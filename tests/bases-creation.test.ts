@@ -35,10 +35,10 @@ test('safe conjunctive defaults, explicit defaults, group precedence and visible
   await operation.run(); assert.equal(await vault.read(operation.path), operation.text);
 });
 
-test('alternative/dynamic/conflicting filters never arbitrarily choose a property value', () => {
+test('alternative/conflicting filters use deterministic first defaults while dynamic filters remain hints only', () => {
   const document = BaseDocument.parse(`filters:\n  and:\n    - or: ['status == "A"', 'status == "B"']\n    - 'owner == this.owner'\n    - 'priority == 1'\n    - 'priority == 2'\nviews: [{type: table, name: Table}]`);
   const defaults = inferBaseCreationDefaults(document);
-  assert.deepEqual(defaults.properties, {}); assert.ok(defaults.warnings.length >= 3);
+  assert.deepEqual(defaults.properties, { status: 'A', priority: 1 }); assert.ok(defaults.warnings.length >= 2);
 });
 
 test('creation plans pick collision-safe names once and never replan after a racing create', async () => {
@@ -55,7 +55,7 @@ test('Create Base creates only normal .base config and can create its destinatio
   const vault = new Vault(new MemoryAdapter()); await vault.initialize();
   const operation = await prepareBaseFileCreation({ vault, folder: 'Views', name: 'Books' });
   await operation.run();
-  assert.deepEqual(BaseDocument.parse(await vault.read('Views/Books.base')).views, [{ type: 'table', name: 'Table' }]);
+  assert.deepEqual(BaseDocument.parse(await vault.read('Views/Books.base')).views, []);
   assert.deepEqual([...vault.entries.keys()].sort(), ['Views', 'Views/Books.base']);
 });
 

@@ -1,5 +1,5 @@
-import { BaseDocument, uniqueBaseViewName, validateBaseViewName } from './document.ts';
-import type { BaseValue, BaseViewPatch, BaseRootPatch } from './document.ts';
+import { BaseDocument, baseViewSetting, uniqueBaseViewName, validateBaseViewName } from './document.ts';
+import type { BaseValue, BaseViewPatch, BaseRootPatch, BaseViewSource } from './document.ts';
 import type { BaseExpressionValue } from './expression.ts';
 import { executeBaseQuery, normalizeBaseProperty } from './query.ts';
 import type { BaseQueryOptions, BaseQueryResult } from './query.ts';
@@ -247,6 +247,7 @@ export class BaseController {
   private propertySourceAttempts = new Map<string, { readonly attempt: object; readonly selection: number; readonly configuration: number; readonly entryId?: string }>();
   private pendingHistoryDirection = new WeakMap<BaseHistoryEntry, 'undo' | 'redo'>();
   private historySourceAttempts = new WeakMap<PropertyHistoryEntry, Record<'undo' | 'redo', object>>();
+  private emptyConfigurationWitness?: BaseSavedWitness;
   private pendingConfigurations = new Map<string, { readonly expected: string; readonly witness?: BaseSavedWitness; readonly attempt: object; readonly index: number; readonly name: string; readonly bound: boolean; readonly selectionSerial: number; readonly entryId?: string; readonly adapter: Vault['adapter']; validate(): void; committed?(): Promise<BaseViewRenameReport | void> }>();
   private pendingViewReferences?: BaseViewReferenceOperation;
   private referenceServices = new Set<NonNullable<Vault['adapter']['documentSemantics']>>();
@@ -372,6 +373,18 @@ export class BaseController {
         if (this.disposed || epoch !== this.epoch) { this.schedule(); return; }
         let version = this.version + 1;
         const document = BaseDocument.parse(source);
+        if (!document.views.length && this.viewName === undefined) {
+          const latest = await observe(this.path);
+          if (this.disposed || epoch !== this.epoch) { this.schedule(); return; }
+          if (!latest || service && (!definition || latest.entryId !== definition.entryId || latest.revision !== definition.revision || latest.mtime !== definition.mtime || latest.size !== definition.size)) throw new Error('The Base configuration changed. Refresh before adding a view.');
+          this.emptyConfigurationWitness = latest.entryId && latest.revision ? Object.freeze({ entryId: latest.entryId, revision: latest.revision }) : undefined;
+          this.query = { ...this.query, viewIndex: 0 }; this.stale = false; this.clearWake();
+          const signature = JSON.stringify([source, this.identities.get(this.path), 'no-views']);
+          if (signature === this.signature && !this.settled.error) { this.publish(this.settled); return; }
+          this.version = version; this.signature = signature;
+          this.publish({ version, source, result: null, error: null, updating: false }); return;
+        }
+        this.emptyConfigurationWitness = undefined;
         let viewIndex = this.query.viewIndex ?? 0;
         if (this.viewName !== undefined) {
           viewIndex = document.views.findIndex(view => view.name === this.viewName);
@@ -552,7 +565,7 @@ export class BaseController {
     } finally { this.summaryQueries.delete(runner); runner.dispose(); }
   }
 
-  private guard(version: number, path: string): { validate: () => void; validateWrite: () => void } {
+  private guard(version: number, path: string, allowEmptyConfiguration = false): { validate: () => void; validateWrite: () => void } {
     const epoch = this.epoch, identity = this.identities.get(path), base = this.identities.get(this.path);
     const selection = this.selectionSerial, configuration = this.configurationEpoch;
     const invalidation = this.lastInvalidation.kind, stale = this.stale;
@@ -596,7 +609,7 @@ export class BaseController {
     const validate = () => {
       validateWrite();
       if (this.current.result && sharedBasePreview(this.current.result)) throw rejection(new Error('Indexing previews are read-only. Wait for saved results before editing.'), 'preview');
-      if (this.current.error || !this.current.result || version !== this.current.version || epoch !== this.epoch) throw rejection(new Error('This base result is stale; refresh before editing'), this.current.error ? 'query-error' : !this.current.result ? 'result-unavailable' : version !== this.current.version ? 'version' : 'epoch');
+      if (this.current.error || (!this.current.result && !(allowEmptyConfiguration && path === this.path && !this.current.updating && !BaseDocument.parse(this.current.source).views.length)) || version !== this.current.version || epoch !== this.epoch) throw rejection(new Error('This base result is stale; refresh before editing'), this.current.error ? 'query-error' : !this.current.result ? 'result-unavailable' : version !== this.current.version ? 'version' : 'epoch');
     };
     validate(); return { validate, validateWrite };
   }
@@ -874,31 +887,28 @@ export class BaseController {
       await this.renameViewConfiguration(version, index, detached.view.name as string, detached.view, detached.root); return;
     }
     await this.changeConfiguration(version, document => {
-      if (detached.root) document.updateRoot(detached.root);
-      if (detached.view) {
-        if (Object.hasOwn(detached.view, 'name')) detached.view.name = validateBaseViewName(detached.view.name as string, document.views, index);
-        document.updateView(index, detached.view);
-      }
+      if (detached.view && Object.hasOwn(detached.view, 'name')) detached.view.name = validateBaseViewName(detached.view.name as string, document.views, index);
+      document.updateViewConfiguration(index, detached);
       return index;
     });
   }
 
   /** Shared absolute-source transaction. A retry persists the same draft once. */
   private async changeConfiguration(version: number, change: (document: BaseDocument) => number, committed?: () => Promise<BaseViewRenameReport | void>): Promise<BaseViewRenameReport | void> {
-    const { validate, validateWrite } = this.guard(version, this.path), expected = this.current.source;
+    const { validate, validateWrite } = this.guard(version, this.path, true), expected = this.current.source;
     const document = BaseDocument.parse(expected), index = change(document), desired = document.toString();
     const selected = document.views[index];
-    if (!selected) throw new Error('The selected base view does not exist');
+    if (!selected && document.views.length) throw new Error('The selected base view does not exist');
     const selectionSerial = this.selectionSerial;
-    const witness = sharedBaseWitness(this.current.result!, this.path);
+    const witness = this.current.result ? sharedBaseWitness(this.current.result, this.path) : this.emptyConfigurationWitness;
     const previous = !this.options.inlineSource ? this.pendingConfigurations.get(desired) : undefined;
-    if (previous && (previous.expected !== expected || previous.selectionSerial !== selectionSerial || previous.index !== index || previous.name !== selected.name
+    if (previous && (previous.expected !== expected || previous.selectionSerial !== selectionSerial || previous.index !== index || previous.name !== (selected?.name ?? '')
       || previous.bound !== (this.viewName !== undefined) || previous.adapter !== this.options.vault.adapter
       || previous.witness?.entryId !== witness?.entryId || previous.witness?.revision !== witness?.revision)) {
       throw new Error('Retry the original Base configuration save before changing its command');
     }
     const attempt = previous?.attempt ?? {};
-    const retry = previous ?? { expected, witness: witness && Object.freeze({ ...witness }), attempt, index, name: selected.name, bound: this.viewName !== undefined, selectionSerial, entryId: witness?.entryId, adapter: this.options.vault.adapter, validate: validateWrite, committed };
+    const retry = previous ?? { expected, witness: witness && Object.freeze({ ...witness }), attempt, index, name: selected?.name ?? '', bound: this.viewName !== undefined, selectionSerial, entryId: witness?.entryId, adapter: this.options.vault.adapter, validate: validateWrite, committed };
     let prepared = false;
     const validateSelection = () => {
       // Even an explicit switch back to the same view retires the command.
@@ -935,7 +945,7 @@ export class BaseController {
     // also advances it, but updates query/name: never undo that later choice.
     if (!this.disposed && this.selectionSerial === selectionSerial) {
       this.query = { ...this.query, viewIndex: index };
-      if (this.viewName !== undefined) this.viewName = selected.name;
+      if (this.viewName !== undefined) this.viewName = selected?.name;
       this.stale = true; this.clearWake();
       this.epoch++; this.lastInvalidation = { kind: 'configuration-commit' }; this.sharedQueries.cancel();
     }
@@ -963,7 +973,7 @@ export class BaseController {
       || inline?.witness && (inline.witness.entryId !== entry.entryId || inline.witness.revision !== entry.revision)) throw new Error('The Base changed while its configuration retry was being acknowledged');
     if (this.selectionSerial === retry.selectionSerial) {
       this.query = { ...this.query, viewIndex: retry.index };
-      if (retry.bound) this.viewName = retry.name;
+      if (retry.bound) this.viewName = retry.name || undefined;
       this.stale = true; this.clearWake(); this.epoch++; this.lastInvalidation = { kind: 'configuration-retry-ack' }; this.sharedQueries.cancel();
     }
     this.pendingConfigurations.clear();
@@ -1043,7 +1053,7 @@ export class BaseController {
       if (this.pendingViewReferences === operation) this.pendingViewReferences = undefined;
       return report;
     };
-    await this.changeConfiguration(version, next => { if (root) next.updateRoot(root); next.updateView(index, { ...patch, name: to }); return active; }, committed);
+    await this.changeConfiguration(version, next => { next.updateViewConfiguration(index, { root, view: { ...patch, name: to } }); return active; }, committed);
     return report;
   }
 
@@ -1055,6 +1065,11 @@ export class BaseController {
       if (Object.hasOwn(detached, 'type') && detached.type !== type || Object.hasOwn(detached, 'name') && detached.name !== chosen) throw new Error('Initial view settings must use the requested view type and name');
       const index = document.addView(type, chosen); document.updateView(index, detached); return index;
     });
+  }
+
+  async setViewSource(version: number, index: number, source: BaseViewSource): Promise<void> {
+    const selected = structuredClone(source), active = this.selectedViewIndex;
+    await this.changeConfiguration(version, document => { document.changeViewSource(index, selected); return active; });
   }
 
   async duplicateView(version: number, index = this.selectedViewIndex, name?: string): Promise<void> {
@@ -1069,8 +1084,6 @@ export class BaseController {
   async removeView(version: number, index = this.selectedViewIndex): Promise<void> {
     const active = this.selectedViewIndex;
     await this.changeConfiguration(version, document => {
-      // Keep the editor usable until last-view reference behavior is verified.
-      if (document.views.length <= 1) throw new Error('The last base view cannot be deleted');
       document.removeView(index);
       return active === index ? Math.max(0, index - 1) : active > index ? active - 1 : active;
     });
@@ -1089,34 +1102,34 @@ export class BaseController {
   async updateRoot(version: number, patch: BaseRootPatch): Promise<void> {
     const detached = structuredClone(patch);
     if (Object.hasOwn(detached, 'views')) throw new Error('Use the guarded view commands to manage base views');
-    await this.changeConfiguration(version, document => { document.updateRoot(detached); return this.selectedViewIndex; });
+    await this.changeConfiguration(version, document => { document.updateViewConfiguration(this.selectedViewIndex, { root: detached }); return this.selectedViewIndex; });
   }
 
   async setFormula(version: number, name: string, expression: string | undefined): Promise<void> {
-    await this.changeConfiguration(version, document => { document.setFormula(name, expression); return this.selectedViewIndex; });
+    await this.changeConfiguration(version, document => { document.setViewFormula(this.selectedViewIndex, name, expression); return this.selectedViewIndex; });
   }
 
   async renameFormula(version: number, from: string, to: string): Promise<void> {
-    await this.changeConfiguration(version, document => { document.renameFormula(from, to); return this.selectedViewIndex; });
+    await this.changeConfiguration(version, document => { document.renameViewFormula(this.selectedViewIndex, from, to); return this.selectedViewIndex; });
   }
 
   async editFormula(version: number, originalName: string | undefined, name: string, expression: string): Promise<void> {
     await this.changeConfiguration(version, document => {
-      if (originalName !== undefined && originalName !== name) document.renameFormula(originalName, name);
+      if (originalName !== undefined && originalName !== name) document.renameViewFormula(this.selectedViewIndex, originalName, name);
       if (originalName === undefined) {
-        const formulas = document.getRoot('formulas');
+        const formulas = baseViewSetting(document, this.selectedViewIndex, 'formulas');
         if (formulas && !Array.isArray(formulas) && typeof formulas === 'object' && Object.hasOwn(formulas, name)) throw new Error('A formula with this name already exists');
       }
-      document.setFormula(name, expression); return this.selectedViewIndex;
+      document.setViewFormula(this.selectedViewIndex, name, expression); return this.selectedViewIndex;
     });
   }
 
   async editSummary(version: number, originalName: string | undefined, name: string, expression: string): Promise<void> {
-    await this.changeConfiguration(version, document => { document.editSummary(originalName, name, expression); return this.selectedViewIndex; });
+    await this.changeConfiguration(version, document => { document.editViewSummary(this.selectedViewIndex, originalName, name, expression); return this.selectedViewIndex; });
   }
 
   async removeSummary(version: number, name: string): Promise<void> {
-    await this.changeConfiguration(version, document => { document.removeSummary(name); return this.selectedViewIndex; });
+    await this.changeConfiguration(version, document => { document.removeViewSummary(this.selectedViewIndex, name); return this.selectedViewIndex; });
   }
 
   dispose(): void {

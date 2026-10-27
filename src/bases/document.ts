@@ -14,6 +14,38 @@ export interface BaseViewConfig {
 export type BaseViewPatch = { [key: string]: BaseValue | undefined };
 export type BaseRootPatch = BaseViewPatch;
 
+/** Each view selects one owning collection or ordinary untyped notes. Missing
+ * source is the legacy untyped representation, not a mixed-source wildcard. */
+export type BaseViewSource = Readonly<{ kind: 'untyped' }> | Readonly<{ kind: 'collection'; id: string }>;
+const untypedSource: BaseViewSource = Object.freeze({ kind: 'untyped' });
+export function baseViewSource(view: BaseViewConfig): BaseViewSource {
+  const value = view.source;
+  if (value === undefined) return untypedSource;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new BaseDocumentError('View source must select untyped notes or one collection');
+  const source = value as Readonly<Record<string, BaseValue>>;
+  if (source.kind === 'untyped' && Object.keys(source).length === 1) return untypedSource;
+  if (source.kind === 'collection' && Object.keys(source).length === 2 && typeof source.id === 'string' && /^[0-9a-z]{12}$/.test(source.id)) return Object.freeze({ kind: 'collection', id: source.id });
+  throw new BaseDocumentError('View source must select untyped notes or one collection');
+}
+
+/** Root configuration is a compatibility fallback only for views without an
+ * explicit source. A new source must not inherit another collection's fields. */
+export function baseViewSetting(document: BaseDocument, viewIndex: number, key: string): BaseValue | undefined {
+  const view = document.views[viewIndex];
+  if (!view) throw new BaseDocumentError('The selected base view does not exist');
+  return Object.hasOwn(view, key) ? view[key] : view.source === undefined ? document.getRoot(key) : undefined;
+}
+
+const sourceSpecificViewKeys = ['filters', 'sort', 'groupBy', 'groupOrder', 'order', 'properties', 'columnSize', 'summaries', 'summaryDefinitions', 'formulas', 'image', 'newItemFolder', 'newItemTemplate'];
+/** Preserve layout and unfamiliar settings, while retiring field references
+ * when selecting a different source. This patch edits no entry or sibling view. */
+export function resetViewSourcePatch(view: BaseViewConfig, source: BaseViewSource): BaseViewPatch {
+  const checked = baseViewSource({ type: view.type, name: view.name, source });
+  const patch: BaseViewPatch = { source: checked };
+  for (const key of sourceSpecificViewKeys) patch[key] = undefined;
+  return patch;
+}
+
 /** Interactive names follow the reference UI; the reader accepts older/raw YAML. */
 export function validateBaseViewName(name: string, views: readonly BaseViewConfig[], except = -1): string {
   if (typeof name !== 'string') throw new BaseDocumentError('View name must be a string');
@@ -120,6 +152,7 @@ function validateDocument(doc: Document): Readonly<Record<string, BaseValue>> {
           throw new BaseDocumentError(`View ${key} must be a nonempty string`);
         }
       }
+      baseViewSource(view as BaseViewConfig);
     }
   }
   return root;
@@ -148,6 +181,18 @@ function validateInput(value: unknown, ancestors = new Set<object>()): asserts v
       if (!Object.hasOwn(value, i)) throw new BaseDocumentError('Sparse base lists are not supported');
     }
   } finally { ancestors.delete(value); }
+}
+
+function captureConfigurationPatch(patch: BaseViewPatch | undefined): BaseViewPatch {
+  if (patch === undefined) return {};
+  if (!patch || typeof patch !== 'object' || ![Object.prototype, null].includes(Object.getPrototypeOf(patch)) || Object.getOwnPropertySymbols(patch).length) throw new BaseDocumentError('Configuration patches must be plain mappings');
+  const entries = Object.getOwnPropertyNames(patch).map(key => {
+    const item = Object.getOwnPropertyDescriptor(patch, key)!;
+    if (!('value' in item) || !item.enumerable) throw new BaseDocumentError('Configuration patches must contain ordinary enumerable data properties');
+    if (item.value !== undefined) validateInput(item.value);
+    return [key, item.value] as const;
+  });
+  return Object.fromEntries(entries);
 }
 
 function parseBaseYAML(source: string): Document {
@@ -186,7 +231,7 @@ export class BaseDocument {
     }
     validateDocument(doc);
     const result = new BaseDocument(doc, source);
-    if (!doc.has('views') || result.views.length === 0) {
+    if (!doc.has('views')) {
       result.edit(next => next.set('views', next.createNode([{ type: 'table', name: 'Table' }])));
     }
     return result;
@@ -296,6 +341,15 @@ export class BaseDocument {
     }, nameOnly ? index : undefined);
   }
 
+  changeViewSource(index: number, source: BaseViewSource): void {
+    const view = this.views[index];
+    if (!view) throw new BaseDocumentError('The selected base view does not exist');
+    const next = baseViewSource({ type: view.type, name: view.name, source });
+    const previous = baseViewSource(view);
+    if (view.source !== undefined && previous.kind === next.kind && (previous.kind === 'untyped' || next.kind === 'collection' && previous.id === next.id)) return;
+    this.updateView(index, resetViewSourcePatch(view, next));
+  }
+
   addView(type: string, name: string): number {
     if (typeof type !== 'string' || typeof name !== 'string') throw new BaseDocumentError('View type and name must be strings');
     let index = 0;
@@ -359,6 +413,66 @@ export class BaseDocument {
         else doc.set(key, value !== null && typeof value === 'object' ? doc.createNode(value) : value);
       }
     });
+  }
+
+  /** Route former root controls to the selected explicit-source view. Legacy
+   * files retain root semantics until their source is deliberately selected. */
+  updateViewConfiguration(index: number, patch: { root?: BaseRootPatch; view?: BaseViewPatch }): void {
+    const view = this.views[index];
+    if (!view) throw new BaseDocumentError('The selected base view does not exist');
+    const root = captureConfigurationPatch(patch.root), local = captureConfigurationPatch(patch.view);
+    if (view.source !== undefined) for (const key of sourceSpecificViewKeys) {
+      if (!Object.hasOwn(root, key)) continue;
+      const target = key === 'summaries' ? 'summaryDefinitions' : key;
+      if (!Object.hasOwn(local, target)) local[target] = root[key];
+      delete root[key];
+    }
+    // Validate the complete operation on a detached document first. Publishing
+    // root then view cannot leave a valid prefix when the second patch fails.
+    const next = BaseDocument.parse(this.toString());
+    if (Object.keys(root).length) next.updateRoot(root);
+    if (Object.keys(local).length) next.updateView(index, local);
+    const checked = parseBaseYAML(next.toString());
+    const values = validateDocument(checked);
+    this.document = checked; this.source = next.toString(); this.values = values;
+  }
+
+  private scopedViewDocument(index: number): BaseDocument {
+    const view = this.views[index];
+    if (!view) throw new BaseDocumentError('The selected base view does not exist');
+    return BaseDocument.parse(JSON.stringify({ formulas: view.formulas ?? {}, summaries: view.summaryDefinitions ?? {}, views: [view] }));
+  }
+
+  setViewFormula(index: number, name: string, expression: string | undefined): void {
+    const view = this.views[index];
+    if (!view) throw new BaseDocumentError('The selected base view does not exist');
+    if (view.source === undefined) { this.setFormula(name, expression); return; }
+    const next = this.scopedViewDocument(index); next.setFormula(name, expression);
+    this.updateView(index, { formulas: next.getRoot('formulas') });
+  }
+
+  renameViewFormula(index: number, from: string, to: string): void {
+    const view = this.views[index];
+    if (!view) throw new BaseDocumentError('The selected base view does not exist');
+    if (view.source === undefined) { this.renameFormula(from, to); return; }
+    const next = this.scopedViewDocument(index); next.renameFormula(from, to);
+    this.updateView(index, { ...next.views[0], formulas: next.getRoot('formulas') });
+  }
+
+  editViewSummary(index: number, originalName: string | undefined, name: string, expression: string): void {
+    const view = this.views[index];
+    if (!view) throw new BaseDocumentError('The selected base view does not exist');
+    if (view.source === undefined) { this.editSummary(originalName, name, expression); return; }
+    const next = this.scopedViewDocument(index); next.editSummary(originalName, name, expression);
+    this.updateView(index, { ...next.views[0], summaryDefinitions: next.getRoot('summaries') });
+  }
+
+  removeViewSummary(index: number, name: string): void {
+    const view = this.views[index];
+    if (!view) throw new BaseDocumentError('The selected base view does not exist');
+    if (view.source === undefined) { this.removeSummary(name); return; }
+    const next = this.scopedViewDocument(index); next.removeSummary(name);
+    this.updateView(index, { ...next.views[0], summaryDefinitions: next.getRoot('summaries') });
   }
 
   setFormula(name: string, expression: string | undefined): void {

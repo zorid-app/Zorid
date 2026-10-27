@@ -66,8 +66,8 @@ test('all four built-in views and arbitrary plugin views roundtrip with unknown 
   assert.deepEqual(base.getRoot('formulas'), { label: 'file.name + "!"' });
 });
 
-test('empty source, missing views and empty views produce an initial table', () => {
-  for (const source of ['', ' \r\n', '{}\n', 'views: []\n', '# heading\nfilters: "true"\n']) {
+test('empty source and missing views produce a legacy initial table', () => {
+  for (const source of ['', ' \r\n', '{}\n', '# heading\nfilters: "true"\n']) {
     const base = BaseDocument.parse(source);
     assert.equal(base.views.length, 1); assert.equal(base.views[0].type, 'table');
     assert.equal(typeof base.views[0].name, 'string'); assert.ok(base.views[0].name);
@@ -105,7 +105,7 @@ test('add, duplicate and remove views retain their options and allow parser-vali
   base.removeView(2); assert.deepEqual(base.views.map(view => view.type), ['table', 'cards', 'kanban', 'community-timeline', 'custom.plugin', 'kanban']);
   while (base.views.length) base.removeView(0);
   assert.deepEqual(base.views, []); // No invented last-view prohibition.
-  assert.equal(BaseDocument.parse(base.toString()).views[0].type, 'table');
+  assert.deepEqual(BaseDocument.parse(base.toString()).views, []);
   assert.equal(base.addView('list', 'Restored'), 0);
 });
 

@@ -1,6 +1,6 @@
 import type { DocumentBaseInlineSource, DocumentBaseResult } from '../core/document-semantics.ts';
 import type { DocumentBasePreviewResult } from '../core/document-preview.ts';
-import { BaseDocument } from './document.ts';
+import { BaseDocument, baseViewSetting, baseViewSource } from './document.ts';
 import type { BaseValue, BaseViewConfig } from './document.ts';
 import { BASE_NULL, BaseExpressionError, BaseFunctionRegistry, baseDate, baseExpressionValue, baseValueIsTruthy, baseValuesEqual, baseValueToString, evaluateBaseExpression, evaluateBaseExpressionOrThrow, parseBaseExpression } from './expression.ts';
 import type { BaseExpression, BaseExpressionContext, BaseExpressionValue, BaseNamespaceValue } from './expression.ts';
@@ -204,9 +204,11 @@ export function executeBaseQuery(document: BaseDocument, snapshot: BaseQuerySnap
   if ((typeof version !== 'string' && typeof version !== 'number') || (typeof version === 'number' && !Number.isFinite(version))) return raise('Snapshot version must be a string or finite number');
   const viewIndex = options.viewIndex ?? 0;
   if (!Number.isInteger(viewIndex) || !document.views[viewIndex]) return raise('View index is out of range');
-  const view = document.views[viewIndex], filter = effectiveFilter(document.getRoot('filters'), view.filters);
+  const view = document.views[viewIndex];
+  if (baseViewSource(view).kind === 'collection') return raise('Collection views require the authoritative document service');
+  const filter = effectiveFilter(view.source === undefined ? document.getRoot('filters') : undefined, view.filters);
   if (options.maxSteps !== undefined && (!Number.isSafeInteger(options.maxSteps) || options.maxSteps < 0)) return raise('maxSteps must be a finite nonnegative safe integer');
-  const formulasValue = document.getRoot('formulas');
+  const formulasValue = baseViewSetting(document, viewIndex, 'formulas');
   if (formulasValue !== undefined && !mapping(formulasValue)) return raise('Formulas must be a named mapping');
   const formulas: Record<string, BaseExpression | BaseExpressionError> = Object.create(null);
   for (const [name, source] of Object.entries(formulasValue ?? {})) {

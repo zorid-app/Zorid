@@ -1,4 +1,4 @@
-import { BaseDocument } from './document.ts';
+import { BaseDocument, baseViewSetting } from './document.ts';
 import type { BaseValue } from './document.ts';
 import { parseBaseExpression } from './expression.ts';
 import type { BaseExpression } from './expression.ts';
@@ -12,6 +12,7 @@ import type { Vault, VaultCreateOperation } from '../core/vault.ts';
 export interface BaseCreationDefaults {
   readonly properties: Readonly<Record<string, BaseValue>>;
   readonly folder?: string;
+  readonly title?: string;
   readonly warnings: readonly string[];
 }
 export interface BaseItemCreationOptions {
@@ -59,60 +60,113 @@ function property(node: BaseExpression): string | undefined {
 }
 function folderPath(value: string): string { return value === '' || value === '/' ? '' : normalizePath(value); }
 
-/** Creation hints only, never a second query evaluator. Unsupported predicates
- * remain constraints on membership and never manufacture arbitrary values. */
+/** Creation hints only, never a second query evaluator. Conditions remain
+ * authoritative in Rust; unsupported or contradictory filters cannot block New.
+ * OR takes the first branch that supplies a useful hint. AND retains the first
+ * conflicting assignment, so the same saved view has repeatable defaults. */
 export function inferBaseCreationDefaults(document: BaseDocument, viewIndex = 0): BaseCreationDefaults {
   const view = document.views[viewIndex];
   if (!view) throw new Error('The selected base view does not exist');
-  const fields = new Map<string, BaseValue>(), conflicts = new Set<string>(), warnings = new Set<string>();
-  let folder: string | undefined, folderConflict = false;
-  const assign = (id: string, value: BaseValue) => {
+  interface Hints { fields: Map<string, BaseValue>; folder?: string; title?: string; warnings: Set<string> }
+  const hints = (): Hints => ({ fields: new Map(), warnings: new Set() });
+  const unsupported = (into: Hints) => into.warnings.add('Some filters could not initialize a new note; it may be outside this view.');
+  const useful = (value: Hints) => value.fields.size > 0 || value.folder !== undefined || value.title !== undefined;
+  const assign = (into: Hints, id: string, value: BaseValue): void => {
     if (id === 'file.folder' && typeof value === 'string') {
-      const next = folderPath(value);
-      if (folder !== undefined && folder !== next) { folder = undefined; folderConflict = true; warnings.add('Folder filters conflict; no destination was inferred.'); }
-      else if (!folderConflict) folder = next;
-    } else if (id.startsWith('note.')) {
+      let next: string;
+      try { next = folderPath(value); } catch { unsupported(into); return; }
+      if (into.folder === undefined) into.folder = next;
+      else if (into.folder !== next) into.warnings.add('Conflicting folder filters used the first destination.');
+    } else if (['file.name', 'file.basename'].includes(id) && typeof value === 'string') {
+      try { fileStem(value, 'md'); } catch { unsupported(into); return; }
+      if (into.title === undefined) into.title = value;
+      else if (into.title !== value) into.warnings.add('Conflicting title filters used the first title.');
+    } else if (id.startsWith('note.') && !['_id', '_type'].includes(id.slice(5))) {
       const key = id.slice(5);
-      if (fields.has(key) && JSON.stringify(fields.get(key)) !== JSON.stringify(value)) { fields.delete(key); conflicts.add(key); warnings.add(`Conflicting filters did not initialize ${key}.`); }
-      else if (!conflicts.has(key)) fields.set(key, value);
-    }
+      if (!into.fields.has(key)) into.fields.set(key, value);
+      else if (JSON.stringify(into.fields.get(key)) !== JSON.stringify(value)) into.warnings.add(`Conflicting filters used the first value for ${key}.`);
+    } else unsupported(into);
   };
-  const expression = (node: BaseExpression): void => {
-    if (node.kind === 'binary' && node.operator === '&&') { expression(node.left); expression(node.right); return; }
-    if (node.kind === 'binary' && ['==', '>=', '<='].includes(node.operator)) {
-      const id = property(node.left), value = literal(node.right);
-      if (id && value && (node.operator === '==' || typeof value.value === 'number')) { assign(id, value.value); return; }
+  const merge = (into: Hints, from: Hints): void => {
+    if (from.folder !== undefined) assign(into, 'file.folder', from.folder);
+    if (from.title !== undefined) assign(into, 'file.name', from.title);
+    for (const [key, value] of from.fields) assign(into, `note.${key}`, value);
+    for (const warning of from.warnings) into.warnings.add(warning);
+  };
+  const alternatives = (into: Hints, branches: readonly (() => Hints)[]): void => {
+    let first: Hints | undefined;
+    for (const branch of branches) {
+      const candidate = branch(); first ??= candidate;
+      if (useful(candidate)) { merge(into, candidate); return; }
     }
-    if (node.kind === 'call' && node.callee.kind === 'member' && node.callee.object.kind === 'identifier' && node.callee.object.name === 'file') {
-      const method = literal(node.callee.key)?.value, value = node.args.length === 1 ? literal(node.args[0])?.value : undefined;
-      if (typeof value === 'string') {
-        if (method === 'inFolder') { assign('file.folder', value); return; }
-        if (method === 'hasProperty') { if (!fields.has(value)) fields.set(value, null); return; }
+    if (first) merge(into, first); else unsupported(into);
+  };
+  const comparison = (into: Hints, node: Extract<BaseExpression, {kind:'binary'}>): boolean => {
+    let id = property(node.left), value = literal(node.right), operator = node.operator;
+    if (!id) {
+      id = property(node.right); value = literal(node.left);
+      operator = ({ '>':'<', '<':'>', '>=':'<=', '<=':'>=' } as Record<string,string>)[operator] ?? operator;
+    }
+    if (!id || !value || !['==', '>=', '<=', '>', '<'].includes(operator)) return false;
+    if (operator === '==') { assign(into, id, value.value); return true; }
+    if (typeof value.value !== 'number') return false;
+    const n = value.value;
+    const step = Math.max(1, Math.abs(n) * Number.EPSILON);
+    const next = operator === '>' ? n + step : operator === '<' ? n - step : n;
+    if (!Number.isFinite(next) || operator === '>' && next <= n || operator === '<' && next >= n) { unsupported(into); return true; }
+    assign(into, id, next); return true;
+  };
+  const expression = (node: BaseExpression, into: Hints): void => {
+    if (node.kind === 'binary' && node.operator === '&&') { expression(node.left, into); expression(node.right, into); return; }
+    if (node.kind === 'binary' && node.operator === '||') {
+      alternatives(into, [node.left, node.right].map(branch => () => { const result = hints(); expression(branch, result); return result; })); return;
+    }
+    if (node.kind === 'binary' && comparison(into, node)) return;
+    if (node.kind === 'identifier') { const id = property(node); if (id) { assign(into, id, true); return; } }
+    if (node.kind === 'unary' && node.operator === '!') {
+      const id = property(node.operand); if (id?.startsWith('note.')) { assign(into, id, false); return; }
+    }
+    if (node.kind === 'call' && node.callee.kind === 'member') {
+      const owner = node.callee.object, method = literal(node.callee.key)?.value;
+      const value = node.args.length === 1 ? literal(node.args[0])?.value : undefined;
+      if (owner.kind === 'identifier' && owner.name === 'file' && typeof value === 'string') {
+        if (method === 'inFolder') { assign(into, 'file.folder', value); return; }
+        if (method === 'hasProperty') { if (!into.fields.has(value)) assign(into, `note.${value}`, null); return; }
         if (method === 'hasTag') {
-          const tag = value.replace(/^#/, ''), previous = fields.get('tags');
-          if (!previous || Array.isArray(previous)) { fields.set('tags', [...new Set([...(previous as readonly BaseValue[] | undefined ?? []), tag])]); return; }
+          const tag = value.replace(/^#/, ''), previous = into.fields.get('tags');
+          if (previous === undefined || Array.isArray(previous)) { into.fields.set('tags', [...new Set([...(previous as readonly BaseValue[] | undefined ?? []), tag])]); return; }
         }
       }
+      const id = property(owner);
+      if (id && typeof value === 'string' && ['contains', 'startsWith', 'endsWith'].includes(String(method))) { assign(into, id, value); return; }
     }
-    warnings.add('Some filters cannot safely initialize a new note; the new file may be outside this view.');
+    unsupported(into);
   };
-  const filter = (value: BaseValue | undefined): void => {
+  const filter = (value: BaseValue | undefined, into: Hints): void => {
     if (value === undefined) return;
-    if (typeof value === 'string') { try { expression(parseBaseExpression(value)); } catch { warnings.add('An advanced filter could not supply creation defaults.'); } return; }
-    if (value && !Array.isArray(value) && typeof value === 'object' && Object.keys(value).length === 1 && Object.hasOwn(value, 'and')) {
-      const children = (value as Readonly<Record<string, BaseValue>>).and;
-      if (Array.isArray(children)) { children.forEach(filter); return; }
+    if (typeof value === 'string') {
+      try { expression(parseBaseExpression(value), into); } catch { into.warnings.add('An advanced filter could not supply creation defaults.'); } return;
     }
-    warnings.add('Alternative or negated filters do not supply creation defaults.');
+    if (value && !Array.isArray(value) && typeof value === 'object' && Object.keys(value).length === 1) {
+      const mapping = value as Readonly<Record<string, BaseValue>>;
+      if (Array.isArray(mapping.and)) { mapping.and.forEach(child => filter(child, into)); return; }
+      if (Array.isArray(mapping.or)) {
+        alternatives(into, mapping.or.map(child => () => { const result = hints(); filter(child, result); return result; })); return;
+      }
+    }
+    unsupported(into);
   };
-  filter(document.getRoot('filters')); filter(view.filters);
-  // Reference New exposes visible note fields as initially empty properties.
-  if (Array.isArray(view.order)) for (const id of view.order) {
+  const result = hints();
+  if (view.source === undefined) filter(document.getRoot('filters'), result);
+  filter(view.filters, result);
+  // Legacy column lists historically supplied empty note fields. Explicit-source
+  // views use collection schema defaults instead; untyped browsing has no grid.
+  if (view.source === undefined && Array.isArray(view.order)) for (const id of view.order) {
     if (typeof id !== 'string') continue;
     const key = normalizeBaseProperty(id);
-    if (key.startsWith('note.') && !fields.has(key.slice(5)) && !conflicts.has(key.slice(5))) fields.set(key.slice(5), null);
+    if (key.startsWith('note.') && !result.fields.has(key.slice(5)) && !['_id','_type'].includes(key.slice(5))) result.fields.set(key.slice(5), null);
   }
-  return Object.freeze({ properties: Object.freeze(Object.fromEntries(fields)), folder, warnings: Object.freeze([...warnings]) });
+  return Object.freeze({ properties: Object.freeze(Object.fromEntries(result.fields)), folder: result.folder, title: result.title, warnings: Object.freeze([...result.warnings]) });
 }
 
 function fileStem(name: string, extension: 'md' | 'base'): string {
@@ -128,8 +182,8 @@ function availablePath(entries: readonly VaultEntry[], folder: string, stem: str
   while (paths.has(path)) path = candidate(` ${suffix++}`);
   return path;
 }
-function configuredPath(document: BaseDocument, key: string): string | undefined {
-  const value = document.getRoot(key);
+function configuredPath(document: BaseDocument, viewIndex: number, key: string): string | undefined {
+  const value = baseViewSetting(document, viewIndex, key);
   if (!value) return undefined;
   if (typeof value !== 'string') throw new Error(`${key} must be a path string`);
   return key === 'newItemFolder' ? folderPath(value) : normalizePath(value);
@@ -142,7 +196,7 @@ export async function planBaseItemCreation(options: BaseItemCreationOptions): Pr
   const group = options.group === undefined ? undefined : structuredClone(options.group);
   const viewIndex = options.viewIndex ?? 0;
   if (!document.views[viewIndex]) throw new Error('The selected base view does not exist');
-  const templatePath = configuredPath(document, 'newItemTemplate'), explicitFolder = configuredPath(document, 'newItemFolder');
+  const templatePath = configuredPath(document, viewIndex, 'newItemTemplate'), explicitFolder = configuredPath(document, viewIndex, 'newItemFolder');
   const check = () => { validate?.(); if (vault.adapter !== adapter) throw new Error('The vault changed while preparing the new note'); };
   check();
   const entries = await adapter.list(); check();
@@ -159,7 +213,7 @@ export async function planBaseItemCreation(options: BaseItemCreationOptions): Pr
     if (group) {
       const id = normalizeBaseProperty(group.property);
       if (id.startsWith('note.')) { if (group.value === null) properties.delete(id.slice(5)); else properties.set(id.slice(5), group.value); }
-      else if (id !== 'file.folder') throw new Error('New notes cannot initialize a computed grouping property');
+      else if (id !== 'file.folder') warnings.push('The computed group cannot initialize a new note; it may be outside this view.');
     }
     for (const [key, value] of properties) text = setProperty(text, key, value as PropertyValue);
   }
@@ -173,7 +227,7 @@ export async function planBaseItemCreation(options: BaseItemCreationOptions): Pr
     const entry = entries.find(entry => normalizePath(entry.path) === path);
     if (entry && entry.type !== 'folder') throw new Error(`The destination contains a file instead of a folder: ${path}`);
   }
-  return Object.freeze({ path: availablePath(entries, folder, fileStem(options.name ?? 'Untitled', 'md'), 'md'), text, templatePath, warnings: Object.freeze(warnings) });
+  return Object.freeze({ path: availablePath(entries, folder, fileStem(options.name ?? inferred?.title ?? 'Untitled', 'md'), 'md'), text, templatePath, warnings: Object.freeze(warnings) });
 }
 
 function operation(vault: Vault, plan: BaseCreationPlan, validate?: () => void): BaseCreationOperation {
@@ -210,6 +264,6 @@ export async function prepareBaseFileCreation(options: { vault: Vault; folder?: 
   options.validate?.(); const entries = await adapter.list(); options.validate?.();
   if (options.vault.adapter !== adapter) throw new Error('The vault changed while preparing the new Base');
   const folder = folderPath(options.folder ?? '');
-  const plan = Object.freeze({ path: availablePath(entries, folder, fileStem(options.name ?? 'Untitled', 'base'), 'base'), text: BaseDocument.parse('').toString(), warnings: Object.freeze([]) });
+  const plan = Object.freeze({ path: availablePath(entries, folder, fileStem(options.name ?? 'Untitled', 'base'), 'base'), text: 'views: []\n', warnings: Object.freeze([]) });
   return operation(options.vault, plan, options.validate);
 }
