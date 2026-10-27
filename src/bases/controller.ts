@@ -1,4 +1,4 @@
-import { BaseDocument, baseViewSetting, baseViewIndexById, baseViewIndexByName, newBaseViewId, uniqueBaseViewName, validateBaseViewName } from './document.ts';
+import { BaseDocument, baseViewSource, baseViewSetting, baseViewIndexById, baseViewIndexByName, newBaseViewId, uniqueBaseViewName, validateBaseViewName } from './document.ts';
 import type { BaseValue, BaseViewPatch, BaseRootPatch, BaseViewSource } from './document.ts';
 import type { BaseExpressionValue } from './expression.ts';
 import { executeBaseQuery, normalizeBaseProperty } from './query.ts';
@@ -153,6 +153,28 @@ export function createBaseMutationHost(options: BaseBufferHost): BaseMutationHos
   };
 }
 
+/** A coherent saved configuration read, independent of query success. The
+ * exact controller-owned object is required for source-only error recovery. */
+export interface BaseConfigurationRead {
+  readonly source: string;
+  readonly path: string;
+  readonly entryId: string;
+  readonly revision: string;
+  readonly version: number;
+  readonly viewIndex: number;
+  readonly viewId?: string;
+}
+interface ConfigurationReadProof {
+  readonly read: BaseConfigurationRead;
+  readonly epoch: number;
+  readonly selection: number;
+  readonly configuration: number;
+  readonly identity: number | undefined;
+  readonly adapter: Vault['adapter'];
+  readonly capability: Vault['adapter']['durableWrites'];
+  readonly repairable: boolean;
+}
+
 export interface BaseControllerState {
   readonly version: number;
   readonly source: string;
@@ -252,6 +274,7 @@ export class BaseController {
   private pendingHistoryDirection = new WeakMap<BaseHistoryEntry, 'undo' | 'redo'>();
   private historySourceAttempts = new WeakMap<PropertyHistoryEntry, Record<'undo' | 'redo', object>>();
   private emptyConfigurationWitness?: BaseSavedWitness;
+  private configurationReadProof?: ConfigurationReadProof;
   private configurationViewIds?: { readonly source: string; readonly ids: string[] };
   private pendingConfigurations = new Map<string, { readonly expected: string; readonly witness?: BaseSavedWitness; readonly attempt: object; readonly index: number; readonly name: string; readonly bound: boolean; readonly selectionSerial: number; readonly entryId?: string; readonly adapter: Vault['adapter']; validate(): void; committed?(): Promise<BaseViewRenameReport | void> }>();
   private pendingViewReferences?: BaseViewReferenceOperation;
@@ -303,6 +326,38 @@ export class BaseController {
   }
 
   get state(): BaseControllerState { return this.current; }
+  get configurationRead(): BaseConfigurationRead | undefined {
+    const proof = this.configurationReadProof;
+    if (!proof || this.disposed || this.current.updating || this.requested || proof.epoch !== this.epoch || proof.selection !== this.selectionSerial || proof.configuration !== this.configurationEpoch || proof.identity !== this.identities.get(this.path) || proof.adapter !== this.options.vault.adapter || proof.capability !== this.options.vault.adapter.durableWrites || proof.read.version !== this.current.version) return undefined;
+    return proof.read;
+  }
+
+  private retainConfigurationRead(read: BaseConfigurationRead, repairable: boolean): void {
+    this.configurationReadProof = { read: Object.freeze(read), epoch: this.epoch, selection: this.selectionSerial, configuration: this.configurationEpoch, identity: this.identities.get(this.path), adapter: this.options.vault.adapter, capability: this.options.vault.adapter.durableWrites, repairable };
+  }
+
+  /** Native reads carry source and revision together. Older/test adapters must
+   * seal read bytes between matching identity/revision observations. */
+  private async verifyConfigurationRead(read: BaseConfigurationRead, validate: () => void): Promise<void> {
+    const vault = this.options.vault, adapter = vault.adapter;
+    const witness = (entry: {entryId?: string;revision?: string;path?: string}|null|undefined) => !!entry && entry.entryId === read.entryId && entry.revision === read.revision && entry.path === read.path;
+    validate();
+    if (adapter.durableWrites) {
+      const current = await vault.readDurableText(read.path); validate();
+      if (!witness(current) || !this.options.inlineSource && current.content !== read.source) throw new Error('The saved Base configuration changed; refresh before changing its source.');
+    } else {
+      const observe = () => adapter.stat ? adapter.stat(read.path) : Promise.resolve(vault.entries.get(read.path));
+      const before = await observe(); validate();
+      const source = this.options.inlineSource ? undefined : await vault.read(read.path); validate();
+      const after = await observe(); validate();
+      if (!witness(before) || !witness(after) || before!.mtime !== after!.mtime || before!.size !== after!.size || source !== undefined && source !== read.source) throw new Error('The saved Base configuration changed; refresh before changing its source.');
+    }
+    if (this.options.inlineSource) {
+      const inline = await this.options.inlineSource.read(); validate();
+      if (inline.source !== read.source || inline.witness?.entryId !== read.entryId || inline.witness.revision !== read.revision) throw new Error('The containing note changed; refresh before changing its Base source.');
+    }
+  }
+
   get basePath(): string { return this.path; }
   /** Admission for a new property interaction only. Existing drafts/writes keep
    * their captured guards. A coherent publish precedes refresh's final flag reset. */
@@ -364,18 +419,23 @@ export class BaseController {
 
   /** Refresh failures are represented in state; mutation failures reject to the caller. */
   refresh(): Promise<void> {
+    this.configurationReadProof = undefined;
     this.clearWake(); this.stale = true;
     if (this.timer !== undefined) { clearTimeout(this.timer); this.timer = undefined; }
     const refresh = async () => {
       if (this.disposed || !this.clock.isVisible()) return;
       const epoch = this.epoch;
+      this.configurationReadProof = undefined;
+      let configurationRead: BaseConfigurationRead | undefined, querying = false;
       if (!this.current.updating) this.publish({ ...this.current, updating: true, error: null });
       try {
         const service = this.options.vault.adapter.documentSemantics;
         const observe = async (path: string) => this.options.vault.adapter.stat ? await this.options.vault.adapter.stat(path) : this.options.vault.entries.get(path);
-        const definition = service ? await observe(this.path) : undefined;
+        let definition = await observe(this.path);
         const inline = this.options.inlineSource ? await this.options.inlineSource.read() : undefined;
-        const source = inline ? inline.source : await this.options.vault.read(this.path);
+        const coherent = !inline && this.options.vault.adapter.durableWrites ? await this.options.vault.readDurableText(this.path) : undefined;
+        const source = inline ? inline.source : coherent ? coherent.content : await this.options.vault.read(this.path);
+        if (coherent) definition = {path: coherent.path, entryId: coherent.entryId, revision: coherent.revision, type: 'file', ctime: coherent.stat.ctime, mtime: coherent.stat.mtime, size: coherent.stat.size};
         if (inline?.witness && definition && (inline.witness.entryId !== definition.entryId || inline.witness.revision !== definition.revision)) throw new Error('The containing note changed. Refresh before editing this Base.');
         if (this.disposed || epoch !== this.epoch) { this.schedule(); return; }
         let version = this.version + 1;
@@ -402,6 +462,11 @@ export class BaseController {
         } else if (this.viewName !== undefined) viewIndex = baseViewIndexByName(document.views, this.viewName);
         const selectedId = document.views[viewIndex]?.id;
         if (typeof selectedId === 'string') this.selectedViewId = selectedId;
+        if (definition?.entryId && definition.revision && document.views[viewIndex]) {
+          const read: BaseConfigurationRead = {source, path: this.path, entryId: definition.entryId, revision: definition.revision, version: this.current.version, viewIndex, ...(typeof selectedId === 'string' ? {viewId: selectedId} : {})};
+          await this.verifyConfigurationRead(read, () => { if (this.disposed || epoch !== this.epoch) throw new Error('The Base configuration read was retired.'); });
+          configurationRead = read;
+        }
         let result: BaseQueryResult;
         const currentPath = currentFilePath(this.query, this.path), expectedCurrentEntryId = this.query.currentFileEntryId;
         const current = service || expectedCurrentEntryId !== undefined
@@ -426,7 +491,9 @@ export class BaseController {
               },
             } : {}),
           };
+          querying = true;
           result = await this.sharedQueries.query(request);
+          querying = false;
           version = Number(result.version);
           if (this.disposed || epoch !== this.epoch) { this.schedule(); return; }
           const latest = await observe(this.path);
@@ -443,7 +510,9 @@ export class BaseController {
             return { path: entry.path, ctime: entry.ctime, mtime: entry.mtime, size: entry.size,
               properties: metadata?.frontmatter, tags: metadata?.tags };
           });
+          querying = true;
           result = executeBaseQuery(document, { version, files }, { currentFilePath: this.path, ...this.query, viewIndex });
+          querying = false;
         }
         this.query = { ...this.query, viewIndex };
         this.lastCapture = sharedBaseCapture(result);
@@ -451,10 +520,17 @@ export class BaseController {
         // Identical rows can still belong to a different `this` context. Keep
         // its saved witness with the result used by footer advice and edits.
         const signature = JSON.stringify([source, this.identities.get(this.path), [currentPath, current?.entryId, current?.revision], result.rows.map(row => this.identities.get(row.path)), { ...result, version: 0 }, sharedBaseCoverage(result)]);
-        if (signature === this.signature && !this.settled.error) { this.publish(this.settled); return; }
+        if (signature === this.signature && !this.settled.error) { if (configurationRead) this.retainConfigurationRead({...configurationRead,version:this.settled.version},false); this.publish(this.settled); return; }
         this.version = version; this.signature = signature;
+        if (configurationRead) this.retainConfigurationRead({...configurationRead,version},false);
         this.publish({ version, source, result, error: null, updating: false });
       } catch (error) {
+        if (querying && configurationRead && !(this.current.result && sharedBasePreview(this.current.result))) {
+          try {
+            await this.verifyConfigurationRead(configurationRead, () => { if (this.disposed || epoch !== this.epoch) throw new Error('The Base configuration read was retired.'); });
+            this.retainConfigurationRead({...configurationRead,version:this.current.version},true);
+          } catch { this.configurationReadProof = undefined; }
+        } else this.configurationReadProof = undefined;
         if (!this.disposed && epoch === this.epoch) this.publish({ ...this.current, updating: false, error: error instanceof Error ? error : new Error(String(error)) });
       }
     };
@@ -919,14 +995,14 @@ export class BaseController {
   }
 
   /** Shared absolute-source transaction. A retry persists the same draft once. */
-  private async changeConfiguration(version: number, change: (document: BaseDocument) => number, committed?: () => Promise<BaseViewRenameReport | void>): Promise<BaseViewRenameReport | void> {
-    const { validate, validateWrite } = this.guard(version, this.path, true), expected = this.current.source;
+  private async changeConfiguration(version: number, change: (document: BaseDocument) => number, committed?: () => Promise<BaseViewRenameReport | void>, repair?: {read: BaseConfigurationRead; validate(): void; validateWrite(): void}): Promise<BaseViewRenameReport | void> {
+    const { validate, validateWrite } = repair ?? this.guard(version, this.path, true), expected = repair ? repair.read.source : this.current.source;
     let allocation = 0;
     const document = BaseDocument.parse(expected, used => this.allocateConfigurationViewId(expected, allocation++, used)), index = change(document), desired = document.toString();
     const selected = document.views[index];
     if (!selected && document.views.length) throw new Error('The selected base view does not exist');
     const selectionSerial = this.selectionSerial;
-    const witness = this.current.result ? sharedBaseWitness(this.current.result, this.path) : this.emptyConfigurationWitness;
+    const witness = repair ? {entryId:repair.read.entryId,revision:repair.read.revision} : this.current.result ? sharedBaseWitness(this.current.result, this.path) : this.emptyConfigurationWitness;
     const previous = !this.options.inlineSource ? this.pendingConfigurations.get(desired) : undefined;
     if (previous && (previous.expected !== expected || previous.selectionSerial !== selectionSerial || previous.index !== index || previous.name !== (selected?.name ?? '')
       || previous.bound !== (this.viewName !== undefined) || previous.adapter !== this.options.vault.adapter
@@ -1104,6 +1180,21 @@ export class BaseController {
     await this.changeConfiguration(version, document => { document.changeViewSource(index, selected); return active; });
   }
 
+  /** Query-error recovery grants only a source change on the selected parsed
+   * view. It does not authorize property writes or other configuration edits. */
+  async repairViewSource(read: BaseConfigurationRead, source: BaseViewSource): Promise<void> {
+    const proof = this.configurationReadProof, selected = structuredClone(source);
+    const validate = () => {
+      if (!proof || !proof.repairable || this.configurationRead !== read || !this.current.error || this.current.result && sharedBasePreview(this.current.result) || baseViewSource(BaseDocument.parse(read.source).views[read.viewIndex]).kind !== 'collection') throw new Error('The failed Base configuration changed; refresh before changing its source.');
+    };
+    const validateWrite = () => {
+      if (!proof || this.disposed || proof.adapter !== this.options.vault.adapter || proof.capability !== this.options.vault.adapter.durableWrites || proof.identity !== this.identities.get(this.path)) throw new Error('The Base source repair owner was replaced or retired.');
+    };
+    validate();
+    await this.verifyConfigurationRead(read, validate);
+    await this.changeConfiguration(read.version, document => { document.changeViewSource(read.viewIndex, selected); return read.viewIndex; }, undefined, {read,validate,validateWrite});
+  }
+
   async duplicateView(version: number, index = this.selectedViewIndex, name?: string): Promise<void> {
     await this.changeConfiguration(version, document => {
       const view = document.views[index];
@@ -1165,6 +1256,7 @@ export class BaseController {
   }
 
   dispose(): void {
+    this.configurationReadProof = undefined;
     this.disposed = true; this.clearWake(); this.epoch++; this.lastInvalidation = { kind: 'controller-dispose' }; this.sharedQueries.dispose();
     for (const runner of this.summaryQueries) runner.dispose(); this.summaryQueries.clear();
     this.undoCommands = []; this.redoCommands = []; this.pendingPropertyHistory.clear(); this.propertySourceAttempts.clear(); this.pendingConfigurations.clear(); this.configurationViewIds = undefined;
