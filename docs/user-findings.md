@@ -1,5 +1,30 @@
 # User findings queue
 
+## Bases desktop closeout — 2026-10-26
+
+- Computed reverse relations/rollups falsely showed missing-raw diagnostics:
+  implemented `0393e387`; three focused checks and real whole-namespace native
+  relation/rollup checks pass.
+- Trashed relation targets stayed live in queries: implemented/reviewed `b9037d59`;
+  hidden files stay recoverable/raw-readable, sources stay unchanged, schema2
+  invalidates old derived caches. Two focused Rust checks and native deletion/
+  unresolved-link checks pass.
+- Successful New-item Retry hid its focused button, preventing Escape:
+  implemented/reviewed `be163101`;21popup checks and actual native corrected-title
+  recovery/close pass, without stealing focus the user moved elsewhere.
+- Original save-close warning: existing Recovery002 passes all three real failure/
+  retry protocols, including acknowledged summary save. Its earlier receipt stays
+  distinct from final normal quit/restart acceptance.
+- User requests no unnecessary tests: broad/reference expansion stopped. The
+  remaining heavy-user stages were continued from retained disposable fixtures,
+  rather than repeating passed stages. Final continuation005 passes8checks/18actions,
+  exact restart and two normal quits; no owned test processes remain.
+- External changes use the existing30-second periodic native scan. The old15-second
+  driver wait expired before discovery; final45-second wait passes. No frontend
+  stale-lease defect or data overwrite was established.
+
+[Closeout evidence and remaining limits](history/bases-desktop-closeout-20261026.md).
+
 ## Bases actual acceptance findings — 2026-10-22
 
 Latest completed cutoff2026-10-26/archive010: durable fixture admission is

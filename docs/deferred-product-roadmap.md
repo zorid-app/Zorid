@@ -9,15 +9,37 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
-Latest user steering: **do not do unnecessary tests**. Reference/harness expansion
-has stopped. Current root4ba88643 composes the reviewed following-context fix
-2299→2d5fbbe3 and completed test corrections. Desktop013 produceraf90928c passed;
-final rebuild and three focused known-bug checks precede ONE complete native
-heavy-user journey. Prior broad matrix gaps remain recorded, not new mandatory
-reruns. Current Obsidian reference logic13/13 PASS; visual005 captured14/23 and
-stopped on an observer counting an invisible measurement card, not a demonstrated
-product defect. Main remains e7d655e1; integrate confirmed implementation after
-focused verification and the final heavy journey, without another approval stop.
+**Local desktop Bases closeout — 2026-10-26.** Root owns integration from
+`codex/types-bases-model` / `.worktrees/types-bases-model`; canonical main's
+integration parent is `e7d655e1`. Reviewed product source is `be163101`, with
+Rust namespace/cache fix `b9037d59`; later commits through `4c71a4a6` correct
+only the desktop driver. Integration uses a fast-forward, preserving the exact
+reviewed implementation. No push, mobile, task/calendar or new sync work is opened.
+
+The heavy-user workflow is covered in retained stages, **not one uninterrupted
+all-green campaign**: heavy005 reaches55checks/366actions; continuation001 covers
+New recovery/Cards/List; continuation003 covers actual Chromium Kanban move,
+keyboard move, split consistency and sidebar context; continuation004 verifies
+exact inline configuration and stale-write protection; continuation005 PASSES
+8checks/18actions, external discovery, exact note/Base/template-body restart and
+two normal quits (exit0, no leaks). All source/artifact freezes verify. Passed
+stages were not restarted after the user's explicit no-unnecessary-tests steering.
+
+Confirmed defects fixed: computed reverse/rollup values falsely required raw
+editable source; trash files incorrectly remained live relation targets; successful
+New-item Retry lost focus and prevented Escape. Focused checks pass (three derived
+renderer checks, two Rust namespace/cache regressions,21popup checks). Matching
+native/CLI rebuild, matching WASM rebuild and desktop016 TypeScript/build pass.
+Browser/CLI runtime
+receipts and their older-source limits remain recorded separately. Native uses
+its existing30-second external scan; the final driver waits45seconds for discovery.
+No rescan optimization or broad suite/reference-matrix expansion was added.
+
+See [desktop closeout](history/bases-desktop-closeout-20261026.md) for evidence,
+artifact identities and retained limits. Earlier interrupted campaigns below are
+historical; they do not become blanket acceptance claims. Complete pixel parity,
+unexecuted safety/filter/config matrices, supplemental web Worker identity and
+other-platform runtime remain unclaimed. Original receipts/archives are retained.
 
 
 Latest completed cutoff (2026-10-26, archive010; source throughc73b0805):

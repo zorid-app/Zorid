@@ -1,6 +1,6 @@
 # Bases implementation pass
 
-Updated 2026-10-22. Status: **implementation in progress; composed runtime acceptance pending**.
+Updated 2026-10-26. Status: **local desktop implementation accepted within the recorded closeout scope**.
 This is the current feature scope and completion checklist for this pass. Follow
 the [roadmap](../roadmap.md) for other milestones. This document supersedes older
 Types/Bases designs and combined Bases/Tasks/Calendar implementation assignments.
@@ -11,6 +11,15 @@ restarting passed scenarios. Finish focused checks for confirmed defects and one
 complete actual heavy-user desktop journey before integration. Retain earlier
 campaign results and unexecuted coverage honestly; do not turn partial reference
 captures or supplemental observer failures into product-parity claims.
+
+The sustained desktop workflow is complete in retained stages, including rich
+properties/relations, full literal templates, all four layouts, split/sidebar/
+embeds, rejected stale writes and exact normal quit/restart. It is not a single
+uninterrupted passing campaign. See the [closeout](../history/bases-desktop-closeout-20261026.md)
+for exact source, receipts and limitations. The detailed inventory below remains
+useful for broader reference/edge-case coverage; unchecked items must not be read
+as either missing implementation or unearned native/parity acceptance. No further
+blanket test campaign is a gate for this scoped integration.
 
 ## Goal and settled decisions
 

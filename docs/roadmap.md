@@ -1,6 +1,6 @@
 # Product roadmap
 
-Updated 2026-10-21. This is the maintained delivery order and scope register for
+Updated 2026-10-26. This is the maintained delivery order and scope register for
 Zorid. The [architecture manual](architecture/README.md) explains system design;
 the [execution checkpoint](deferred-product-roadmap.md) records owners, branches
 and evidence; [user findings](user-findings.md) records incoming bugs/requests.
@@ -13,8 +13,10 @@ the user deferred further performance optimization/stress budgets and requested
 ordinary functional acceptance. Matching macOS Electron, actual web and standalone
 CLI checks pass; the browser startup and rename/save failures found during this
 closeout are fixed, reviewed and verified in the app. See the execution checkpoint
-for exact source, results and limits. **Next: local S4 Bases.**
-Existing feature/iOS work is preserved; no later stage was implemented here.
+for exact source, results and limits. **Local S4 Bases is delivered within the recorded desktop scope.**
+The [Bases closeout](history/bases-desktop-closeout-20261026.md) records staged
+heavy-user acceptance and remaining coverage limits. Existing iOS work is
+preserved; no task/calendar, sync or mobile milestone is opened by this closeout.
 
 Direct user steering (2026-10-21) defers the broader managed-data/Tasks/Calendar
 work and prioritizes Bases now. File-backed query/view configuration
@@ -71,7 +73,7 @@ performance work is deferred by the user. Later milestones remain **planned**.
 | S0 | Storage layer, saving and local recovery — immediate priority | Current source/retained-artifact inventory |
 | S0A | Modular interfaces and feature-consumer contract review | S0; storage contract design starts within S0 |
 | S1 | Rust parsing, indexing, caching and search performance | S0A |
-| S4 | Fully usable local desktop Bases — next | S1; bounded local Base/property contracts |
+| S4 | Local desktop Bases delivered within recorded scope | S1; bounded local Base/property contracts |
 | S3 | Managed-data services and feature contracts — deferred until after S4 | S1 |
 | S5 | Fully usable desktop Tasks | S4 and relevant S3 contracts |
 | S6 | Fully usable desktop Calendar and planning | S5 |
@@ -282,23 +284,23 @@ Execution scope and completion checklist:
 [Bases implementation pass](plans/bases-implementation-goal.md). Read it before
 implementing Base queries, property definitions, layouts, commands or embeds.
 
-2026-10-21 latest UI direction: use Obsidian's Bases appearance and interaction
-as the exact starting target. Verify concrete reference scenarios with REA and
-actual UI evidence; static inventories are not visual or interaction acceptance.
-This scoped instruction supersedes earlier reference-only UX discretion for Bases.
+Obsidian's Bases appearance and interaction are the starting reference. REA and
+actual runtime evidence inform concrete behavior; the latest project direction
+prioritizes the best Zorid UX and the agreed improvements. The closeout establishes
+bounded desktop functionality, not complete visual or behavioral parity.
 
-- [ ] Create/open/configure Bases through normal UI; useful presets and creation
+- [x] Create/open/configure Bases through normal UI; useful presets and creation
   defaults; property value types and appropriate editing controls. No named Types
   or Type editor. An ordinary `type: book` property is user data, not a reserved
   schema declaration. Select/status option configuration remains a property concern.
-- [ ] Multiple named saved views: table/cards/list/Kanban, filtering, grouping,
+- [x] Multiple named saved views: table/cards/list/Kanban, filtering, grouping,
   sorting, formulas, visible fields and source-preserving configuration editing.
-- [ ] Note creation and inline editing work in file tabs and embeds/splits, with
+- [x] Note creation and inline editing work in file tabs and embeds/splits, with
   stale identity, dirty-buffer, pin-close and mount-lifecycle rules intact.
-- [ ] Invalid definitions remain editable/saveable with clear diagnostics.
-- [ ] Shared property settings support select/multiselect/status and relations/
+- [x] Invalid definitions remain editable/saveable with clear diagnostics.
+- [x] Shared property settings support select/multiselect/status and relations/
   reverse relations/rollups without named note Types. Settle persistence locally.
-- [ ] New copies the configured template's complete properties and body literally;
+- [x] New copies the configured template's complete properties and body literally;
   this is the approved difference from the inspected Obsidian implementation.
 
 **Exit:** actual Electron create Base → configure views → create/edit notes
