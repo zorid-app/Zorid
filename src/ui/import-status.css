@@ -6,3 +6,8 @@
 .import-status-message { margin:3px 0 0; color:var(--text-muted); font-size:12px; line-height:1.5; }
 .import-status-retry { flex-shrink:0; padding:6px 12px; border-radius:6px; }
 .import-status-retry[hidden] { display:none; }
+.import-status-host { display:contents; }
+.import-status.mod-compact { display:inline-flex; max-height:none; overflow:visible; padding:0; border:0; background:transparent; }
+.import-status.mod-compact[hidden], .import-status-row[hidden], .import-status-details[hidden] { display:none; }
+.import-status-details { display:inline-flex; align-items:center; gap:5px; padding:3px 4px; border:0; background:transparent; color:var(--text-muted); font:inherit; white-space:nowrap; }
+.import-status-details:hover { color:var(--text-normal); background:var(--background-modifier-hover); }

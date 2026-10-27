@@ -883,13 +883,16 @@ test('browser command recovery runs after note recovery and installs its final n
   await (workspace as any).buffers.get('One.md').saveRecoveryCopy();
 });
 
-test('desktop reconciliation stays quiet over usable notes and cleans its subscription',async t=>{
+for(const editorOnly of [false,true])test(`${editorOnly?'embedded':'desktop'} reconciliation stays quiet over usable notes and cleans its subscription`,async t=>{
   const {workspace,root}=await setup(t);const adapter=new MemoryAdapter({'Visible.md':'usable'});
   let listener:(()=>void)|undefined,stops=0;
   const status={complete:false,scanComplete:false,observed:1,imported:1,namespaceApplied:0,issueCount:1,issues:[],issuesTruncated:false};
-  await workspace.openVault({adapter,label:'Importing',id:'test:importing',reconciliation:{getStatus:()=>status,subscribe:fn=>{listener=()=>fn(status);return()=>{stops++;};},retry:async()=>{status.complete=true;status.scanComplete=true;listener?.();}}});
+  await workspace.openVault({adapter,label:'Importing',id:'test:importing',editorOnly,reconciliation:{getStatus:()=>status,subscribe:fn=>{listener=()=>fn(status);return()=>{stops++;};},retry:async()=>{status.complete=true;status.scanComplete=true;listener?.();}}});
   const banner=root.querySelector<HTMLElement>('.import-status')!;
   assert.ok(banner);assert.equal(workspace.vault.entries.has('Visible.md'),true);
+  assert.ok(root.querySelector(editorOnly?'.workspace-center':'.status-bar .import-status-host')?.contains(banner),'Background availability remains attached to its platform shell');
+  await workspace.openNote('Visible.md');
+  assert.ok(root.querySelector(editorOnly?'.workspace-center':'.status-bar .import-status-host')?.contains(banner),'Ordinary status rendering preserves the availability control');
   assert.equal(banner.hidden,true);assert.equal(banner.dataset.state,'checking');assert.equal(banner.getAttribute('aria-busy'),'true');
   assert.equal(banner.querySelector<HTMLButtonElement>('.import-status-retry')!.hidden,true);
   assert.match(banner.querySelector('.import-status-message')!.textContent!,/notes will appear here/i);

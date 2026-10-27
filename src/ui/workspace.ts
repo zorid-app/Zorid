@@ -264,6 +264,7 @@ export class Workspace {
   private sidebarControls?: ReturnType<typeof createSidebarControls>;
   private disposeFileListMenu?: () => void;
   private importStatusCleanup?:()=>void;
+  private importStatusHost?:HTMLElement;
 
   constructor(root: HTMLElement, editorFactory?: EditorFactory, viewFactories: WorkspaceViewFactories = {}) { this.root = root; this.editorFactory = editorFactory; this.viewFactories = viewFactories; }
   private noteStorageFailure(error:unknown,message='This note couldn’t be saved. Keep it open and try again.'):void {
@@ -993,11 +994,14 @@ export class Workspace {
     const switcher = textButton(this.platform.label, () => this.run(() => this.chooseVault()), 'vault-switcher'); switcher.prepend(icon('folder')); switcher.append(icon('down',14));
     this.sidebar.append(title,tabs,tools,this.sidebarContent,switcher);
     const center = el('section','workspace-center');
+    this.status = el('footer','status-bar'); this.status.setAttribute('aria-live','polite');
+    this.importStatusHost=undefined;
     const reconciliation=this.platform.reconciliation;
     if(reconciliation){
+      if(!this.platform.editorOnly){this.importStatusHost=el('div','import-status-host');this.status.append(this.importStatusHost);}
       const vault=this.vault,generation=this.vaultGeneration;
       const count=()=>[...vault.entries.values()].filter(entry=>entry.type==='file').length;
-      const view=mountImportStatus(center,{status:reconciliation.getStatus(),entryCount:count(),retry:async()=>{
+      const view=mountImportStatus(center,{status:reconciliation.getStatus(),entryCount:count(),statusHost:this.importStatusHost,retry:async()=>{
         await reconciliation.retry();if(this.vault!==vault||this.vaultGeneration!==generation)return;
         await vault.reload();update();
       }});
@@ -1013,7 +1017,6 @@ export class Workspace {
     rightTabs.append(button('table','Bases',()=>this.run(async()=>{await this.sidebarBase?.session.flush();const path=this.sidebarBasePath??this.sidebarBase?.path??this.current()?.path;if(this.sidebarBase&&this.sidebarBase.path===path){this.rightTab='base';this.renderRight();this.saveSession();}else if(path&&/\.base$/i.test(path))await this.openBaseSidebar(path);else notice('Open a Base first.');})));
     this.sidebarBasePinButton=button('pin','Pin sidebar Base',()=>this.run(()=>this.toggleSidebarBasePin()),'sidebar-base-pin');this.sidebarBasePinButton.hidden=true;rightTabs.append(this.sidebarBasePinButton);
     rightTabs.append(button('rightbar','Toggle right sidebar',()=>this.toggleRight(),'pane-sidebar-toggle')); this.rightContent=el('div','right-content'); this.right.append(rightTabs,this.rightContent);
-    this.status = el('footer','status-bar'); this.status.setAttribute('aria-live','polite');
     const status=el('section','native-document-status');status.setAttribute('aria-label','Save and recovery notices');status.setAttribute('aria-live','polite');
     this.nativeDocumentStatus=status;
     if(this.platform.editorOnly){
@@ -2612,7 +2615,7 @@ export class Workspace {
   private renderStatus():void{
     this.renderNativeDocumentStatus();
     if(!this.activePane)return;const tab=this.current();const buffer=tab?.path?this.buffers.get(tab.path):undefined;const text=buffer?.text||'';
-    this.status.replaceChildren();
+    this.status.replaceChildren(...(this.importStatusHost?[this.importStatusHost]:[]));
     if(tab?.kind!=='note')return;
     if(tab?.path&&!isMarkdown(tab.path)){if(/\.base$/i.test(tab.path))this.status.append(el('span','save-state',buffer?.error?'Couldn’t save — keep this Base open':buffer?.dirty?'Saving…':''));this.status.append(el('span','',`${this.vault.entries.get(tab.path)?.size??0} bytes`));return;}
     this.status.append(el('span','save-state',buffer?.error?'Couldn’t save — keep this note open':buffer?.dirty?'Saving…':''));

@@ -1,10 +1,12 @@
 import type { DesktopReconciliation } from '../platform/bridge';
-import { el,textButton } from './dom.ts';
+import { el,icon,modal,textButton } from './dom.ts';
 
 export interface ImportStatusOptions {
   status:DesktopReconciliation|null;
   /** Count from the visible authority, never the scanner's imported counter. */
   entryCount:number;
+  /** Usable vaults keep background check warnings out of the editing area. */
+  statusHost?:HTMLElement;
   retry():Promise<void>;
 }
 export interface ImportStatusView {
@@ -45,18 +47,41 @@ export function mountImportStatus(host:HTMLElement,options:ImportStatusOptions):
   const heading=el('strong','import-status-heading'),message=el('p','import-status-message');
   message.role='status';message.setAttribute('aria-live','polite');
   copy.append(heading,message);
-  const retry=textButton('Try again',()=>{
+  const startRetry=()=>{
     if(busy||destroyed)return;
-    cancelTimer();attempts=0;void runRetry();
-  },'import-status-retry');
-  row.append(copy,retry);element.append(row);host.append(element);
+    closeDetails();cancelTimer();attempts=0;void runRetry();
+  };
+  const retry=textButton('Try again',startRetry,'import-status-retry');
+  let detailsModal:ReturnType<typeof modal>|undefined;
+  const closeDetails=()=>{detailsModal?.close();detailsModal=undefined;};
+  const explanation=()=>status?.failure
+    ?'Zorid couldn’t check this folder. Make sure it’s available, then try again.'
+    :status?.issues.some(issue=>issue.code==='reconciliation_blocked')
+      ?'Some file changes couldn’t be verified. Zorid kept the existing saved versions instead of guessing which changes to accept.'
+      :'Zorid couldn’t check every file. You can keep working with the notes that are available.';
+  const details=textButton('Folder needs attention',()=>{
+    if(detailsModal?.content.isConnected)return;
+    detailsModal=modal('Folder needs attention');
+    detailsModal.content.append(el('h2','','Folder needs attention'),el('p','',explanation()));
+    const actions=el('div','modal-buttons');
+    const again=textButton('Try again',startRetry);
+    actions.append(textButton('Done',closeDetails),again);detailsModal.content.append(actions);again.focus();
+  },'import-status-details');
+  details.prepend(icon('circle-alert',13));details.setAttribute('aria-haspopup','dialog');
+  row.append(copy,retry);element.append(row,details);host.append(element);
 
   const complete=()=>!!status?.complete&&!status.failure;
   const cancelTimer=()=>{if(timer!==null){clearTimeout(timer);timer=null;}};
   const refresh=()=>{
     if(destroyed)return;
     const needsAttention=!complete()&&!busy&&attempts===retryDelays.length&&timer===null;
+    const compact=entryCount>0;
+    const parent=compact&&options.statusHost?options.statusHost:host;
+    if(element.parentElement!==parent)parent.append(element);
     element.hidden=complete()||(!needsAttention&&entryCount>0);
+    element.classList.toggle('mod-compact',compact);
+    row.hidden=compact;details.hidden=!compact||!needsAttention;
+    if(complete())closeDetails();
     element.dataset.state=needsAttention?'incomplete':'checking';
     element.setAttribute('aria-busy',String(!complete()&&!needsAttention));
     retry.hidden=!needsAttention;retry.disabled=busy;
@@ -92,6 +117,6 @@ export function mountImportStatus(host:HTMLElement,options:ImportStatusOptions):
       else if(wasComplete||advanced){attempts=0;schedule();}
       refresh();
     },
-    destroy(){if(destroyed)return;destroyed=true;cancelTimer();element.remove();},
+    destroy(){if(destroyed)return;destroyed=true;cancelTimer();closeDetails();element.remove();},
   };
 }

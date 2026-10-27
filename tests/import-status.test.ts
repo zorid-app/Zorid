@@ -42,7 +42,9 @@ test('automatic retries back off, ignore duplicate notifications and stop at a b
     assert.match(view.element.textContent!,/Check that the folder is available/);
     assert.equal(view.element.querySelector('button')!.hidden,false);
     view.update(report(),1);t.mock.timers.tick(1_000_000);await settle();assert.equal(calls,4);
-    view.element.querySelector('button')!.click();assert.equal(calls,5);await settle();
+    view.element.querySelector<HTMLButtonElement>('.import-status-details')!.click();
+    [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(button=>button.textContent==='Try again')!.click();
+    assert.equal(calls,5);await settle();assert.equal(document.querySelector('[role="dialog"]'),null);
     assert.equal(view.element.hidden,true);
     view.destroy();
   }finally{f.close();}
@@ -147,7 +149,9 @@ test('completed physical scan keeps importing durable pages beyond four retries,
     for(const delay of delays){t.mock.timers.tick(delay);await settle();}
     assert.equal(calls,11);assert.equal(view.element.dataset.state,'incomplete');
     t.mock.timers.tick(1_000_000);await settle();assert.equal(calls,11);
-    view.element.querySelector('button')!.click();await settle();assert.equal(calls,12);
+    view.element.querySelector<HTMLButtonElement>('.import-status-details')!.click();
+    [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(button=>button.textContent==='Try again')!.click();
+    await settle();assert.equal(calls,12);
     view.update(completed(),count);t.mock.timers.tick(1_000_000);assert.equal(calls,12);view.destroy();
   }finally{f.close();}
 });
@@ -182,5 +186,29 @@ test('scan completion is progress once; regressing observations and repeated tra
     for(const delay of delays){t.mock.timers.tick(delay);await settle();}
     assert.equal(calls,5);assert.equal(view.element.hidden,false);
     t.mock.timers.tick(1_000_000);await settle();assert.equal(calls,5);view.destroy();
+  }finally{f.close();}
+});
+
+test('an unresolved check over usable notes stays in the status bar with details on demand',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const f=setup();try{
+    const footer=document.createElement('footer');document.body.append(footer);
+    const view=mountImportStatus(f.host,{status:report({issues:[{path:'Existing.md',code:'reconciliation_blocked'}]}),entryCount:9,statusHost:footer,retry:async()=>{}});
+    for(const delay of delays){t.mock.timers.tick(delay);await settle();}
+    assert.equal(view.element.parentElement,footer,'Usable notes retain their full workspace');
+    assert.equal(view.element.querySelector<HTMLElement>('.import-status-row')!.hidden,true);
+    const details=view.element.querySelector<HTMLButtonElement>('.import-status-details')!;
+    assert.equal(details.hidden,false);assert.match(details.textContent!,/folder needs attention/i);
+    assert.equal(document.querySelector('[role="dialog"]'),null);
+    details.click();
+    const dialog=document.querySelector<HTMLElement>('[role="dialog"][aria-label="Folder needs attention"]')!;
+    assert.ok(dialog);assert.match(dialog.textContent!,/file changes couldn’t be verified/i);
+    assert.doesNotMatch(dialog.textContent!,/notes aren’t available|Existing\.md/);
+    [...dialog.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='Done')!.click();
+    assert.equal(document.querySelector('[role="dialog"]'),null);
+    details.click();assert.equal(document.querySelectorAll('[role="dialog"]').length,1);
+    view.update(completed(),9);
+    assert.equal(view.element.hidden,true);assert.equal(document.querySelector('[role="dialog"]'),null);
+    view.destroy();
   }finally{f.close();}
 });
