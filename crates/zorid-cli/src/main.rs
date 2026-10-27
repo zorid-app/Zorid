@@ -251,7 +251,11 @@ impl Failure {
         }
     }
     fn json(&self) -> Value {
-        json!({"version":1,"ok":false,"error":{"code":self.code,"message":self.message,"detail":self.detail}})
+        let mut result = json!({"version":1,"ok":false,"error":{"code":self.code,"message":self.message,"detail":self.detail}});
+        if self.code == "collection_publication_pending" {
+            result["error"]["commit_uncertain"] = Value::Bool(true);
+        }
+        result
     }
 }
 type Result<T> = std::result::Result<T, Failure>;
@@ -424,6 +428,7 @@ impl From<zorid_native::Error> for Failure {
     fn from(error: zorid_native::Error) -> Self {
         use zorid_native::Error::*;
         match error {
+            DatabaseCommitted(_) => Self::new("collection_publication_pending", "The local collection change was saved but publication status is unavailable; retry only the identical operation ID and request", 1),
             ConditionalSource(error) => {
                 use zorid_native::ConditionalSourceError::*;
                 let (code, exit) = match error {
@@ -818,6 +823,22 @@ fn run(args: Args) -> Result<Output> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn committed_collection_failure_preserves_retry_identity_without_diagnostics() {
+        let failure = Failure::from(zorid_native::Error::DatabaseCommitted(Box::new(
+            zorid_native::Error::UnsafePath("secret native path diagnostic".into()),
+        )));
+        assert_eq!(failure.exit, 1);
+        let json = failure.json();
+        assert_eq!(json["error"]["code"], "collection_publication_pending");
+        assert_eq!(json["error"]["commit_uncertain"], true);
+        assert_eq!(json["error"]["detail"], Value::Null);
+        assert!(!json.to_string().contains("secret"));
+        let ordinary = Failure::from(zorid_native::Error::Busy("secret diagnostic"));
+        assert_eq!(ordinary.json()["error"]["code"], "filesystem_changed");
+        assert!(ordinary.json()["error"].get("commit_uncertain").is_none());
+    }
 
     #[test]
     fn partial_success_never_prints_native_diagnostics() {
