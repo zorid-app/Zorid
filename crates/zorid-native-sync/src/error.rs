@@ -58,6 +58,7 @@ impl From<zorid_native::Error> for Error {
     fn from(error: zorid_native::Error) -> Self {
         use zorid_native::Error::*;
         let (code, exit) = match error {
+            DatabaseCommitted(_) => ("collection_publication_pending", 1),
             ConditionalSource(error) => match error {
                 zorid_native::ConditionalSourceError::Changed => ("conditional_source_changed", 3),
                 zorid_native::ConditionalSourceError::Owner => ("source_capture_owner", 3),
@@ -109,6 +110,18 @@ impl From<zorid_native::Error> for Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn committed_collection_failure_retains_unknown_outcome_without_inner_diagnostics() {
+        let error = Error::from(zorid_native::Error::DatabaseCommitted(Box::new(
+            zorid_native::Error::Contract(zorid_core::ContractError::InvalidMutation {
+                reason: "secret-sentinel".into(),
+            }),
+        )));
+        assert_eq!(error.code(), "collection_publication_pending");
+        assert_eq!(error.exit_code(), 1);
+        assert!(!format!("{error:?} {error}").contains("secret-sentinel"));
+        assert_ne!(error.code(), "invalid_mutation");
+    }
     #[test]
     fn formatting_discards_native_diagnostic_and_contract_details() {
         let errors = [
