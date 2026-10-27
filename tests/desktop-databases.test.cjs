@@ -100,3 +100,28 @@ test('real editor-core manager admits databases but fences other roots, windows 
 test('packaged desktop includes the database boundary required by the native service',async()=>{
  const {desktopFiles}=await import('../scripts/stage-desktop.mjs');assert.ok(desktopFiles.includes('desktop/databases.cjs'));
 });
+
+
+test('safe collection errors use static domain messages and keep mutation uncertainty',()=>{
+ const request=req('create',{operationId:'op',name:'Books'});
+ for(const [code,fragment]of[
+  ['collection_name_taken','Choose another name'],['collection_invalid_name','reserved characters'],['collection_stale','Refresh it'],
+  ['collection_invalid_value','Correct the value'],['collection_not_found','no longer available'],['collection_deleted','Restore it'],
+  ['collection_property_name_taken','unique name'],['collection_option_name_taken','unique label'],['collection_source_conflict','draft was kept'],
+  ['invalid_mutation','Check the name'],['new_unknown_host_code','Refresh the collection'],['__proto__','Refresh the collection'],
+ ]){
+  const envelope={databases:true,schemaVersion:1,ok:false,error:{code,source:'host',commitUncertain:false}};
+  assert.throws(()=>decodeDatabaseEnvelope(request,envelope),error=>error.code===code&&error.commitUncertain===false&&error.message.includes(fragment));
+ }
+ const envelope={databases:true,schemaVersion:1,ok:false,error:{code:'collection_name_taken',source:'host',commitUncertain:true}};
+ assert.throws(()=>decodeDatabaseEnvelope(request,envelope),error=>error.code==='collection_name_taken'&&error.commitUncertain===true&&error.message.includes('retry this change rather than submitting a new one')&&!error.message.includes('Choose another name'));
+});
+
+test('preload ignores arbitrary native collection diagnostics instead of showing their paths or source',async()=>{
+ const source=fs.readFileSync(path.resolve(__dirname,'../desktop/preload.cjs'),'utf8');let bridge;
+ const secret='PRIVATE /Users/someone/vault/secret.md '+ 'content'.repeat(20000);
+ vm.runInNewContext(source,{require(name){assert.equal(name,'electron');return{contextBridge:{exposeInMainWorld(_name,value){bridge=value;}},ipcRenderer:{invoke:async()=>({ok:false,error:{code:'collection_name_taken',commitUncertain:false,message:secret,path:secret,source:secret}}),on(){},removeListener(){}},webUtils:{}};}});
+ const envelope=structuredClone(await bridge.durableInvoke('/vault','admission','databaseCommand',[req('create',{operationId:'op',name:'Books'})]));
+ assert.deepEqual(Object.keys(envelope.error).sort(),['code','commitUncertain','source']);
+ assert.throws(()=>decodeDatabaseEnvelope(req('create',{operationId:'op',name:'Books'}),envelope),error=>error.code==='collection_name_taken'&&error.message.includes('Choose another name')&&!error.message.includes('PRIVATE')&&!error.message.includes('/Users/'));
+});

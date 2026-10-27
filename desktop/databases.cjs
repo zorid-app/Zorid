@@ -14,7 +14,39 @@ const types=new Set(['text','number','checkbox','date','datetime','select','mult
 const reads=new Set(['list','get','get_entry','compose']);
 const mutation=op=>!reads.has(op);
 function scalar(text){for(let index=0;index<text.length;index++){const n=text.charCodeAt(index);if(n>=0xd800&&n<=0xdbff){const low=text.charCodeAt(++index);if(!(low>=0xdc00&&low<=0xdfff))return false;}else if(n>=0xdc00&&n<=0xdfff)return false;}return true;}
-function failure(code,uncertain=false){return Object.assign(new Error(uncertain?'Collection acknowledgement is uncertain; retain the identical operation ID and request.':'Collection request could not finish.'),{code,source:'host',commitUncertain:uncertain});}
+// Domain messages are compiled here. Native diagnostic text, paths and source
+// excerpts never cross into this error surface, including for unknown codes.
+const messages=Object.freeze({
+  collection_name_taken:'A collection with this name already exists, including in Trash. Choose another name.',
+  collection_invalid_name:'Choose a nonempty collection name without filename separators or reserved characters.',
+  collection_stale:'This collection changed. Refresh it before saving your changes.',
+  collection_invalid_value:'A property value does not match its configured datatype or options. Correct the value and try again.',
+  collection_not_found:'This collection or entry is no longer available. Refresh the collection.',
+  collection_deleted:'This collection was deleted. Restore it before editing its entries.',
+  collection_property_name_taken:'Each property in a collection needs a unique name. Choose another name.',
+  collection_option_name_taken:'Each option in a property needs a unique label. Choose another label.',
+  collection_destructive_confirmation:'This change removes existing values. Review the affected entries and confirm the change.',
+  collection_limit:'This collection request exceeds a supported limit. Reduce its size and try again.',
+  collection_source_conflict:'The note changed or its managed properties were edited. Your draft was kept. Refresh the note or use the collection property controls.',
+  revision_conflict:'This collection or note changed. Refresh it before saving your changes.',
+  idempotency_conflict:'This retry differs from the original request. Keep your draft and reload the current collection before making another change.',
+  entry_not_found:'The selected note is no longer available. Refresh the collection.',
+  entry_deleted:'The selected entry was deleted. Restore it before editing.',
+  invalid_path:'Choose a valid note location inside this vault.',
+  invalid_mutation:'This collection change is not valid. Check the name, property settings and values before trying again.',
+  database_request_limit:'This collection request is too large. Reduce its size and try again.',
+  request_limit:'This collection request exceeds a supported limit. Reduce its size and try again.',
+  invalid_database_request:'Check the collection name, property settings and values before trying again.',
+  invalid_database_response:'The collection response could not be verified. Refresh the collection.',
+  unsupported_host_capability:'This version of the local core does not support collections. Update Zorid and reopen the vault.',
+  client_not_admitted:'This vault session is no longer active. Reopen the vault before making another change.',
+  client_ownership_lost:'This vault session is no longer active. Reopen the vault before making another change.',
+  durable_scope_changed:'The selected vault changed. Reopen the collection in its current vault.',
+});
+function failure(code,uncertain=false){
+  const message=uncertain?'The collection change could not be confirmed. Keep your draft and retry this change rather than submitting a new one.':Object.hasOwn(messages,code)?messages[code]:'The collection request could not finish. Refresh the collection and try again.';
+  return Object.assign(new Error(message),{code,source:'host',commitUncertain:uncertain});
+}
 // Capture inert plain data before awaiting or invoking JSON.stringify. Accessors,
 // custom prototypes, toJSON, sparse arrays and cycles never execute caller code.
 function detached(value,max,depth=0,budget={nodes:0,bytes:0},active=new Set()){
