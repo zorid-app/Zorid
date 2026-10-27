@@ -83,6 +83,14 @@ test('deleting a default option clears its default while retaining stable option
 test('collection creation hints drop incompatible values and retain feasible schema values',async()=>{
   const {collectionInitialValues}=await import('../src/databases/collection-ui.ts');
   const schema:DatabaseCollection={...collection,properties:[...collection.properties,{id:'texttexttext',name:'Title',datatype:'text',options:[]},{id:'datedatedate',name:'Due',datatype:'date',options:[]},{id:'checkchecked',name:'Ready',datatype:'checkbox',options:[]}]};
-  assert.deepEqual(collectionInitialValues(schema,{Title:5,Due:'2026-02-30',Ready:'true',Status:'Started'}),{mnopqrstuvwx:'123456789abc'});
-  assert.deepEqual(collectionInitialValues(schema,{Title:'Book',Due:'2026-10-30',Ready:true}),{texttexttext:'Book',datedatedate:'2026-10-30',checkchecked:true});
+  assert.deepEqual(collectionInitialValues(schema,{texttexttext:5,datedatedate:'2026-02-30',checkchecked:'true',mnopqrstuvwx:'123456789abc'}),{mnopqrstuvwx:'123456789abc'});
+  assert.deepEqual(collectionInitialValues(schema,{texttexttext:'Book',datedatedate:'2026-10-30',checkchecked:true}),{texttexttext:'Book',datedatedate:'2026-10-30',checkchecked:true});
+});
+
+test('creation hints distinguish hidden field identities from readable template names',async()=>{
+  const {collectionInitialValues}=await import('../src/databases/collection-ui.ts');
+  const schema:DatabaseCollection={...collection,properties:[{id:'aaaaaaaaaaaa',name:'bbbbbbbbbbbb',datatype:'text',options:[]},{id:'bbbbbbbbbbbb',name:'Amount',datatype:'number',options:[]}]};
+  assert.deepEqual(collectionInitialValues(schema,{bbbbbbbbbbbb:5}),{bbbbbbbbbbbb:5});
+  assert.deepEqual(collectionInitialValues(schema,{bbbbbbbbbbbb:'Readable template value'},'names'),{aaaaaaaaaaaa:'Readable template value'});
+  assert.deepEqual(collectionInitialValues(schema,{aaaaaaaaaaaa:'Unknown template metadata'},'names'),{});
 });

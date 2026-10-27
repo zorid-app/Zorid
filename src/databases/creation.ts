@@ -15,6 +15,6 @@ export async function planCollectionEntryCreation(options:{vault:Vault;collectio
   let body=plan.templatePath?plan.text:'';
   const templateValues=plan.templatePath?Object.fromEntries(readProperties(body).map(property=>[property.key,property.value])):{};
   if(plan.templatePath)body=removeProperty(removeProperty(body,'_id'),'_type');
-  const values={...collectionInitialValues(collection,templateValues),...collectionInitialValues(collection,{...defaults.properties,...(options.group?{[basePropertyName(options.group.property)]:options.group.value}:{})})};
+  const values={...collectionInitialValues(collection,templateValues,'names'),...collectionInitialValues(collection,{...defaults.properties,...(options.group?{[basePropertyName(options.group.property)]:options.group.value}:{})})};
   return{path:plan.path,body,values,warnings:plan.warnings};
 }

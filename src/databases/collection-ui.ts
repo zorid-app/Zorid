@@ -34,10 +34,10 @@ export function collectionValue(value: unknown): string | number | boolean | nul
 }
 
 /** Best-effort creation hints never turn an impossible filter into a failed New. */
-export function collectionInitialValues(collection:DatabaseCollection,hints:Readonly<Record<string,unknown>>):Record<string,string|number|boolean|null|string[]> {
+export function collectionInitialValues(collection:DatabaseCollection,hints:Readonly<Record<string,unknown>>,keys:'fieldIds'|'names'='fieldIds'):Record<string,string|number|boolean|null|string[]> {
   const values:Record<string,string|number|boolean|null|string[]>={};
   for(const[key,input]of Object.entries(hints)){
-    const field=collection.properties.find(field=>field.id===key||field.name===key);if(!field)continue;
+    const field=collection.properties.find(field=>keys==='fieldIds'?field.id===key:field.name===key);if(!field)continue;
     if(input===null){values[field.id]=null;continue;}
     let value:unknown=input;
     const valid=field.datatype==='text'?typeof value==='string':field.datatype==='number'?typeof value==='number'&&Number.isFinite(value):field.datatype==='checkbox'?typeof value==='boolean':field.datatype==='date'?typeof value==='string'&&validDateText(value,false):field.datatype==='datetime'?typeof value==='string'&&validDateText(value,true):['select','status'].includes(field.datatype)?typeof value==='string'&&!!field.options.find(option=>option.id===value||option.name===value):Array.isArray(value)&&value.every(item=>typeof item==='string'&&field.options.some(option=>option.id===item||option.name===item));
