@@ -1578,6 +1578,9 @@ pub(crate) fn validate_rows_invocation(
         None if matches!(view.source, crate::BaseViewSource::Collection { .. }) => return Err(ExpressionDiagnostic::new("source-unavailable", "Collection source requires authoritative captured membership")),
         _ => {},
     }
+    if matches!(view.source, crate::BaseViewSource::Untyped) && options.summary_preview_property.as_ref().is_some_and(|property| !program::property_id(property).starts_with("file.")) {
+        return Err(ExpressionDiagnostic::new("configuration", "Untyped browsing summaries require file information"));
+    }
     if input.records.len() > options.max_scanned {
         return Err(budget("Snapshot exceeds scanned-record budget"));
     }
@@ -2495,21 +2498,30 @@ pub(crate) fn query_rows_validated(
         }
     }
     let mut matched_set = matched_available.iter().cloned().collect::<HashSet<_>>();
-    for row in &rows {
-        if let Some(record) = by_id.get(&row.entry_id) {
-            for (key, _) in &record.properties {
-                admit(&mut admission, |admission| {
-                    admission.charge(0)?;
-                    Ok(slots::<String>(1)
-                        .saturating_add(map_slot::<String, ()>())
-                        .saturating_add(crate::preview::string_bytes(key).saturating_mul(2))
-                        .saturating_add(32))
-                })?;
-                let property = format!("note.{key}");
-                if matched_set.insert(property.clone()) {
-                    matched_available.push(property);
-                }
-            }
+    // Catalog the entire selected source, before this view's filters, search,
+    // grouping visibility and limits. Otherwise an empty result strands the
+    // controls needed to change the filter that made it empty.
+    for record in input.records {
+        if !record.path.to_ascii_lowercase().ends_with(".md") || ignored.contains(&record.path) { continue; }
+        if let Some(scope) = &options.source_scope {
+            if !record.witness.as_ref().is_some_and(|w| scope.includes(&w.entry_id)) { continue; }
+        }
+        for (key, _) in &record.properties {
+            admit(&mut admission, |admission| {
+                admission.charge(0)?;
+                Ok(slots::<String>(1)
+                    .saturating_add(map_slot::<String, ()>())
+                    .saturating_add(crate::preview::string_bytes(key).saturating_mul(2))
+                    .saturating_add(32))
+            })?;
+            let property = format!("note.{key}");
+            if matched_set.insert(property.clone()) { matched_available.push(property); }
+        }
+    }
+    if let Some(scope) = &options.source_scope {
+        for key in scope.field_names() {
+            let property = format!("note.{key}");
+            if matched_set.insert(property.clone()) { matched_available.push(property); }
         }
     }
     for (name, _) in &program.formulas {
@@ -2521,7 +2533,7 @@ pub(crate) fn query_rows_validated(
         })?;
         matched_available.push(format!("formula.{name}"));
     }
-    let mut available = matched_available;
+    let available = matched_available;
     admit(&mut admission, |admission| {
         admission.charge(0)?;
         Ok(available
@@ -2765,9 +2777,8 @@ pub(crate) fn query_rows_validated(
             (None, Vec::new())
         };
     if matches!(view.source, crate::BaseViewSource::Untyped) {
-        // Keep internal values and sort admission intact until all predicates,
-        // sorting, grouping and summaries finish. Redact only public output.
-        available.retain(|key| key.starts_with("file."));
+        // Keep the metadata catalog for filter/sort controls. Only display
+        // columns and row/edit values are restricted to file information.
         for row in &mut rows { row.values.retain(|key, _| key.starts_with("file.")); row.edit_values.clear(); }
     }
     let dependency = program
@@ -2816,6 +2827,12 @@ pub(crate) fn query_rows_validated(
                 admission,
             )?)
             .saturating_add(slots::<crate::MetadataIssue>(input.metadata_issues.len()));
+        if matches!(view.source, crate::BaseViewSource::Untyped) {
+            bytes = bytes.saturating_add(slots::<PropertyValue>(properties.len()))
+                .saturating_add(string_copies(properties.iter().map(String::as_str), admission)?)
+                .saturating_add(map_slot::<String, PropertyValue>())
+                .saturating_add(crate::preview::string_bytes("order"));
+        }
         for issue in input.metadata_issues {
             bytes = bytes.saturating_add(crate::preview::issue_bytes(issue, admission)?);
         }
@@ -2825,8 +2842,15 @@ pub(crate) fn query_rows_validated(
         .checked_add(admission_work(&admission))
         .filter(|used| *used <= options.max_steps)
         .ok_or_else(|| budget("Preview admission exceeds query work budget"))?;
+    let mut presentation = view.configuration.clone();
+    if matches!(view.source, crate::BaseViewSource::Untyped) {
+        if let PropertyValue::Object(fields) = &mut presentation {
+            fields.retain(|(key, _)| key != "order");
+            fields.push(("order".into(), PropertyValue::Array(properties.iter().cloned().map(PropertyValue::String).collect())));
+        }
+    }
     let result = QueryRowsResult {
-        view: view.configuration.clone(),
+        view: presentation,
         rows,
         groups,
         summaries,

@@ -97,10 +97,16 @@ fn legacy_registry_is_ordinary_data_and_does_not_block_or_define_note_values() {
     assert_eq!(result.rows.len(), 1);
     assert_eq!(result.rows[0].entry_id, id("n"));
     assert_eq!(result.properties, ["file.name"]);
+    assert_eq!(
+        result.view.get("order"),
+        Some(&PropertyValue::Array(vec![PropertyValue::String(
+            "file.name".into()
+        )]))
+    );
     assert!(result
         .available_properties
         .iter()
-        .all(|key| key.starts_with("file.")));
+        .any(|key| key == "note.score"));
     assert!(result.rows[0]
         .values
         .keys()
@@ -343,7 +349,11 @@ fn untyped_sort_uses_hidden_frontmatter_and_formula_keys_before_public_redaction
         assert!(result
             .available_properties
             .iter()
-            .all(|key| key.starts_with("file.")));
+            .any(|key| key == "note.score"));
+        assert!(result
+            .available_properties
+            .iter()
+            .any(|key| key == "formula.reverse"));
         assert!(result.properties.iter().all(|key| key.starts_with("file.")));
         assert!(result.rows.iter().all(|row| row
             .values
@@ -381,5 +391,99 @@ fn digit_leading_field_id_is_addressable_without_a_second_storage_key() {
     assert_eq!(
         result.rows[0].values[&format!("note.{field}")],
         BaseValue::Number { value: 4.0 }
+    );
+}
+
+#[test]
+fn untyped_filter_sort_catalog_uses_whole_source_without_exposing_property_columns() {
+    let generation = generation(&[
+        ("n", "Alpha.md", "---\nscore: 7\npublic: first\n---\n"),
+        ("z", "Zulu.md", "---\nscore: 9\nlater: second\n---\n"),
+        ("a", "Typed.md", "---\nsecret: collection-only\n---\n"),
+    ]);
+    let program = compile_base_source("views:\n  - type: list\n    name: Empty\n    source: {kind: untyped}\n    filters: 'score > 999'\n    formulas: {double: 'score * 2'}\n  - type: list\n    name: Limited\n    source: {kind: untyped}\n    order: [file.name, score]\n    sort: [{property: file.name, direction: ASC}]\n    limit: 1\n    formulas: {double: 'score * 2'}\n").unwrap();
+    for view_index in [0, 1] {
+        let result = query_generation_scoped(
+            &program,
+            &generation,
+            &[],
+            scope(BaseViewSource::Untyped),
+            &QueryOptions {
+                view_index,
+                ..QueryOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(result.rows.len(), view_index);
+        for property in ["note.score", "note.public", "note.later", "formula.double"] {
+            assert!(
+                result
+                    .available_properties
+                    .iter()
+                    .any(|key| key == property),
+                "{property}"
+            );
+        }
+        assert!(!result
+            .available_properties
+            .iter()
+            .any(|key| key == "note.secret"));
+        assert_eq!(result.properties, ["file.name"]);
+        assert!(result.rows.iter().all(|row| row
+            .values
+            .keys()
+            .all(|key| key.starts_with("file."))
+            && row.edit_values.is_empty()));
+    }
+}
+
+#[test]
+fn untyped_presented_configuration_has_no_property_columns_groups_or_summaries() {
+    let generation = generation(&[("n", "Note.md", "---\nscore: 7\n---\n")]);
+    let source = "views: [{type: cards, name: Notes, source: {kind: untyped}, order: [score, formula.twice], groupBy: {property: score, direction: ASC}, summaries: {score: Sum}, image: score, properties: {score: {displayName: Score}}, columnSize: {score: 150}, formulas: {twice: 'score * 2'}}]\n";
+    let program = compile_base_source(source).unwrap();
+    let result = query_generation_scoped(
+        &program,
+        &generation,
+        &[],
+        scope(BaseViewSource::Untyped),
+        &QueryOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(result.properties, ["file.name"]);
+    assert_eq!(
+        result.view.get("order"),
+        Some(&PropertyValue::Array(vec![PropertyValue::String(
+            "file.name".into()
+        )]))
+    );
+    for key in ["groupBy", "groupOrder", "summaries", "image"] {
+        assert!(result.view.get(key).is_none(), "{key}");
+    }
+    assert_eq!(result.groups.len(), 1);
+    assert!(result.groups[0].key.is_none());
+    assert!(result.summaries.is_empty());
+    assert!(result
+        .available_properties
+        .iter()
+        .any(|key| key == "note.score"));
+    assert!(result
+        .available_properties
+        .iter()
+        .any(|key| key == "formula.twice"));
+    assert_eq!(
+        program
+            .configuration
+            .get("views")
+            .unwrap()
+            .as_array()
+            .unwrap()[0]
+            .get("order")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        2,
+        "presentation must not mutate saved configuration"
     );
 }

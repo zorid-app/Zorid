@@ -117,6 +117,9 @@ impl BaseSourceScope {
     pub fn revision(&self) -> &str {
         &self.revision
     }
+    pub(crate) fn field_names(&self) -> impl Iterator<Item = &str> {
+        self.types.iter().map(|(id, _)| id.as_str())
+    }
     pub(crate) fn includes(&self, id: &EntryId) -> bool {
         match self.source {
             BaseViewSource::Untyped => !self.assigned.contains(id),

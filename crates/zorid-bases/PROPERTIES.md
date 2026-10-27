@@ -37,7 +37,10 @@ Untyped views browse ordinary notes and exclude collection-owned entries,
 including entries awaiting collection deletion/trash publication. Their
 frontmatter can participate in filtering and sorting, but the result exposes
 file information rather than editable user-property columns. Open a note to
-edit its ordinary frontmatter.
+edit its ordinary frontmatter. The separate `availableProperties` catalog still
+includes metadata/formula keys for filtering and sorting. That catalog covers
+the whole selected source before view filters and limits, and does not grant
+editable/display columns or include fields from other collections.
 
 Collection queries use schema, ownership and typed values captured by Rust with
 the document generation's authority manifest. Query fields use `note.<fieldId>`

@@ -58,12 +58,34 @@ impl BaseProgram {
     /// configuration is inherited only by views without a source declaration.
     pub(crate) fn effective_view(&self, index: usize) -> Result<std::borrow::Cow<'_, Self>, ExpressionDiagnostic> {
         let view = self.views.get(index).ok_or_else(|| error("View index out of range"))?;
-        if !view.explicit_source { return Ok(std::borrow::Cow::Borrowed(self)); }
+        if !view.explicit_source && !matches!(view.source, BaseViewSource::Untyped) { return Ok(std::borrow::Cow::Borrowed(self)); }
         let mut selected = self.clone();
-        selected.filter = None;
-        selected.formulas = named_expressions(&view.configuration, "formulas")?;
-        selected.summaries = named_expressions(&view.configuration, "summaryDefinitions")?;
-        selected.summary_preview_dependency = crate::query::BaseClockDependency::Instant;
+        if view.explicit_source {
+            selected.filter = None;
+            selected.formulas = named_expressions(&view.configuration, "formulas")?;
+            selected.summaries = named_expressions(&view.configuration, "summaryDefinitions")?;
+            selected.summary_preview_dependency = crate::query::BaseClockDependency::Instant;
+        }
+        if matches!(view.source, BaseViewSource::Untyped) {
+            let browsing = &mut selected.views[index];
+            if browsing.group.as_ref().is_some_and(|group| !group.property.starts_with("file.")) {
+                browsing.group = None;
+                browsing.group_order = None;
+            }
+            browsing.summaries.retain(|(property, _)| property.starts_with("file."));
+            if let PropertyValue::Object(fields) = &mut browsing.configuration {
+                fields.retain(|(key, _)| key != "summaries" && !(browsing.group.is_none() && matches!(key.as_str(), "groupBy" | "groupOrder")));
+                if !browsing.summaries.is_empty() {
+                    fields.push(("summaries".into(), PropertyValue::Object(browsing.summaries.iter().map(|(property, name)| (property.clone(), PropertyValue::String(name.clone()))).collect())));
+                }
+                fields.retain(|(key, value)| key != "image" || text(value).is_some_and(|image| image == "file" || image.starts_with("file.")));
+                for (key, value) in fields {
+                    if matches!(key.as_str(), "properties" | "columnSize") {
+                        if let PropertyValue::Object(settings) = value { settings.retain(|(property, _)| property_id(property).starts_with("file.")); }
+                    }
+                }
+            }
+        }
         Ok(std::borrow::Cow::Owned(selected))
     }
     pub fn view_names(&self) -> Vec<Option<&str>> {

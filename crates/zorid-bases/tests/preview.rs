@@ -510,23 +510,31 @@ fn small_prepared_subset_does_not_prepare_a_hundred_thousand_entry_namespace() {
 fn summaries_describe_prepared_subset_without_claiming_complete_aggregates() {
     let builder = fixture();
     let captured = capture_rows(&builder, &["definition", "a"]);
-    let program = compile_base_source("filters: file.ext == 'md'\nviews:\n  - type: table\n    name: T\n    summaries:\n      score: Sum\n").unwrap();
+    let program = compile_base_source("filters: file.ext == 'md'\nviews:\n  - type: table\n    name: T\n    summaries:\n      file.size: Sum\n").unwrap();
     let result = query_preview(
         &program,
         &captured,
         &id("definition"),
-        &[],
+        &[FilePresentationFacts {
+            witness: RecordWitness {
+                entry_id: id("a"),
+                revision: Revision::new("r1").unwrap(),
+            },
+            size: Some(42),
+            ctime_ms: None,
+            mtime_ms: None,
+        }],
         &trusted_options(),
         MAX_PREVIEW_QUERY_OWNED_BYTES,
     )
     .unwrap();
     assert_eq!(
-        result.value.summaries["note.score"],
-        BaseValue::Number { value: 1.0 }
+        result.value.summaries["file.size"],
+        BaseValue::Number { value: 42.0 }
     );
     assert_eq!(
-        result.value.groups[0].summaries["note.score"],
-        BaseValue::Number { value: 1.0 }
+        result.value.groups[0].summaries["file.size"],
+        BaseValue::Number { value: 42.0 }
     );
     assert!(!result.value.complete && !result.value.aggregates_complete);
     assert_eq!(
