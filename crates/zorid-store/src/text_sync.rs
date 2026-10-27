@@ -525,7 +525,7 @@ impl Store {
                 return Err(zorid_client_sync::SyncError::IdentityMismatch.into());
             }
         }
-        let result = Self::apply_transaction_text(&tx, command, None, Some(text), None)?;
+        let result = Self::apply_transaction_text(&tx, command, None, Some(text), None, None)?;
         tx.commit()?;
         Ok(result)
     }
@@ -1000,6 +1000,7 @@ impl Store {
                 plan: plan.authored,
                 adoption_history: None,
             }),
+            Some(&observation),
         )?;
         put_revision(&tx, &plan.observed_baseline.state)?;
         let mut observed_state = physical.state.clone();

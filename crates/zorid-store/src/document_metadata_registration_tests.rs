@@ -240,6 +240,7 @@ fn foreign_store_provider_and_counter_allocations_do_not_admit_a_pin() {
         owner: pin.owner.clone(),
         generation: pin.shared_generation(),
         pins: Arc::new(AtomicUsize::new(1)),
+        database_state: pin.database_state.clone(),
     };
     expired(unchanged_check(&store, &forged_counter));
     drop(forged_counter);

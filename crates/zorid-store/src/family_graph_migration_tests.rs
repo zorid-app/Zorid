@@ -26,6 +26,7 @@ fn drop_graph_schema(connection: &Connection) {
 
 pub(super) fn downgrade(path: &Path, version: i64) {
     let mut connection = Connection::open(path).unwrap();
+    databases::drop_schema_for_test(&connection);
     connection.execute_batch("DROP TABLE host_intent_sources").unwrap();
     drop_graph_schema(&connection);
     if version < TEXT_SCHEMA_VERSION {
@@ -64,6 +65,7 @@ fn source_rows(connection: &Connection) -> Vec<(String, Vec<Vec<Value>>)> {
                     .any(|(accounting_name, _)| *accounting_name == name.as_str())
                 && name != "namespace_successions"
                 && name != "host_intent_sources"
+                && !databases::SCHEMA.iter().any(|(database_name,_)|*database_name==name)
         })
         .map(|name| {
             let mut statement = connection

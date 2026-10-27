@@ -667,6 +667,9 @@ fn finish(
         return Err(rejected(reason.code));
     }
     let plan = &prepared.durable;
+    if let BinaryTarget::Write { id, .. } = &plan.request.request.target {
+        databases::reject_binary_write(tx, id)?;
+    }
     if record_cut(tx, stage)?
         != Some(serde_json::to_string(&PlanRecord::Authorized(
             plan.clone(),

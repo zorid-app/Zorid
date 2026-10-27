@@ -81,6 +81,10 @@ pub use family_materialization::{FamilyContentWitness, FamilyMaterialization, Fa
 mod family_ledger;
 mod family_store;
 mod managed_records;
+pub mod databases;
+pub use databases::{DatabaseCollection, DatabaseDatatype, DatabaseEntry, DatabaseOption, DatabaseOptionInput,
+    DatabaseProperty, DatabasePropertyInput, DatabaseProjection, DatabaseProjectionKind,
+    DatabaseQueryState, DatabaseRequest, DatabaseSchemaProjection, DatabaseSnapshot};
 pub use managed_records::{
     ManagedChange, ManagedChangePage, ManagedCollection, ManagedCommit, ManagedExportPage,
     ManagedIntentDisposition, ManagedIntentInput, ManagedIntentPage, ManagedIntentRef,
@@ -138,7 +142,8 @@ use zorid_core::{
     Mutation, MutationRequest, RecordedOperation, Revision,
 };
 
-const SCHEMA_VERSION: i64 = 17;
+const SCHEMA_VERSION: i64 = 18;
+const SOURCE_GUARD_SCHEMA_VERSION: i64 = 17;
 const GRAPH_SCHEMA_VERSION: i64 = 16;
 const TEXT_SCHEMA_VERSION: i64 = 15;
 const OBSERVATION_SCHEMA_VERSION: i64 = 14;
@@ -181,6 +186,7 @@ fn schema_objects() -> Vec<(&'static str, &'static str)> {
         .chain(storage_accounting::REVISION_SCHEMA)
         .chain(family_ledger::SCHEMA)
         .chain(managed_records::SCHEMA)
+        .chain(databases::SCHEMA)
         .chain(file_state::SCHEMA)
         .chain(blob_index::SCHEMA)
         .chain(blob_stage::SCHEMA)
@@ -197,7 +203,7 @@ fn check_schema(connection: &Connection) -> Result<i64> {
     // Unreleased formats: reject before changing WAL or database bytes.
     if !matches!(
         version,
-        0 | PREDECESSOR_SCHEMA_VERSION | NAMESPACE_SCHEMA_VERSION | OBSERVATION_SCHEMA_VERSION | TEXT_SCHEMA_VERSION | GRAPH_SCHEMA_VERSION | SCHEMA_VERSION
+        0 | PREDECESSOR_SCHEMA_VERSION | NAMESPACE_SCHEMA_VERSION | OBSERVATION_SCHEMA_VERSION | TEXT_SCHEMA_VERSION | GRAPH_SCHEMA_VERSION | SOURCE_GUARD_SCHEMA_VERSION | SCHEMA_VERSION
     ) {
         return Err(StoreError::UnsupportedSchema(version));
     }
@@ -224,8 +230,10 @@ fn check_schema(connection: &Connection) -> Result<i64> {
                     && (version >= GRAPH_SCHEMA_VERSION
                         || (!family_graph::SCHEMA.iter().any(|(graph_name, _)| graph_name == name)
                             && !storage_accounting::schema().any(|(accounting_name, _)| accounting_name == name)))
-                    && (version == SCHEMA_VERSION
+                    && (version >= SOURCE_GUARD_SCHEMA_VERSION
                         || !host_source_guards::SCHEMA.iter().any(|(guard_name, _)| guard_name == name))
+                    && (version == SCHEMA_VERSION
+                        || !databases::SCHEMA.iter().any(|(database_name, _)| database_name == name))
             })
             .map(|(name, sql)| if name == "immutable_payloads" && version < TEXT_SCHEMA_VERSION {
                 (name, immutable_payloads::LEGACY_TABLE_SQL)
@@ -492,6 +500,7 @@ impl Store {
                 .chain(immutable_payloads::SCHEMA)
                 .chain(family_ledger::SCHEMA)
                 .chain(managed_records::SCHEMA)
+                .chain(databases::SCHEMA)
                 .chain(file_state::SCHEMA)
                 .chain(blob_index::SCHEMA)
                 .chain(blob_stage::SCHEMA)
@@ -505,6 +514,7 @@ impl Store {
             presentation::migrate(&tx)?;
             text_sync::migrate(&tx)?;
             checkpoints::migrate(&tx)?;
+            tx.execute("INSERT INTO local_database_state(singleton,revision) VALUES(1,0)", [])?;
             for (_, sql) in storage_accounting::schema() {
                 tx.execute_batch(sql)?;
             }
@@ -552,6 +562,11 @@ impl Store {
             for (_, sql) in host_source_guards::SCHEMA {
                 tx.execute_batch(sql)?;
             }
+            tx.pragma_update(None, "user_version", SOURCE_GUARD_SCHEMA_VERSION)?;
+        }
+        if version != 0 && version < SCHEMA_VERSION {
+            for (_,sql) in databases::SCHEMA { tx.execute_batch(sql)?; }
+            tx.execute("INSERT INTO local_database_state(singleton,revision) VALUES(1,0)", [])?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         // Reopen checks the exact schema and scalar graph head/readiness state.
@@ -615,14 +630,16 @@ impl Store {
         request: &MutationRequest,
         now_ms: Option<u64>,
     ) -> Result<CommitResult> {
-        Self::apply_transaction_text(tx, request, now_ms, None, None)
+        Self::apply_transaction_text(tx, request, now_ms, None, None, None)
     }
+    fn apply_transaction_observed(tx:&Connection,request:&MutationRequest,observation:&ExternalObservation)->Result<CommitResult>{Self::apply_transaction_text(tx,request,None,None,None,Some(observation))}
     fn apply_transaction_text(
         tx: &Connection,
         request: &MutationRequest,
         now_ms: Option<u64>,
         adoption: Option<&zorid_client_sync::TextIdentity>,
         prepared: Option<text_sync::PreparedText>,
+        observation: Option<&ExternalObservation>,
     ) -> Result<CommitResult> {
         request.validate()?;
         family_store::reject_legacy_mutation(tx)?;
@@ -640,6 +657,7 @@ impl Store {
         if let Some(receipt) = prior {
             return Ok(receipt);
         }
+        match observation {Some(observation)=>databases::validate_external_content_write(tx,request,observation)?,None=>databases::validate_content_write(tx, request)?}
         host_intents::check_execution(tx, request)?;
         let now_ms = match now_ms {
             Some(value) => value,

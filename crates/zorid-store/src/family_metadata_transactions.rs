@@ -352,11 +352,16 @@ pub(super) fn commit_prepared(
     tx: &Connection,
     plan: &PreparedFamilyCommand,
 ) -> Result<CommitResult> {
+    commit_prepared_context(tx,plan,None)
+}
+pub(super) fn commit_prepared_observed(tx:&Connection,plan:&PreparedFamilyCommand,observation:&ExternalObservation)->Result<CommitResult>{commit_prepared_context(tx,plan,Some(observation))}
+fn commit_prepared_context(tx:&Connection,plan:&PreparedFamilyCommand,observation:Option<&ExternalObservation>)->Result<CommitResult>{
     let plan = match plan {
         PreparedFamilyCommand::Indexed(ready) => {
             if let Some(receipt) = replay_command(tx, ready.command())? {
                 return Ok(receipt);
             }
+            match observation{Some(observation)=>databases::validate_external_content_write(tx,ready.request(),observation)?,None=>databases::validate_content_write(tx, ready.request())?}
             check_mode_bound_intent(tx, ready.request(), ready.command().create_mode)?;
             host_intents::check_execution(tx, ready.request())?;
             if blob_stage::operation_reserved(tx, &ready.request().operation_id)? {
@@ -369,13 +374,17 @@ pub(super) fn commit_prepared(
         }
         PreparedFamilyCommand::Legacy(plan) => plan,
     };
-    commit_legacy_prepared(tx, plan)
+    commit_legacy_prepared_context(tx, plan,observation)
 }
 fn commit_legacy_prepared(tx: &Connection, plan: &LegacyPreparedFamilyCommand) -> Result<CommitResult> {
+    commit_legacy_prepared_context(tx,plan,None)
+}
+fn commit_legacy_prepared_context(tx:&Connection,plan:&LegacyPreparedFamilyCommand,observation:Option<&ExternalObservation>)->Result<CommitResult>{
     let request = &plan.command.request;
     if let Some(receipt) = replay_command(tx, &plan.command)? {
         return Ok(receipt);
     }
+    match observation{Some(observation)=>databases::validate_external_content_write(tx,request,observation)?,None=>databases::validate_content_write(tx, request)?}
     check_mode_bound_intent(tx, request, plan.command.create_mode)?;
     host_intents::check_execution(tx, request)?;
     if blob_stage::operation_reserved(tx, &request.operation_id)? {

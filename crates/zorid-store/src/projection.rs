@@ -769,7 +769,7 @@ impl Store {
         } else {
             None
         };
-        let result = Self::apply_transaction(&tx, request)?;
+        let result = Self::apply_transaction_observed(&tx, request, &obs)?;
         if obs.resolution.is_none() {
             if baseline(&tx, request.mutation.id())? != obs.baseline {
                 return Err(StoreError::Corrupt("import baseline changed".into()));

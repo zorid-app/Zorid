@@ -15,6 +15,7 @@ zorid-sqlite = { path = "../zorid-sqlite" }
 zorid-records = { path = "../zorid-records" }
 zorid-index = { path = "../zorid-index" }
 zorid-core = { path = "../zorid-core" }
+zorid-document = { path = "../zorid-document" }
 zorid-client-sync = { path = "../zorid-client-sync" }
 zorid-file-sync = { path = "../zorid-file-sync" }
 zorid-crypto = { path = "../zorid-crypto" }
@@ -22,6 +23,7 @@ zorid-sync-protocol = { path = "../zorid-sync-protocol" }
 rusqlite = { version = "=0.40.2", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+unicode-normalization = "=0.1.25"
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]

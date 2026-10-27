@@ -33,7 +33,7 @@ fn legacy_copy(source: &std::path::Path, destination: &std::path::Path, version:
     assert!(matches!(version, OBSERVATION_SCHEMA_VERSION | TEXT_SCHEMA_VERSION));
     let mut connection = Connection::open(destination).unwrap();
     connection.pragma_update(None, "foreign_keys", true).unwrap();
-    for (name, sql) in schema_objects().into_iter().filter(|(name, _)| !graph_object(name) && *name != "host_intent_sources") {
+    for (name, sql) in schema_objects().into_iter().filter(|(name, _)| !graph_object(name) && *name != "host_intent_sources" && !databases::SCHEMA.iter().any(|(database_name,_)|database_name==name)) {
         connection.execute_batch(if name == "immutable_payloads" && version < TEXT_SCHEMA_VERSION { immutable_payloads::LEGACY_TABLE_SQL } else { sql }).unwrap();
     }
     connection.execute("ATTACH DATABASE ?1 AS previous", [source.to_str().unwrap()]).unwrap();

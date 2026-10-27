@@ -235,7 +235,7 @@ impl Store {
             &physical.state,
             Some(&physical.content),
         )?;
-        let receipt = family_commands::commit_prepared(&tx, &prepared)?;
+        let receipt = family_metadata_transactions::commit_prepared_observed(&tx, &prepared, &actual)?;
         text_sync::reserve_revision(&tx, &observed_revision)?;
         text_sync::put_revision(&tx, &observed.text.state)?;
         let mut observed_state = physical.state.clone();

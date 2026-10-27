@@ -160,8 +160,12 @@ pub struct DocumentManifest {
     watermark: String,
     entries: Vec<StoredEntryMetadata>,
     presentations: Vec<EntryPresentation>,
+    /// Captured with source watermark and file metadata, never current state
+    /// attached to an older published generation. Old cache manifests rebuild.
+    database_state: DatabaseQueryState,
 }
 impl DocumentManifest {
+    pub fn database_state(&self) -> &DatabaseQueryState { &self.database_state }
     fn source(&self) -> IndexResult<SourceSnapshotId> {
         Ok(SourceSnapshotId::new(
             self.local_store_id.clone(),
@@ -431,6 +435,7 @@ pub struct DocumentQueryPin {
     owner: OperationId,
     generation: std::sync::Arc<Generation>,
     pins: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    database_state: DatabaseQueryState,
 }
 impl Drop for DocumentQueryPin {
     fn drop(&mut self) {
@@ -438,6 +443,7 @@ impl Drop for DocumentQueryPin {
     }
 }
 impl DocumentQueryPin {
+    pub fn database_state(&self) -> &DatabaseQueryState { &self.database_state }
     pub fn generation(&self) -> &Generation {
         &self.generation
     }
@@ -598,6 +604,7 @@ fn capture_authority(tx: &Connection) -> IndexResult<DocumentManifest> {
         watermark: source.watermark().as_str().into(),
         entries,
         presentations,
+        database_state: databases::query_state(tx)?,
     };
     result.manifest()?;
     Ok(result)
@@ -1849,6 +1856,7 @@ impl Store {
             .finish()
             .map_err(|_| DocumentIndexError::RebuildRequired)?
             .into_parts();
+        let database_state = h.manifest.database_state.clone();
         tx.commit()?;
         self.document_query_pins
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1856,6 +1864,7 @@ impl Store {
             owner: self.document_query_owner.clone(),
             generation: std::sync::Arc::new(generation),
             pins: self.document_query_pins.clone(),
+            database_state,
         })
     }
     /// Revalidate only the registration of already-admitted immutable metadata.
@@ -2403,6 +2412,7 @@ mod cache_snapshot_tests {
             watermark: source.watermark().as_str().into(),
             entries,
             presentations,
+            database_state: databases::query_state(&tx).unwrap(),
         };
         assert_eq!(actual, expected);
         assert_eq!(actual.entries.len(), 4);
