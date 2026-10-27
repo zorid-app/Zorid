@@ -1,6 +1,8 @@
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod binary;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
+mod databases;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod documents;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod documents_search;
@@ -38,6 +40,12 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Manage local collections and their owned notes without sync enrollment.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    Database {
+        #[command(subcommand)]
+        command: databases::Command,
+    },
     /// Initialize private storage in an existing directory; does not import files.
     Init,
     /// Report local pending work, without printing file contents.
@@ -677,6 +685,7 @@ fn run(args: Args) -> Result<Output> {
         _ => None,
     };
     let value = match args.command {
+        Command::Database { command } => databases::run(&mut vault, command)?,
         Command::Sync {
             credentials,
             command,
