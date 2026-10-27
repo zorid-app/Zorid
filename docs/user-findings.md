@@ -2,6 +2,19 @@
 
 ## Tauri desktop performance feasibility — 2026-10-27
 
+Follow-up authorization: user asks for further RAM evaluation after the initial uncertain RSS result. Root resumes the isolated branch with `memory-run.mjs`; `benchmark_audit` owns a read-only libproc physical-footprint probe and `tauri_shell` owns phase-controlled UI workload evidence. Compare 100/1,000-note fixtures with one note, eight actual tabs and a roughly250KB note, using longer settling/sampling and alternating serial runs. This remains evaluation, not authorization to replace the production shell. Compressed-memory accounting, XPC attribution and cleanup must be reported separately from observed savings.
+
+Follow-up completed as a bounded shell-swap study: eight serial successful runs,
+24 exact state/source receipts, physical-footprint accounting and independent
+source/measurement review. Small-fixture idle saving is13–23MiB in the repeats;
+tabs/large-note states offset it. Larger receipts retain scan-limit warnings and
+some viewports differ. User explicitly challenges fairness and lack of direct
+Rust integration: correct, both shells retain Node + separate Rust host. Do not
+use these results to reject a properly integrated Tauri migration. Node-free
+embedding is feasible but not implemented; full desktop adapter/drafts/runtime
+contracts must be preserved. See `docs/history/tauri-memory-evaluation-20261027.md`.
+
+
 User authorizes an isolated prototype and matched Electron/Tauri comparison; no production migration is decided. Root owns `codex/tauri-benchmark`, `.worktrees/tauri-benchmark`, based on `8507a855`; worker `tauri_shell` owns the standalone shell and `benchmark_audit` reviews transport and measurement. The benchmark reuses identical installed renderer assets, a common disposable Node broker, and the installed Rust host. Shell-only timing and RSS are distinct from a future Node-free integration. Native input/IME, large-vault behavior, platform parity and production installation size require separate evidence. Implementation and runtime results are tracked in `docs/history/tauri-benchmark-20261027.md`.
 
 ## Native file identity across macOS device changes — 2026-10-27

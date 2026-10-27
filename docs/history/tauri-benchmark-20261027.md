@@ -11,6 +11,8 @@ shell changed.
 
 ## Result and decision
 
+Follow-up: the user requested further RAM evaluation. The expanded physical-footprint study and its separate limits are recorded in [Tauri memory evaluation](tauri-memory-evaluation-20261027.md). Earlier RSS numbers below remain historical observations and must not be treated as confirmed RAM savings.
+
 The final matched synthetic-edit pass showed essentially equal startup, editor frame
 timing and save readback. Tauri had lower sampled RSS in this pass; repeat samples
 and earlier runs were inconsistent, so there is no validated general RAM saving.

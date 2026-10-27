@@ -9,6 +9,8 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+**RAM evaluation follow-up — 2026-10-27.** User explicitly requests more evidence on RAM savings. Root resumes `codex/tauri-benchmark`; physical-footprint probe owner `benchmark_audit`, UI workload owner `tauri_shell`, root owns serial runner and interpretation. No Rust/Tauri rebuild or production source edits required; compiled shell and installed renderer/core artifacts are reused. Two fixture sizes and three UI states are measured with settling windows, compressed-memory charges and lifecycle evidence for otherwise ambiguous XPC candidates. Eight successful serial runs/24 exact state-source receipts are retained; results and limits are in `docs/history/tauri-memory-evaluation-20261027.md`. User challenges the retained Node bridge: these results establish only shell-swap observations, not an optimized direct-Rust Tauri migration verdict. Direct embedding is feasible but remains unimplemented.
+
 **Tauri feasibility benchmark — 2026-10-27.** User explicitly requests the proposed isolated shell prototype and matched comparison. Root owns `codex/tauri-benchmark` / `.worktrees/tauri-benchmark`, base `8507a855`; production shell remains Electron. Common installed editor + Node broker + Rust host isolates shell differences, with disposable vault/data roots. Tauri shell worker owns only the standalone prototype; audit worker owns transport review. Results, evidence, limitations and commits are recorded in `docs/history/tauri-benchmark-20261027.md`; prototype code stays isolated from main.
 
 **Native filesystem identity repaired — 2026-10-27.** User explicitly requested
