@@ -1182,3 +1182,87 @@ fn projection_page_continuation_can_pass_an_unsettled_first_member() {
         .unwrap()
         .is_empty());
 }
+
+#[test]
+fn delete_superseding_pending_restore_retains_the_original_restore_cohort() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path).unwrap();
+    let collection = create(&mut store, "Books");
+    let entry = new_entry(&mut store, &collection, "one");
+    publish(&mut store, &entry, "publish");
+    store
+        .apply(&MutationRequest {
+            operation_id: op("trash-folder"),
+            mutation: Mutation::Create {
+                id: id("trash-folder"),
+                path: VaultPath::new(".trash").unwrap(),
+                kind: EntryKind::Folder,
+                content: None,
+            },
+        })
+        .unwrap();
+    let deleted = request(
+        &mut store,
+        json!({"op":"delete","operationId":"first-delete","collectionId":collection.id,"expectedRevision":collection.revision}),
+    );
+    let current = store.read(&entry.entry_id).unwrap().unwrap();
+    store
+        .apply(&MutationRequest {
+            operation_id: op("materialize-trash"),
+            mutation: Mutation::Move {
+                id: entry.entry_id.clone(),
+                expected: current.state.revision,
+                path: VaultPath::new(".trash/one.md").unwrap(),
+            },
+        })
+        .unwrap();
+    let pending = store
+        .database_entry_projection(&entry.entry_id)
+        .unwrap()
+        .unwrap();
+    store
+        .database_projection_ack(
+            &entry.entry_id,
+            &pending.entry_revision,
+            &pending.collection_revision,
+        )
+        .unwrap();
+    let restored = request(
+        &mut store,
+        json!({"op":"restore","operationId":"first-restore","collectionId":collection.id,"expectedRevision":deleted.collections[0].revision}),
+    );
+    assert_eq!(
+        store.database_pending_projections(10).unwrap()[0].kind,
+        zorid_store::DatabaseProjectionKind::Restore
+    );
+    let deleted_again = request(
+        &mut store,
+        json!({"op":"delete","operationId":"second-delete","collectionId":collection.id,"expectedRevision":restored.collections[0].revision}),
+    );
+    let pending = store.database_pending_projections(10).unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].kind, zorid_store::DatabaseProjectionKind::Trash);
+    assert_eq!(pending[0].original_path, "one.md");
+    store
+        .database_projection_ack(
+            &entry.entry_id,
+            &pending[0].entry_revision,
+            &pending[0].collection_revision,
+        )
+        .unwrap();
+    drop(store);
+    let mut store = Store::open(path).unwrap();
+    request(
+        &mut store,
+        json!({"op":"restore","operationId":"second-restore","collectionId":collection.id,"expectedRevision":deleted_again.collections[0].revision}),
+    );
+    let pending = store.database_pending_projections(10).unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(
+        pending[0].kind,
+        zorid_store::DatabaseProjectionKind::Restore
+    );
+    assert_eq!(pending[0].entry_id, entry.entry_id);
+    assert_eq!(pending[0].original_path, "one.md");
+}

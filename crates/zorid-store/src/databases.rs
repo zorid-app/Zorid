@@ -1448,6 +1448,11 @@ fn execute(tx: &Connection, operation: &OperationId, request: &DatabaseRequest) 
             collection.deleted = deleting;
             collection.revision = new_revision();
             save_collection(tx, &collection)?;
+            let pending_restores = if deleting {
+                tx.prepare("SELECT cohort.entry_id FROM local_collection_trash_cohort cohort JOIN local_database_projections pending ON pending.entry_id=cohort.entry_id WHERE cohort.collection_id=?1 AND pending.kind='restore'")?.query_map([collection_id],|r|r.get::<_,String>(0))?.collect::<std::result::Result<BTreeSet<_>,_>>()?
+            } else {
+                BTreeSet::new()
+            };
             if deleting {
                 tx.execute(
                     "DELETE FROM local_collection_trash_cohort WHERE collection_id=?1",
@@ -1459,17 +1464,21 @@ fn execute(tx: &Connection, operation: &OperationId, request: &DatabaseRequest) 
                 history(tx, operation, collection_id, Some(&id), &entry)?;
                 let file = entry_content::read_metadata_row(tx, &id)?;
                 if deleting {
-                    let eligible = !entry.deleted
+                    let visible = file.as_ref().is_some_and(|file| {
+                        !file.state.deleted
+                            && file.state.kind == EntryKind::File
+                            && !file
+                                .state
+                                .path
+                                .as_str()
+                                .split('/')
+                                .any(|part| part.starts_with('.'))
+                    });
+                    let superseding_restore = pending_restores.contains(id.as_str())
                         && file.as_ref().is_some_and(|file| {
-                            !file.state.deleted
-                                && file.state.kind == EntryKind::File
-                                && !file
-                                    .state
-                                    .path
-                                    .as_str()
-                                    .split('/')
-                                    .any(|part| part.starts_with('.'))
+                            !file.state.deleted && file.state.kind == EntryKind::File
                         });
+                    let eligible = !entry.deleted && (visible || superseding_restore);
                     if !eligible {
                         // Independently trashed/missing files are not this
                         // deletion's work and must not be resurrected later.
@@ -1480,7 +1489,9 @@ fn execute(tx: &Connection, operation: &OperationId, request: &DatabaseRequest) 
                         continue;
                     }
                     tx.execute("INSERT INTO local_collection_trash_cohort(collection_id,entry_id) VALUES(?1,?2)",params![collection_id,id.as_str()])?;
-                    entry.original_path = file.as_ref().unwrap().state.path.as_str().into();
+                    if visible {
+                        entry.original_path = file.as_ref().unwrap().state.path.as_str().into();
+                    }
                 } else {
                     let eligible:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM local_collection_trash_cohort WHERE collection_id=?1 AND entry_id=?2)",params![collection_id,id.as_str()],|r|r.get(0))?;
                     if !eligible {
