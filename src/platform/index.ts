@@ -185,6 +185,10 @@ export async function pickDesktopVault(): Promise<PlatformVault | null> {
 }
 
 export async function createPlatformAdapter(): Promise<PlatformVault | null> {
+  if ((window as Window & { __ZORID_TAURI__?: boolean }).__ZORID_TAURI__ === true) {
+    const { openTauriNativeVault } = await import('./tauri-native.ts');
+    return openTauriNativeVault();
+  }
   if (window.zorid) {
     const info = await window.zorid.getVault();
     return info ? desktopVault(window.zorid, info) : null;

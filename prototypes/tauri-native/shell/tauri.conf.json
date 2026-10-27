@@ -1,0 +1,19 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Zorid Native Tauri Prototype",
+  "version": "0.0.0",
+  "identifier": "app.zorid.benchmark.native",
+  "build": { "frontendDist": "../dist" },
+  "app": {
+    "windows": [],
+    "withGlobalTauri": true,
+    "security": {
+      "capabilities": [{
+        "identifier": "native-fixture-window",
+        "windows": ["main"],
+        "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+      }]
+    }
+  },
+  "bundle": { "active": false, "icon": ["icons/icon.png"] }
+}
