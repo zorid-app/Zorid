@@ -430,6 +430,23 @@ and the user's live Electron window. Build outcome remains pending. The browser
 adapter currently omits collection capability; ordinary-note/untyped behavior
 and collection delivery must be reported separately.
 
+### P005 — 2026-10-27 — datatype correction source finding
+
+The main owner's independent review reports zero documented standards violations
+and one P2 spec finding: Select/Status → Number retains the old option ID and
+readable label, but the ordinary note property setter compares the label against
+the old ID under the new datatype and rejects both correction and clearing,
+including after reopen. This violates E11. `local_ui` owns the scoped setter fix
+and focused regression in its isolated worktree; `local_core` assists with the
+retained-projection contract, and `collection_ui_review` owns independent review.
+Entry/schema revision and stale-note guards must remain. No runtime reproduction
+or fix acceptance is claimed yet; main integration remains held.
+
+The WASM preflight did **not start compilation**: only 186 MiB free, below the
+1.5 GiB prerequisite. Receipt:
+`tmp/local-databases-20261027/wasm-build-preflight-lowdisk.json`. Lane released;
+no cleanup, source changes or app actions followed. No Tauri work.
+
 ### Receipt template
 
 ```text

@@ -1,5 +1,17 @@
 # User findings queue
 
+## Retained datatype value cannot be corrected in note properties — 2026-10-27
+
+- Source finding from the main owner's independent spec review: Select/Status
+  value `Started` converted to Number remains readable, but correction or clear
+  through ordinary note properties is rejected even after reopen. E11 requires
+  preserving the value until the user explicitly corrects or clears it.
+- Implementation: assigned to `local_ui`, retained-projection contract assist
+  from `local_core`; entry/schema revision guards must remain. Independent review
+  assigned to `collection_ui_review`. Fix and focused regression pending.
+- Verification: source finding only; no runtime reproduction or acceptance yet.
+  Main integration held. No Tauri work.
+
 ## Local collections actual CLI pass; user testing Electron — 2026-10-27
 
 Original actual CLI run failed at 29 on a stale numeric counter oracle. Test-only

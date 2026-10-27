@@ -9,6 +9,16 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+**Local collections review correction — 2026-10-27, P005.** Independent main-owner
+review reports zero documented standards violations and one P2: retained
+Select/Status values cannot be corrected or cleared after conversion to Number
+in ordinary note properties. `local_ui` owns the scoped fix/regression,
+`local_core` advises the projection contract, `collection_ui_review` reviews it.
+Entry/schema and stale-note guards remain required. Main integration is held;
+prior CLI passes do not cover this case. WASM compilation did not start because
+only 186 MiB was free; its build lane is released. User's active disposable
+Electron window remains untouched. No Tauri work. See tracker P005.
+
 **Local collections actual CLI/live Electron cutoff — 2026-10-27, P004.**
 Root `06696a2c` contains test-only oracle correction `ab538c71`, no product change.
 Final narrow source/UI review closes through this HEAD with no remaining must-fix
