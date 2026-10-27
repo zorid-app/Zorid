@@ -111,3 +111,15 @@ test('first-view creation refuses stale command and preserves an existing dirty 
     buffer.update(buffer.savedText);await buffer.flush();
   }finally{await f.stop();}
 });
+
+
+test('combined explicit-source rename and root controls use identical scoped bytes for reference publication',async()=>{
+  const source=document([view(untyped,{filters:'file.ext == "md"'})],{filters:'legacy == true'}).toString();
+  const f=await fixture(source);try{
+    await f.vault.create('Link.md','[[Personal.base#Main]]');await f.controller.refresh();
+    await f.controller.updateConfiguration(f.controller.state.version,{root:{filters:'true',newItemFolder:'Notes'},view:{name:'Renamed'}});
+    const saved=BaseDocument.parse(await f.vault.read('Personal.base'));
+    assert.equal(saved.getRoot('filters'),'legacy == true');assert.equal(saved.views[0].filters,'true');assert.equal(saved.views[0].newItemFolder,'Notes');assert.equal(saved.views[0].name,'Renamed');
+    assert.equal(await f.vault.read('Link.md'),'[[Personal.base#Renamed]]');assert.equal(f.controller.hasPendingViewReferences,false);assert.equal(f.controller.state.error,null);
+  }finally{await f.stop();}
+});

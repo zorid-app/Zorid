@@ -1004,17 +1004,16 @@ export class BaseController {
     const viewNames = document.views.map(view => view.name);
     const to = validateBaseViewName(rawName, document.views, index), active = this.selectedViewIndex;
     if (to === from) {
-      await this.changeConfiguration(version, next => { if (root) next.updateRoot(root); next.updateView(index, { ...patch, name: to }); return active; });
+      await this.changeConfiguration(version, next => { next.updateViewConfiguration(index, { root, view: { ...patch, name: to } }); return active; });
       return Object.freeze({ basePath: this.path, from, to, completedPaths: Object.freeze([]), failedPaths: Object.freeze([]), references: 0, mode: this.options.vault.adapter.documentSemantics ? 'core' : 'legacy' });
     }
-    if (root) document.updateRoot(root);
-    document.updateView(index, { ...patch, name: to });
+    document.updateViewConfiguration(index, { root, view: { ...patch, name: to } });
     const desired = document.toString();
     if (!this.options.inlineSource && this.pendingConfigurations.has(desired)) {
       // Resume the exact saved command before consulting backlinks again. Its
       // reference witnesses and result belong to the original continuation.
       if (!this.pendingConfigurations.get(desired)!.committed) throw new Error('Retry the original Base configuration save before renaming its view');
-      const report = await this.changeConfiguration(version, next => { if (root) next.updateRoot(root); next.updateView(index, { ...patch, name: to }); return active; });
+      const report = await this.changeConfiguration(version, next => { next.updateViewConfiguration(index, { root, view: { ...patch, name: to } }); return active; });
       if (!report) throw new Error('The original view rename has no retained reference outcome');
       return report;
     }
