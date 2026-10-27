@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {fixtureFiles,cases,records,base,roundTripSources} from './fixtures.mjs';
 import {assertMembership,assertConfiguration,expectedPaths} from './oracles.mjs';
 import {closeTypedFilter as close} from './close-readiness.mjs';
+import {enterNativeDate} from './native-date-input.mjs';
 export {fixtureFiles,vaultName} from './fixtures.mjs';
 const active='.pane.is-active .bases-session',panel='[role="dialog"][aria-label="Filter"]';
 const local=panel+' .bases-filter-section:nth-of-type(2)',root=local+' .bases-filter-tree > .bases-filter-group';
@@ -41,10 +42,8 @@ async function operand(c,scope,item){
   const literal=item.values[0];
   if(literal===null){await c.ui.button('Clear value',scope);return;}
   if(typeof literal==='boolean'){await boolean(c,value(scope),literal);return;}
+  if(item.property==='due'||item.property==='moment'){await enterNativeDate(c,value(scope),String(literal));return;}
   await c.ui.type(value(scope),String(literal));
-  // Native date/datetime controls must actually accept the trusted input. A
-  // platform input limitation fails here; no DOM assignment or constructor
-  // expression is used to conceal it.
   await c.ui.wait(`return document.querySelector(${JSON.stringify(value(scope))})?.value===${JSON.stringify(String(literal))};`,'Exact visible operand value');await c.ui.key('Tab');
 }
 async function untouched(c,initial,label){

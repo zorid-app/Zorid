@@ -35,7 +35,15 @@ static shipped-artifact evidence; this campaign does not establish reference
 runtime, visual parity, mobile, sync or performance acceptance. Known supported
 operators must reopen structurally; unsupported source is preserved without
 guessing a replacement. Native date/datetime input uses trusted UI input and
-strict field readback. A platform input failure stops the campaign; it is never
+strict field readback. The original owned reference helper at
+`/private/tmp/zorid-obsidian-1.14.5-runtime-20261026-005/ui.mjs` supplies the
+native keyboard recipe; no recovered product code is included. Standard CDP
+DOM/Accessibility reads identify the exact input and its actual ordered native
+segments. Trusted digit key events fill those observed segments, with observed
+automatic advancement or a real Tab between segments. Full original ISO value
+and validity must match before and after an actual Tab blur. AX receipts retain
+input type/step and the scoped tree; unsupported labels, focus, seconds or
+timezone spelling fail explicitly. No locale order is guessed. A platform input failure stops the campaign; it is never
 replaced by DOM assignment or a `date()` expression.
 
 After the coordinator freezes matching frontend/native artifacts and grants the
