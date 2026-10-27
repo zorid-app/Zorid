@@ -45,3 +45,24 @@ test('empty Base first view onboarding saves an independent untyped source with 
   const source=BaseDocument.parse(await vault.read('Work.base'));assert.deepEqual(source.views[0].source,{kind:'untyped'});assert.equal(host.querySelector('[aria-label="Properties"]'),null);assert.equal(host.querySelector('[aria-label="Group"]'),null);assert.ok(host.querySelector('[aria-label="Filter"]'));assert.ok(host.querySelector('[aria-label="Sort"]'));assert.ok(!vault.entries.has('Properties.yaml'));
   await session.close();for(const buffer of buffers.values())await buffer.dispose();dom.window.close();
 });
+
+test('uncertain New stays bound to its original collection view and retries the identical request',async()=>{
+  const original='views:\n - {id: aaaaaaaaaaaa, type: table, name: Books, source: {kind: collection, id: abcdefghijkl}}\n - {id: bbbbbbbbbbbb, type: list, name: Notes, source: {kind: untyped}}\n';
+  const adapter=new Adapter({'Work.base':original}),requests:unknown[]=[],errors:unknown[]=[],opened:string[]=[];let first=true;
+  adapter.databases={async request(command){if(command.op==='create_entry'){requests.push(structuredClone(command));const pending=first;first=false;if(!pending)await adapter.write(command.path,'Body');return{collections:[collection],entries:[{entryId:command.entryId,collectionId:collection.id,revision:'member-r1',fileRevision:pending?null:'r1',path:command.path,values:{},deleted:false,pendingProjection:pending}],projection:{pending:pending?1:0,issues:[]}};}return{collections:[collection],entries:[],projection:{pending:0,issues:[]}};}};
+  const unused=async():Promise<never>=>{throw new Error('unexpected operation');};
+  adapter.documentSemantics={status:async()=>({source,snapshot,coveredSource:source,current:true,rebuildRequired:false,coverageComplete:true}),initialize:unused,rebuild:unused,begin:unused,pump:unused,publish:unused,discard:unused,
+    open:async()=>({pinId:'pin',source,snapshot,coverageComplete:true,close:async()=>{},search:unused,backlinks:unused,metadata:async()=>({source,snapshot,coverageComplete:true,value:{entry:{id:'Work.base',revision:'r1',path:'Work.base',kind:'file',deleted:false},metadata:null,exclusion:null}}),
+      base:async(input:{options?:{viewIndex?:number}})=>({source,snapshot,coverageComplete:true,value:{definition:{id:'Work.base',revision:'r1',path:'Work.base',kind:'file',deleted:false},result:{snapshotId:snapshot,view:BaseDocument.parse(await adapter.read('Work.base')).views[input.options?.viewIndex??0],rows:[],groups:[{key:null,keyId:null,entryIds:[]}],groupOptions:[],properties:['file.name'],availableProperties:['file.name'],counts:{scanned:0,matched:0,afterGroupOrder:0,afterSearch:0,returned:0},diagnostics:[],relationshipsAvailable:true,metadataComplete:true,metadataIssues:[],stepsUsed:1}}}),
+    }),
+  } as unknown as DocumentService;
+  const vault=new Vault(adapter);await vault.initialize();const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),host=dom.window.document.querySelector('main')!;
+  const buffers=new Map<string,NoteBuffer>();
+  const session=createBaseSession(host,{vault,basePath:'Work.base',validate(){},openFile:path=>opened.push(path),onError:error=>errors.push(error),buffers:{validate(){},getBuffer:async path=>{let buffer=buffers.get(path);if(!buffer){buffer=new NoteBuffer(vault,path);buffers.set(path,buffer);}await buffer.load();return buffer;}}});await session.ready;
+  host.querySelector<HTMLButtonElement>('[aria-label="New"]')!.click();await until(()=>errors.length>0);assert.equal(session.hasPendingChanges(),true);assert.equal(requests.length,1);
+  await assert.rejects(session.selectView(1),/Finish or cancel/);host.querySelector<HTMLButtonElement>('[aria-label="Change view source"]')!.click();assert.equal(host.querySelector('.collection-source-chooser'),null);
+  // An external source edit cannot retarget the accepted operation either.
+  await vault.modify('Work.base',original.replace('source: {kind: collection, id: abcdefghijkl}','source: {kind: untyped}'));await session.refresh();
+  host.querySelector<HTMLButtonElement>('[aria-label="New"]')!.click();await tick();assert.equal(requests.length,1);assert.ok(errors.some(error=>String(error).includes('original collection view')));
+  await vault.modify('Work.base',original);await session.refresh();host.querySelector<HTMLButtonElement>('[aria-label="New"]')!.click();await until(()=>opened.length===1);assert.equal(requests.length,2);assert.deepEqual(requests[0],requests[1]);await until(()=>!session.hasPendingChanges());await session.close();for(const buffer of buffers.values())await buffer.dispose();dom.window.close();
+});

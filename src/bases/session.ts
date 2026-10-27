@@ -278,6 +278,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   const collectionMutations = new Map<string, DatabaseRequest>();
   const collectionVersions = new Map<string|number,{collection:DatabaseCollection;entries:Map<string,DatabaseEntry>}>();
   let pendingCollectionCreate: DatabaseRequest | undefined;
+  let pendingCollectionCreateOwner:{collectionId:string;viewId?:string;source:string}|undefined;
   const databaseService = options.vault.adapter.databases;
   const currentViewSource = (): BaseViewSource => {
     const view = BaseDocument.parse(controller.state.source).views[controller.selectedViewIndex];
@@ -329,7 +330,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   let scheduled: ReturnType<typeof setTimeout> | undefined;
   const pending = new Set<Promise<unknown>>(), changedBuffers = new Set<NoteBuffer>();
   let configurationLifecycle = 0;
-  const canBeginPropertyEdit = () => !disposed && !closing && !configurationLifecycle && !pending.size && !mounted?.hasQueuedConfiguration?.() && !mounted?.hasActiveEdits?.() && controller.canBeginPropertyEdit;
+  const canBeginPropertyEdit = () => !disposed && !closing && !configurationLifecycle && !pendingCollectionCreate && !pending.size && !mounted?.hasQueuedConfiguration?.() && !mounted?.hasActiveEdits?.() && controller.canBeginPropertyEdit;
   const alive = () => { options.validate(); if (disposed) throw new Error('This base view is closed'); };
   const action = () => { alive(); if (closing) throw new Error('This base view is closing'); notice = undefined; };
   const report = (error: unknown) => {
@@ -340,7 +341,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     try { options.onError?.(error); } catch { /* User error reporters do not change persistence. */ }
   };
   const propertyDraft = () => !!mounted?.hasActiveEdits?.() || !!content.querySelector('.zorid-bases-table-input, [data-base-editing]');
-  const activeDraft = () => propertyDraft() || toolbarUI.hasDraft() || settings.hasDraft() || summaryDraft || !!chooser?.hasPendingChanges() || !!collectionEditor?.hasPendingChanges();
+  const activeDraft = () => !!pendingCollectionCreate || propertyDraft() || toolbarUI.hasDraft() || settings.hasDraft() || summaryDraft || !!chooser?.hasPendingChanges() || !!collectionEditor?.hasPendingChanges();
   const editsPending = () => !!pending.size || !!mounted?.hasQueuedConfiguration?.() || controller.hasPendingViewReferences || activeDraft() || !!summaryHasRawDraft?.() || [...changedBuffers].some(buffer => buffer.dirty || !!buffer.error);
   let editsWerePending = false;
   const schedule = () => {
@@ -401,7 +402,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   const toolbarUI = createBaseToolbar(toolbar, {
     immediate: true,
     filterOperands: () => baseSessionFilterOperands(options.vault, definitions, controller.state.result?.availableProperties ?? [], filterOwnerCurrent),
-    preflight() { action(); if (pending.size || propertyDraft() || settings.hasDraft() || summaryPanel || chooser?.hasPendingChanges() || collectionEditor?.hasPendingChanges()) throw new Error('Finish or cancel the current edit before changing the view.'); },
+    preflight(kind) { action(); if(pendingCollectionCreate&&kind!=='new')throw new Error('Use New again to finish the original entry creation before changing this view.'); if (pending.size || propertyDraft() || settings.hasDraft() || summaryPanel || chooser?.hasPendingChanges() || collectionEditor?.hasPendingChanges()) throw new Error('Finish or cancel the current edit before changing the view.'); },
     selectView,
     save(version, patch) { return saveConfigurationCommand(() => controller.updateView(numericVersion(version), patch)); },
     saveConfiguration(version, patch) { return saveConfigurationCommand(() => controller.updateConfiguration(numericVersion(version), patch)); },
@@ -439,7 +440,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   function closeSourceChooser(): void { chooser?.destroy(); chooser=undefined; }
   function chooseSource(choose:(source:BaseViewSource)=>Promise<void>, cancel=true):Promise<void> {
     action(); if (options.readOnly) return Promise.reject(new Error('This Base is read-only.'));
-    if(chooser?.hasPendingChanges()||collectionEditor?.hasPendingChanges())return Promise.reject(new Error('Finish or cancel the current collection edit before changing the view source.'));
+    if(pendingCollectionCreate||chooser?.hasPendingChanges()||collectionEditor?.hasPendingChanges())return Promise.reject(new Error('Finish or cancel the current collection edit before changing the view source.'));
     closeSourceChooser(); collectionEditor?.destroy(); collectionEditor=undefined;
     return new Promise((resolve,reject)=>{
       chooser=mountSourceChooser(sourcePanel,{service:databaseService,isCurrent:()=>!disposed&&!closing,
@@ -451,8 +452,9 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     action();if(options.readOnly||!databaseService||!collection||collection.deleted)throw new Error('This collection is unavailable.');
     if(pending.size||propertyDraft()||toolbarUI.hasDraft())throw new Error('Finish editing the current value first.');
     if(collectionEditor){collectionEditor.element.querySelector<HTMLInputElement>('input')?.focus();return;}
-    collectionEditor=mountCollectionEditor(sourcePanel,{service:databaseService,collection,entries:[...collectionEntries.values()],propertyId,
-      isCurrent:()=>!disposed&&!closing&&currentViewSource().kind==='collection'&&(currentViewSource() as {id:string}).id===collection?.id,
+    const editingCollection=collection;
+    collectionEditor=mountCollectionEditor(sourcePanel,{service:databaseService,collection:editingCollection,entries:[...collectionEntries.values()],propertyId,
+      isCurrent:()=>!disposed&&!closing&&currentViewSource().kind==='collection'&&(currentViewSource() as {id:string}).id===editingCollection.id,
       onSaved:async()=>{await options.vault.reload();await loadDefinitions();await controller.refresh();},
       onClose:()=>{collectionEditor?.destroy();collectionEditor=undefined;schedule();}});
   }
@@ -482,7 +484,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   const editCollectionProperty=(edit:Parameters<typeof actions.editProperty>[0])=>editCollectionProperties([edit]);
   const editProperty=(edit:Parameters<typeof actions.editProperty>[0])=>collectionMode()?editCollectionProperty(edit):Promise.reject(new Error('Vault note views are browsing only. Open the note to edit its properties.'));
   function saveConfigurationCommand(operation: () => Promise<void>): Promise<void> {
-    action(); if (options.readOnly) return Promise.reject(new Error('This base is read-only'));
+    action();if(pendingCollectionCreate)throw new Error('Use New again to finish the original entry creation before changing this view.'); if (options.readOnly) return Promise.reject(new Error('This base is read-only'));
     const attempt: { buffer?: NoteBuffer; text?: string } = {}; configurationAttempt = attempt;
     configurationLifecycle++; renderStatus(controller.state);
     let saving: Promise<void>;
@@ -663,19 +665,21 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     action(); if (options.readOnly || !controller.state.result || sharedBasePreview(controller.state.result)) throw new Error('This base is read-only');
     if (await options.closeCreatedFile?.()) return;
     alive();
+    if(pendingCollectionCreate){const source=currentViewSource(),owner=pendingCollectionCreateOwner;if(!owner||source.kind!=='collection'||source.id!==owner.collectionId||(owner.viewId?controller.selectedViewIdentity!==owner.viewId:controller.state.source!==owner.source))throw new Error('The unfinished New belongs to its original collection view. Reopen that view to retry it.');}
     if(collectionMode()){
       if(!databaseService||!collection||collection.deleted)throw new Error('This collection is unavailable.');
       if(!pendingCollectionCreate){
         const plan=await planCollectionEntryCreation({vault:options.vault,collection,document:BaseDocument.parse(controller.state.source),basePath:options.basePath,viewIndex:selectedIndex,group,validate:alive});alive();
         const folder=plan.path.includes('/')?plan.path.slice(0,plan.path.lastIndexOf('/')):'';
         let parent='';for(const segment of folder.split('/').filter(Boolean)){parent=parent?`${parent}/${segment}`:segment;if(options.vault.entries.get(parent)?.type==='file')throw new Error('A file occupies the new entry’s folder.');if(!options.vault.entries.has(parent))await options.vault.createFolder(parent,alive);}
+        pendingCollectionCreateOwner={collectionId:collection.id,viewId:controller.selectedViewIdentity,source:controller.state.source};
         pendingCollectionCreate={op:'create_entry',operationId:crypto.randomUUID(),collectionId:collection.id,expectedCollectionRevision:collection.revision,entryId:crypto.randomUUID(),path:plan.path,body:plan.body,values:plan.values};
       }
       const request=pendingCollectionCreate;
       const response=await databaseService.request(request);alive();
       const entry=response.entries.find(entry=>request.op==='create_entry'&&entry.entryId===request.entryId);
       if(!entry||entry.pendingProjection)throw new Error('The entry is committed locally but its note still needs publication. Use New again to retry.');
-      pendingCollectionCreate=undefined;
+      pendingCollectionCreate=undefined;pendingCollectionCreateOwner=undefined;
       await options.vault.reload();await loadDefinitions();await controller.refresh();
       notice=controller.state.result&&!controller.state.result.rows.some(row=>row.entryId===entry.entryId)?'Created entry is not shown in the current results.':undefined;renderStatus(controller.state);
       const event=new(win?.MouseEvent??MouseEvent)('click');

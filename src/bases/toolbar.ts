@@ -52,7 +52,7 @@ export interface BaseToolbarCommands {
   renameFormula?(version: BaseQueryResult['version'], from: string, to: string): Promise<void>;
 }
 export interface BaseToolbarOptions {
-  preflight(): void;
+  preflight(action?:'new'): void;
   selectView(index: number): Promise<void>;
   save(version: BaseQueryResult['version'], patch: BaseViewPatch): Promise<void>;
   /** Reference mode persists changes in place; failures retain their exact draft. */
@@ -885,7 +885,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       actions.append(node);
     }
     if (options.onSearch) { const node = button(doc, '', () => { if (!searchRow.hidden) { closeSearch(); return; } searchRow.hidden = false; searchInput.value = state?.search ?? ''; node.classList.add('is-active'); searchInput.focus(); searchInput.select(); }, 'Search'); node.className = 'bases-toolbar-action'; node.append(icon('search',16,doc),doc.createTextNode('Search')); node.classList.toggle('is-active',!searchRow.hidden); actions.append(node); }
-    if (!next.readOnly && options.onNew) { const node = button(doc, '', () => { try { options.preflight(); if (hasDraft()) throw new Error('Finish the current changes first.'); node.disabled = true; void options.onNew!().catch(report).finally(() => { if (!destroyed) node.disabled = false; }); } catch (error) { report(error); } }, 'New'); node.className = 'bases-toolbar-action bases-toolbar-new'; node.append(icon('plus',16,doc),doc.createTextNode('New')); actions.append(node); }
+    if (!next.readOnly && options.onNew) { const node = button(doc, '', () => { try { options.preflight('new'); if (hasDraft()) throw new Error('Finish the current changes first.'); node.disabled = true; void options.onNew!().catch(report).finally(() => { if (!destroyed) node.disabled = false; }); } catch (error) { report(error); } }, 'New'); node.className = 'bases-toolbar-action bases-toolbar-new'; node.append(icon('plus',16,doc),doc.createTextNode('New')); actions.append(node); }
     // Existing integrations can open the same configuration from its current view menu.
     if (!next.readOnly && !options.commands) { const node = button(doc, 'View', () => open('View options',node), 'View options'); node.className = 'bases-toolbar-action'; actions.append(node); }
     if (focusedLabel) Array.from(actions.querySelectorAll<HTMLButtonElement>('button')).find(node => node.getAttribute('aria-label') === focusedLabel)?.focus({ preventScroll: true });
