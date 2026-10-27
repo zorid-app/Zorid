@@ -14,7 +14,12 @@ export async function planCollectionEntryCreation(options:{vault:Vault;collectio
   const plan=await planBaseItemCreation(options);options.validate();
   let body=plan.templatePath?plan.text:'';
   const templateValues=plan.templatePath?Object.fromEntries(readProperties(body).map(property=>[property.key,property.value])):{};
-  if(plan.templatePath)body=removeProperty(removeProperty(body,'_id'),'_type');
+  if(plan.templatePath){
+    // The native publication journal owns these keys from the first write.
+    // Seed only unrelated YAML so overridden template values are not mistaken
+    // for an external edit against an empty projection baseline.
+    for(const key of ['_id','_type',...collection.properties.map(property=>property.name)])body=removeProperty(body,key);
+  }
   const values={...collectionInitialValues(collection,templateValues,'names'),...collectionInitialValues(collection,{...defaults.properties,...(options.group?{[basePropertyName(options.group.property)]:options.group.value}:{})})};
   return{path:plan.path,body,values,warnings:plan.warnings};
 }
