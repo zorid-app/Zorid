@@ -2,6 +2,7 @@
 const { desktopDurableWrites } = require('./durable-writes.cjs');
 const { desktopTextCreates } = require('./text-create.cjs');
 const { createDesktopDocumentSemantics } = require('./document-semantics.cjs');
+const {captureDatabaseRequest,isDatabaseMutation}=require('./databases.cjs');
 const {captureWorkBlockRequest}=require('./workblocks.cjs');
 const { MAX_BINARY_FRAME } = require('./rust-vault-service.cjs');
 const {captureDraftRequest,captureDraftBody,MAX_DRAFT_CHUNK}=require('./document-drafts.cjs');
@@ -59,6 +60,7 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
     }
     function wrap(flushToken) {
       const methods = ['readText', 'readTextById', 'planWrite', 'prepare', 'commit', 'query', 'listUnacknowledged', 'acknowledge',
+        ...(typeof capability.composeNote==='function'?['composeNote']:[]),
         ...(typeof capability.captureSavedSource === 'function' && typeof capability.releaseSavedSource === 'function' ? ['captureSavedSource', 'releaseSavedSource'] : [])];
       return Object.freeze({
         ...Object.fromEntries(methods.map(name => [name, (...args) => invoke(async() => {const value=await capability[name](...args);if(name==='commit')service.documentRuntimeSourceHint?.();if(name==='captureSavedSource')live();return value;}, flushToken)])),
@@ -105,6 +107,23 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
       },null),
       subscribe:(listener,onRetire)=>{allowed();if(draftRetired)throw fail('client_not_admitted');return drafts.subscribe(listener,onRetire);},
     }):null;
+    const databasesAvailable=host.capabilities?.includes('databases')===true;
+    if(databasesAvailable&&typeof guarded.databaseCommand!=='function')throw fail('unsupported_host_capability');
+    const databaseCommand=input=>invoke(async()=>{
+      const request=captureDatabaseRequest(input);
+      const value=await guarded.databaseCommand(clientId,request);
+      try{live();}catch(error){
+        if(isDatabaseMutation(request.command.op))throw Object.assign(new Error('Collection acknowledgement is uncertain.'),{code:'client_ownership_lost',commitUncertain:true});
+        throw error;
+      }
+      if(isDatabaseMutation(request.command.op)){
+        service.documentRuntimeSourceHint?.();
+        // Schema/membership may change without a file event (or publication may
+        // remain pending). Wake all admitted vault viewers after durable commit.
+        service.databaseChanged?.();
+      }
+      return value;
+    },null);
     const workblockCommand=input=>invoke(async()=>{
       const request=captureWorkBlockRequest(input);
       const value=await guarded.workblockCommand(clientId,request);
@@ -142,6 +161,7 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
       ...(documentDrafts?{draftsAvailable:true,documentDrafts}:{}),
       ...(documentRuntime?{documentRuntime}:{}),
       ...(host.capabilities?.includes('workblocks')?{workblockCommand}:{}),
+      ...(databasesAvailable?{databaseCommand}:{}),
       ...(host.capabilities?.includes('binary_streams')?{binaryCommand,binaryLimits:host.binaryLimits}:{}),
       ...(creates?{createText:input=>invoke(async()=>{const value=await creates.create(input);service.documentRuntimeSourceHint?.();return value;},null),createTextReceipt:input=>invoke(async()=>{const value=await creates.createReceipt(input);service.documentRuntimeSourceHint?.();return value;},null),fileCommand:input=>invoke(async()=>{const value=await creates.execute(input);service.documentRuntimeSourceHint?.();return value;},null)}:{}),
       async retire() {

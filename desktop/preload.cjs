@@ -2,16 +2,23 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 const invoke = (name, ...args) => ipcRenderer.invoke(`zorid:${name}`, ...args);
 const durable = async (name, ...args) => {
+  const databases = name === 'durableInvoke' && args[2] === 'databaseCommand';
   const workblock = name === 'durableInvoke' && args[2] === 'workblockCommand';
   const planning = name === 'durableInvoke' && args[2] === 'planWrite';
   const runtime = name === 'durableInvoke' && ['documentRuntimeObserve','documentRuntimeControl','documentRuntimeAckControl','documentRuntimeAckOutcome'].includes(args[2]);
   let reply;
   try { reply = await invoke(name, ...args); }
   catch (error) {
+    if (databases) return {databases:true,schemaVersion:1,ok:false,error:{code:'database_transport_lost',source:'host',commitUncertain:true}};
     if (planning) return {notePlanning:true,schemaVersion:1,ok:false,error:{code:'planning_transport_lost',source:'host',commitUncertain:true}};
     if (workblock) return {workblocks:true,schemaVersion:1,ok:false,error:{code:'workblock_transport_lost',source:'host',commitUncertain:true}};
     if (runtime) return {documentRuntime:true,schemaVersion:1,ok:false,error:{code:'document_runtime_transport_lost',source:'host',commitUncertain:true}};
     throw error;
+  }
+  if (databases) {
+    if(reply?.ok===true)return {databases:true,schemaVersion:1,ok:true,value:reply.result};
+    const valid=reply?.ok===false&&typeof reply.error?.code==='string'&&/^[a-z_]{1,64}$/.test(reply.error.code)&&typeof reply.error.commitUncertain==='boolean';
+    return {databases:true,schemaVersion:1,ok:false,error:{code:valid?reply.error.code:'invalid_database_response',source:'host',commitUncertain:valid?reply.error.commitUncertain:true}};
   }
   if (runtime) {
     if (reply?.ok === true) return {documentRuntime:true,schemaVersion:1,ok:true,value:reply.result};

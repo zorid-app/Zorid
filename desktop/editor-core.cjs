@@ -12,7 +12,7 @@ const {captureSavedSourceWitness,captureSavedSourceId,captureSavedSourceValue}=r
 const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 const fail=code=>Object.assign(new Error('Rust vault operation failed.'),{code});
 const runtimeUnavailable=()=>Object.assign(new Error('The desktop core does not support document indexing. Update Zorid and restart the app.'),{code:'document_runtime_unavailable'});
-const methods=new Set(['readText','readTextById','planWrite','prepare','commit','query','listUnacknowledged','acknowledge']);
+const methods=new Set(['readText','readTextById','composeNote','planWrite','prepare','commit','query','listUnacknowledged','acknowledge']);
 const checkpointMethods=new Set(['load','compareAndSwap','list','changes']);
 const runtimeMethods={documentRuntimeObserve:'observe',documentRuntimeControl:'control',documentRuntimeAckControl:'ackControl',documentRuntimeAckOutcome:'ackOutcome'};
 const runtimeAvailable=admission=>admission.documentRuntime&&['observe','control','ackControl','ackOutcome','subscribe'].every(name=>typeof admission.documentRuntime[name]==='function');
@@ -28,7 +28,7 @@ function createEditorCoreManager(environment=process.env, options={}){
   const documentRuntime=options.documentRuntime===true;
   if(documentRuntime&&typeof options.onDocumentRuntimeNudge!=='function')throw runtimeUnavailable();
   const contexts=new Map(), admissions=new Map(), released=new WeakMap(), services=new Set(), openings=new Map(), retirements=new Map();
-  const describe=saved=>({admissionId:saved.id,scope:saved.admission.scope,...(saved.admission.createTextReceipt?{textCreateReceiptsAvailable:true}:{}),...(saved.admission.conditionalSavedSourceAvailable===true?{conditionalSavedSourceAvailable:true}:{}),...(saved.admission.documentCommand?{documentSemantics:true}:{}),...(saved.admission.metadataRowsAvailable===true?{metadataRowsAvailable:true}:{}),...(saved.admission.propertyTargetsAvailable===true?{propertyTargetsAvailable:true}:{}),...(saved.admission.basePreviewAvailable===true?{basePreviewAvailable:true}:{}),...(saved.admission.draftsAvailable===true?{draftsAvailable:true}:{}),...(documentRuntime&&runtimeAvailable(saved.admission)?{documentMaintenance:true}:{}),...(saved.admission.workblockCommand?{workBlocks:true}:{}),...(saved.admission.binaryLimits?{binaryLimits:saved.admission.binaryLimits}:{})});
+  const describe=saved=>({admissionId:saved.id,scope:saved.admission.scope,...(saved.admission.createTextReceipt?{textCreateReceiptsAvailable:true}:{}),...(saved.admission.conditionalSavedSourceAvailable===true?{conditionalSavedSourceAvailable:true}:{}),...(saved.admission.documentCommand?{documentSemantics:true}:{}),...(saved.admission.metadataRowsAvailable===true?{metadataRowsAvailable:true}:{}),...(saved.admission.propertyTargetsAvailable===true?{propertyTargetsAvailable:true}:{}),...(saved.admission.basePreviewAvailable===true?{basePreviewAvailable:true}:{}),...(saved.admission.draftsAvailable===true?{draftsAvailable:true}:{}),...(documentRuntime&&runtimeAvailable(saved.admission)?{documentMaintenance:true}:{}),...(saved.admission.workblockCommand?{workBlocks:true}:{}),...(saved.admission.databaseCommand?{databases:true}:{}),...(saved.admission.binaryLimits?{binaryLimits:saved.admission.binaryLimits}:{})});
   const executable=()=>require('./host-location.cjs').resolveDesktopHost({...options,override:config.executable});
   function checked(broker,record,expectedRoot,admissionId,allowRetired=false){
     broker.assertLive(record);
@@ -163,6 +163,10 @@ function createEditorCoreManager(environment=process.env, options={}){
         if(contexts.get(record)!==saved)throw fail('durable_scope_changed');
         return captureDocumentRuntimeReply(method,captured,value,{localStoreId:saved.admission.scope.vaultId,clientId:saved.admission.scope.clientId});
       }
+      if(method==='databaseCommand'){
+        if(args.length!==1||!saved.admission.databaseCommand)throw fail('invalid_durable_request');
+        return saved.admission.databaseCommand(args[0]);
+      }
       if(method==='workblockCommand'){
         if(args.length!==1||!saved.admission.workblockCommand)throw fail('invalid_durable_request');
         return saved.admission.workblockCommand(args[0]);
@@ -201,7 +205,7 @@ function createEditorCoreManager(environment=process.env, options={}){
         const name=method.slice(prefix.length);if(!checkpointMethods.has(name))throw fail('invalid_durable_request');
         return saved.admission.durableWrites.checkpoints[name](...captured);
       }
-      if(!methods.has(method))throw fail('invalid_durable_request');
+      if(!methods.has(method)||typeof saved.admission.durableWrites[method]!=='function')throw fail('invalid_durable_request');
       return saved.admission.durableWrites[method](...captured);
     },
     async release(broker,record,event,expectedRoot,admissionId){

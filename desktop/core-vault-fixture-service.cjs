@@ -207,6 +207,7 @@ class CoreVaultFixtureService {
     return this.ensureDocumentScheduler().releaseDraftClient(reference);
   }
   documentRuntimeSourceHint() { this.documentScheduler?.sourceHint(); }
+  databaseChanged() { this.live();this.notify({type:'change'}); }
   async poll() {
     if (this.closed) return;
     const owner=this.documentRuntimeEnabled?this.runtimeOwner():null;

@@ -36,6 +36,8 @@ export interface CapturedTextCreate {
 export interface VaultAdapter {
   /** Optional admitted Rust-owned metadata/index/Base read capability. */
   readonly documentSemantics?:DocumentService;
+  /** Optional Rust-owned local collections; no sync enrollment or JS authority. */
+  readonly databases?:import('./databases.ts').DatabaseService;
   /** Optional admitted bounded stage/pinned-read authority. */
   readonly binaryStreams?: BinaryStreams;
   /** Optional durable text-save protocol; commit/publication run through Vault. */

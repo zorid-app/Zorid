@@ -1,3 +1,5 @@
+import {createDatabaseService} from '../core/databases.ts';
+import type {DatabaseService} from '../core/databases.ts';
 import {decodeDesktopNotePlan,snapshotDesktopNoteWriteInput} from './desktop-note-plan.ts';
 import {decodeWorkBlockEnvelope} from '../../desktop/workblocks.cjs';
 import {createDesktopWorkBlocks,createDesktopBinaryStreams,createDesktopConditionalSavedSources} from './desktop.ts';
@@ -16,6 +18,7 @@ export interface PlatformVault {
   readonly recoveryHistory?:import('./bridge').RecoveryHistory;
   readonly workBlocks?:import('../core/workblocks.ts').WorkBlockService;
   readonly documentSemantics?:DocumentService;
+  readonly databases?:DatabaseService;
   nativeDocumentNavigation?:import('./mobile-native.ts').NativeDocumentNavigation;
   nativeWebRouting?:import('./mobile-web-routing.ts').NativeWebRouting;
   /** Presentation bridge only; native controls execute shared editor commands. */
@@ -56,6 +59,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
   let createText: ((path:string,content:string)=>Promise<void>) | undefined;
   let commands:Partial<VaultAdapter>={};
   let binary:ReturnType<typeof createDesktopBinaryStreams>|undefined;
+  let databases:DatabaseService|undefined;
   let workBlocks:ReturnType<typeof createDesktopWorkBlocks>|undefined;
   let documents:ReturnType<typeof createDesktopDocumentService>|undefined;
   let documentRuntime:ReturnType<typeof createDesktopDocumentRuntime>|undefined;
@@ -116,6 +120,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
     durableWrites = Object.freeze<DurableWrites>({
       ...createDesktopConditionalSavedSources(async(method,input)=>{const value=await call(method,input);if(released)throw Object.assign(new Error('Durable desktop context released'),{code:'client_not_admitted',source:'host'});return value;},binding.conditionalSavedSourceAvailable===true),
       readText: path => call('readText',path), readTextById: id => call('readTextById',id),
+      ...(binding.databases===true?{composeNote:(input:import('../core/durable-writes.ts').DurableNoteCompositionInput)=>call<import('../core/durable-writes.ts').DurableNoteComposition|null>('composeNote',input)}:{}),
       planWrite: async input => {const captured=snapshotDesktopNoteWriteInput(input);if(captured.conditionalSavedSource&&binding.conditionalSavedSourceAvailable!==true)return Promise.reject(Object.assign(new Error('Conditional saved-source capture is unavailable.'),{code:'unsupported_host_capability',source:'host',commitUncertain:false}));return call('planWrite',captured).then(reply=>decodeDesktopNotePlan(captured,scope,reply));}, prepare: plan => call('prepare',plan),
       commit: ref => call('commit',ref), query: ref => call('query',ref),
       listUnacknowledged: () => call('listUnacknowledged'), acknowledge: (ref,outcome) => call('acknowledge',ref,outcome),
@@ -124,6 +129,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
         list: options => call('checkpoints.list',options), changes: options => call('checkpoints.changes',options)}),
     });
     let binaryDrained=false,documentsDrained=false,draftsDrained=false;
+    if(binding.databases===true)databases=createDatabaseService(request=>call('databaseCommand',request));
     if(binding.workBlocks===true)workBlocks=createDesktopWorkBlocks(request=>call('workblockCommand',request).then(reply=>decodeWorkBlockEnvelope(request,reply)));
     if(binding.documentMaintenance===true){
       if(binding.documentSemantics!==true||!bridge.onDocumentRuntimeNudge)throw new Error('Incomplete document runtime capability');
@@ -148,6 +154,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
     ...(bridge.recoveryList&&bridge.recoveryRead?{recoveryHistory:{list:(entryId,options)=>bridge.recoveryList!(info.path,entryId,options),read:(entryId,snapshotId)=>bridge.recoveryRead!(info.path,entryId,snapshotId)}}:{}),
     ...(workBlocks?{workBlocks:workBlocks.service}:{}),
     ...(documents?{documentSemantics:documents.service}:{}),
+    ...(databases?{databases}:{}),
     ...(reconciliation?{reconciliation}:{}),
     ...(binary?{recoverCommands:()=>scheduleBinaryTransfer(binary!.streams,()=>binary!.recover())}:{}),
     id: durableWrites ? `desktop-core:${durableWrites.checkpoints.scope.vaultId}:${durableWrites.checkpoints.scope.clientId}` : `desktop:${info.path}`,
@@ -155,6 +162,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
     adapter: {
       ...(durableWrites ? {durableWrites} : {}),
       ...(documents?{documentSemantics:documents.service}:{}),
+      ...(databases?{databases}:{}),
       ...(binary ? {binaryStreams:binary.streams} : {}),
       ...(createText ? {createText} : {}),
       list: () => bridge.list(info.path),
