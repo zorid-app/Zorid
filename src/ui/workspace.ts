@@ -2513,10 +2513,28 @@ export class Workspace {
         }
         return collectionValue(value);
       };
-      for(const field of selected.collection.properties){
-        if(JSON.stringify(previous.get(field.name))===JSON.stringify(proposed.get(field.name)))continue;
+      const changedFields=selected.collection.properties.filter(field=>JSON.stringify(previous.get(field.name))!==JSON.stringify(proposed.get(field.name)));
+      const preservedFields=changedFields.filter(field=>Object.hasOwn(selected.entry.problems??{},field.id));
+      let canonicalPreserved:Map<string,unknown>|undefined;
+      if(preservedFields.length){
+        // A datatype change may retain its old readable projection while values
+        // still contains the earlier datatype's payload (such as an option ID).
+        // Prove the displayed baseline against the exact saved file and the
+        // core's revision-bound canonical projection; never retype that payload.
+        const savedText=buffer.savedText,witness=buffer.savedDurableWitness;
+        if(!witness||selected.entry.deleted||selected.entry.pendingProjection||!selected.entry.fileRevision||witness.entryId!==selected.entry.entryId||witness.path!==selected.entry.path||witness.path!==buffer.path||witness.revision!==selected.entry.fileRevision)throw new Error('The saved collection projection changed. Reopen the note before correcting this value; the draft is retained.');
+        const savedWitness={entryId:witness.entryId,path:witness.path,revision:witness.revision};
+        const savedProperties=new Map(readProperties(savedText).map(property=>[property.key,property.value]));
+        for(const field of preservedFields)if(!savedProperties.has(field.name)||JSON.stringify(previous.get(field.name)??null)!==JSON.stringify(savedProperties.get(field.name)??null))throw new Error(`The saved ${field.name} value changed. Reopen the note before correcting it; the draft is retained.`);
+        const reply=await databases.request({op:'compose',entryId:selected.entry.entryId,expectedRevision:savedWitness.revision,baseline:savedText,proposed:savedText});validate();
+        const currentWitness=buffer.savedDurableWitness,composition=reply.composition;
+        if(vault!==this.vault||generation!==this.vaultGeneration||buffer.text!==before||buffer.savedText!==savedText||!currentWitness||currentWitness.entryId!==savedWitness.entryId||currentWitness.path!==savedWitness.path||currentWitness.revision!==savedWitness.revision||!composition||composition.currentFileRevision!==savedWitness.revision||composition.currentFileRevision!==selected.entry.fileRevision||composition.entryRevision!==selected.entry.revision||composition.collectionRevision!==selected.collection.revision)throw new Error('The saved collection projection changed. Reopen the note before correcting this value; the draft is retained.');
+        canonicalPreserved=new Map(readProperties(composition.content).map(property=>[property.key,property.value]));
+        if(canonicalPreserved.get('_id')!==selected.entry.entryId||canonicalPreserved.get('_type')!==selected.collection.name)throw new Error('The canonical collection projection has a different identity. The draft is retained.');
+      }
+      for(const field of changedFields){
         const authoritative=selected.entry.values[field.id]??null;
-        const rendered=(field.datatype==='select'||field.datatype==='status')&&typeof authoritative==='string'?field.options.find(option=>option.id===authoritative)?.name??authoritative:field.datatype==='multi-select'&&Array.isArray(authoritative)?authoritative.map(id=>field.options.find(option=>option.id===id)?.name??id):authoritative;
+        const rendered=preservedFields.includes(field)?canonicalPreserved?.get(field.name):(field.datatype==='select'||field.datatype==='status')&&typeof authoritative==='string'?field.options.find(option=>option.id===authoritative)?.name??authoritative:field.datatype==='multi-select'&&Array.isArray(authoritative)?authoritative.map(id=>field.options.find(option=>option.id===id)?.name??id):authoritative;
         if(JSON.stringify(previous.get(field.name)??null)!==JSON.stringify(rendered))throw new Error(`The saved ${field.name} value changed in another view. Refresh the note before editing; the draft is retained.`);
         values[field.id]=typed(field,proposed.get(field.name));
       }
