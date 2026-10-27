@@ -1,5 +1,23 @@
 # User findings queue
 
+## Local collections implementation resume — 2026-10-27
+
+User explicitly resumes with **"ok start"**. Scope remains local collections and
+independently sourced Base views; untyped views browse without property grids,
+New creates without filter-related questions/blocking, and Properties.yaml loses
+special registry behavior. No note import, cross-collection move or detach-to-
+untyped flow. `_id` uses existing core EntryId and emitted field keys use exact
+display names. Existing note/body data and guarded storage remain protected.
+
+Root composes `codex/local-databases` from main `c36c4b0e`; the acknowledged shared-
+core owner retains sole main integration. [Tracker P001](plans/types-properties-implementation.md#p001--2026-10-27--local-implementation-resumed-underway)
+records active ownership, source checks and pending native dependencies. Initial
+view-model/focused registry TS checks pass; Rust query source contracts PASS6/6 after a
+corrected compile failure; the native trusted-membership hook remains pending. No integrated runtime acceptance or completion claim.
+E09 duplicate view-name routes and E18 external managed-value reconciliation are
+still gaps; safe raw-edit rejection is intermediate behavior. Sync remains
+future roadmap work. Earlier stopped/docs-only entries below are dated history.
+
 ## Local Bases/collections UX and edge-case decisions — 2026-10-27
 
 Latest direct user steering: Base is a container of views; each view selects one

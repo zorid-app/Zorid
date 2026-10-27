@@ -16,9 +16,11 @@ Each view selects one collection/type or untyped notes; untyped views only brows
 notes and do not expose property grids. The special Properties.yaml registry is
 to be retired. Collection import and cross-collection moves are excluded.
 
-Product implementation is **stopped for discussion**. The latest authorization
-is documentation/tracking only; this addition does not resume feature work or
-change the accepted scope of shipped Bases. The [design decisions](design/types-properties-sync-discussion.md)
+The user subsequently resumed local implementation with **"ok start"** on
+2026-10-27. The [tracker's P001 receipt](plans/types-properties-implementation.md#p001--2026-10-27--local-implementation-resumed-underway)
+records active owners, contracts and actual source checks. This is implementation
+in progress, not acceptance of the new feature or a change to the recorded
+acceptance scope of shipped Bases. The [design decisions](design/types-properties-sync-discussion.md)
 and [implementation tracker](plans/types-properties-implementation.md) record
 local contracts, edge cases, owners, batches and separate verification gates.
 Earlier broad sync-first or no-Types language is historical where it conflicts

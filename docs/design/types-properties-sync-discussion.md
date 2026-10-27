@@ -1,17 +1,18 @@
 # Types, properties, Bases and collections — design decisions
 
 Date: 2026-10-27
-Status: local product decisions recorded; implementation stopped for discussion.
-Current authorization: update documentation and implementation tracking only.
+Status: local product decisions recorded; **local implementation resumed**.
+Latest authorization: user **"ok start"** on 2026-10-27. Collaboration/sync remains
+deferred; source implementation, review and runtime acceptance are tracked separately.
 
 This records agreed product behavior, its rationale and remaining engineering
 questions. It does not describe what Zorid already implements. Read the current
 scope below before the retained future-sync discussion in sections 7–8.
 
-The user narrowed delivery to **local use** and then explicitly stopped product
-implementation to discuss behavior first. This documentation request does not
-resume that work. Collaboration, CRDT implementation and encrypted-sync changes
-are deferred. Their requirements belong in the [product roadmap](../roadmap.md#future-collection-collaboration-and-sync).
+The user narrowed delivery to **local use**, stopped implementation for discussion,
+then explicitly resumed with **"ok start"** after the documentation handoff.
+Current work implements the local feature within these decisions. Collaboration,
+CRDT implementation and encrypted-sync changes remain deferred. Their requirements belong in the [product roadmap](../roadmap.md#future-collection-collaboration-and-sync).
 
 Resume and handoff record: [implementation tracker](../plans/types-properties-implementation.md).
 It separates product decisions, source implementation, review, integration and
@@ -117,8 +118,8 @@ Delete Base removes its views. Delete view removes that view. Neither deletes
 collections or entries. Delete collection removes its definition and all member
 entries, including those hidden by current filters, through recoverable Trash.
 There is no keep-as-ordinary-notes conversion. The exact handling of a hypothetical
-individual "remove membership" action is still open; do not introduce it as a
-backdoor move/import path.
+individual "remove membership" action is excluded by the resumed local contract;
+do not introduce detach-to-untyped as a backdoor move/import path.
 
 ### Defined edge cases
 
@@ -226,8 +227,10 @@ field-ID strings does not identify the fields as the same object.
 We also explored UUIDs, six-character IDs, name-prefixed IDs and word/passphrase
 IDs. The user chose ordinary random IDs instead. This does not require replacing
 the existing core's file IDs or using the same format for CRDT actors and updates.
-The relationship between the Markdown `_id` and existing core entry identity still
-needs an implementation decision; examples are not a migration instruction.
+The resumed local implementation uses the existing **core EntryId** as Markdown
+`_id`; its format need not match schema IDs. The illustrative 12-character note
+ID below is not a migration instruction. Missing/duplicated external IDs still
+need guarded admission and repair.
 
 Collisions during offline multiplayer need explicit handling before rollout.
 Randomness makes collisions unlikely, not impossible; unrelated fields must never
@@ -348,9 +351,11 @@ edit does not change membership; cross-collection moves and note import are outs
 the agreed product. Exact mismatch-repair handling remains open alongside the
 other external-edit reconciliation rules below.
 
-The exact mapping from display names to emitted YAML keys is not finalized.
-The examples use simple lowercase keys. We must not introduce a second immutable
-storage-key system without review: that earlier proposal was rejected as confusing.
+The resumed local contract uses each field's **exact display name** as its emitted
+YAML key. The earlier lowercase examples are illustrative, not a normalization
+rule. There is no second immutable storage-key system; stable IDs live in hidden
+state. Renaming a field preserves its ID and updates the readable key through
+safe projection.
 
 Two fields may acquire the same display name through concurrent edits. Two options
 may also share labels. Plain YAML keys/labels cannot faithfully encode every such
@@ -592,8 +597,9 @@ The product model and defined edge cases in section 1 are settled enough to trac
 These engineering details remain open; do not silently replace them with the
 paused workers' tentative APIs or assistant recommendations:
 
-1. **Identity/storage:** `_id` versus existing core EntryId, duplicate/missing ID
-   repair, local authority format, schema versions, restore/export completeness.
+1. **Identity/storage:** `_id` uses the existing core EntryId. Duplicate/missing ID
+   repair, local authority format, schema versions and restore/export completeness
+   remain safety contracts to finish and review.
 2. **Existing product transition:** old `.base` source/filter configuration moving
    to per-view configuration; retiring special Properties.yaml behavior while
    preserving ordinary files and existing note data. Reconcile active roadmap,
@@ -612,8 +618,8 @@ paused workers' tentative APIs or assistant recommendations:
    source-change reset acknowledgement, collection management/discoverability,
    focus behavior when a row disappears. No untyped property-grid work.
 7. **Membership boundary:** no cross-collection move or ordinary-note import;
-   whether an individual detach-to-untyped action exists is unresolved. External
-   `_type` edits cannot bypass the boundary.
+   the resumed local contract also excludes detach-to-untyped. External `_type`
+   edits cannot bypass the boundary.
 8. **Platform contract:** delivery order and actual local desktop, CLI and web
    support; mobile remains deferred under the roadmap. Never present an omitted
    capability as available or infer another platform's acceptance from unit tests.
@@ -637,7 +643,12 @@ partial unreviewed registry-retirement/docs drafts, then the user explicitly
 stopped implementation. Those drafts are not approval, implementation completion
 or evidence against this later product design. See the tracker's workspace ledger.
 
-The latest user request authorizes documenting these decisions and creating the
-tracker. Product implementation remains stopped pending a separate explicit
-resume. No migration, sync activation, product verification or feature-completion
-claim follows from these documentation changes.
+The subsequent user instruction **"ok start"** explicitly resumed local product
+implementation. Root composes `codex/local-databases` at
+`.worktrees/local-databases`, based on canonical main `c36c4b0e`, with the earlier
+documentation batch `bc006f23` queued to the sole main owner. That owner reaffirmed
+integration ownership at 2026-10-27 16:56:08 UTC from
+`term_d8b43288-7bf1-464c-af5f-b779721982e3`. Current source owners and exact checks
+are in tracker P001. The earlier stopped status remains historical provenance,
+not current authorization. No source draft, isolated test or documentation update
+establishes product integration, native runtime acceptance or sync activation.

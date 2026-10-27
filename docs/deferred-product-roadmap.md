@@ -9,6 +9,25 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+**Local collections implementation resumed — 2026-10-27.** User explicitly says
+"ok start" after the Base/view/type and untyped-browsing design handoff. Root owns
+`codex/local-databases` / `.worktrees/local-databases`, main baseline `c36c4b0e`.
+The shared-core main owner acknowledged sole integration at 16:56:08 UTC from
+`term_d8b43288-7bf1-464c-af5f-b779721982e3`; docs `bc006f23` are queued, not yet
+integrated. Root does not mutate main. [Tracker P001](plans/types-properties-implementation.md#p001--2026-10-27--local-implementation-resumed-underway)
+records named core/native/query/UI/view-model/transport/save owners, dependencies,
+source checks and pending results. Query owner has the sole Rust slot, root
+`tmp/local-database-target`, release offline `-j1`; first compile failed on a new
+QueryOptions field, was corrected, and the retry PASS6/6 is recorded. Query owner
+released the lane to root; no parallel heavy command is authorized by this entry.
+View-model and focused registry TS checks pass as separately recorded; no
+integrated/native/app verification or feature acceptance follows. Local only;
+no import, cross-collection move or detach; raw managed edits rejection and
+unique-name legacy view routing remain explicit E18/E09 gaps. Body composition,
+trusted typed-query membership and guarded native projection are in progress.
+Collaboration/sync remains roadmap work. The stopped documentation entry below
+is historical and is superseded by this explicit resume.
+
 **Local collection design/tracking — 2026-10-27.** User authorizes documentation
 of the agreed Base/view/type model and edge cases, plus a tracker for long passes.
 Product implementation remains stopped for discussion; previous local-database
