@@ -1,5 +1,16 @@
 # User findings queue
 
+## Local core flows integrated — 2026-10-27
+
+Latest direct user instruction: root integrates main itself. The previous owner
+acknowledged a temporary serialized lane; root fast-forwarded clean main
+`c36c4b0e` to verified `ae5cb5d4`. Main post-merge **99/99 focused checks,
+TypeScript and native frontend build PASS** (`main-core-ui-001.log`,
+`main-native-build-001.log`). The frozen core flow, E11 correction and basic
+deleted-view Restore/Change source are complete within recorded scope. Earlier
+pending entries below are historical. No push or Tauri changes; no installed
+production-package, browser collection CRUD or broad parity claim.
+
 ## Final basic local flows verified; integration pending — P009, 2026-10-27
 
 Final code 05b73d5a08dc7c9a083041071d376b54020a71f9, product 262939e6/controller

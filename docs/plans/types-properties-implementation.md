@@ -1,10 +1,10 @@
 # Local collections, types and Base views — implementation tracker
 
 Updated: 2026-10-27. Owner: this discussion's coordinator (`/root`).
-State: **frozen core-flow scope verified; main integration pending**.
+State: **integrated to main; frozen local core-flow scope verified**.
 Latest authorization: the user explicitly resumed with **"ok start"** on
-2026-10-27 after the documentation handoff. Root's built-in goal is active;
-this repository tracker remains the cross-session record. Collaboration/sync is
+2026-10-27 after the documentation handoff.
+This repository tracker remains the cross-session record. Collaboration/sync is
 still deferred. This file does not grant main integration ownership or a build
 slot; follow the acknowledged owner/resource lane below.
 
@@ -23,18 +23,28 @@ variants remain honest limits, not blockers to a bounded core-delivery claim.
 
 ## Resume checkpoint
 
+**Main integration — 2026-10-27.** The user explicitly instructed root to
+integrate to main itself. The previous integration owner acknowledged a temporary
+serialized lane. Root fast-forwarded clean main `c36c4b0e` to pinned
+`ae5cb5d4f4ef3b03809c3390b49ed6437e009b13`. Post-merge checks on main:
+**99/99 PASS, zero skipped**, full TypeScript and native frontend build PASS
+(`main-core-ui-001.log`, `main-native-build-001.log`). Product code is identical
+to the verified `05b73d5a`/`262939e6` snapshot; Rust/protocol inputs still match the
+retained native build receipt. No push, installed-app update or Tauri work.
+The temporary lane returns to the standing owner after completion notice.
+
 | Item | Current state |
 | --- | --- |
-| Current task | Core local create/edit/filter/delete/restore/restart + truthful deleted-source card/Change source are verified within frozen scope. Prepare clean final handoff and root's explicit integration request to sole main owner; no new exploratory work. |
+| Current task | Frozen local core flows are implemented, reviewed, verified and integrated. No further exploratory work or acceptance gates. |
 | Composition branch/worktree | `codex/local-databases` / `.worktrees/local-databases`, main base `c36c4b0e`; final code HEAD `05b73d5a08dc7c9a083041071d376b54020a71f9` (product `262939e6`, later test-only oracle correction). Root will commit current documentation separately. |
-| Main integration ownership | Shared-core sole owner `term_d8b43288-7bf1-464c-af5f-b779721982e3`; main unchanged `c36c4b0e`. Root terminal `term_4603116b-4cb4-4e5a-b3a5-968bea283161` has not merged product work. |
-| Review/handoff | All P009 controller/UI/test successors independently reviewed with zero must-fix findings. Main integration still needs root's explicit request, clean branch/evidence and owner action; review is not completed integration. |
+| Main integration ownership | Root terminal `term_4603116b-4cb4-4e5a-b3a5-968bea283161` performed this batch under latest direct user authorization and the previous owner's acknowledged temporary lane. Standing owner `term_d8b43288-7bf1-464c-af5f-b779721982e3` resumes after completion notice. |
+| Review/integration | All P009 successors independently reviewed, zero must-fix. Clean main fast-forwarded to pinned `ae5cb5d4`; main 99/99, TypeScript and native build PASS. |
 | Final source checks | `final-core-ui-composed-002.log` 99/99 PASS, 0 skipped; full TS/native frontend006 PASS. Original001 was98/99 FAIL on obsolete unsupported-untyped-edit oracle; test-only successor preserves supported draft guards. No retroactive pass or aggregate with earlier overlaps. |
 | Actual CLI | P004 successor30 commands/13 checks/all7 scenarios PASS; separate native P2 contract12 commands/8 checks PASS. Original oracle failure retained; exclusions remain scoped limits. |
 | Actual normal native | P008 functional pass + P009 final session70282 PASS: clear deleted card, Restore directly, Change source to untyped, old collection Restore leaves chosen view untyped, exact 3 IDs/9-null-0/full file hashes unchanged. Normal quit exit 0; all owned test apps closed. |
 | Actual browser | P007 source73fa fresh-origin untyped browsing/filter/sort/New/edit-out/reload PASS bounded. Browser collection CRUD unsupported. No final 05b browser rerun, recovered-note or broad platform parity claimed. |
 | Artifacts/runtime | Normal source-mode Electron used retained matched native host and native frontend006, not installed production package. Native products receipt and WASM002 source/hash receipts retained; latest browser actual receipt keeps its earlier source limit. Production app/real vault untouched. |
-| Next action | Root inspects/commits four documentation files, hands ordered reviewed source and exact receipts to sole main owner and explicitly requests integration. No further UI/source campaign required for this frozen core-flow scope. |
+| Next action | Record completion and release the temporary integration lane. No further source/UI campaign is required for this frozen scope. |
 | Remaining limits | Browser collections, scoped indexing previews, actual concurrent-client/crash and broad layout/filter/visual/keyboard/installed-package/mobile/other OS variants remain explicit limits, not new blockers to bounded core delivery. |
 | Resource/scope | No live owned test app. Serial bounded resource rules unchanged. No further Tauri, sync, exploratory or secondary-edge work. |
 
@@ -42,7 +52,8 @@ Final native receipt:
 `/private/tmp/zorid-local-collections-desktop-20261027/deleted-source-final-smoke.json`;
 prior native functional/readback receipts: `desktop-acceptance-002.json` and
 `restored-final-data.json` in that directory. Final source and runtime gate are
-closed within the user-frozen core-flow scope; **main integration is still pending**.
+closed within the user-frozen core-flow scope; **main integration and its scoped
+post-merge checks are complete**.
 Retain earlier P006/P007 failures and first final001 98/99 failure as original
 history. The passing successor does not imply unexecuted variants or another
 platform/installed-package acceptance.
@@ -166,14 +177,14 @@ actual receipts; none of these rows is accepted merely because work is active.
 
 | Batch | Scope and required exit | Dependencies | Source / review | Integration | Runtime |
 | --- | --- | --- | --- | --- | --- |
-| L0 Contracts and current-code audit | Stable identity/source/ownership/storage/publication contracts used by this local slice. | Current main/owner audited | Scoped source/review complete; see named owners above | Integration pending | Bounded flows verified; unsupported capabilities listed |
-| L1 Local domain/storage | Stable schemas, typed values, membership, revision guards and durable retry without new sync enrollment. | L0 | Scoped source/review complete; see named owners above | Integration pending | Store64 selected checks + P004 CLI ownership/retry/rename/reopen PASS; broader concurrent/crash variants unrun |
-| L2 Projection/editor saves | Readable schema/frontmatter, exact bodies, guarded composition and recovered-note UI. | L0–L1 | Scoped source/review complete; see named owners above | Integration pending | Native source checks + P005/P008 actual correction/restart/managed and ordinary saves PASS bounded; actual crash/external-edit matrix open |
-| L3 Per-view sources/registry retirement | Trusted one-source queries, hidden metadata catalogs, no global Properties.yaml authority. | L0–L2 | Scoped source/review complete; see named owners above | Integration pending | Query24/native facade3 source checks PASS; native typed filter and browser untyped catalogs PASS; scoped previews/browser collections unavailable |
-| L4 Onboarding/browsing | Create/select collection and untyped view flows, collection browsing. | L3 | Scoped source/review complete; see named owners above | Integration pending | Normal native Tasks onboarding and collection browser + actual browser untyped onboarding PASS; all source/layout combinations not claimed |
-| L5 Editing/New | Property controls, templates, automatic New hints, clean acknowledgement and edit-out preservation. | L1–L4 | Scoped source/review complete; see named owners above | Integration pending | P008 native Status 9 New inherits 9 then0 hides with editor/file retained; ordinary4→5 and managed8→9 PASS. Browser rating 4 New/edit 2 PASS; other hint/layout/keyboard variants source-only or unrun |
-| L6 Deletion/recovery/edges | Basic schema conversion, identity, hidden members, Trash/Restore and deleted-source state. | L1–L5 | Scoped source/review complete through05b / UI + model + reviewers | Integration pending | P004/P005/P008/P009 actual basic data/card/Restore/Change source PASS, exact 3IDs/9-null-0/full hashes. Broader variants remain limits, not new gates |
-| L7 Review/integration/delivery | Final scoped review/artifacts/checks and ordered sole-owner integration. | Final clean branch/evidence ready after root docs commit | Source/UI/controller review complete, zero must-fix;99/99/TS/frontend006 PASS | Main c36c4b0e unchanged; root explicit request + owner integration pending | Core-flow actual CLI/native and browser-untyped scoped proof complete; installed production package/unsupported platforms remain limits |
+| L0 Contracts and current-code audit | Stable identity/source/ownership/storage/publication contracts used by this local slice. | Current main/owner audited | Scoped source/review complete; see named owners above | Integrated at `ae5cb5d4` | Bounded flows verified; unsupported capabilities listed |
+| L1 Local domain/storage | Stable schemas, typed values, membership, revision guards and durable retry without new sync enrollment. | L0 | Scoped source/review complete; see named owners above | Integrated at `ae5cb5d4` | Store64 selected checks + P004 CLI ownership/retry/rename/reopen PASS; broader concurrent/crash variants unrun |
+| L2 Projection/editor saves | Readable schema/frontmatter, exact bodies, guarded composition and recovered-note UI. | L0–L1 | Scoped source/review complete; see named owners above | Integrated at `ae5cb5d4` | Native source checks + P005/P008 actual correction/restart/managed and ordinary saves PASS bounded; actual crash/external-edit matrix open |
+| L3 Per-view sources/registry retirement | Trusted one-source queries, hidden metadata catalogs, no global Properties.yaml authority. | L0–L2 | Scoped source/review complete; see named owners above | Integrated at `ae5cb5d4` | Query24/native facade3 source checks PASS; native typed filter and browser untyped catalogs PASS; scoped previews/browser collections unavailable |
+| L4 Onboarding/browsing | Create/select collection and untyped view flows, collection browsing. | L3 | Scoped source/review complete; see named owners above | Integrated at `ae5cb5d4` | Normal native Tasks onboarding and collection browser + actual browser untyped onboarding PASS; all source/layout combinations not claimed |
+| L5 Editing/New | Property controls, templates, automatic New hints, clean acknowledgement and edit-out preservation. | L1–L4 | Scoped source/review complete; see named owners above | Integrated at `ae5cb5d4` | P008 native Status 9 New inherits 9 then0 hides with editor/file retained; ordinary4→5 and managed8→9 PASS. Browser rating 4 New/edit 2 PASS; other hint/layout/keyboard variants source-only or unrun |
+| L6 Deletion/recovery/edges | Basic schema conversion, identity, hidden members, Trash/Restore and deleted-source state. | L1–L5 | Scoped source/review complete through05b / UI + model + reviewers | Integrated at `ae5cb5d4` | P004/P005/P008/P009 actual basic data/card/Restore/Change source PASS, exact 3IDs/9-null-0/full hashes. Broader variants remain limits, not new gates |
+| L7 Review/integration/delivery | Final scoped review/artifacts/checks and ordered sole-owner integration. | Final clean branch/evidence ready after root docs commit | Source/UI/controller review complete, zero must-fix;99/99/TS/frontend006 PASS | Integrated at `ae5cb5d4`; main 99/99 + TS/native build PASS | Core-flow actual CLI/native and browser-untyped scoped proof complete; installed production package/unsupported platforms remain limits |
 
 L7 review/integration can run alongside independent bounded source work once a
 batch is ready. Keep shared API changes coordinated and heavy compilation/native
@@ -575,7 +586,7 @@ own bounded passes; no blanket multi-platform acceptance or main merge follows.
 
 ### P009 — 2026-10-27 — deleted-source core flow verified
 
-**CLOSED within the frozen basic core-flow scope; main integration pending.**
+**CLOSED within the frozen basic core-flow scope; integrated at `ae5cb5d4`.**
 Final code HEAD `05b73d5a08dc7c9a083041071d376b54020a71f9`; product UI commit
 `262939e6`, controller `cd17f237`, controller tests `2708115e`; final 05b is a
 test-only successor. All source/controller/UI changes independently reviewed,

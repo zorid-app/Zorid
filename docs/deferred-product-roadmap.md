@@ -7,6 +7,18 @@ is historical where it conflicts with this checkpoint. The maintained stage
 sequence is in [roadmap.md](roadmap.md); S1 scope is in
 [plans/indexing-search.md](plans/indexing-search.md).
 
+**Latest: local collections integrated — 2026-10-27.** This supersedes the
+earlier dated pending cutoffs below. On the user's direct instruction to integrate
+itself, root obtained the previous owner's acknowledged temporary serialized lane
+and fast-forwarded clean main `c36c4b0e` to `ae5cb5d4`. Main then passed **99/99
+focused checks, TypeScript and the native frontend build**. The frozen basic
+create/edit/filter/delete/restore/restart scope and deleted-view source recovery
+have actual desktop/CLI and bounded untyped-browser receipts in the
+[tracker](plans/types-properties-implementation.md). No Tauri work or push.
+Browser collection CRUD, installed production-package and broad platform parity
+remain unclaimed; sync/collaboration stays deferred. Completion notice releases
+the temporary lane back to the standing main owner.
+
 **P008 bounded native PASS; P009 presentation pending — 2026-10-27.** Root
 `dd6c0b7f`: main-owner successor source review Standards 0/Spec 0, independently
 closed; root 52/52 focused + full TS/native frontend005 PASS. Actual **normal

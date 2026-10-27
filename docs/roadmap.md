@@ -17,7 +17,8 @@ records local_ui + view_source_model ownership and combined-review dependency.
 
 ## Current focus
 
-Frozen basic local scope is now **verified; main integration pending**. Final
+Frozen basic local scope is now **verified and integrated to main at `ae5cb5d4`**.
+Post-merge main checks: **99/99 PASS, TypeScript and native frontend build PASS**. Final
 code `05b73d5a08dc7c9a083041071d376b54020a71f9`/product `262939e6` and controller
 successors are independently reviewed, zero must-fix; root 99/99 targeted/full TS/
 native frontend006 PASS. Final normal source Electron 70282 verifies truthful
@@ -27,9 +28,9 @@ selected untyped source. Normal quit exit 0, all owned test apps closed.
 
 [Final tracker/handoff](plans/types-properties-implementation.md#p009--2026-10-27--deleted-source-core-flow-verified)
 retains earlier CLI/native/browser passes and failures, exact artifact receipts
-and limits. Main unchanged c36c4b0e; root will commit clean docs/evidence and make
-an explicit integration request to its sole owner. Review/isolated verification
-is not a main merge. No installed production-package or broad platform acceptance
+and limits. The user directly instructed root to integrate main itself; the previous owner
+acknowledged a temporary serialized lane. Root fast-forwarded clean main from
+`c36c4b0e` to pinned `ae5cb5d4` and ran its scoped post-merge checks. No installed production-package or broad platform acceptance
 claim. Untested secondary variants remain limits, not blockers to the frozen basic
 scope. Browser collections/scoped previews unavailable. No Tauri or new sync work.
 
