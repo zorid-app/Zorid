@@ -131,7 +131,7 @@ export function createNotePropertyTargets(options: {
     getDefinitions(){
       if(!current()||!collectionState)return{};
       return Object.fromEntries(collectionState.collection.properties.map(property=>[property.name,{type:property.datatype==='multi-select'?'multiselect':property.datatype,
-        ...(property.options.length?{options:property.options.map(option=>({value:option.name,label:option.name,...(option.category?{category:option.category==='not_started'?'todo' as const:option.category==='working'?'in-progress' as const:'done' as const}:{})}))}:{})} satisfies BasePropertyDefinition]));
+        ...(property.options.length?{options:property.options.map(option=>({value:option.name,label:option.name,...(option.color?{color:option.color}:{}),...(option.category?{category:option.category==='not_started'?'todo' as const:option.category==='working'?'in-progress' as const:'done' as const}:{})}))}:{})} satisfies BasePropertyDefinition]));
     },
     get(property) { return current() && !result?.diagnostics.some(issue => !issue.property || issue.property === property || issue.property === `note.${property}`) ? result?.relationTargets[property] ?? result?.relationTargets[`note.${property}`] : undefined; },
     getDisplayValue(property, raw) {
