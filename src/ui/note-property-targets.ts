@@ -39,27 +39,66 @@ export function createNotePropertyTargets(options: {
   let timer: ReturnType<typeof setTimeout> | undefined, abort: AbortController | undefined;
   let wake: (() => void) | undefined, pending: Promise<void> = Promise.resolve(), closing: Promise<void> | undefined;
   const stops: (() => void)[] = [];
-  let collectionState:{collection:DatabaseCollection;entry:DatabaseEntry}|undefined;
-  let collectionSerial=0;
-  async function prepareCollection(){
-    const databases=vault.adapter.databases,entry=vault.entries.get(options.getPath()),request=++collectionSerial;
-    if(!databases||!entry?.entryId){collectionState=undefined;return;}
-    const reply=await databases.request({op:'get_entry',entryId:entry.entryId});
-    if(disposed||!options.isCurrent()||vault.entries.get(options.getPath())?.entryId!==entry.entryId)throw new Error('The collection note changed.');
-    const member=reply.entries.find(item=>item.entryId===entry.entryId&&!item.deleted),collection=member&&reply.collections.find(item=>item.id===member.collectionId&&!item.deleted);
-    const next=member&&collection?{collection,entry:member}:undefined;
-    if(request===collectionSerial){const changed=JSON.stringify(next)!==JSON.stringify(collectionState);collectionState=next;if(changed)notify();}
-    return next;
+  type CollectionState={collection:DatabaseCollection;entry:DatabaseEntry};
+  let collectionState:CollectionState|undefined,collectionPath:string|undefined,collectionActor:object|undefined;
+  const collectionReads=new Set<Promise<CollectionState|undefined>>();
+  let collectionSerial=0,collectionInvalidated=false;
+  let collectionRequest:{path:string;promise:Promise<CollectionState|undefined>}|undefined;
+  function prepareCollection():Promise<CollectionState|undefined>{
+    const path=options.getPath();
+    if(collectionRequest?.path===path)return collectionRequest.promise;
+    const adapter=vault.adapter,databases=adapter.databases,durable=adapter.durableWrites,listed=vault.entries.get(path),entry=listed?{...listed}:undefined,request=++collectionSerial;
+    const scope=durable?.checkpoints.scope,vaultId=scope?.vaultId,clientId=scope?.clientId;
+    let resolvedId:string|undefined;
+    const sameActor=()=>{const latest=vault.entries.get(path);return latest?.type==='file'&&(entry?.entryId?latest.entryId===entry.entryId:latest===listed||!!resolvedId&&latest.entryId===resolvedId);};
+    const live=()=>current()&&request===collectionSerial&&vault.adapter===adapter&&vault.adapter.databases===databases&&adapter.durableWrites===durable&&durable?.checkpoints.scope.vaultId===vaultId&&durable?.checkpoints.scope.clientId===clientId&&options.getPath()===path&&sameActor();
+    const apply=(next:CollectionState|undefined)=>{
+      const changed=collectionPath!==path||JSON.stringify(next)!==JSON.stringify(collectionState);
+      collectionPath=path;collectionActor=vault.entries.get(path);collectionState=next;if(changed)notify();return next;
+    };
+    const promise=Promise.resolve().then(async()=>{
+      if(!databases){if(request===collectionSerial&&!disposed)return apply(undefined);return;}
+      if(entry?.type!=='file')throw new Error('The collection note is unavailable.');
+      // A namespace listing may intentionally omit durable identities. Resolve
+      // through the admitted provider, never from readable _id/_type content.
+      const fallback=!entry.entryId||!entry.revision;
+      const witness=fallback&&adapter.durableWrites?await vault.readDurableText(path):undefined;
+      if(!live())throw new Error('The collection note changed.');
+      const entryId=fallback?witness?.entryId:entry.entryId,revision=fallback?witness?.revision:entry.revision;
+      if(!entryId||!revision||!durable)throw new Error('The collection note identity is unavailable.');
+      resolvedId=entryId;
+      const selected=vault.entries.get(path);
+      if(selected?.entryId&&selected.entryId!==entryId)throw new Error('The collection note changed.');
+      let reply:Awaited<ReturnType<typeof databases.request>>|undefined;
+      try{reply=await databases.request({op:'get_entry',entryId});}
+      catch(error){
+        // Only an admitted, definite native absence can establish an ordinary
+        // note. Transport/validation/IO failures retain the last known state.
+        const absent=error as {code?:unknown;source?:unknown;commitUncertain?:unknown};
+        if(absent.code!=='collection_not_found'||absent.source!=='host'||absent.commitUncertain!==false)throw error;
+      }
+      if(!live())throw new Error('The collection note changed.');
+      const latest=vault.entries.get(path);
+      if(latest?.entryId&&latest.entryId!==entryId)throw new Error('The collection note changed.');
+      const observed=await vault.readDurableTextById(entryId);
+      if(!live()||!observed||observed.path!==path||observed.revision!==revision||latest?.entryId&&latest.entryId!==observed.entryId)throw new Error('The collection note changed.');
+      if(!reply)return apply(undefined);
+      const member=reply.entries.find(item=>item.entryId===entryId);
+      if(!member||member.deleted||member.path!==path||member.fileRevision!==revision)throw new Error('The collection note changed.');
+      const collection=reply.collections.find(item=>item.id===member.collectionId&&!item.deleted);
+      if(!collection)throw new Error('The collection note is unavailable.');
+      return apply({collection,entry:member});
+    }).finally(()=>{collectionReads.delete(promise);if(collectionRequest?.promise===promise){collectionRequest=undefined;if(collectionInvalidated){collectionInvalidated=false;requestCollection();}}});
+    collectionRequest={path,promise};collectionReads.add(promise);return promise;
   }
-  if(vault.adapter.databases){
-    for(const event of ['create','modify','delete','rename','ready']as const)stops.push(vault.on(event,()=>{void prepareCollection().catch(()=>{});}));
-    void prepareCollection().catch(()=>{});
-  }
+  const requestCollection=()=>{if(disposed||!vault.adapter.databases)return;if(collectionRequest){collectionInvalidated=true;return;}void prepareCollection().catch(()=>{});};
 
   const current = () => { try { return !disposed && options.isCurrent() && vault.adapter.documentSemantics === service; } catch { return false; } };
   const notify = () => { if (current()) { try { options.onChange(); } catch { /* A renderer cannot strand the query queue. */ } } };
+  const selectedCollection=()=>{const entry=collectionPath?vault.entries.get(collectionPath):undefined;return current()&&collectionPath===options.getPath()&&entry?.type==='file'&&(entry.entryId?entry.entryId===collectionState?.entry.entryId:entry===collectionActor)?collectionState:undefined;};
   function invalidate() {
     if (!current()) return;
+    requestCollection();
     serial++; abort?.abort(); wake?.(); wake = undefined;
     if (result) { result = undefined; notify(); }
     if (!service?.propertyTargetsAvailable || !clock.isVisible() || timer !== undefined) return;
@@ -87,6 +126,13 @@ export function createNotePropertyTargets(options: {
         if (live()) { result = undefined; notify(); }
       }
     });
+  }
+  if(vault.adapter.databases){
+    for(const event of ['create','modify','delete','rename','ready']as const)stops.push(vault.on(event,requestCollection));
+    // A later normal invalidation retries a failed initial identity/membership
+    // read. No polling or automatic failure loop is introduced.
+    if(!service?.propertyTargetsAvailable)stops.push(vault.onMetadata(requestCollection));
+    requestCollection();
   }
   if (service?.propertyTargetsAvailable) {
     for (const event of ['create', 'modify', 'delete', 'rename', 'ready'] as const) stops.push(vault.on(event, invalidate));
@@ -126,11 +172,11 @@ export function createNotePropertyTargets(options: {
     result = undefined;
   }
   return {
-    getCollection:()=>current()?collectionState:undefined,
+    getCollection:selectedCollection,
     prepareCollection,
     getDefinitions(){
-      if(!current()||!collectionState)return{};
-      return Object.fromEntries(collectionState.collection.properties.map(property=>[property.name,{type:property.datatype==='multi-select'?'multiselect':property.datatype,
+      const selected=selectedCollection();if(!selected)return{};
+      return Object.fromEntries(selected.collection.properties.map(property=>[property.name,{type:property.datatype==='multi-select'?'multiselect':property.datatype,
         ...(property.options.length?{options:property.options.map(option=>({value:option.name,label:option.name,...(option.color?{color:option.color}:{}),...(option.category?{category:option.category==='not_started'?'todo' as const:option.category==='working'?'in-progress' as const:'done' as const}:{})}))}:{})} satisfies BasePropertyDefinition]));
     },
     get(property) { return current() && !result?.diagnostics.some(issue => !issue.property || issue.property === property || issue.property === `note.${property}`) ? result?.relationTargets[property] ?? result?.relationTargets[`note.${property}`] : undefined; },
@@ -146,7 +192,8 @@ export function createNotePropertyTargets(options: {
     close() {
       destroy();
       if (closing) return closing;
-      const task = pending.then(async () => { if (service) await closePropertyTargetQueries(service); });
+      const reading=[...collectionReads];
+      const task = pending.then(async () => { await Promise.allSettled(reading); if (service) await closePropertyTargetQueries(service); });
       closing = task;
       void task.then(() => {}, () => { if (closing === task) closing = undefined; });
       return task;

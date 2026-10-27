@@ -155,3 +155,115 @@ test('destroyed and retired panels ignore queued same-frame stale invalidation',
   try{await tick();const changed=f.changed;f.publishMetadata({...initial,status:'stale'});if(action==='destroy')f.manager.destroy();else f.retire();await Promise.resolve();await tick();assert.equal(calls,1);assert.equal(f.changed,changed);assert.equal(f.manager.getDisplayValue('author',originalAuthor),undefined);}finally{await f.manager.close();}
  }
 });
+
+/** A cold filesystem inventory has paths/stats but no admitted core identity.
+ * Only the separate durable provider may identify a note for collection reads. */
+async function collectionFixture(options:{listedIdentity?:boolean;ordinary?:boolean}={}){
+  type Read=import('../src/core/durable-writes.ts').DurableWriteRead;
+  const raw='---\n_id: untrusted-frontmatter-id\n_type: Misleading type label\nDeadline: null\n---\nBody';
+  let selectedPath='Note.md',owner=true,changed=0,ordinary=options.ordinary??false;
+  const records=new Map<string,Read>([
+    ['trusted-note',{entryId:'trusted-note',revision:'r1',path:'Note.md',content:raw,stat:{ctime:1,mtime:1,size:raw.length}}],
+    ['trusted-other',{entryId:'trusted-other',revision:'r1',path:'Other.md',content:'Other body',stat:{ctime:1,mtime:1,size:10}}],
+  ]);
+  const schema={id:'abcdefghijkl',name:'Books',revision:'schema-r1',deleted:false,properties:[{id:'mnopqrstuvwx',name:'Deadline',datatype:'date' as const,options:[]}]};
+  const requests:import('../src/core/databases.ts').DatabaseRequest[]=[],reads:string[]=[];
+  let onRequest:((entryId:string)=>Promise<void>)|undefined,requestError:unknown,mutateReply:((value:any)=>void)|undefined;
+  const adapter=new MemoryAdapter({'Note.md':raw,'Other.md':'Other body'}) as MemoryAdapter&{durableWrites:import('../src/core/durable-writes.ts').DurableWrites;databases:import('../src/core/databases.ts').DatabaseService};
+  if(options.listedIdentity){const list=adapter.list.bind(adapter);adapter.list=async()=> (await list()).map(row=>({...row,entryId:row.path==='Note.md'?'trusted-note':'trusted-other',revision:'r1'}));}
+  const unsupported=async():Promise<never>=>{throw new Error('Unexpected write');};
+  adapter.durableWrites={checkpoints:{scope:{vaultId:'vault',clientId:'client'},load:unsupported,compareAndSwap:unsupported,list:unsupported,changes:unsupported},
+    readText:async path=>{reads.push('path:'+path);const row=[...records.values()].find(row=>row.path===path);if(!row)throw new Error('Missing note');return structuredClone(row);},
+    readTextById:async id=>{reads.push('id:'+id);return structuredClone(records.get(id)??null);},planWrite:unsupported,prepare:unsupported,commit:unsupported,query:unsupported,listUnacknowledged:unsupported,acknowledge:unsupported};
+  adapter.databases={request:async command=>{
+    assert.equal(command.op,'get_entry');if(command.op!=='get_entry')throw new Error('Unexpected collection operation');requests.push(command);
+    const row=records.get(command.entryId)!;
+    const reply={collections:[structuredClone(schema)],entries:[{entryId:row.entryId,collectionId:schema.id,revision:'member-r1',fileRevision:row.revision,path:row.path,values:{mnopqrstuvwx:null},deleted:false,pendingProjection:false}],projection:{pending:0,issues:[]}};
+    if(onRequest)await onRequest(command.entryId);if(requestError)throw requestError;
+    if(ordinary)throw Object.assign(new Error('Ordinary note'),{source:'host',code:'collection_not_found',commitUncertain:false});
+    mutateReply?.(reply);return reply;
+  }};
+  const vault=new Vault(adapter);await vault.initialize();
+  const manager=createNotePropertyTargets({vault,getPath:()=>selectedPath,isCurrent:()=>owner,onChange:()=>changed++});
+  return{adapter,vault,manager,records,requests,reads,schema,get changed(){return changed;},select(path:string){selectedPath=path;},retire(){owner=false;},ordinary(){ordinary=true;},hold(fn:typeof onRequest){onRequest=fn;},fail(error:unknown){requestError=error;},reply(fn:typeof mutateReply){mutateReply=fn;}};
+}
+function gate(){let release!:()=>void,enter!:()=>void;const started=new Promise<void>(resolve=>{enter=resolve;}),pending=new Promise<void>(resolve=>{release=resolve;});return{started,pending,enter,release};}
+
+test('cold no-ID inventory resolves collection schema through trusted durable identity, never readable _id/_type',async()=>{
+  const f=await collectionFixture();try{
+    assert.equal(f.vault.entries.get('Note.md')?.entryId,undefined);
+    const selected=await f.manager.prepareCollection();assert.equal(selected?.entry.entryId,'trusted-note');assert.equal(f.manager.getCollection()?.collection.name,'Books');
+    assert.equal(f.manager.getDefinitions().Deadline?.type,'date');assert.deepEqual(f.requests,[{op:'get_entry',entryId:'trusted-note'}]);
+    assert.deepEqual(f.reads,['path:Note.md','id:trusted-note']);assert.equal(f.vault.entries.get('Note.md')?.entryId,undefined,'note-local identity resolution does not rewrite inventory');
+  }finally{await f.manager.close();}
+});
+
+test('ordinary note with misleading readable type stays ordinary only after verified native nonmembership',async()=>{
+  const f=await collectionFixture({ordinary:true});try{
+    assert.equal(await f.manager.prepareCollection(),undefined);assert.equal(f.manager.getCollection(),undefined);assert.deepEqual(f.manager.getDefinitions(),{});
+    assert.deepEqual(f.requests,[{op:'get_entry',entryId:'trusted-note'}]);assert.ok(f.reads.includes('id:trusted-note'));
+  }finally{await f.manager.close();}
+});
+
+test('late membership response cannot attach across same-path replacement, move or file-revision advance',async()=>{
+  for(const kind of ['replace','move','revision']as const){const f=await collectionFixture(),held=gate();f.hold(async()=>{held.enter();await held.pending;});
+    const reading=f.manager.prepareCollection();await held.started;
+    const before=f.records.get('trusted-note')!;
+    if(kind==='replace'){f.records.delete('trusted-note');f.records.set('replacement',{...before,entryId:'replacement',revision:'r2'});f.vault.entries.set('Note.md',{...f.vault.entries.get('Note.md')!});}
+    if(kind==='move'){f.records.set('trusted-note',{...before,path:'Moved.md'});f.vault.entries.delete('Note.md');}
+    if(kind==='revision')f.records.set('trusted-note',{...before,revision:'r2'});
+    held.release();await assert.rejects(reading,/collection note changed/);assert.equal(f.manager.getCollection(),undefined,kind);await f.manager.close();
+  }
+});
+
+test('superseded path request rejects instead of returning old membership to an awaiting editor',async()=>{
+  const f=await collectionFixture(),held=gate();f.hold(async id=>{if(id==='trusted-note'){held.enter();await held.pending;}});
+  const first=f.manager.prepareCollection();await held.started;f.select('Other.md');const second=await f.manager.prepareCollection();
+  assert.equal(second?.entry.entryId,'trusted-other');held.release();await assert.rejects(first,/collection note changed/);assert.equal(f.manager.getCollection()?.entry.entryId,'trusted-other');await f.manager.close();
+});
+
+test('collection request failure retains last managed state and existing invalidation retries once without polling',async()=>{
+  const f=await collectionFixture();try{
+    await f.manager.prepareCollection();f.fail(Object.assign(new Error('Temporarily unavailable'),{source:'host',code:'request_limit',commitUncertain:false}));
+    await assert.rejects(f.manager.prepareCollection(),/Temporarily unavailable/);assert.equal(f.manager.getCollection()?.collection.id,f.schema.id);
+    const count=f.requests.length;await tick();assert.equal(f.requests.length,count,'failed reads do not poll');
+    f.fail(undefined);f.manager.invalidate();await f.manager.prepareCollection();assert.equal(f.manager.getCollection()?.entry.entryId,'trusted-note');assert.equal(f.requests.length,count+1);
+  }finally{await f.manager.close();}
+});
+
+test('only definite admitted absence clears a known collection, never unknown or lookalike failures',async()=>{
+  const f=await collectionFixture();try{
+    await f.manager.prepareCollection();
+    for(const error of [Object.assign(new Error('Unknown'),{code:'collection_not_found'}),Object.assign(new Error('Uncertain'),{source:'host',code:'collection_not_found',commitUncertain:true})]){
+      f.fail(error);await assert.rejects(f.manager.prepareCollection());assert.equal(f.manager.getCollection()?.collection.id,f.schema.id);
+    }
+    f.fail(undefined);f.ordinary();assert.equal(await f.manager.prepareCollection(),undefined);assert.equal(f.manager.getCollection(),undefined);assert.deepEqual(f.manager.getDefinitions(),{});
+  }finally{await f.manager.close();}
+});
+
+test('malformed, deleted and stale-witness successful replies never become ordinary-note fallback',async()=>{
+  for(const mutate of [(reply:any)=>{reply.entries=[];},(reply:any)=>{reply.entries[0].deleted=true;},(reply:any)=>{reply.collections[0].deleted=true;},(reply:any)=>{reply.entries[0].fileRevision='wrong-revision';}]){
+    const f=await collectionFixture();try{await f.manager.prepareCollection();f.reply(mutate);await assert.rejects(f.manager.prepareCollection());assert.equal(f.manager.getCollection()?.collection.id,f.schema.id);}finally{await f.manager.close();}
+  }
+});
+
+test('durable scope replacement and disposal fence collection reads even with identical apparent IDs',async()=>{
+  for(const kind of ['scope','dispose']as const){const f=await collectionFixture(),held=gate();f.hold(async()=>{held.enter();await held.pending;});const reading=f.manager.prepareCollection();await held.started;
+    if(kind==='scope')f.adapter.durableWrites={...f.adapter.durableWrites};else f.retire();
+    held.release();await assert.rejects(reading,/collection note changed/);assert.equal(f.manager.getCollection(),undefined);await f.manager.close();
+  }
+});
+
+
+test('close joins obsolete collection reads as well as the latest selected path',async()=>{
+  const f=await collectionFixture(),held=gate();f.hold(async id=>{if(id==='trusted-note'){held.enter();await held.pending;}});
+  const first=f.manager.prepareCollection();await held.started;f.select('Other.md');await f.manager.prepareCollection();
+  let closed=false;const closing=f.manager.close().then(()=>{closed=true;});await Promise.resolve();await Promise.resolve();assert.equal(closed,false);
+  held.release();await assert.rejects(first,/collection note changed/);await closing;assert.equal(closed,true);
+});
+
+test('a replacement no-ID inventory actor cannot reuse a previously resolved collection cache',async()=>{
+  const f=await collectionFixture();try{await f.manager.prepareCollection();f.vault.entries.set('Note.md',{...f.vault.entries.get('Note.md')!});
+    assert.equal(f.manager.getCollection(),undefined);assert.deepEqual(f.manager.getDefinitions(),{});
+  }finally{await f.manager.close();}
+});
