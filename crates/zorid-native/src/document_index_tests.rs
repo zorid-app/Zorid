@@ -1567,55 +1567,145 @@ fn retired_global_registry_is_ordinary_native_data_and_explicit_attachment_is_re
     vault.close_document_snapshot(pin);
 }
 
-fn local_query_command(vault: &mut NativeVault, command: serde_json::Value) -> zorid_store::databases::DatabaseSnapshot {
+fn local_query_command(
+    vault: &mut NativeVault,
+    command: serde_json::Value,
+) -> zorid_store::databases::DatabaseSnapshot {
     // Query-facade fixture: commit hidden state directly, deliberately leave
     // projection pending. This tests authoritative query snapshots, not native
     // filesystem publication or app runtime acceptance.
-    vault.store.database_request(&serde_json::from_value(command).unwrap()).unwrap()
+    vault
+        .store
+        .database_request(&serde_json::from_value(command).unwrap())
+        .unwrap()
 }
 
 #[test]
 fn collection_queries_capture_membership_values_and_schema_with_each_retained_generation() {
     use serde_json::json;
-    let dir = tempfile::tempdir().unwrap(); let mut vault = NativeVault::open(dir.path()).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(dir.path()).unwrap();
     let work = local_query_command(&mut vault, json!({"op":"create","operationId":"new-work","name":"Work","properties":[{"name":"Score","datatype":"number"}]})).collections.remove(0);
     let personal = local_query_command(&mut vault, json!({"op":"create","operationId":"new-personal","name":"Personal","properties":[{"name":"Score","datatype":"number"}]})).collections.remove(0);
-    let field = work.properties[0].id.clone(); let other_field = personal.properties[0].id.clone();
+    let field = work.properties[0].id.clone();
+    let other_field = personal.properties[0].id.clone();
     let member = local_query_command(&mut vault, json!({"op":"create_entry","operationId":"new-work-entry","collectionId":work.id,"expectedCollectionRevision":work.revision,"entryId":"work-entry","path":"Work.md","body":"Body before projection","values":{(field.clone()):3}})).entries.remove(0);
-    local_query_command(&mut vault, json!({"op":"create_entry","operationId":"new-personal-entry","collectionId":personal.id,"expectedCollectionRevision":personal.revision,"entryId":"personal-entry","path":"Personal.md","values":{(other_field):9}}));
-    create(&mut vault, "fake", "Untyped.md", "---\n_type: Work\ntype: Work\nScore: 3\n---\nOrdinary body");
+    local_query_command(
+        &mut vault,
+        json!({"op":"create_entry","operationId":"new-personal-entry","collectionId":personal.id,"expectedCollectionRevision":personal.revision,"entryId":"personal-entry","path":"Personal.md","values":{(other_field):9}}),
+    );
+    create(
+        &mut vault,
+        "fake",
+        "Untyped.md",
+        "---\n_type: Work\ntype: Work\nScore: 3\n---\nOrdinary body",
+    );
     let base = format!("views:\n  - type: table\n    name: Work\n    source: {{kind: collection, id: {}}}\n    order: [file.name, note.{}]\n  - type: list\n    name: Notes\n    source: {{kind: untyped}}\n", work.id, field);
-    create(&mut vault, "base", "Views.base", &base); vault.initialize_document_index().unwrap(); build(&mut vault);
+    create(&mut vault, "base", "Views.base", &base);
+    vault.initialize_document_index().unwrap();
+    build(&mut vault);
     let old = vault.open_document_snapshot().unwrap();
-    let before = vault.query_base_document(&old, &id("base"), &QueryOptions::default()).unwrap();
-    assert_eq!(before.value.result.rows.len(), 1); assert_eq!(before.value.result.rows[0].entry_id, id("work-entry"));
-    assert_eq!(before.value.result.rows[0].values[&format!("note.{field}")], zorid_bases::BaseValue::Number {value:3.0});
-    let notes = vault.query_base_document(&old, &id("base"), &QueryOptions {view_index:1,..QueryOptions::default()}).unwrap();
-    assert_eq!(notes.value.result.rows.len(),1); assert_eq!(notes.value.result.rows[0].entry_id,id("fake"));
-    local_query_command(&mut vault,json!({"op":"set_entry","operationId":"set-hidden-value","entryId":"work-entry","expectedRevision":member.revision,"expectedCollectionRevision":work.revision,"values":{(field.clone()):7}}));
-    local_query_command(&mut vault,json!({"op":"update","operationId":"rename-work","collectionId":work.id,"expectedRevision":work.revision,"name":"Renamed","properties":[{"id":field,"name":"Rating","datatype":"number"}]}));
-    build(&mut vault); let current = vault.open_document_snapshot().unwrap();
-    let fresh = vault.query_base_document(&current,&id("base"),&QueryOptions::default()).unwrap();
-    assert_eq!(fresh.value.result.rows[0].values[&format!("note.{field}")],zorid_bases::BaseValue::Number{value:7.0});
-    let retained = vault.query_base_document(&old,&id("base"),&QueryOptions::default()).unwrap();
-    assert_eq!(retained.value.result.rows[0].values[&format!("note.{field}")],zorid_bases::BaseValue::Number{value:3.0});
-    vault.close_document_snapshot(old);vault.close_document_snapshot(current);
+    let before = vault
+        .query_base_document(&old, &id("base"), &QueryOptions::default())
+        .unwrap();
+    assert_eq!(before.value.result.rows.len(), 1);
+    assert_eq!(before.value.result.rows[0].entry_id, id("work-entry"));
+    assert_eq!(
+        before.value.result.rows[0].values[&format!("note.{field}")],
+        zorid_bases::BaseValue::Number { value: 3.0 }
+    );
+    let notes = vault
+        .query_base_document(
+            &old,
+            &id("base"),
+            &QueryOptions {
+                view_index: 1,
+                ..QueryOptions::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(notes.value.result.rows.len(), 1);
+    assert_eq!(notes.value.result.rows[0].entry_id, id("fake"));
+    local_query_command(
+        &mut vault,
+        json!({"op":"set_entry","operationId":"set-hidden-value","entryId":"work-entry","expectedRevision":member.revision,"expectedCollectionRevision":work.revision,"values":{(field.clone()):7}}),
+    );
+    local_query_command(
+        &mut vault,
+        json!({"op":"update","operationId":"rename-work","collectionId":work.id,"expectedRevision":work.revision,"name":"Renamed","properties":[{"id":field,"name":"Rating","datatype":"number"}]}),
+    );
+    build(&mut vault);
+    let current = vault.open_document_snapshot().unwrap();
+    let fresh = vault
+        .query_base_document(&current, &id("base"), &QueryOptions::default())
+        .unwrap();
+    assert_eq!(
+        fresh.value.result.rows[0].values[&format!("note.{field}")],
+        zorid_bases::BaseValue::Number { value: 7.0 }
+    );
+    let retained = vault
+        .query_base_document(&old, &id("base"), &QueryOptions::default())
+        .unwrap();
+    assert_eq!(
+        retained.value.result.rows[0].values[&format!("note.{field}")],
+        zorid_bases::BaseValue::Number { value: 3.0 }
+    );
+    vault.close_document_snapshot(old);
+    vault.close_document_snapshot(current);
 }
 
 #[test]
 fn deleted_collection_source_never_falls_back_to_notes_or_reclassifies_pending_trash() {
     use serde_json::json;
-    let dir=tempfile::tempdir().unwrap();let mut vault=NativeVault::open(dir.path()).unwrap();
-    let collection=local_query_command(&mut vault,json!({"op":"create","operationId":"new-collection","name":"Work"})).collections.remove(0);
-    local_query_command(&mut vault,json!({"op":"create_entry","operationId":"new-member","collectionId":collection.id,"expectedCollectionRevision":collection.revision,"entryId":"member","path":"Member.md"}));
-    create(&mut vault,"ordinary","Ordinary.md","body");
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(dir.path()).unwrap();
+    let collection = local_query_command(
+        &mut vault,
+        json!({"op":"create","operationId":"new-collection","name":"Work"}),
+    )
+    .collections
+    .remove(0);
+    local_query_command(
+        &mut vault,
+        json!({"op":"create_entry","operationId":"new-member","collectionId":collection.id,"expectedCollectionRevision":collection.revision,"entryId":"member","path":"Member.md"}),
+    );
+    create(&mut vault, "ordinary", "Ordinary.md", "body");
     create(&mut vault,"base","Views.base",&format!("views: [{{type: table, name: Work, source: {{kind: collection, id: {}}}}}, {{type: list, name: Notes, source: {{kind: untyped}}}}]\n",collection.id));
-    vault.initialize_document_index().unwrap();build(&mut vault);let old=vault.open_document_snapshot().unwrap();
-    local_query_command(&mut vault,json!({"op":"delete","operationId":"delete-collection","collectionId":collection.id,"expectedRevision":collection.revision}));
-    build(&mut vault);let current=vault.open_document_snapshot().unwrap();
-    expect_code(vault.query_base_document(&current,&id("base"),&QueryOptions::default()),"source-unavailable");
-    let notes=vault.query_base_document(&current,&id("base"),&QueryOptions{view_index:1,..QueryOptions::default()}).unwrap();
-    assert_eq!(notes.value.result.rows.len(),1);assert_eq!(notes.value.result.rows[0].entry_id,id("ordinary"));
-    assert_eq!(vault.query_base_document(&old,&id("base"),&QueryOptions::default()).unwrap().value.result.rows.len(),1);
-    vault.close_document_snapshot(old);vault.close_document_snapshot(current);
+    vault.initialize_document_index().unwrap();
+    build(&mut vault);
+    let old = vault.open_document_snapshot().unwrap();
+    local_query_command(
+        &mut vault,
+        json!({"op":"delete","operationId":"delete-collection","collectionId":collection.id,"expectedRevision":collection.revision}),
+    );
+    build(&mut vault);
+    let current = vault.open_document_snapshot().unwrap();
+    expect_code(
+        vault.query_base_document(&current, &id("base"), &QueryOptions::default()),
+        "source-unavailable",
+    );
+    let notes = vault
+        .query_base_document(
+            &current,
+            &id("base"),
+            &QueryOptions {
+                view_index: 1,
+                ..QueryOptions::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(notes.value.result.rows.len(), 1);
+    assert_eq!(notes.value.result.rows[0].entry_id, id("ordinary"));
+    assert_eq!(
+        vault
+            .query_base_document(&old, &id("base"), &QueryOptions::default())
+            .unwrap()
+            .value
+            .result
+            .rows
+            .len(),
+        1
+    );
+    vault.close_document_snapshot(old);
+    vault.close_document_snapshot(current);
 }

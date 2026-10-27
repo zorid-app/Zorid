@@ -598,30 +598,69 @@ fn metadata_error(error: zorid_index::MetadataRowsError) -> NativeDocumentError 
 
 /// Translate one retained Store authority snapshot into the query crate's
 /// in-process capability. Names/frontmatter never participate in ownership.
-fn database_source_scope(state: &zorid_store::databases::DatabaseQueryState, source: zorid_bases::BaseViewSource) -> NativeDocumentResult<zorid_bases::BaseSourceScope> {
+fn database_source_scope(
+    state: &zorid_store::databases::DatabaseQueryState,
+    source: zorid_bases::BaseViewSource,
+) -> NativeDocumentResult<zorid_bases::BaseSourceScope> {
     use std::collections::BTreeMap;
     use zorid_bases::{BaseViewSource, PropertyType, PropertyValue};
     use zorid_store::databases::DatabaseDatatype;
-    let memberships = state.entries.iter().map(|entry| (entry.entry_id.clone(), entry.collection_id.clone())).collect::<BTreeMap<_, _>>();
+    let memberships = state
+        .entries
+        .iter()
+        .map(|entry| (entry.entry_id.clone(), entry.collection_id.clone()))
+        .collect::<BTreeMap<_, _>>();
     let mut values = BTreeMap::new();
     let mut types = Vec::new();
     if let BaseViewSource::Collection { id } = &source {
-        let collection = state.collections.iter().find(|collection| &collection.id == id && !collection.deleted).ok_or_else(|| zorid_bases::ExpressionDiagnostic::new("source-unavailable", "The selected collection is deleted or unavailable"))?;
-        types = collection.properties.iter().map(|field| (field.id.clone(), match field.datatype {
-            DatabaseDatatype::Text | DatabaseDatatype::Select | DatabaseDatatype::Status => PropertyType::Text,
-            DatabaseDatatype::MultiSelect => PropertyType::List,
-            DatabaseDatatype::Number => PropertyType::Number,
-            DatabaseDatatype::Checkbox => PropertyType::Checkbox,
-            DatabaseDatatype::Date => PropertyType::Date,
-            DatabaseDatatype::Datetime => PropertyType::Datetime,
-        })).collect();
-        for entry in state.entries.iter().filter(|entry| &entry.collection_id == id && !entry.deleted) {
+        let collection = state
+            .collections
+            .iter()
+            .find(|collection| &collection.id == id && !collection.deleted)
+            .ok_or_else(|| {
+                zorid_bases::ExpressionDiagnostic::new(
+                    "source-unavailable",
+                    "The selected collection is deleted or unavailable",
+                )
+            })?;
+        types = collection
+            .properties
+            .iter()
+            .map(|field| {
+                (
+                    field.id.clone(),
+                    match field.datatype {
+                        DatabaseDatatype::Text
+                        | DatabaseDatatype::Select
+                        | DatabaseDatatype::Status => PropertyType::Text,
+                        DatabaseDatatype::MultiSelect => PropertyType::List,
+                        DatabaseDatatype::Number => PropertyType::Number,
+                        DatabaseDatatype::Checkbox => PropertyType::Checkbox,
+                        DatabaseDatatype::Date => PropertyType::Date,
+                        DatabaseDatatype::Datetime => PropertyType::Datetime,
+                    },
+                )
+            })
+            .collect();
+        for entry in state
+            .entries
+            .iter()
+            .filter(|entry| &entry.collection_id == id && !entry.deleted)
+        {
             let mut fields = Vec::with_capacity(collection.properties.len());
             for field in &collection.properties {
-                let value = if entry.problems.contains_key(&field.id) { PropertyValue::Null } else {
+                let value = if entry.problems.contains_key(&field.id) {
+                    PropertyValue::Null
+                } else {
                     match entry.values.get(&field.id) {
                         None => PropertyValue::Null,
-                        Some(value) => serde_json::from_value::<PropertyValue>(value.clone()).map_err(|_| zorid_bases::ExpressionDiagnostic::new("source-unavailable", "A saved collection value cannot be queried safely"))?,
+                        Some(value) => serde_json::from_value::<PropertyValue>(value.clone())
+                            .map_err(|_| {
+                                zorid_bases::ExpressionDiagnostic::new(
+                                    "source-unavailable",
+                                    "A saved collection value cannot be queried safely",
+                                )
+                            })?,
                     }
                 };
                 fields.push((field.id.clone(), value));
@@ -629,5 +668,11 @@ fn database_source_scope(state: &zorid_store::databases::DatabaseQueryState, sou
             values.insert(entry.entry_id.clone(), fields);
         }
     }
-    Ok(zorid_bases::BaseSourceScope::captured(source, state.revision.clone(), &memberships, values, types)?)
+    Ok(zorid_bases::BaseSourceScope::captured(
+        source,
+        state.revision.clone(),
+        &memberships,
+        values,
+        types,
+    )?)
 }
