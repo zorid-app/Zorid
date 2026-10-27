@@ -5,6 +5,71 @@ use std::collections::BTreeSet;
 use zorid_store::{ExternalNamespaceAction, ExternalNamespaceMember};
 
 impl NativeVault {
+    /// Accept only fresh same-path projections of the COMPLETE bound namespace.
+    /// Extra untracked physical files remain ordinary imports. One changed or
+    /// missing bound file conservatively prevents the entire rebaseline batch.
+    /// Returns whether the derived inventory was retired and must be restarted.
+    fn rebaseline_equivalent_inventory(
+        &mut self,
+        scan: &mut external_scan_progress::ProgressScan,
+        started: std::time::Instant,
+        duration: std::time::Duration,
+    ) -> Result<bool> {
+        if !scan.run.finished || !scan.run.complete || !scan.issues.is_empty() { return Ok(false); }
+        let bindings = self.store.physical_bindings()?;
+        if !bindings.iter().any(|binding| scan.entries.get(&binding.state.path).is_some_and(|entry|
+            entry.identity != binding.physical.inode || entry.parent_identity != binding.physical.parent_inode))
+        { return Ok(false); }
+        // Retained recovery occupants must remain tied to their original proofs.
+        for attempt in self.store.projection_attempts(true)? {
+            for suffix in ["stage", "previous"] {
+                if started.elapsed() >= duration || fs::node_type(&self.paths.private, &format!("{}.{suffix}", attempt.attempt_id.as_str()))?.is_some() { return Ok(false); }
+            }
+        }
+        for attempt in self.store.directory_attempts(true)? {
+            if started.elapsed() >= duration || fs::node_type(&self.paths.private, &format!("{}.directory", attempt.attempt_id.as_str()))?.is_some() { return Ok(false); }
+        }
+        for attempt in self.store.namespace_attempt_metadata(true)? {
+            for member in attempt.members {
+                for suffix in ["namespace", "directory"] {
+                    if started.elapsed() >= duration || fs::node_type(&self.paths.private, &format!("{}.{}.{suffix}", attempt.job.job_id.as_str(), member.index))?.is_some() { return Ok(false); }
+                }
+            }
+        }
+        let locations: std::collections::BTreeMap<_, _> = scan.entries.iter().map(|(path, entry)| (&entry.identity, path)).collect();
+        let mut current = Vec::with_capacity(bindings.len());
+        let mut seen = BTreeSet::new();
+        for binding in &bindings {
+            if started.elapsed() >= duration { return Ok(false); }
+            let Some(entry) = scan.entries.get(&binding.state.path) else { return Ok(false); };
+            if entry.kind != binding.state.kind || !seen.insert(&entry.identity)
+                || locations.get(&binding.physical.inode).is_some_and(|path| **path != binding.state.path)
+                || self.store.read_metadata(&binding.state.id)?.is_none_or(|entry| entry.state != binding.state)
+                || !scan.confirm_snapshot(self, &binding.state.path)?
+            { return Ok(false); }
+            if entry.kind == EntryKind::File {
+                let Some(base) = self.store.projection_baseline(&binding.state.id)?.filter(|base| base.state == binding.state) else { return Ok(false); };
+                let Some(disk) = scan.file_snapshot(self, &binding.state.path)? else { return Ok(false); };
+                if !snapshot_matches_content(&disk, &base.content) { return Ok(false); }
+            } else if self.store.directory_baseline(&binding.state.id)?.is_none_or(|base|
+                base.state != binding.state || base.identity != binding.physical.inode)
+            { return Ok(false); }
+            current.push(PhysicalIdentity { inode: entry.identity.clone(), parent_inode: entry.parent_identity.clone() });
+        }
+        scan.revalidate(self)?;
+        // Cursor retirement precedes the atomic Store writer. Even a stale CAS
+        // or interruption can therefore only restart discovery, not reuse old
+        // absence proofs with the newly accepted physical occupants.
+        scan.discard_for_rebaseline(self)?;
+        self.point("equivalent_rebaseline_before_verify");
+        for binding in &bindings {
+            if !scan.confirm_snapshot(self, &binding.state.path)? { return Err(Error::Busy("equivalent projection changed before rebaseline")); }
+        }
+        self.paths.verify()?;
+        self.store.rebaseline_idle_physical_bindings(&bindings, &current)?;
+        Ok(true)
+    }
+
     /// Only expected per-path conflicts become partial-report diagnostics. Root
     /// and private-storage authority must still be intact before reporting one.
     fn external_reconciliation_issue(&self, error: Error) -> Result<String> {
@@ -44,7 +109,10 @@ impl NativeVault {
         let create_origin = OperationId::new("native_external_create")?;
         let started = std::time::Instant::now();
         let duration = options.max_duration;
-        let mut scan = self.external_progress_scan_locked(options)?;
+        let mut scan = self.external_progress_scan_locked(options.clone())?;
+        if self.rebaseline_equivalent_inventory(&mut scan, started, duration)? {
+            scan = self.external_progress_scan_locked(options)?;
+        }
         let mut report = ExternalReconcileReport {
             complete: false,
             run: scan.run.clone(),

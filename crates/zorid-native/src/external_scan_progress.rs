@@ -262,6 +262,14 @@ pub(super) struct ProgressScan {
     active: bool,
 }
 impl ProgressScan {
+    /// A fresh physical baseline invalidates old absence-binding fences. Retire
+    /// only this derived cursor BEFORE the binding CAS, so a crash cannot resume
+    /// old namespace authority after successful rebinding. History stays intact.
+    pub(super) fn discard_for_rebaseline(&mut self, vault: &mut NativeVault) -> Result<()> {
+        vault.save_inventory(&mut self.checkpoint_revision, None)?;
+        self.active = false;
+        Ok(())
+    }
     pub(super) fn pending_paths(&self) -> Vec<VaultPath> {
         if !self.active {
             return Vec::new();

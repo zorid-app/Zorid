@@ -364,6 +364,87 @@ pub(super) fn put_publication_proof(tx: &Connection, proof: &PublicationProof) -
     Ok(())
 }
 impl Store {
+    /// Rebaseline a complete idle bound namespace after native has re-read exact
+    /// same-path, same-kind, baseline-equivalent physical objects under its vault
+    /// lock. This accepts fresh occupants; it does not infer historical identity.
+    /// No logical revision, source content, receipt or historical proof changes.
+    pub fn rebaseline_idle_physical_bindings(
+        &mut self,
+        expected: &[PhysicalBinding],
+        current: &[PhysicalIdentity],
+    ) -> Result<bool> {
+        if expected.is_empty() || expected.len() != current.len() || expected.len() > 100_000 {
+            return Ok(false);
+        }
+        let tx = self.connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // Global idle is deliberately conservative: ancestor/descendant members
+        // and pending source guards cannot escape a target-entry-only check.
+        for query in [
+            "SELECT EXISTS(SELECT 1 FROM projection_jobs WHERE completed=0)",
+            "SELECT EXISTS(SELECT 1 FROM projection_attempts WHERE completed=0)",
+            "SELECT EXISTS(SELECT 1 FROM directory_attempts WHERE completed=0)",
+            "SELECT EXISTS(SELECT 1 FROM namespace_attempts WHERE completed=0)",
+            "SELECT EXISTS(SELECT 1 FROM family_namespace_covered WHERE satisfied=0)",
+            "SELECT EXISTS(SELECT 1 FROM host_intents WHERE state IN ('prepared','commit_requested'))",
+            "SELECT EXISTS(SELECT 1 FROM external_observations WHERE json_extract(record,'$.resolution') IS NULL)",
+            "SELECT EXISTS(SELECT 1 FROM family_external_namespace WHERE result IS NULL)",
+            "SELECT EXISTS(SELECT 1 FROM binary_stages WHERE (purpose='command' AND phase IN ('receiving','sealed','commit_requested')) OR (purpose='capture' AND phase='receiving'))",
+        ] {
+            if tx.query_row(query, [], |row| row.get::<_, bool>(0))? { return Ok(false); }
+        }
+        let entries = entry_content::read_visible_metadata(&tx)?;
+        let entries_by_id: std::collections::BTreeMap<_, _> = entries.iter().map(|entry| (&entry.state.id, entry)).collect();
+        let count: i64 = tx.query_row("SELECT count(*) FROM physical_bindings", [], |row| row.get(0))?;
+        if entries.len() != expected.len() || count != expected.len() as i64 { return Ok(false); }
+        let mut ids = std::collections::BTreeSet::new();
+        let mut inodes = std::collections::BTreeSet::new();
+        let mut parents = std::collections::BTreeMap::new();
+        for (before, physical) in expected.iter().zip(current) {
+            validate_saved(before)?; physical.validate()?;
+            if !ids.insert(&before.state.id) || !inodes.insert(&physical.inode)
+                || binding(&tx, &before.state.id)?.as_ref() != Some(before)
+                || entries_by_id.get(&before.state.id).is_none_or(|entry| entry.state != before.state)
+            { return Ok(false); }
+            let claimed: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM physical_bindings WHERE inode=?1 AND entry_id<>?2)",
+                params![physical.inode, before.state.id.as_str()], |row| row.get(0))?;
+            if claimed { return Ok(false); }
+            let normal = family_materialization::get(&tx, &before.state.id)?;
+            if !normal.as_ref().is_some_and(|value| matches!(&value.publication,
+                FamilyPublication::Normal { path, kind, .. } if path == &before.state.path && kind == &before.state.kind))
+            { return Ok(false); }
+            if before.state.kind == EntryKind::File {
+                let base = projection::baseline(&tx, &before.state.id)?;
+                let Some(base) = base.filter(|base| base.state == before.state) else { return Ok(false); };
+                let entry = entries_by_id.get(&before.state.id).expect("checked entry");
+                if !entry.content.as_ref().is_some_and(|content| content.len() == base.content.len() && *content.digest() == base.content.digest()) {
+                    return Ok(false);
+                }
+                family_materialization::check_publication_content(&tx, &before.state, Some(&base.content))?;
+            } else {
+                let base = directory::baseline(&tx, &before.state.id)?;
+                if !base.is_some_and(|base| base.state == before.state && base.identity == before.physical.inode) { return Ok(false); }
+                family_materialization::check_publication_content(&tx, &before.state, None)?;
+                parents.insert(&before.state.path, physical);
+            }
+        }
+        for (before, physical) in expected.iter().zip(current) {
+            if let Some(parent) = before.state.path.parent() {
+                if !parents.get(&parent).is_some_and(|binding| binding.inode == physical.parent_inode) { return Ok(false); }
+            }
+        }
+        let mut order: Vec<_> = (0..expected.len()).collect();
+        order.sort_by_key(|&index| (expected[index].state.kind != EntryKind::Folder, expected[index].state.path.as_str().split('/').count()));
+        for index in order {
+            let before = &expected[index]; let physical = &current[index];
+            if before.state.kind == EntryKind::Folder {
+                directory::put_baseline(&tx, &DirectoryBaseline { state: before.state.clone(), identity: physical.inode.clone() })?;
+            }
+            put_binding(&tx, &PhysicalBinding { state: before.state.clone(), physical: physical.clone() })?;
+        }
+        tx.commit()?;
+        Ok(true)
+    }
+
     /// Physical ownership survives logical moves/deletes until the corresponding
     /// physical baseline is retired. Never infer absence from live entries alone.
     pub fn physical_owner_at(
