@@ -66,3 +66,34 @@ test('uncertain New stays bound to its original collection view and retries the 
   host.querySelector<HTMLButtonElement>('[aria-label="New"]')!.click();await tick();assert.equal(requests.length,1);assert.ok(errors.some(error=>String(error).includes('original collection view')));
   await vault.modify('Work.base',original);await session.refresh();host.querySelector<HTMLButtonElement>('[aria-label="New"]')!.click();await until(()=>opened.length===1);assert.equal(requests.length,2);assert.deepEqual(requests[0],requests[1]);await until(()=>!session.hasPendingChanges());await session.close();for(const buffer of buffers.values())await buffer.dispose();dom.window.close();
 });
+
+async function creationSession(options:{base:string;files?:Record<string,string>;collections?:DatabaseCollection[];beforeRead?:(path:string)=>Promise<void>;mutation:(command:import('../src/core/databases.ts').DatabaseRequest,adapter:Adapter)=>Promise<import('../src/core/databases.ts').DatabaseResponse>}){
+  const adapter=new Adapter({'Work.base':options.base,...options.files}),errors:unknown[]=[],requests:import('../src/core/databases.ts').DatabaseRequest[]=[],opened:string[]=[];
+  const read=adapter.read.bind(adapter);adapter.read=async path=>{await options.beforeRead?.(path);return read(path);};
+  adapter.databases={async request(command){if(['create_entry','set_entry'].includes(command.op)){requests.push(structuredClone(command));return options.mutation(command,adapter);}return{collections:options.collections??[collection],entries:[],projection:{pending:0,issues:[]}};}};
+  const unused=async():Promise<never>=>{throw new Error('unexpected operation');};
+  adapter.documentSemantics={status:async()=>({source,snapshot,coveredSource:source,current:true,rebuildRequired:false,coverageComplete:true}),initialize:unused,rebuild:unused,begin:unused,pump:unused,publish:unused,discard:unused,open:async()=>({pinId:'pin',source,snapshot,coverageComplete:true,close:async()=>{},search:unused,backlinks:unused,metadata:async()=>({source,snapshot,coverageComplete:true,value:{entry:{id:'Work.base',revision:'r1',path:'Work.base',kind:'file',deleted:false},metadata:null,exclusion:null}}),base:async(input:{options?:{viewIndex?:number}})=>({source,snapshot,coverageComplete:true,value:{definition:{id:'Work.base',revision:'r1',path:'Work.base',kind:'file',deleted:false},result:{snapshotId:snapshot,view:BaseDocument.parse(await adapter.read('Work.base')).views[input.options?.viewIndex??0],rows:[],groups:[{key:null,keyId:null,entryIds:[]}],groupOptions:[],properties:['file.name'],availableProperties:['file.name'],counts:{scanned:0,matched:0,afterGroupOrder:0,afterSearch:0,returned:0},diagnostics:[],relationshipsAvailable:true,metadataComplete:true,metadataIssues:[],stepsUsed:1}}})})} as unknown as DocumentService;
+  const vault=new Vault(adapter);await vault.initialize();const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),host=dom.window.document.querySelector('main')!,buffers=new Map<string,NoteBuffer>();
+  const session=createBaseSession(host,{vault,basePath:'Work.base',validate(){},openFile:path=>opened.push(path),onError:error=>errors.push(error),buffers:{validate(){},getBuffer:async path=>{let buffer=buffers.get(path);if(!buffer){buffer=new NoteBuffer(vault,path);buffers.set(path,buffer);}await buffer.load();return buffer;}}});await session.ready;
+  return{adapter,vault,host,session,requests,errors,opened,async close(){await session.close();for(const buffer of buffers.values())await buffer.dispose();dom.window.close();}};
+}
+
+test('a source replaced during template IO cannot publish New into the replacement collection',async()=>{
+  const a='views:\n - {id: aaaaaaaaaaaa, type: table, name: Books, source: {kind: collection, id: abcdefghijkl}, newItemTemplate: Template.md}\n';
+  let release!:()=>void,entered!:()=>void,hold=false;const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});
+  const other={...collection,id:'mnopqrstuvwx',name:'Projects'};
+  const f=await creationSession({base:a,files:{'Template.md':'Template body'},collections:[collection,other],beforeRead:async path=>{if(hold&&path==='Template.md'){entered();await gate;}},mutation:async()=>{throw new Error('must not publish');}});
+  hold=true;f.host.querySelector<HTMLButtonElement>('[aria-label="New"]')!.click();await started;
+  await f.vault.modify('Work.base',a.replace('id: abcdefghijkl','id: mnopqrstuvwx'));await f.session.refresh();release();
+  await until(()=>f.errors.some(error=>String(error).includes('view source changed')));assert.equal(f.requests.length,0);assert.equal(f.opened.length,0);await until(()=>!f.session.hasPendingChanges());await f.close();
+});
+
+test('definitive non-commit New rejection releases its old attempt and allows fresh planning',async()=>{
+  const base='views:\n - {id: aaaaaaaaaaaa, type: table, name: Books, source: {kind: collection, id: abcdefghijkl}}\n';let first=true;
+  const f=await creationSession({base,mutation:async(command,adapter)=>{
+    if(first){first=false;await adapter.write('Untitled.md','Other writer');throw Object.assign(new Error('Path occupied'),{source:'host',commitUncertain:false,code:'path_occupied'});}
+    assert.equal(command.op,'create_entry');if(command.op!=='create_entry')throw new Error('wrong command');await adapter.write(command.path,'Created body');return{collections:[collection],entries:[{entryId:command.entryId,collectionId:collection.id,revision:'member-r1',fileRevision:'r1',path:command.path,values:{},deleted:false,pendingProjection:false}],projection:{pending:0,issues:[]}};
+  }});
+  f.host.querySelector<HTMLButtonElement>('[aria-label="New"]')!.click();await until(()=>f.errors.length>0&&!f.session.hasPendingChanges());assert.equal(f.requests.length,1);
+  f.host.querySelector<HTMLButtonElement>('[aria-label="New"]')!.click();await until(()=>f.opened.length===1);assert.equal(f.requests.length,2);const [old,next]=f.requests;assert.equal(old.op,'create_entry');assert.equal(next.op,'create_entry');if(old.op==='create_entry'&&next.op==='create_entry'){assert.notEqual(old.operationId,next.operationId);assert.notEqual(old.entryId,next.entryId);assert.equal(next.path,'Untitled 1.md');}await until(()=>!f.session.hasPendingChanges());await f.close();
+});

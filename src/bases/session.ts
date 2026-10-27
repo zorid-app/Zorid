@@ -450,7 +450,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   }
   function openCollectionProperties(propertyId?:string):void {
     action();if(options.readOnly||!databaseService||!collection||collection.deleted)throw new Error('This collection is unavailable.');
-    if(pending.size||propertyDraft()||toolbarUI.hasDraft())throw new Error('Finish editing the current value first.');
+    if(pendingCollectionCreate||pending.size||propertyDraft()||toolbarUI.hasDraft())throw new Error('Finish editing the current value or retry the unfinished New first.');
     if(collectionEditor){collectionEditor.element.querySelector<HTMLInputElement>('input')?.focus();return;}
     const editingCollection=collection;
     collectionEditor=mountCollectionEditor(sourcePanel,{service:databaseService,collection:editingCollection,entries:[...collectionEntries.values()],propertyId,
@@ -663,20 +663,30 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   }
   async function createItem(group?: { property: string; value: BaseValue }, anchor?: HTMLElement): Promise<void> {
     action(); if (options.readOnly || !controller.state.result || sharedBasePreview(controller.state.result)) throw new Error('This base is read-only');
+    const creatingSource=controller.state.source,creatingViewId=controller.selectedViewIdentity,creatingIndex=controller.selectedViewIndex;
+    const validatePreparation=()=>{alive();if(controller.state.source!==creatingSource||controller.selectedViewIdentity!==creatingViewId||controller.selectedViewIndex!==creatingIndex)throw new Error('The view source changed while preparing New. No entry was created.');};
     if (await options.closeCreatedFile?.()) return;
-    alive();
+    validatePreparation();
     if(pendingCollectionCreate){const source=currentViewSource(),owner=pendingCollectionCreateOwner;if(!owner||source.kind!=='collection'||source.id!==owner.collectionId||(owner.viewId?controller.selectedViewIdentity!==owner.viewId:controller.state.source!==owner.source))throw new Error('The unfinished New belongs to its original collection view. Reopen that view to retry it.');}
     if(collectionMode()){
       if(!databaseService||!collection||collection.deleted)throw new Error('This collection is unavailable.');
       if(!pendingCollectionCreate){
-        const plan=await planCollectionEntryCreation({vault:options.vault,collection,document:BaseDocument.parse(controller.state.source),basePath:options.basePath,viewIndex:selectedIndex,group,validate:alive});alive();
+        const creatingCollection=collection;
+        const plan=await planCollectionEntryCreation({vault:options.vault,collection:creatingCollection,document:BaseDocument.parse(creatingSource),basePath:options.basePath,viewIndex:creatingIndex,group,validate:validatePreparation});validatePreparation();
         const folder=plan.path.includes('/')?plan.path.slice(0,plan.path.lastIndexOf('/')):'';
-        let parent='';for(const segment of folder.split('/').filter(Boolean)){parent=parent?`${parent}/${segment}`:segment;if(options.vault.entries.get(parent)?.type==='file')throw new Error('A file occupies the new entry’s folder.');if(!options.vault.entries.has(parent))await options.vault.createFolder(parent,alive);}
-        pendingCollectionCreateOwner={collectionId:collection.id,viewId:controller.selectedViewIdentity,source:controller.state.source};
-        pendingCollectionCreate={op:'create_entry',operationId:crypto.randomUUID(),collectionId:collection.id,expectedCollectionRevision:collection.revision,entryId:crypto.randomUUID(),path:plan.path,body:plan.body,values:plan.values};
+        let parent='';for(const segment of folder.split('/').filter(Boolean)){parent=parent?`${parent}/${segment}`:segment;if(options.vault.entries.get(parent)?.type==='file')throw new Error('A file occupies the new entry’s folder.');if(!options.vault.entries.has(parent))await options.vault.createFolder(parent,validatePreparation);validatePreparation();}
+        pendingCollectionCreateOwner={collectionId:creatingCollection.id,viewId:creatingViewId,source:creatingSource};
+        pendingCollectionCreate={op:'create_entry',operationId:crypto.randomUUID(),collectionId:creatingCollection.id,expectedCollectionRevision:creatingCollection.revision,entryId:crypto.randomUUID(),path:plan.path,body:plan.body,values:plan.values};
       }
       const request=pendingCollectionCreate;
-      const response=await databaseService.request(request);alive();
+      let response;
+      try{response=await databaseService.request(request);}
+      catch(failure){
+        const rejection=failure as {source?:unknown;commitUncertain?:unknown};
+        if(rejection?.source==='host'&&rejection.commitUncertain===false){pendingCollectionCreate=undefined;pendingCollectionCreateOwner=undefined;try{await options.vault.reload();await loadDefinitions();await controller.refresh();}catch{/* Keep the original definitive rejection visible. */}}
+        throw failure;
+      }
+      alive();
       const entry=response.entries.find(entry=>request.op==='create_entry'&&entry.entryId===request.entryId);
       if(!entry||entry.pendingProjection)throw new Error('The entry is committed locally but its note still needs publication. Use New again to retry.');
       pendingCollectionCreate=undefined;pendingCollectionCreateOwner=undefined;
