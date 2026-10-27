@@ -3,7 +3,7 @@ import {
   ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleHelp,
   CodeXml, Columns2, Columns3, Copy, Ellipsis, EllipsisVertical, Eye, EyeOff, File, FileDown, FileQuestion, FileSearch, Filter, FolderClosed, FolderPlus, GalleryVertical,
   GitFork, Group, GripHorizontal, GripVertical, House, Info, LayoutDashboard, LayoutGrid, Link, List, ListFilter, Maximize, Minus, PanelLeft, PanelRight, PanelTop, StretchHorizontal,
-  Plus, Redo2, RotateCcw, RotateCw, Search, Settings, SlidersHorizontal, SquareCheck, SquareFunction, SquarePen, StickyNote, Table, Tag, Terminal, Text, TextAlignStart, Trash2, Undo2, X, ZoomIn,
+  Pin, PinOff, Plus, Redo2, RotateCcw, RotateCw, Search, Settings, SlidersHorizontal, SquareCheck, SquareFunction, SquarePen, StickyNote, Table, Tag, Terminal, Text, TextAlignStart, Trash2, Undo2, X, ZoomIn,
 } from 'lucide';
 import type { IconNode } from 'lucide';
 
@@ -31,6 +31,7 @@ const glyphs: Record<string, IconNode> = {
   table: Table, 'layout-grid': LayoutGrid, 'list-filter': ListFilter, 'text-align-start': TextAlignStart,
   'ellipsis-vertical': EllipsisVertical, 'chevron-right': ChevronRight, 'chevron-left': ChevronLeft, 'file-question': FileQuestion,
   maximize: Maximize, 'undo-2': Undo2, 'redo-2': Redo2, dashboard: LayoutDashboard, 'zoom-in': ZoomIn,
+  pin: Pin, 'pin-off': PinOff,
 };
 
 /** Fresh, decorative SVG; the containing button supplies the accessible name. */

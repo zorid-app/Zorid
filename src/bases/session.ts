@@ -224,7 +224,7 @@ export interface BaseSession {
   /** Passive saved-name transition for sibling embeds; retains all drafts. */
   rebindViewName(from: string, to: string): boolean;
   /** Workspace preflight: retain the mounted view while settling accepted edits. */
-  flush(): Promise<void>;
+  flush(options?: { dismissCleanPanels?: boolean }): Promise<void>;
   hasPendingChanges(): boolean;
   /** Lifecycle-owned portals may be outside the session's DOM root. */
   owns?(node: Node): boolean;
@@ -236,6 +236,7 @@ interface MountedView {
   destroy(): void;
   hasActiveEdits?(): boolean;
   hasQueuedConfiguration?(): boolean;
+  dismissCleanPanels?(): void;
   openSummaryPicker?(property: string, anchor: HTMLElement, groupIndex?: number | null): void;
 }
 
@@ -273,6 +274,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   let creation: BaseCreationOperation | undefined;
   let summaryPanel: HTMLElement | undefined;
   let summaryDraft = false, destroySummaryEditor: (() => void) | undefined;
+  let summaryHasRawDraft: (() => boolean) | undefined;
   let definitionEpoch = 0, definitionsRevision = 0, mountedDefinitionsRevision = -1;
   let definitionsLoading = false;
   let definitionsError: string | undefined;
@@ -512,6 +514,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     type SummaryAttempt = { name: string; expression: string; source: string; deleted?: boolean };
     let retryAccepted: SummaryAttempt | undefined, timer: ReturnType<typeof setTimeout> | undefined;
     let formulaEditor: BaseFormulaEditor | undefined;
+    summaryHasRawDraft = () => name.value !== acceptedName || expression.value !== acceptedExpression;
     const mark = () => { summaryDraft = dirty || saving || !!retryPersistence; panel.setAttribute('aria-busy', String(saving)); schedule(); };
     const updateDirty = () => { dirty = name.value.trim() !== acceptedName || expression.value !== acceptedExpression; mark(); };
     let anchorBounds = anchor.getBoundingClientRect();
@@ -524,7 +527,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     };
     const scroll = (event: Event) => { const target = event.target; if (target && 'nodeType' in target && panel.contains(target as Node)) return; place(); };
     const resize = win?.ResizeObserver ? new win.ResizeObserver(place) : undefined;
-    const cleanup = () => { if (destroyed) return; destroyed = true; if (timer) clearTimeout(timer); doc.removeEventListener('pointerdown', outside, true); win?.removeEventListener('resize', place); win?.removeEventListener('scroll', scroll, true); resize?.disconnect(); formulaEditor?.destroy(); panel.remove(); if (summaryPanel === panel) { summaryPanel = undefined; summaryDraft = false; destroySummaryEditor = undefined; } };
+    const cleanup = () => { if (destroyed) return; destroyed = true; if (timer) clearTimeout(timer); doc.removeEventListener('pointerdown', outside, true); win?.removeEventListener('resize', place); win?.removeEventListener('scroll', scroll, true); resize?.disconnect(); formulaEditor?.destroy(); panel.remove(); if (summaryPanel === panel) { summaryPanel = undefined; summaryDraft = false; summaryHasRawDraft = undefined; destroySummaryEditor = undefined; } };
     const close = (chooser: boolean) => {
       if (destroyed) return;
       if (saving) { closeRequest = closeRequest === true || chooser; return; }
@@ -881,7 +884,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     if (creation?.status === 'uncertain') throw new Error('The new note creation is uncertain. Use New again to reconcile it before leaving this base.');
     if (activeDraft()) throw new Error('Finish or cancel the property edit before leaving this base');
   }
-  async function finish(close: boolean): Promise<void> {
+  async function finish(close: boolean, dismissCleanPanels = false): Promise<void> {
     if (disposed) return;
     if (closing) throw new Error('This base view is already finishing edits');
     if (mounted?.hasQueuedConfiguration?.()) throw new Error('Wait for the queued column width changes before leaving this base');
@@ -889,6 +892,8 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     try {
       await settle();
       if (mounted?.hasQueuedConfiguration?.()) throw new Error('Wait for the queued column width changes before leaving this base');
+      if (dismissCleanPanels && summaryHasRawDraft?.()) throw new Error('Finish or cancel the summary edit before changing context');
+      if (dismissCleanPanels) { mounted?.dismissCleanPanels?.(); toolbarUI.dismissCleanPanel(); settings.destroy(); destroySummaryEditor?.(); }
       if (close) {
         toolbarUI.destroy(); settings.destroy(); destroySummaryEditor?.(); stopDefinitions.forEach(stop => stop()); stopFilterMetadata(); mounted?.destroy(); mounted = undefined; observer?.disconnect();
         if (scheduled !== undefined) clearTimeout(scheduled);
@@ -920,7 +925,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     rebindViewName: (from, to) => { alive(); return controller.rebindViewName(from, to); },
     hasPendingChanges: () => !disposed && (!!pending.size || !!mounted?.hasQueuedConfiguration?.() || controller.hasPendingViewReferences || creation?.status === 'uncertain' || activeDraft() || [...changedBuffers].some(buffer => buffer.dirty || !!buffer.error)),
     owns: node => { try { alive(); return !closing && root.isConnected && toolbarUI.owns(node); } catch { return false; } },
-    flush: () => finish(false),
+    flush: options => finish(false, options?.dismissCleanPanels),
     close: () => finish(true),
   };
 }

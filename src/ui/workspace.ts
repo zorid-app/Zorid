@@ -46,7 +46,7 @@ import { AttachmentResources, isImage } from './attachments.ts';
 import type {AttachmentLease} from './attachments.ts';
 import { createImageView } from './image-view.ts';
 import type { ImageView } from './image-view.ts';
-import { isMarkdown } from '../core/types.ts';
+import { isMarkdown, normalizePath } from '../core/types.ts';
 import { AttachmentImporter, DEFAULT_ATTACHMENT_IMPORT_SETTINGS } from '../core/attachment-import.ts';
 import type { AttachmentImportSettings } from '../core/attachment-import.ts';
 import type { TransferFile } from '../editor/transfers.ts';
@@ -92,6 +92,11 @@ interface DocumentSearchOwner {
   pins:Set<DocumentPin>; closing:Map<DocumentPin,Promise<void>>; acquisition:Promise<void>;
 }
 type Mode = 'live' | 'reading';
+interface SidebarBaseContext { path:string|null; entryId?:string; token?:symbol }
+interface SidebarBaseState {
+  path:string;session:BaseSession;host:HTMLElement;context:string|null;contextEntryId?:string;
+  pinned:boolean;pinnedContext?:SidebarBaseContext;pinning?:Promise<void>;closing?:Promise<void>;
+}
 interface Tab {
   id:string; path:string|null; expectedEntryId?:string; mode:Mode; kind:'note'|'graph'|'calendar'|'tasks'; subpath?:string; calendarState?:CalendarViewState;
   /** Standalone .base source editing only; never a Markdown/embedded mode. */
@@ -153,9 +158,11 @@ export class Workspace {
   private propertyDefinitionSaver=createBasePropertyDefinitionSaver();
   private treeTab: 'files' | 'search' | 'bookmarks' = 'files';
   private rightTab: 'backlinks' | 'outline' | 'tags' | 'base' = 'backlinks';
-  private sidebarBase?:{path:string;session:BaseSession;host:HTMLElement;context:string;closing?:Promise<void>};
+  private sidebarBase?:SidebarBaseState;
   private sidebarBaseIntent=0;
   private sidebarBasePath?:string;
+  private sidebarPinnedContext?:SidebarBaseContext;
+  private sidebarBasePinButton?:HTMLButtonElement;
   private baseNewItem?:BaseNewItemPopoverHandle;
   /** Stable initiating host; popover positioning keeps its separate button anchor. */
   private baseNewItemAnchor?:HTMLElement;
@@ -791,7 +798,7 @@ export class Workspace {
     this.attachments=new AttachmentResources(this.vault);
     this.attachmentImporter=new AttachmentImporter(this.vault);
     this.splitLayout?.destroy(); this.splitLayout=undefined; this.restoringLayout=true;
-    this.panes = []; this.autoRevealFiles=false; this.collapsed.clear(); this.bookmarks.clear(); this.sessionState = {};this.rightTab='backlinks';this.sidebarBasePath=undefined;
+    this.panes = []; this.autoRevealFiles=false; this.collapsed.clear(); this.bookmarks.clear(); this.sessionState = {};this.rightTab='backlinks';this.sidebarBasePath=undefined;this.sidebarPinnedContext=undefined;
     this.buildShell();
     if(!platform.editorOnly)this.mountFileTreeDrag();
     let restored = false;
@@ -801,6 +808,10 @@ export class Workspace {
         this.sessionState = saved;this.autoRevealFiles=saved.autoRevealFiles===true;
         if(['backlinks','outline','tags'].includes(saved.rightTab))this.rightTab=saved.rightTab;
         if(typeof saved.sidebarBasePath==='string'&&/\.base$/i.test(saved.sidebarBasePath)&&next.entries.get(saved.sidebarBasePath)?.type==='file')this.sidebarBasePath=saved.sidebarBasePath;
+        if(this.sidebarBasePath&&saved.sidebarBasePinned===true){
+          const identityValid=saved.sidebarBaseContextEntryId===undefined||typeof saved.sidebarBaseContextEntryId==='string';
+          this.sidebarPinnedContext=this.captureSidebarPinContext({path:identityValid&&typeof saved.sidebarBaseContext==='string'?saved.sidebarBaseContext:null,...(typeof saved.sidebarBaseContextEntryId==='string'?{entryId:saved.sidebarBaseContextEntryId}:{})});
+        }
         this.root.classList.toggle('right-hidden', saved.rightHidden !== false);
         this.root.classList.toggle('left-hidden', saved.leftHidden === true);
         this.collapsed = new Set(saved.collapsed || []); this.bookmarks = new Set(saved.bookmarks || []);
@@ -849,10 +860,13 @@ export class Workspace {
       const oldPath = change.oldPath!;
       const sidebar=this.sidebarBase,generation=this.vaultGeneration,sidebarIntent=this.sidebarBaseIntent;
       const movedSidebar=sidebar&&(sidebar.path===oldPath||sidebar.path.startsWith(oldPath+'/'))?change.path+sidebar.path.slice(oldPath.length):undefined;
+      const pinned=sidebar?.pinnedContext??this.sidebarPinnedContext,movedPin=pinned?.path&&(pinned.path===oldPath||pinned.path.startsWith(oldPath+'/'))?change.path+pinned.path.slice(oldPath.length):undefined;
+      const ownedPin=!!(pinned&&movedPin&&(pinned.entryId?this.vault.entries.get(movedPin)?.entryId===pinned.entryId:pinned.token&&this.entryTokens.get(pinned.path!)===pinned.token));
       const movedBuffers=new Set([...this.buffers].filter(([path,buffer])=>this.bufferEntries.has(buffer)&&this.bufferEntries.get(buffer)===this.entryTokens.get(path)).map(([,buffer])=>buffer));
       this.invalidateTreeTokens(oldPath); this.invalidateTreeTokens(change.path);
       const relocate=(path:string)=>path===oldPath||path.startsWith(oldPath+'/')?change.path+path.slice(oldPath.length):path;
       if(this.sidebarBasePath)this.sidebarBasePath=relocate(this.sidebarBasePath);
+      if(pinned&&movedPin&&ownedPin){const next={...pinned,path:movedPin,token:this.treeEntryToken(movedPin)};if(sidebar?.pinnedContext===pinned)sidebar.pinnedContext=next;if(this.sidebarPinnedContext===pinned)this.sidebarPinnedContext=next;}
       this.bookmarks=new Set([...this.bookmarks].map(relocate));
       this.collapsed=new Set([...this.collapsed].map(relocate));
       this.treeSelection=new Set([...this.treeSelection].map(relocate));
@@ -873,7 +887,7 @@ export class Workspace {
           // A move is a new source binding. Never retarget retained drafts or a
           // newer sidebar request, nor adopt a replacement at the destination.
           if(generation!==this.vaultGeneration||sidebarIntent!==this.sidebarBaseIntent||this.sidebarBase!==sidebar||this.sidebarBasePath!==movedSidebar||!token||this.treeEntryToken(movedSidebar)!==token||sidebar.session.hasPendingChanges())return;
-          await this.openBaseSidebar(movedSidebar,{activate:false,reveal:false});
+          await this.openBaseSidebar(movedSidebar,{activate:false,reveal:false,...(sidebar.pinned&&sidebar.pinnedContext?{pinnedContext:sidebar.pinnedContext}:{})});
         });
       }
       this.renderSidebar(); this.renderRight(); this.panes.forEach(pane => this.run(()=>this.renderPane(pane))); this.saveSession();
@@ -996,6 +1010,7 @@ export class Workspace {
     const rightTabs = el('div','right-tabs');
     for (const [type,glyph,label] of [['backlinks','link','Backlinks'],['outline','list','Outline'],['tags','tag','Tags']] as const) rightTabs.append(button(glyph,label,()=>{this.run(async()=>{await this.sidebarBase?.session.flush();this.rightTab=type;this.renderRight();});}));
     rightTabs.append(button('table','Bases',()=>this.run(async()=>{await this.sidebarBase?.session.flush();const path=this.sidebarBasePath??this.sidebarBase?.path??this.current()?.path;if(this.sidebarBase&&this.sidebarBase.path===path){this.rightTab='base';this.renderRight();this.saveSession();}else if(path&&/\.base$/i.test(path))await this.openBaseSidebar(path);else notice('Open a Base first.');})));
+    this.sidebarBasePinButton=button('pin','Pin sidebar Base',()=>this.run(()=>this.toggleSidebarBasePin()),'sidebar-base-pin');this.sidebarBasePinButton.hidden=true;rightTabs.append(this.sidebarBasePinButton);
     rightTabs.append(button('rightbar','Toggle right sidebar',()=>this.toggleRight(),'pane-sidebar-toggle')); this.rightContent=el('div','right-content'); this.right.append(rightTabs,this.rightContent);
     this.status = el('footer','status-bar'); this.status.setAttribute('aria-live','polite');
     const status=el('section','native-document-status');status.setAttribute('aria-label','Save and recovery notices');status.setAttribute('aria-live','polite');
@@ -1376,8 +1391,9 @@ export class Workspace {
     if(version===pane.renderVersion)pane.viewReady=true;this.renderStatus();
   }
 
-  private createWorkspaceBaseSession(host:HTMLElement,path:string,owner:()=>Pane,validate:()=>void,sourcePath?:string,viewName?:string,inline?:InlineBaseRequest,onSourceError?:(error:Error|null)=>void,onInlineSourceSaved?:(next:InlineBaseRequest)=>boolean):BaseSession{
+  private createWorkspaceBaseSession(host:HTMLElement,path:string,owner:()=>Pane,validate:()=>void,sourcePath?:string|SidebarBaseContext,viewName?:string,inline?:InlineBaseRequest,onSourceError?:(error:Error|null)=>void,onInlineSourceSaved?:(next:InlineBaseRequest)=>boolean):BaseSession{
     const vault=this.vault,resources=this.attachments!;
+    const sourceContext=typeof sourcePath==='object'?sourcePath:{path:sourcePath??path};
     const hover=createBaseFileHover({parent:host,isMac:this.hotkeys.platform==='mac',
       isCurrent:target=>{try{validate();const entry=vault.entries.get(target.path);return entry?.type==='file'&&entry.entryId===target.entryId&&entry.revision===target.revision;}catch{return false;}},
       getBuffer:async(target,admit)=>{validate();admit();if(!isMarkdown(target.path))return undefined;const buffer=await this.baseBufferFor(target.path,()=>{validate();admit();});admit();return buffer;},
@@ -1460,7 +1476,7 @@ export class Workspace {
       }
     }:undefined;
     let session:BaseSession;
-    try{session=(this.viewFactories.base??createBaseSession)(host,{vault,basePath:path,validate,viewName,inlineSource,query:{currentFilePath:sourcePath??path},
+    try{session=(this.viewFactories.base??createBaseSession)(host,{vault,basePath:path,validate,viewName,inlineSource,query:{currentFilePath:sourceContext.path,...(sourceContext.entryId?{currentFileEntryId:sourceContext.entryId}:{})},
             hoverFile:(row,event)=>{try{validate();const anchor=baseFileHoverAnchor(row,event);if(anchor)hover.hover(row,event,anchor);}catch(error){notice(error instanceof Error?error.message:String(error));}},
             ...(onSourceError?{onState:state=>onSourceError(state.error)}:{}),
             onViewRenamed:event=>{validate();const identity=this.treeEntryToken(event.basePath);if(!identity)return;for(const sessions of new Set([this.baseNewItemEmbeds,...this.baseHoverEmbeds,...this.loadedViews().map(pane=>pane.baseEmbeds)].filter((sessions):sessions is BaseEmbedSessions=>!!sessions)))sessions.renameViewBinding(event.basePath,event.from,event.to,identity);},
@@ -1492,7 +1508,7 @@ export class Workspace {
               validate();
               if(/^[a-z][\w+.-]*:/i.test(target)||target.startsWith('//')){if(/^(?:https?:\/\/|mailto:|tel:)/i.test(target))window.open(target,'_blank','noopener,noreferrer');return;}
               const newTab=('button'in event&&event.button===1)||event.metaKey||event.ctrlKey;
-              if(witness)return this.openPropertyLink(sourcePath??path,target,owner(),witness,newTab);
+              if(witness)return this.openPropertyLink(sourceContext.path??path,target,owner(),witness,newTab);
               return this.openNote(target,newTab,owner(),true,target.includes('#')?target.slice(target.indexOf('#')):'');
             }),
             loadThumbnail:async request=>{
@@ -1510,9 +1526,9 @@ export class Workspace {
             },onError:error=>notice(error instanceof Error?error.message:String(error))});}
     catch(error){void hover.destroy().catch(()=>{});throw error;}
     let flushing:Promise<void>|undefined,closing:Promise<void>|undefined,closed=false;
-    const flush=()=>{if(closed)return Promise.resolve();if(closing)return closing;if(flushing)return flushing;const pending=Promise.resolve().then(async()=>{await this.finishInlinePublicationAt(path);await hover.flush();await session.flush();});flushing=pending;const clear=()=>{if(flushing===pending)flushing=undefined;};void pending.then(clear,clear);return pending;};
+    const flush=(options?:Parameters<BaseSession['flush']>[0]):Promise<void>=>{if(closed)return Promise.resolve();if(closing)return closing;if(flushing)return options?.dismissCleanPanels?flushing.then(()=>flush(options)):flushing;const pending=Promise.resolve().then(async()=>{await this.finishInlinePublicationAt(path);await hover.flush();await session.flush(options);});flushing=pending;const clear=()=>{if(flushing===pending)flushing=undefined;};void pending.then(clear,clear);return pending;};
     const close=()=>{if(closed)return Promise.resolve();if(closing)return closing;const pending=Promise.resolve().then(async()=>{await flushing;await this.finishInlinePublicationAt(path);await hover.close();await session.close();await hover.destroy();closed=true;});closing=pending;const clear=()=>{if(closing===pending)closing=undefined;};void pending.then(clear,clear);return pending;};
-    return{get ready(){return session.ready;},get state(){return session.state;},refresh:()=>session.refresh(),selectView:index=>session.selectView(index),setCurrentFile:target=>session.setCurrentFile(target),rebindViewName:(from,to)=>session.rebindViewName(from,to),flush,close,owns:node=>!closed&&!closing&&session.owns?.(node)===true,hasPendingChanges:()=>hover.hasPendingChanges()||session.hasPendingChanges()};
+    return{get ready(){return session.ready;},get state(){return session.state;},refresh:()=>session.refresh(),selectView:index=>session.selectView(index),setCurrentFile:(target,expectedEntryId)=>session.setCurrentFile(target,expectedEntryId),rebindViewName:(from,to)=>session.rebindViewName(from,to),flush,close,owns:node=>!closed&&!closing&&session.owns?.(node)===true,hasPendingChanges:()=>hover.hasPendingChanges()||session.hasPendingChanges()};
   }
 
   /** Base hover uses the ordinary shared draft, editor and embed save boundary. */
@@ -2341,16 +2357,97 @@ export class Workspace {
     }
   }
 
-  private async openBaseSidebar(path:string,options:{reveal?:boolean;persist?:boolean;activate?:boolean}={}):Promise<void>{
+  private sidebarMainContext():SidebarBaseContext{
+    const tab=this.current(),path=tab?.kind==='note'?tab.path:null;
+    const entry=path?this.vault.entries.get(path):undefined;
+    return entry?.type==='file'?{path:entry.path,entryId:entry.entryId,token:this.treeEntryToken(entry.path)}:{path:null};
+  }
+
+  private captureSidebarPinContext(input:SidebarBaseContext):SidebarBaseContext{
+    if(input.path===null)return{path:null};
+    try{if(normalizePath(input.path)!==input.path)return{path:null};}catch{return{path:null};}
+    if(input.entryId!==undefined&&(typeof input.entryId!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(input.entryId)))return{path:null};
+    const atPath=this.vault.entries.get(input.path),entry=input.entryId&&atPath?.entryId!==input.entryId?[...this.vault.entries.values()].find(entry=>entry.type==='file'&&entry.entryId===input.entryId):atPath;
+    const owned=entry?.type==='file'&&(!input.token||input.token===this.treeEntryToken(entry.path));
+    return{path:owned?entry.path:input.path,entryId:input.entryId??(owned?entry.entryId:undefined),token:owned?this.treeEntryToken(entry.path):input.token};
+  }
+
+  private resolveSidebarPinContext(target:SidebarBaseContext):SidebarBaseContext{
+    if(target.path===null)return{path:null};
+    const atPath=this.vault.entries.get(target.path),entry=target.entryId&&atPath?.entryId!==target.entryId?[...this.vault.entries.values()].find(entry=>entry.type==='file'&&entry.entryId===target.entryId):atPath;
+    if(entry?.type!=='file'||(!target.entryId&&(!target.token||target.token!==this.treeEntryToken(entry.path))))return{path:null};
+    return{path:entry.path,entryId:target.entryId??entry.entryId,token:this.treeEntryToken(entry.path)};
+  }
+
+  private sidebarContextsEqual(a:SidebarBaseContext,b:SidebarBaseContext):boolean{return a.path===b.path&&a.entryId===b.entryId&&a.token===b.token;}
+
+  private renderSidebarPinControl():void{
+    const control=this.sidebarBasePinButton,saved=this.sidebarBase;if(!control)return;
+    control.hidden=this.rightTab!=='base'||!saved;
+    control.disabled=!saved||!!saved.closing||!!saved.pinning;
+    const pinned=saved?.pinned===true,label=pinned?'Unpin sidebar Base':'Pin sidebar Base';
+    control.setAttribute('aria-label',label);control.setAttribute('aria-pressed',String(pinned));control.setAttribute('aria-busy',String(!!saved?.pinning));control.classList.toggle('is-active',pinned);
+    control.title=pinned?`${label} (${saved?.context??'no current note'})`:label;
+    control.replaceChildren(icon(pinned?'pin-off':'pin'));
+  }
+
+  private changeSidebarBaseContext(saved:SidebarBaseState,update:(validate:()=>void)=>Promise<{pinned:boolean;context:SidebarBaseContext;target?:SidebarBaseContext}>):Promise<void>{
+    if(saved.pinning)return saved.pinning;
+    const vault=this.vault,generation=this.vaultGeneration,intent=this.sidebarBaseIntent,token=this.treeEntryToken(saved.path),wasInert=saved.host.hasAttribute('inert');
+    const validate=()=>{if(this.vault!==vault||this.vaultGeneration!==generation||this.sidebarBase!==saved||this.sidebarBaseIntent!==intent||saved.closing||!token||this.treeEntryToken(saved.path)!==token)throw new Error('The sidebar Base changed before its context could be updated.');};
+    let retargeted=false;
+    const operation=Promise.resolve().then(async()=>{
+      validate();await saved.session.flush({dismissCleanPanels:true});validate();retargeted=true;
+      const next=await update(validate);validate();
+      const previous={pinned:saved.pinned,target:saved.pinnedContext,context:saved.context,entryId:saved.contextEntryId};
+      saved.pinned=next.pinned;saved.pinnedContext=next.target;saved.context=next.context.path;saved.contextEntryId=next.context.entryId;
+      try{this.saveSession();}catch(error){saved.pinned=previous.pinned;saved.pinnedContext=previous.target;saved.context=previous.context;saved.contextEntryId=previous.entryId;throw error;}
+    }).catch(async error=>{
+      // A failed identity-bound setter must not leave an unacknowledged query
+      // selector under the old pin flag. Only this same local owner may roll back.
+      if(retargeted&&this.vault===vault&&this.vaultGeneration===generation&&this.sidebarBase===saved&&this.sidebarBaseIntent===intent&&!saved.closing){
+        const restore=saved.pinned&&saved.pinnedContext?this.resolveSidebarPinContext(saved.pinnedContext):this.sidebarMainContext();
+        try{await saved.session.setCurrentFile(restore.path,restore.entryId);validate();saved.context=restore.path;saved.contextEntryId=restore.entryId;}catch{ /* Preserve the original actionable failure; no local pin acknowledgement follows. */ }
+      }
+      throw error;
+    }).finally(()=>{if(saved.pinning===operation)saved.pinning=undefined;if(!wasInert)saved.host.removeAttribute('inert');this.renderSidebarPinControl();});
+    saved.pinning=operation;saved.host.setAttribute('inert','');this.renderSidebarPinControl();return operation;
+  }
+
+  private toggleSidebarBasePin():Promise<void>{
+    const saved=this.sidebarBase;if(!saved)return Promise.resolve();
+    const pin=!saved.pinned,target=pin?this.sidebarMainContext():undefined;
+    return this.changeSidebarBaseContext(saved,async validate=>{
+      if(pin){
+        const desired=this.resolveSidebarPinContext(target!);
+        if(!this.sidebarContextsEqual(target!,desired))throw new Error('The selected note changed before it could be pinned.');
+        await saved.session.setCurrentFile(desired.path,desired.entryId);validate();
+        if(!this.sidebarContextsEqual(desired,this.resolveSidebarPinContext(target!)))throw new Error('The selected note changed before it could be pinned.');
+        return{pinned:true,context:desired,target};
+      }
+      // A main-pane change during the saved-query acknowledgement belongs to
+      // the same unpin intent. Publish only the latest stable active context.
+      for(;;){const desired=this.sidebarMainContext();await saved.session.setCurrentFile(desired.path,desired.entryId);validate();if(this.sidebarContextsEqual(desired,this.sidebarMainContext()))return{pinned:false,context:desired};}
+    });
+  }
+
+  private refreshPinnedSidebarContext(saved:SidebarBaseState):Promise<void>{
+    return this.changeSidebarBaseContext(saved,async validate=>{
+      for(;;){const target=saved.pinnedContext??{path:null},desired=this.resolveSidebarPinContext(target);await saved.session.setCurrentFile(desired.path,desired.entryId);validate();if(target===saved.pinnedContext&&this.sidebarContextsEqual(desired,this.resolveSidebarPinContext(target)))return{pinned:true,context:desired,target};}
+    });
+  }
+
+  private async openBaseSidebar(path:string,options:{reveal?:boolean;persist?:boolean;activate?:boolean;pinnedContext?:SidebarBaseContext}={}):Promise<void>{
     const vault=this.vault,generation=this.vaultGeneration,intent=++this.sidebarBaseIntent;
     const token=this.treeEntryToken(path);
     if(!token||vault.entries.get(path)?.type!=='file')throw new Error('The selected sidebar Base is unavailable.');
-    const previous=this.sidebarBase;
+    const previous=this.sidebarBase,pinnedContext=options.pinnedContext??(!previous&&path===this.sidebarBasePath?this.sidebarPinnedContext:undefined);
     if(previous){
       // Register before invoking close so a newer request joins this teardown,
       // including requests made synchronously by the closing session itself.
       const closing=previous.closing??=Promise.resolve().then(()=>previous.session.close());
-      try{await closing;}catch(error){if(previous.closing===closing)previous.closing=undefined;throw error;}
+      this.renderSidebarPinControl();
+      try{await closing;}catch(error){if(previous.closing===closing){previous.closing=undefined;this.renderSidebarPinControl();}throw error;}
     }
     if(vault!==this.vault||generation!==this.vaultGeneration||intent!==this.sidebarBaseIntent||this.sidebarBase!==previous)return;
     if(this.treeEntryToken(path)!==token)throw new Error('The selected sidebar Base changed while closing the previous view.');
@@ -2364,9 +2461,9 @@ export class Workspace {
     // when the actual mounted session changes, keeping file/vault guards live.
     let session:BaseSession|undefined;
     const validate=()=>{if(vault!==this.vault||generation!==this.vaultGeneration||!token||this.treeEntryToken(path)!==token||(session?this.sidebarBase?.session!==session:intent!==this.sidebarBaseIntent))throw new Error('The sidebar Base changed.');};
-    const context=this.current()?.path??path;
+    const target=pinnedContext?this.captureSidebarPinContext(pinnedContext):undefined,context=target?this.resolveSidebarPinContext(target):this.sidebarMainContext();
     session=this.createWorkspaceBaseSession(host,path,()=>this.activePane,validate,context);
-    this.sidebarBase={path,session,host,context};this.sidebarBasePath=path;if(options.activate!==false)this.rightTab='base';if(options.reveal!==false)this.root.classList.remove('right-hidden');this.renderRight();await session.ready;if(options.persist!==false)this.saveSession();
+    this.sidebarBase={path,session,host,context:context.path,contextEntryId:context.entryId,pinned:!!target,pinnedContext:target};this.sidebarPinnedContext=target;this.sidebarBasePath=path;if(options.activate!==false)this.rightTab='base';if(options.reveal!==false)this.root.classList.remove('right-hidden');this.renderRight();await session.ready;if(options.persist!==false)this.saveSession();
   }
 
   private async changePropertyDefinition(property:string,definition:BasePropertyDefinition,validate:()=>void):Promise<void>{
@@ -2381,7 +2478,18 @@ export class Workspace {
   private renderRight():void{
     this.clearDocumentBacklinks();
     if(!this.vault||!this.activePane)return;
-    if(this.rightTab==='base'&&this.sidebarBase){const saved=this.sidebarBase;if(!this.rightContent.contains(saved.host))this.rightContent.replaceChildren(saved.host);const context=this.current()?.path??saved.path;if(context!==saved.context&&!saved.closing){saved.context=context;void saved.session.setCurrentFile(context).catch(error=>notice(error instanceof Error?error.message:String(error)));}return;}
+    this.renderSidebarPinControl();
+    if(this.rightTab==='base'&&this.sidebarBase){
+      const saved=this.sidebarBase;if(!this.rightContent.contains(saved.host))this.rightContent.replaceChildren(saved.host);
+      if(!saved.closing&&!saved.pinning){
+        const context=saved.pinned&&saved.pinnedContext?this.resolveSidebarPinContext(saved.pinnedContext):this.sidebarMainContext();
+        if(context.path!==saved.context||context.entryId!==saved.contextEntryId){
+          if(saved.pinned)this.run(()=>this.refreshPinnedSidebarContext(saved));
+          else{saved.context=context.path;saved.contextEntryId=context.entryId;void saved.session.setCurrentFile(context.path,context.entryId).catch(error=>notice(error instanceof Error?error.message:String(error)));}
+        }
+      }
+      return;
+    }
     this.rightContent.replaceChildren();delete this.rightContent.dataset.metadataStatus;const path=this.current()?.path;
     if(this.rightTab==='backlinks'){
       if(this.vault.adapter.documentSemantics){
@@ -2966,7 +3074,7 @@ export class Workspace {
     else{const tab:Tab={id:makeId(),path:null,mode:'reading',kind:'calendar'};pane.tabs.push(tab);pane.active=tab.id;}
     this.activate(pane);await this.renderPane(pane);this.saveSession();
   }
-  private async openGraph():Promise<void>{await this.flushPane(this.activePane);const tab:Tab={id:makeId(),path:null,mode:'reading',kind:'graph'};this.activePane.tabs.push(tab);this.activePane.active=tab.id;this.run(()=>this.renderPane(this.activePane));this.saveSession();}
+  private async openGraph():Promise<void>{await this.flushPane(this.activePane);const tab:Tab={id:makeId(),path:null,mode:'reading',kind:'graph'};this.activePane.tabs.push(tab);this.activePane.active=tab.id;this.renderRight();this.run(()=>this.renderPane(this.activePane));this.saveSession();}
   private renderGraph(parent:HTMLElement):void{
     const vault=this.vault,state=vault.metadataFrame,frame=state?.frame??null,previous=this.metadataGraphs.get(parent);
     const updateStatus=(container:HTMLElement,status:HTMLElement)=>{
@@ -3039,7 +3147,7 @@ export class Workspace {
   }
   private applySettings():void{const theme=this.settings.theme==='system'?(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):this.settings.theme;document.documentElement.dataset.theme=theme;document.documentElement.style.setProperty('--font-text-size',`${this.settings.fontSize}px`);}
   private saveSettings():void{localStorage.setItem('zorid:settings',JSON.stringify(this.settings));this.applySettings();}
-  private saveSession():void{if(!this.platform||this.restoringLayout)return;this.panes.forEach(pane=>this.capturePaneState(pane));localStorage.setItem(this.sessionKey(),JSON.stringify({...this.sessionState,rightTab:this.rightTab,sidebarBasePath:this.sidebarBasePath,rightHidden:this.root.classList.contains('right-hidden'),leftHidden:this.root.classList.contains('left-hidden'),autoRevealFiles:this.autoRevealFiles,layout:this.splitLayout?.serialize(),activePaneId:this.activePane?.id,panes:this.panes.map(p=>({...p.persisted,id:p.id,tabs:p.tabs,active:p.tabs.findIndex(t=>t.id===p.active)})),collapsed:[...this.collapsed],bookmarks:[...this.bookmarks]}));}
+  private saveSession():void{if(!this.platform||this.restoringLayout)return;const pin=this.sidebarBase?this.sidebarBase.pinned?this.sidebarBase.pinnedContext:undefined:this.sidebarPinnedContext;this.panes.forEach(pane=>this.capturePaneState(pane));localStorage.setItem(this.sessionKey(),JSON.stringify({...this.sessionState,rightTab:this.rightTab,sidebarBasePath:this.sidebarBasePath,sidebarBasePinned:!!pin,sidebarBaseContext:pin?.path,sidebarBaseContextEntryId:pin?.entryId,rightHidden:this.root.classList.contains('right-hidden'),leftHidden:this.root.classList.contains('left-hidden'),autoRevealFiles:this.autoRevealFiles,layout:this.splitLayout?.serialize(),activePaneId:this.activePane?.id,panes:this.panes.map(p=>({...p.persisted,id:p.id,tabs:p.tabs,active:p.tabs.findIndex(t=>t.id===p.active)})),collapsed:[...this.collapsed],bookmarks:[...this.bookmarks]}));this.sidebarPinnedContext=pin;}
   private help():void{const{content}=modal('Help');content.append(el('h2','','Get started'),el('p','',`Link to another note with [[note name]]. Customize workspace shortcuts in Settings → Hotkeys. Create note: ${this.hotkeys.label('new-note')||'not assigned'}. Find file: ${this.hotkeys.label('quick-switcher')||'not assigned'}. Command palette: ${this.hotkeys.label('command-palette')||'not assigned'}.`));
   }
   private hotkeySurfaceBlocked(): boolean {

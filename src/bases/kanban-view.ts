@@ -47,6 +47,7 @@ export interface BaseKanbanView {
   update(result: BaseQueryResult): void;
   move(path: string, destination: BaseExpressionValue): Promise<boolean>;
   hasActiveEdits(): boolean;
+  dismissCleanPanels(): void;
   refreshLayout(): void;
   destroy(): void;
 }
@@ -525,5 +526,5 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
   const Observer = doc.defaultView?.ResizeObserver;
   const observer = Observer ? new Observer(() => render()) : undefined; observer?.observe(root);
   update(result);
-  return { update, move, hasActiveEdits, refreshLayout() { render(); }, destroy() { if (destroyed) return; destroyed = true; epoch++; deferredResult = undefined; editObserver?.disconnect(); releaseRows(); mountedColumns.clear(); columnDrag = undefined; pendingColumnOrder = undefined; columns?.destroy(); pending.clear(); drag = undefined; observer?.disconnect(); root.removeEventListener('scroll', onScroll); root.removeEventListener('keydown', onKey); root.remove(); } };
+  return { update, move, hasActiveEdits, dismissCleanPanels() { columns?.dismissCleanPanel(); }, refreshLayout() { render(); }, destroy() { if (destroyed) return; destroyed = true; epoch++; deferredResult = undefined; editObserver?.disconnect(); releaseRows(); mountedColumns.clear(); columnDrag = undefined; pendingColumnOrder = undefined; columns?.destroy(); pending.clear(); drag = undefined; observer?.disconnect(); root.removeEventListener('scroll', onScroll); root.removeEventListener('keydown', onKey); root.remove(); } };
 }

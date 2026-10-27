@@ -71,6 +71,8 @@ export interface BaseToolbar {
   hasDraft(): boolean;
   /** Only this live toolbar's current connected portal, including its child controls. */
   owns(node: Node): boolean;
+  /** After accepted saves settle, retire this toolbar's clean portal only. */
+  dismissCleanPanel(): void;
   captureSaveAcknowledgement(): () => void;
   destroy(): void;
 }
@@ -889,6 +891,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       }
       panel?.refreshFilterAdvice?.(next);
     }, hasDraft, owns: node => !!(!destroyed && container.isConnected && panel?.node.isConnected && panel.trigger.isConnected && container.contains(panel.trigger) && panel.node.contains(node)), captureSaveAcknowledgement() { const token = panel?.failure, captured = panel; return () => { if (!destroyed && captured && captured === panel && token && captured.failure === token && !captured.saving && captured.acceptsSaveAcknowledgement?.()) { captured.failure = undefined; captured.dirty = false; captured.close(false); } }; },
+    dismissCleanPanel() { if (hasDraft()) throw new Error('Apply or cancel the toolbar changes before changing context.'); panel?.close(false); },
     destroy() { destroyed = true; if (panel) { panel.saving = false; panel.close(false); } container.replaceChildren(); },
   };
 }

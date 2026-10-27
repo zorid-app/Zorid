@@ -23,6 +23,7 @@ export interface BaseKanbanColumns {
   update(result: BaseQueryResult): void;
   open(anchor: HTMLElement): void;
   hide(key: BaseExpressionValue): Promise<boolean>;
+  dismissCleanPanel(): void;
   destroy(): void;
 }
 interface Row { key: BaseExpressionValue; sharedKeyId?: string; checked: boolean; count: number; stored?: BaseValue; orderKey?: BaseValue }
@@ -242,6 +243,7 @@ export function createBaseKanbanColumns(container: HTMLElement, options: BaseKan
       targets.forEach(row=>{row.checked=false;});
       try { return await save(orderOf()); } catch (error) { report(error); return false; }
     },
+    dismissCleanPanel() { if (popover && (pending || errorMessage)) throw new Error('Finish or cancel the column changes before changing context.'); close(); },
     destroy() { if (disposed) return; disposed = true; close(); doc.removeEventListener('pointerdown', outside); doc.removeEventListener('keydown', key); win?.removeEventListener('resize', position); },
   };
 }
