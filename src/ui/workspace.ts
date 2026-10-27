@@ -248,6 +248,7 @@ export class Workspace {
   }
   private bufferRevisions = new WeakMap<NoteBuffer,number>();
   private bufferEntries = new WeakMap<NoteBuffer,symbol>();
+  private recoveredBufferBindings = new WeakSet<NoteBuffer>();
   private initialized = false;
   private startupFailed = false;
   private attachments?:AttachmentResources;
@@ -796,7 +797,7 @@ export class Workspace {
     this.hideNativeEditorToolbar();this.nativeEditorCleanup?.();this.nativeEditorCleanup=undefined;
     cancelTasksClose(false);cancelTasksClose=()=>{};
     this.nativeDocumentCleanup?.();this.nativeDocumentCleanup=undefined;
-    this.platform = platform; this.vault = next; this.platformReleased=false;this.platformDrained=false;this.buffers=recovered; this.vaultGeneration++;
+    this.platform = platform; this.vault = next; this.platformReleased=false;this.platformDrained=false;this.buffers=recovered; this.recoveredBufferBindings=new WeakSet(recovered.values()); this.vaultGeneration++;
     this.attachments=new AttachmentResources(this.vault);
     this.attachmentImporter=new AttachmentImporter(this.vault);
     this.splitLayout?.destroy(); this.splitLayout=undefined; this.restoringLayout=true;
@@ -1103,6 +1104,31 @@ export class Workspace {
     return buffer;
   }
 
+  /** Recovery loads before vault installation, so its buffers have no tree
+   * token yet. Admit that first binding using the saved actor, never path alone;
+   * an existing invalidated binding remains a retained replacement draft. */
+  private async bindRecoveredBuffer(path:string,buffer:NoteBuffer,validate:()=>void):Promise<void>{
+    if(this.bufferEntries.has(buffer))return;
+    const vault=this.vault,generation=this.vaultGeneration,adapter=vault.adapter,durable=adapter.durableWrites;
+    const witness=buffer.savedDurableWitness,token=this.treeEntryToken(path),scope=durable?.checkpoints.scope,vaultId=scope?.vaultId,clientId=scope?.clientId;
+    const changed=()=>new Error('This recovered note changed or was replaced; its draft is retained.');
+    const check=()=>{
+      validate();const current=buffer.savedDurableWitness,entry=vault.entries.get(path);
+      if(this.vault!==vault||this.vaultGeneration!==generation||vault.adapter!==adapter||adapter.durableWrites!==durable||durable?.checkpoints.scope.vaultId!==vaultId||durable?.checkpoints.scope.clientId!==clientId
+        ||!this.recoveredBufferBindings.has(buffer)&&this.bufferEntries.get(buffer)!==token||!witness||witness.path!==path||!token||this.treeEntryToken(path)!==token||this.buffers.get(path)!==buffer||buffer.path!==path||entry?.type!=='file'
+        ||entry.entryId&&entry.entryId!==witness.entryId||!current||current.entryId!==witness.entryId||current.path!==witness.path||current.revision!==witness.revision)throw changed();
+    };
+    check();
+    const observed=await vault.readDurableTextById(witness!.entryId);
+    check();
+    if(!observed||observed.entryId!==witness!.entryId||observed.path!==path||observed.revision!==witness!.revision)throw changed();
+    // Another simultaneous admission may have bound the same exact actor while
+    // the read was pending. It may never replace a previously owned token.
+    const bound=this.bufferEntries.get(buffer);if(bound&&bound!==token)throw changed();
+    this.bufferEntries.set(buffer,token!);
+    this.recoveredBufferBindings.delete(buffer);
+  }
+
   private async bufferFor(path:string,expectedEntryId?:string,validate:()=>void=()=>{}):Promise<NoteBuffer>{
     validate();
     if(expectedEntryId!==undefined){
@@ -1111,7 +1137,7 @@ export class Workspace {
     }
     let buffer=this.buffers.get(path); if(buffer){
       if(expectedEntryId!==undefined&&!buffer.savedDurableWitness)throw new Error('The selected note is still loading; retry navigation');
-      await buffer.load(expectedEntryId,validate);validate();return buffer;
+      await buffer.load(expectedEntryId,validate);validate();await this.bindRecoveredBuffer(path,buffer,validate);validate();return buffer;
     }
     const vault=this.vault;
     buffer=new NoteBuffer(vault,path,{onMetadata:()=>this.draftMetadataChanged(buffer!,vault),storage:localStorage,storageKey:this.storageScope.draftPrefix(this.platform.id),onState:()=>{if(buffer)this.draftBufferStateChanged(buffer,vault);}});
