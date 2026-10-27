@@ -19,7 +19,7 @@ fn create(store: &mut Store, name: &str) -> DatabaseCollection {
     request(store,json!({"op":"create","operationId":format!("create-{name}"),"name":name,"properties":[{"name":"Score","datatype":"number"},{"name":"Status","datatype":"status","options":[{"name":"Todo","category":"not_started"},{"name":"Done","category":"done"}]}]})).collections.remove(0)
 }
 fn new_entry(store: &mut Store, collection: &DatabaseCollection, entry: &str) -> DatabaseEntry {
-    request(store,json!({"op":"create_entry","operationId":format!("new-{entry}"),"collectionId":collection.id,"expectedCollectionRevision":collection.revision,"entryId":entry,"path":format!("{entry}.md"),"body":"# Body\r\n\r\nKeep β exactly.\r\n","values":{collection.properties[0].id.clone():3,collection.properties[1].id.clone():collection.properties[1].options[0].id}})).entries.remove(0)
+    request(store,json!({"op":"create_entry","operationId":format!("new-{entry}"),"collectionId":collection.id,"expectedCollectionRevision":collection.revision,"entryId":entry,"path":format!("{entry}.md"),"body":"# Body\r\n\r\nKeep β exactly.\r\n","values":{collection.properties[0].id.clone():3,collection.properties[1].id.clone():collection.properties[1].options[0].id}})).entries.into_iter().find(|value|value.entry_id.as_str()==entry).unwrap()
 }
 fn input(collection: &DatabaseCollection) -> Vec<Value> {
     collection
@@ -574,6 +574,10 @@ fn schema_only_mutation_changes_document_source_watermark() {
     let collection = create(&mut store, "Books");
     let after = store.list_snapshot().unwrap().cursor;
     assert_ne!(before, after);
+    let changes = store.changes_after(&before, 100).unwrap();
+    assert_eq!(changes.changes.len(), 1);
+    assert!(changes.changes[0].requires_full_reload);
+    assert!(changes.changes[0].entries.is_empty());
     let first = store.database_query_state().unwrap();
     update(
         &mut store,
@@ -585,6 +589,10 @@ fn schema_only_mutation_changes_document_source_watermark() {
     let second = store.database_query_state().unwrap();
     assert_ne!(first.revision, second.revision);
     assert_ne!(after, store.list_snapshot().unwrap().cursor);
+    let changes = store.changes_after(&after, 100).unwrap();
+    assert_eq!(changes.changes.len(), 1);
+    assert!(changes.changes[0].requires_full_reload);
+    assert!(changes.changes[0].entries.is_empty());
 }
 
 #[test]
@@ -877,5 +885,267 @@ fn datatype_change_converts_inherited_status_default_to_its_readable_label() {
     assert_eq!(
         changed.collections[0].properties[0].default,
         Some(json!("Not started"))
+    );
+}
+
+#[test]
+fn collection_restore_never_resurrects_a_previously_trashed_member() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path).unwrap();
+    let collection = create(&mut store, "Books");
+    let old = new_entry(&mut store, &collection, "earlier");
+    let active = new_entry(&mut store, &collection, "active");
+    publish(&mut store, &old, "publish-earlier");
+    publish(&mut store, &active, "publish-active");
+    store
+        .apply(&MutationRequest {
+            operation_id: op("trash-folder"),
+            mutation: Mutation::Create {
+                id: id("trash-folder"),
+                path: VaultPath::new(".trash").unwrap(),
+                kind: EntryKind::Folder,
+                content: None,
+            },
+        })
+        .unwrap();
+    let before = store.read(&old.entry_id).unwrap().unwrap();
+    store
+        .apply(&MutationRequest {
+            operation_id: op("independent-trash"),
+            mutation: Mutation::Move {
+                id: old.entry_id.clone(),
+                expected: before.state.revision,
+                path: VaultPath::new(".trash/earlier.md").unwrap(),
+            },
+        })
+        .unwrap();
+    let listed = get(&mut store, &collection);
+    let trashed = listed
+        .entries
+        .iter()
+        .find(|e| e.entry_id == old.entry_id)
+        .unwrap();
+    assert!(trashed.deleted);
+    let edit=serde_json::from_value(json!({"op":"set_entry","operationId":"edit-trashed","entryId":old.entry_id,"expectedRevision":trashed.revision,"expectedCollectionRevision":collection.revision,"values":{collection.properties[0].id.clone():99}})).unwrap();
+    assert!(store.database_request(&edit).is_err());
+    let duplicate=serde_json::from_value(json!({"op":"duplicate_entry","operationId":"duplicate-trashed","entryId":old.entry_id,"expectedRevision":trashed.revision,"newEntryId":"unwanted","path":"Unwanted.md"})).unwrap();
+    assert!(store.database_request(&duplicate).is_err());
+    let deleted = request(
+        &mut store,
+        json!({"op":"delete","operationId":"delete-collection","collectionId":collection.id,"expectedRevision":collection.revision}),
+    );
+    let queued = store.database_pending_projections(20).unwrap();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].entry_id, active.entry_id);
+    drop(store);
+    let mut store = Store::open(&path).unwrap();
+    let restored = request(
+        &mut store,
+        json!({"op":"restore","operationId":"restore-collection","collectionId":collection.id,"expectedRevision":deleted.collections[0].revision}),
+    );
+    let old = restored
+        .entries
+        .iter()
+        .find(|e| e.entry_id == old.entry_id)
+        .unwrap();
+    assert!(old.deleted);
+    assert_eq!(old.path, ".trash/earlier.md");
+    let queued = store.database_pending_projections(20).unwrap();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].entry_id, active.entry_id);
+    assert_eq!(queued[0].kind, zorid_store::DatabaseProjectionKind::Restore);
+}
+
+#[test]
+fn independently_tombstoned_member_stays_deleted_after_collection_restore() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path().join("db")).unwrap();
+    let collection = create(&mut store, "Books");
+    let entry = new_entry(&mut store, &collection, "one");
+    let file = store.read(&entry.entry_id).unwrap().unwrap();
+    store
+        .apply(&MutationRequest {
+            operation_id: op("independent-delete"),
+            mutation: Mutation::Delete {
+                id: entry.entry_id.clone(),
+                expected: file.state.revision,
+                recursive: false,
+            },
+        })
+        .unwrap();
+    assert!(get(&mut store, &collection).entries[0].deleted);
+    let deleted = request(
+        &mut store,
+        json!({"op":"delete","operationId":"delete-collection","collectionId":collection.id,"expectedRevision":collection.revision}),
+    );
+    assert!(store.database_pending_projections(20).unwrap().is_empty());
+    let restored = request(
+        &mut store,
+        json!({"op":"restore","operationId":"restore-collection","collectionId":collection.id,"expectedRevision":deleted.collections[0].revision}),
+    );
+    assert!(restored.entries[0].deleted);
+    assert!(store.database_pending_projections(20).unwrap().is_empty());
+    assert!(store.read(&entry.entry_id).unwrap().unwrap().state.deleted);
+}
+
+#[test]
+fn schema_rename_while_member_is_in_trash_defers_projection_until_individual_restore() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path().join("db")).unwrap();
+    let collection = create(&mut store, "Books");
+    let entry = new_entry(&mut store, &collection, "one");
+    publish(&mut store, &entry, "publish");
+    store
+        .apply(&MutationRequest {
+            operation_id: op("trash-folder"),
+            mutation: Mutation::Create {
+                id: id("trash-folder"),
+                path: VaultPath::new(".trash").unwrap(),
+                kind: EntryKind::Folder,
+                content: None,
+            },
+        })
+        .unwrap();
+    let current = store.read(&entry.entry_id).unwrap().unwrap();
+    store
+        .apply(&MutationRequest {
+            operation_id: op("trash-note"),
+            mutation: Mutation::Move {
+                id: entry.entry_id.clone(),
+                expected: current.state.revision,
+                path: VaultPath::new(".trash/One.md").unwrap(),
+            },
+        })
+        .unwrap();
+    let renamed = update(
+        &mut store,
+        &collection,
+        "Library",
+        input(&collection),
+        false,
+    )
+    .collections
+    .remove(0);
+    assert!(store.database_pending_projections(20).unwrap().is_empty());
+    let current = store.read(&entry.entry_id).unwrap().unwrap();
+    store
+        .apply(&MutationRequest {
+            operation_id: op("restore-note"),
+            mutation: Mutation::Move {
+                id: entry.entry_id.clone(),
+                expected: current.state.revision,
+                path: VaultPath::new("Restored.md").unwrap(),
+            },
+        })
+        .unwrap();
+    let pending = store.database_pending_projections(20).unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].properties["_type"], json!("Library"));
+    assert!(!get(&mut store, &renamed).entries[0].deleted);
+}
+
+#[test]
+fn superseded_unacknowledged_schema_targets_remain_durable_until_current_ack() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path).unwrap();
+    let first = create(&mut store, "Books");
+    let second = update(&mut store, &first, "Library", input(&first), false)
+        .collections
+        .remove(0);
+    let third = update(&mut store, &second, "Reading", input(&second), false)
+        .collections
+        .remove(0);
+    drop(store);
+    let mut store = Store::open(path).unwrap();
+    let pending = store.database_pending_schema_projections(20).unwrap();
+    assert_eq!(pending.len(), 1);
+    let candidate_paths = pending[0]
+        .candidates
+        .iter()
+        .map(|c| c.path.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        candidate_paths,
+        [
+            ".zorid/types/Books.yaml",
+            ".zorid/types/Library.yaml",
+            ".zorid/types/Reading.yaml"
+        ]
+    );
+    assert!(pending[0]
+        .candidates
+        .iter()
+        .all(|c| c.source.contains(&first.id)));
+    assert!(store
+        .database_schema_projection_ack(&first.id, &first.revision)
+        .is_err());
+    assert_eq!(
+        store.database_pending_schema_projections(20).unwrap()[0]
+            .candidates
+            .len(),
+        3
+    );
+    // Simulates the host acknowledgement only; physical cleanup is native's
+    // independent contract and is covered in its filesystem tests.
+    store
+        .database_schema_projection_ack(&third.id, &third.revision)
+        .unwrap();
+    assert!(store
+        .database_pending_schema_projections(20)
+        .unwrap()
+        .is_empty());
+    let fourth = update(&mut store, &third, "Research", input(&third), false)
+        .collections
+        .remove(0);
+    let pending = store.database_pending_schema_projections(20).unwrap();
+    assert_eq!(pending[0].candidates.len(), 1);
+    assert_eq!(
+        pending[0].previous_path.as_deref(),
+        Some(".zorid/types/Reading.yaml")
+    );
+    assert_eq!(pending[0].revision, fourth.revision);
+}
+
+#[test]
+fn pending_schema_candidate_limit_rejects_transaction_without_losing_recovery_targets() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path().join("db")).unwrap();
+    let mut collection = request(
+        &mut store,
+        json!({"op":"create","operationId":"begin","name":"Collection 0"}),
+    )
+    .collections
+    .remove(0);
+    for n in 1..64 {
+        collection = update(
+            &mut store,
+            &collection,
+            &format!("Collection {n}"),
+            vec![],
+            false,
+        )
+        .collections
+        .remove(0);
+    }
+    let command=serde_json::from_value(json!({"op":"update","operationId":"over-limit","collectionId":collection.id,"expectedRevision":collection.revision,"name":"Over limit","properties":[]})).unwrap();
+    assert!(store.database_request(&command).is_err());
+    assert_eq!(get(&mut store, &collection).collections[0], collection);
+    assert_eq!(
+        store.database_pending_schema_projections(1).unwrap()[0]
+            .candidates
+            .len(),
+        64
+    );
+    store
+        .database_schema_projection_ack(&collection.id, &collection.revision)
+        .unwrap();
+    store.database_request(&command).unwrap();
+    assert_eq!(
+        store.database_pending_schema_projections(1).unwrap()[0]
+            .candidates
+            .len(),
+        1
     );
 }

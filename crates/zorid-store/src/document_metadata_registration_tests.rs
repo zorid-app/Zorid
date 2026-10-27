@@ -21,6 +21,18 @@ fn build(store: &mut Store) {
     while !store.pump_document_index(&stage).unwrap().ready {}
     store.publish_document_index(&stage).unwrap();
 }
+
+#[test]
+fn cached_database_state_cannot_replace_an_existing_pin_context(){
+    let(_dir,mut store)=fixture(1);let pin=store.open_document_snapshot().unwrap();let original=pin.database_state().clone();let key=Snapshot::of(pin.generation.id()).key();
+    let raw:String=store.document_cache.connection.query_row("SELECT record FROM document_index_generations WHERE snapshot_key=?1",[&key],|r|r.get(0)).unwrap();let mut header:serde_json::Value=serde_json::from_str(&raw).unwrap();header["manifest"]["database_state"]["revision"]=serde_json::json!("999");store.document_cache.connection.execute("UPDATE document_index_generations SET record=?1 WHERE snapshot_key=?2",params![serde_json::to_string(&header).unwrap(),key]).unwrap();
+    assert_eq!(pin.database_state(),&original);assert!(matches!(store.document_snapshot_manifest(&pin),Err(DocumentIndexError::RebuildRequired)));assert!(matches!(store.read_document_projection(&pin,&EntryId::new("entry-00").unwrap()),Err(DocumentIndexError::RebuildRequired)));
+}
+
+#[test]
+fn published_pin_keeps_original_database_state_after_new_schema_generation(){
+    let(_dir,mut store)=fixture(1);let old=store.open_document_snapshot().unwrap();assert!(old.database_state().collections.is_empty());let created=store.database_request(&crate::DatabaseRequest::Create{operation_id:OperationId::new("collection-create").unwrap(),name:"Books".into(),preset:None,properties:vec![]}).unwrap();build(&mut store);let latest=store.open_document_snapshot().unwrap();assert!(old.database_state().collections.is_empty());assert_eq!(latest.database_state().collections,created.collections);assert_ne!(old.database_state().revision,latest.database_state().revision);store.document_snapshot_manifest(&old).unwrap();store.document_snapshot_manifest(&latest).unwrap();
+}
 fn fixture(count: usize) -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();

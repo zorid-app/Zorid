@@ -196,6 +196,7 @@ pub(crate) fn record_changes(
     now: u64,
 ) -> Result<()> {
     validate_number(now)?;
+    databases::record_file_transitions(tx,changes)?;
     let now_sql = i64::try_from(now)
         .map_err(|_| StoreError::Corrupt("display clock conversion overflow".into()))?;
     let mut entries = Vec::new();
@@ -228,6 +229,7 @@ pub(crate) fn record_family_reload(
     now: u64,
 ) -> Result<()> {
     validate_number(now)?;
+    databases::record_file_transitions(tx,changes)?;
     let now =
         i64::try_from(now).map_err(|_| StoreError::Corrupt("display clock overflow".into()))?;
     for change in changes {

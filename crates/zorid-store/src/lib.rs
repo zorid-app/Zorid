@@ -84,7 +84,7 @@ mod managed_records;
 pub mod databases;
 pub use databases::{DatabaseCollection, DatabaseDatatype, DatabaseEntry, DatabaseOption, DatabaseOptionInput,
     DatabaseProperty, DatabasePropertyInput, DatabaseProjection, DatabaseProjectionKind,
-    DatabaseQueryState, DatabaseRequest, DatabaseSchemaProjection, DatabaseSnapshot};
+    DatabaseQueryState, DatabaseRequest, DatabaseSchemaCandidate, DatabaseSchemaProjection, DatabaseSnapshot};
 pub use managed_records::{
     ManagedChange, ManagedChangePage, ManagedCollection, ManagedCommit, ManagedExportPage,
     ManagedIntentDisposition, ManagedIntentInput, ManagedIntentPage, ManagedIntentRef,

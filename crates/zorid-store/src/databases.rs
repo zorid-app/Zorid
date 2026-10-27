@@ -16,14 +16,18 @@ const MAX_COMMAND_BYTES: usize = 10 * 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ENTRY_BYTES: usize = 64 * 1024;
 const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
+const MAX_SCHEMA_CANDIDATES: usize = 64;
+const MAX_SCHEMA_CANDIDATE_BYTES: usize = 8 * 1024 * 1024;
 
 pub(super) const SCHEMA: &[(&str, &str)] = &[
     ("local_database_state", "CREATE TABLE local_database_state (singleton INTEGER PRIMARY KEY CHECK(singleton=1), revision INTEGER NOT NULL CHECK(revision>=0))"),
     ("local_collections", "CREATE TABLE local_collections (id TEXT PRIMARY KEY NOT NULL, name_key TEXT NOT NULL UNIQUE, revision TEXT NOT NULL, deleted INTEGER NOT NULL CHECK(deleted IN (0,1)), model TEXT NOT NULL CHECK(length(model)<=1048576), projected_path TEXT, projected_source TEXT)"),
     ("local_collection_entries", "CREATE TABLE local_collection_entries (entry_id TEXT PRIMARY KEY NOT NULL, collection_id TEXT NOT NULL REFERENCES local_collections(id), revision TEXT NOT NULL, deleted INTEGER NOT NULL CHECK(deleted IN (0,1)), values_json TEXT NOT NULL CHECK(length(values_json)<=65536), preserved_json TEXT NOT NULL CHECK(length(preserved_json)<=65536), original_path TEXT NOT NULL, projected_properties TEXT NOT NULL CHECK(length(projected_properties)<=1048576))"),
     ("local_collection_members", "CREATE INDEX local_collection_members ON local_collection_entries(collection_id,entry_id)"),
+    ("local_collection_trash_cohort", "CREATE TABLE local_collection_trash_cohort (collection_id TEXT NOT NULL REFERENCES local_collections(id), entry_id TEXT NOT NULL REFERENCES local_collection_entries(entry_id), PRIMARY KEY(collection_id,entry_id))"),
     ("local_database_projections", "CREATE TABLE local_database_projections (entry_id TEXT PRIMARY KEY NOT NULL REFERENCES local_collection_entries(entry_id), kind TEXT NOT NULL CHECK(kind IN ('properties','trash','restore')))"),
     ("local_database_schema_projections", "CREATE TABLE local_database_schema_projections (collection_id TEXT PRIMARY KEY NOT NULL REFERENCES local_collections(id))"),
+    ("local_database_schema_candidates", "CREATE TABLE local_database_schema_candidates (collection_id TEXT NOT NULL REFERENCES local_collections(id), revision TEXT NOT NULL, path TEXT NOT NULL, source TEXT NOT NULL CHECK(length(source)<=1048576), deleted INTEGER NOT NULL CHECK(deleted IN (0,1)), PRIMARY KEY(collection_id,revision))"),
     ("local_database_operations", "CREATE TABLE local_database_operations (operation_id TEXT PRIMARY KEY NOT NULL, request TEXT NOT NULL CHECK(length(request)<=10485760), response TEXT NOT NULL CHECK(length(response)<=16777216))"),
     ("local_database_history", "CREATE TABLE local_database_history (sequence INTEGER PRIMARY KEY AUTOINCREMENT, operation_id TEXT NOT NULL REFERENCES local_database_operations(operation_id) DEFERRABLE INITIALLY DEFERRED, collection_id TEXT NOT NULL, entry_id TEXT, record TEXT NOT NULL CHECK(length(record)<=1048576))"),
     ("local_database_history_collection", "CREATE INDEX local_database_history_collection ON local_database_history(collection_id,sequence)"),
@@ -213,6 +217,17 @@ pub struct DatabaseSchemaProjection {
     pub previous_path: Option<String>,
     pub previous_source: Option<String>,
     pub deleted: bool,
+    /// Exact generated targets which may have reached disk before a lost ACK.
+    /// Native may clean only exact byte matches, preserving external content.
+    pub candidates: Vec<DatabaseSchemaCandidate>,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DatabaseSchemaCandidate {
+    pub revision: String,
+    pub path: String,
+    pub source: String,
+    pub deleted: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -362,6 +377,14 @@ fn save_collection(tx: &Connection, collection: &DatabaseCollection) -> Result<(
         "INSERT OR IGNORE INTO local_database_schema_projections(collection_id) VALUES(?1)",
         [&collection.id],
     )?;
+    let candidate = schema_candidate(collection)?;
+    tx.execute("INSERT INTO local_database_schema_candidates(collection_id,revision,path,source,deleted) VALUES(?1,?2,?3,?4,?5)",params![collection.id,candidate.revision,candidate.path,candidate.source,candidate.deleted])?;
+    let(count,bytes):(i64,i64)=tx.query_row("SELECT count(*),coalesce(sum(length(CAST(source AS BLOB))+length(CAST(path AS BLOB))+128),0) FROM local_database_schema_candidates WHERE collection_id=?1",[&collection.id],|r|Ok((r.get(0)?,r.get(1)?)))?;
+    if count > MAX_SCHEMA_CANDIDATES as i64 || bytes > MAX_SCHEMA_CANDIDATE_BYTES as i64 {
+        return Err(invalid(
+            "Finish pending collection definition publication before further schema edits",
+        ));
+    }
     Ok(())
 }
 fn build_properties(
@@ -727,12 +750,17 @@ fn entry_snapshot(
     member: &Member,
 ) -> Result<DatabaseEntry> {
     let file = entry_content::read_metadata_row(tx, &member.entry_id)?;
+    let file_unavailable = file.as_ref().is_none_or(|f| {
+        f.state.deleted
+            || f.state.kind != EntryKind::File
+            || f.state.path.as_str().split('/').any(|p| p.starts_with('.'))
+    });
     let pending = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM local_database_projections WHERE entry_id=?1)",
         [member.entry_id.as_str()],
         |r| r.get(0),
     )?;
-    Ok(DatabaseEntry{entry_id:member.entry_id.clone(),collection_id:member.collection_id.clone(),revision:member.revision.clone(),file_revision:file.as_ref().map(|f|f.state.revision.clone()),path:file.map(|f|f.state.path.as_str().to_owned()).unwrap_or_else(||member.original_path.clone()),values:member.values.clone(),deleted:member.deleted||collection.deleted,pending_projection:pending,problems:member.preserved.keys().map(|id|(id.clone(),"This value was authored for an earlier datatype. Correct or clear it to finish conversion.".into())).collect()})
+    Ok(DatabaseEntry{entry_id:member.entry_id.clone(),collection_id:member.collection_id.clone(),revision:member.revision.clone(),file_revision:file.as_ref().map(|f|f.state.revision.clone()),path:file.map(|f|f.state.path.as_str().to_owned()).unwrap_or_else(||member.original_path.clone()),values:member.values.clone(),deleted:member.deleted||collection.deleted||file_unavailable,pending_projection:pending,problems:member.preserved.keys().map(|id|(id.clone(),"This value was authored for an earlier datatype. Correct or clear it to finish conversion.".into())).collect()})
 }
 fn collection_member_ids(tx: &Connection, id: &str) -> Result<Vec<EntryId>> {
     let ids=tx.prepare("SELECT entry_id FROM local_collection_entries WHERE collection_id=?1 ORDER BY entry_id LIMIT ?2")?.query_map(params![id,(MAX_ENTRIES+1) as i64],|r|r.get::<_,String>(0))?.collect::<std::result::Result<Vec<_>,_>>()?;
@@ -820,6 +848,81 @@ fn collection_body(tx: &Connection, id: &EntryId) -> Result<StoredEntry> {
         return Err(invalid("Collection entry file is unavailable"));
     }
     Ok(entry)
+}
+fn require_active_file(tx: &Connection, id: &EntryId) -> Result<()> {
+    let file = entry_content::read_metadata_row(tx, id)?
+        .ok_or_else(|| invalid("Collection entry file is missing"))?;
+    if file.state.deleted
+        || file.state.kind != EntryKind::File
+        || file
+            .state
+            .path
+            .as_str()
+            .split('/')
+            .any(|part| part.starts_with('.'))
+    {
+        return Err(invalid("Collection entry is in Trash or unavailable"));
+    }
+    Ok(())
+}
+fn file_visible(tx: &Connection, id: &EntryId) -> Result<bool> {
+    Ok(
+        entry_content::read_metadata_row(tx, id)?.is_some_and(|file| {
+            !file.state.deleted
+                && file.state.kind == EntryKind::File
+                && !file
+                    .state
+                    .path
+                    .as_str()
+                    .split('/')
+                    .any(|part| part.starts_with('.'))
+        }),
+    )
+}
+
+/// A note independently restored from Trash remains in its original collection
+/// and receives the latest schema projection. Trashing it suspends only its
+/// ordinary property publication, never another collection's deletion cohort.
+pub(crate) fn record_file_transitions(
+    tx: &Connection,
+    changes: &[zorid_core::EntryChange],
+) -> Result<()> {
+    for change in changes {
+        let Some(before) = &change.before else {
+            continue;
+        };
+        if before.path == change.after.path && before.deleted == change.after.deleted {
+            continue;
+        }
+        let Some(member) = member(tx, &change.after.id)? else {
+            continue;
+        };
+        let collection = require_collection(tx, &member.collection_id, None, false)?;
+        let visible = !change.after.deleted
+            && change.after.kind == EntryKind::File
+            && !change
+                .after
+                .path
+                .as_str()
+                .split('/')
+                .any(|part| part.starts_with('.'));
+        if !visible {
+            if !member.deleted {
+                tx.execute("DELETE FROM local_database_projections WHERE entry_id=?1 AND kind='properties'",[member.entry_id.as_str()])?;
+            }
+        } else if member.deleted || collection.deleted {
+            queue(tx, &member.entry_id, DatabaseProjectionKind::Trash)?;
+        } else if before.deleted
+            || before
+                .path
+                .as_str()
+                .split('/')
+                .any(|part| part.starts_with('.'))
+        {
+            queue(tx, &member.entry_id, DatabaseProjectionKind::Properties)?;
+        }
+    }
+    Ok(())
 }
 fn validate_path(path: &str) -> Result<VaultPath> {
     let path = VaultPath::new(path)?;
@@ -1019,9 +1122,9 @@ impl Store {
                 "collection revision counter exhausted".into(),
             ));
         }
-        presentation::record_changes(
+        presentation::record_family_reload(
             &tx,
-            ChangeOrigin::LocalCommand {
+            ProjectionOrigin::LocalCommand {
                 operation_id: operation.clone(),
             },
             &[],
@@ -1190,15 +1293,17 @@ fn execute(tx: &Connection, operation: &OperationId, request: &DatabaseRequest) 
             for (old, entry) in updates {
                 history(tx, operation, collection_id, Some(&entry.entry_id), &old)?;
                 save_member(tx, &entry)?;
-                queue(
-                    tx,
-                    &entry.entry_id,
-                    if entry.deleted {
-                        DatabaseProjectionKind::Trash
-                    } else {
-                        DatabaseProjectionKind::Properties
-                    },
-                )?;
+                if entry.deleted || file_visible(tx, &entry.entry_id)? {
+                    queue(
+                        tx,
+                        &entry.entry_id,
+                        if entry.deleted {
+                            DatabaseProjectionKind::Trash
+                        } else {
+                            DatabaseProjectionKind::Properties
+                        },
+                    )?;
+                }
             }
             Ok(collection_id.clone())
         }
@@ -1258,6 +1363,7 @@ fn execute(tx: &Connection, operation: &OperationId, request: &DatabaseRequest) 
             if entry.deleted {
                 return Err(invalid("Entry is deleted"));
             }
+            require_active_file(tx, entry_id)?;
             let old = entry.clone();
             apply_values(&collection, &mut entry.values, values)?;
             for id in values.keys() {
@@ -1280,6 +1386,7 @@ fn execute(tx: &Connection, operation: &OperationId, request: &DatabaseRequest) 
             if entry.deleted {
                 return Err(invalid("Entry is deleted"));
             }
+            require_active_file(tx, entry_id)?;
             let collection = require_collection(tx, &entry.collection_id, None, true)?;
             let source = collection_body(tx, entry_id)?
                 .content
@@ -1341,15 +1448,53 @@ fn execute(tx: &Connection, operation: &OperationId, request: &DatabaseRequest) 
             collection.deleted = deleting;
             collection.revision = new_revision();
             save_collection(tx, &collection)?;
+            if deleting {
+                tx.execute(
+                    "DELETE FROM local_collection_trash_cohort WHERE collection_id=?1",
+                    [collection_id],
+                )?;
+            }
             for id in collection_member_ids(tx, collection_id)? {
                 let mut entry = require_member(tx, &id, None)?;
                 history(tx, operation, collection_id, Some(&id), &entry)?;
+                let file = entry_content::read_metadata_row(tx, &id)?;
                 if deleting {
-                    let file = entry_content::read_metadata_row(tx, &id)?;
-                    if let Some(file) = file {
-                        if !file.state.path.as_str().starts_with(".trash/") {
-                            entry.original_path = file.state.path.as_str().into();
-                        }
+                    let eligible = !entry.deleted
+                        && file.as_ref().is_some_and(|file| {
+                            !file.state.deleted
+                                && file.state.kind == EntryKind::File
+                                && !file
+                                    .state
+                                    .path
+                                    .as_str()
+                                    .split('/')
+                                    .any(|part| part.starts_with('.'))
+                        });
+                    if !eligible {
+                        // Independently trashed/missing files are not this
+                        // deletion's work and must not be resurrected later.
+                        tx.execute(
+                            "DELETE FROM local_database_projections WHERE entry_id=?1",
+                            [id.as_str()],
+                        )?;
+                        continue;
+                    }
+                    tx.execute("INSERT INTO local_collection_trash_cohort(collection_id,entry_id) VALUES(?1,?2)",params![collection_id,id.as_str()])?;
+                    entry.original_path = file.as_ref().unwrap().state.path.as_str().into();
+                } else {
+                    let eligible:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM local_collection_trash_cohort WHERE collection_id=?1 AND entry_id=?2)",params![collection_id,id.as_str()],|r|r.get(0))?;
+                    if !eligible {
+                        continue;
+                    }
+                    if file
+                        .as_ref()
+                        .is_none_or(|f| f.state.deleted || f.state.kind != EntryKind::File)
+                    {
+                        tx.execute(
+                            "DELETE FROM local_database_projections WHERE entry_id=?1",
+                            [id.as_str()],
+                        )?;
+                        continue;
                     }
                 }
                 entry.deleted = deleting;
@@ -1648,13 +1793,7 @@ fn validate_projected_source(projection: &DatabaseProjection, source: &str) -> R
     }
     Ok(())
 }
-fn schema_projection(tx: &Connection, id: &str) -> Result<DatabaseSchemaProjection> {
-    let collection = require_collection(tx, id, None, false)?;
-    let (previous_path, previous_source) = tx.query_row(
-        "SELECT projected_path,projected_source FROM local_collections WHERE id=?1",
-        [id],
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    )?;
+fn schema_candidate(collection: &DatabaseCollection) -> Result<DatabaseSchemaCandidate> {
     // JSON-quoted scalars are valid YAML 1.2 and avoid ambiguous dates/booleans.
     let mut source = format!(
         "version: 1\nid: {}\nname: {}\nproperties:",
@@ -1699,14 +1838,37 @@ fn schema_projection(tx: &Connection, id: &str) -> Result<DatabaseSchemaProjecti
             }
         }
     }
-    Ok(DatabaseSchemaProjection {
-        collection_id: id.into(),
+    bounded(&source, MAX_REQUEST_BYTES)?;
+    Ok(DatabaseSchemaCandidate {
         revision: collection.revision.clone(),
         path: format!(".zorid/types/{}.yaml", collection.name),
         source,
+        deleted: collection.deleted,
+    })
+}
+fn schema_projection(tx: &Connection, id: &str) -> Result<DatabaseSchemaProjection> {
+    let collection = require_collection(tx, id, None, false)?;
+    let candidate = schema_candidate(&collection)?;
+    let (previous_path, previous_source) = tx.query_row(
+        "SELECT projected_path,projected_source FROM local_collections WHERE id=?1",
+        [id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let candidates=tx.prepare("SELECT revision,path,source,deleted FROM local_database_schema_candidates WHERE collection_id=?1 ORDER BY rowid LIMIT ?2")?.query_map(params![id,(MAX_SCHEMA_CANDIDATES+1) as i64],|r|Ok(DatabaseSchemaCandidate{revision:r.get(0)?,path:r.get(1)?,source:r.get(2)?,deleted:r.get(3)?}))?.collect::<std::result::Result<Vec<_>,_>>()?;
+    if candidates.len() > MAX_SCHEMA_CANDIDATES {
+        return Err(StoreError::Corrupt(
+            "Too many pending schema candidates".into(),
+        ));
+    }
+    Ok(DatabaseSchemaProjection {
+        collection_id: id.into(),
+        revision: candidate.revision,
+        path: candidate.path,
+        source: candidate.source,
         previous_path,
         previous_source,
         deleted: collection.deleted,
+        candidates,
     })
 }
 impl Store {
@@ -1822,10 +1984,20 @@ impl Store {
         }
         let tx = self.connection.unchecked_transaction()?;
         let ids=tx.prepare("SELECT collection_id FROM local_database_schema_projections ORDER BY collection_id LIMIT ?1")?.query_map([limit],|r|r.get::<_,String>(0))?.collect::<std::result::Result<Vec<_>,_>>()?;
-        let result = ids
-            .into_iter()
-            .map(|id| schema_projection(&tx, &id))
-            .collect::<Result<Vec<_>>>()?;
+        let mut result = Vec::new();
+        let mut bytes = 2;
+        for id in ids {
+            let item = schema_projection(&tx, &id)?;
+            let size = bounded(&item, MAX_RESPONSE_BYTES)?.len() + 1;
+            if bytes + size > MAX_RESPONSE_BYTES {
+                if result.is_empty() {
+                    return Err(invalid("Schema projection exceeds response budget"));
+                }
+                break;
+            }
+            bytes += size;
+            result.push(item);
+        }
         bounded(&result, MAX_RESPONSE_BYTES)?;
         tx.commit()?;
         Ok(result)
@@ -1843,6 +2015,10 @@ impl Store {
         )?;
         tx.execute(
             "DELETE FROM local_database_schema_projections WHERE collection_id=?1",
+            [id],
+        )?;
+        tx.execute(
+            "DELETE FROM local_database_schema_candidates WHERE collection_id=?1",
             [id],
         )?;
         tx.commit()?;

@@ -837,7 +837,7 @@ fn pinned_header(
     if !h.published {
         return Err(IndexError::SnapshotExpired.into());
     }
-    if h.manifest.manifest()? != *pin.generation.manifest() {
+    if h.manifest.manifest()? != *pin.generation.manifest() || h.manifest.database_state != pin.database_state {
         return Err(DocumentIndexError::RebuildRequired);
     }
     Ok(h)
