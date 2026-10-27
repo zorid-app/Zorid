@@ -10,7 +10,9 @@ use zorid_document::{
     DocumentMetadata, MetadataRequest, DIALECT_VERSION, MAX_SOURCE_BYTES, SCHEMA_VERSION,
 };
 
-pub const INDEX_SCHEMA_VERSION: u32 = 1;
+// Version 2 excludes dot-path retained files from the note namespace. Old
+// persisted generations must rebuild even when the authority watermark matches.
+pub const INDEX_SCHEMA_VERSION: u32 = 2;
 /// Result shape and dialect both invalidate derived extraction records.
 pub fn document_extraction_version() -> String {
     format!("{}:metadata-{}", DIALECT_VERSION, SCHEMA_VERSION)

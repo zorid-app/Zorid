@@ -584,7 +584,11 @@ fn capture_authority(tx: &Connection) -> IndexResult<DocumentManifest> {
     if minimum < 0 || minimum as u64 > MAX_GENERATION_METADATA_BYTES as u64 {
         return Err(IndexError::GenerationLimit.into());
     }
-    let entries = entry_content::read_visible_metadata(tx)?;
+    let mut entries = entry_content::read_visible_metadata(tx)?;
+    // Retained dot-path files (including trash) remain authoritative, but are
+    // outside the note namespace, just as in the desktop's normal inventory.
+    // Exclude them before building resolver/relationship data, not just rows.
+    entries.retain(|entry| !entry.state.path.as_str().split('/').any(|part| part.starts_with('.')));
     let presentations = entries
         .iter()
         .map(|e| presentation::presentation(tx, &e.state))
@@ -1968,6 +1972,55 @@ mod cache_snapshot_tests {
         let stage = store.begin_document_index().unwrap();
         while !store.pump_document_index(&stage).unwrap().ready {}
         store.publish_document_index(&stage).unwrap();
+    }
+
+    #[test]
+    fn pre_dot_namespace_cache_requires_rebuild_at_the_same_authority_watermark() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path().join("store.sqlite")).unwrap();
+        store.apply(&create("note")).unwrap();
+        let mut retained = create("retained");
+        if let Mutation::Create { path, .. } = &mut retained.mutation {
+            *path = zorid_core::VaultPath::new(".retained.md").unwrap();
+        }
+        store.apply(&retained).unwrap();
+        store.initialize_document_index().unwrap();
+        build(&mut store);
+        let tx = store.document_transaction(TransactionBehavior::Immediate).unwrap();
+        let mut c = control(&tx).unwrap();
+        let mut h = header(&tx, &c.head.as_ref().unwrap().id().unwrap()).unwrap();
+        let watermark = source(&tx).unwrap();
+        // Reconstruct the previous policy's complete, valid hidden-bearing
+        // generation. Only its semantic tag changes below, never authority.
+        h.manifest.entries = entry_content::read_visible_metadata(&tx.authority).unwrap();
+        h.manifest.presentations = h.manifest.entries.iter()
+            .map(|entry| presentation::presentation(&tx.authority, &entry.state).unwrap()).collect();
+        let witness = h.manifest.manifest().unwrap().witness(&EntryId::new("retained").unwrap()).unwrap();
+        let row = IndexRecord::text(witness.clone(), &MetadataRequest {
+            entry_id: witness.entry().id.clone(), content_revision: witness.entry().revision.clone(), source: "needle".into(),
+        }, true).unwrap();
+        tx.execute("INSERT OR REPLACE INTO document_index_rows VALUES(?1,?2,?3,?4)",
+            params![h.snapshot.key(), "retained", encode(&Record::of(&row)).unwrap(), b"needle".as_slice()]).unwrap();
+        tx.execute("UPDATE document_index_generations SET record=?1 WHERE snapshot_key=?2",
+            params![encode(&h).unwrap(), h.snapshot.key()]).unwrap();
+        let (_, legacy) = builder(&tx, &h).unwrap().finish().unwrap().into_parts();
+        assert!(legacy.record(&EntryId::new("retained").unwrap()).is_some());
+        assert!(h.published);
+        h.snapshot.schema = 1;
+        c.head = Some(h.snapshot.clone());
+        tx.execute("UPDATE document_index_generations SET record=?1 WHERE snapshot_key=?2",
+            params![encode(&h).unwrap(), h.snapshot.key()]).unwrap();
+        tx.execute("UPDATE document_index_control SET record=?1 WHERE singleton=1", [encode(&c).unwrap()]).unwrap();
+        tx.commit().unwrap();
+        let (unchanged, status) = store.document_index_status_with_source().unwrap();
+        assert_eq!(unchanged, watermark);
+        assert!(matches!(status, DocumentIndexStatus::RebuildRequired));
+        store.rebuild_document_index().unwrap(); build(&mut store);
+        let fresh = store.open_document_snapshot().unwrap();
+        assert!(fresh.generation().record(&EntryId::new("note").unwrap()).is_some());
+        assert!(fresh.generation().record(&EntryId::new("retained").unwrap()).is_none());
+        assert_eq!(store.read(&EntryId::new("retained").unwrap()).unwrap().unwrap().content.unwrap(), b"needle");
+        store.close_document_snapshot(fresh);
     }
 
     #[test]

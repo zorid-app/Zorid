@@ -100,7 +100,7 @@ fn property_definitions_use_exact_saved_root_source_in_each_retained_generation(
     create(&mut vault, "settings", "Properties.yaml", settings);
     create(&mut vault, "author", "Author.md", "---\ntype: author\n---\n");
     create(&mut vault, "book", "Book.md", "---\nauthor: '[[Author]]'\n---\n");
-    create(&mut vault, "base", "Books.base", "filters: file.path == \"Author.md\"\nviews:\n  - type: table\n    name: Authors\n    order: [file.path, note.bookCount]\n");
+    create(&mut vault, "base", "Books.base", "filters: type == \"author\"\nviews:\n  - type: table\n    name: Authors\n    order: [file.path, note.bookCount]\n");
     vault.initialize_document_index().unwrap();
     build(&mut vault);
     let old = vault.open_document_snapshot().unwrap();
@@ -119,6 +119,35 @@ fn property_definitions_use_exact_saved_root_source_in_each_retained_generation(
     let fresh = vault.open_document_snapshot().unwrap();
     expect_code(vault.query_base_document_sources(&fresh, &id("base"), None, Some(&attached), None, &options), "property_source_mismatch");
     assert!(vault.query_base_document(&fresh, &id("base"), &options).is_ok());
+    for (name, path) in [("trash", ".trash"), ("trash-operation", ".trash/operation")] {
+        apply(&mut vault, &format!("create-{name}"), Mutation::Create {
+            id: id(name), path: VaultPath::new(path).unwrap(), kind: EntryKind::Folder, content: None,
+        });
+    }
+    let retained_source = vault.read(&id("author")).unwrap().unwrap().content.unwrap();
+    let original_book = vault.read(&id("book")).unwrap().unwrap().content.unwrap();
+    let expected = revision(&vault, "author");
+    apply(&mut vault, "trash-author", Mutation::Move {
+        id: id("author"), expected, path: VaultPath::new(".trash/operation/Author.md").unwrap(),
+    });
+    build(&mut vault);
+    let after_trash = vault.open_document_snapshot().unwrap();
+    let authors = vault.query_base_document(&after_trash, &id("base"), &options).unwrap();
+    assert!(authors.value.result.rows.is_empty(), "trash must not supply author rows or rollups");
+    let picker = vault.query_property_targets_document(&after_trash, None, &QueryOptions {
+        current_entry_id: Some(id("book")), ..QueryOptions::default()
+    }).unwrap();
+    assert!(picker.value.relation_targets["author"].is_empty());
+    assert!(matches!(&picker.value.current_relation_values.unwrap().values["author"], zorid_bases::BaseValue::Link {target: None, ..}), "the saved book link must become unresolved");
+    assert!(vault.document_relationships(&after_trash, 10, 64 * 1024).unwrap().value.edges().iter().all(|edge| edge.target().is_none()));
+    let retained = vault.read(&id("author")).unwrap().unwrap();
+    assert_eq!(retained.state.path.as_str(), ".trash/operation/Author.md");
+    assert_eq!(retained.content.unwrap(), retained_source);
+    assert!(vault.list().unwrap().iter().any(|entry| entry.id == id("author")), "ordinary authority enumeration retains trash");
+    assert_eq!(vault.read(&id("book")).unwrap().unwrap().content.unwrap(), original_book);
+    // Retained generations preserve their original, pre-trash identity.
+    assert_eq!(vault.query_base_document(&fresh, &id("base"), &options).unwrap().value.result.rows.len(), 1);
+    vault.close_document_snapshot(after_trash);
     vault.close_document_snapshot(old);
     vault.close_document_snapshot(fresh);
 }
