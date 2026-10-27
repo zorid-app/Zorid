@@ -169,6 +169,8 @@ export class UI {
       if (collapsed) await this.click(`[role="treeitem"][data-path=${JSON.stringify(folder)}]`);
     }
     await this.click(selector);
+    const breadcrumb = file.replace(/\.(?:md|base)$/i, '').replaceAll('/', ' / ');
+    await this.wait(`return document.querySelector('.pane.is-active .breadcrumbs')?.textContent===${JSON.stringify(breadcrumb)};`, 'Requested file is visibly mounted');
   }
   async command(label) {
     await this.click('.ribbon [data-hotkey-command="command-palette"]');
