@@ -1,5 +1,9 @@
 # User findings queue
 
+## Tauri desktop performance feasibility — 2026-10-27
+
+User authorizes an isolated prototype and matched Electron/Tauri comparison; no production migration is decided. Root owns `codex/tauri-benchmark`, `.worktrees/tauri-benchmark`, based on `8507a855`; worker `tauri_shell` owns the standalone shell and `benchmark_audit` reviews transport and measurement. The benchmark reuses identical installed renderer assets, a common disposable Node broker, and the installed Rust host. Shell-only timing and RSS are distinct from a future Node-free integration. Native input/IME, large-vault behavior, platform parity and production installation size require separate evidence. Implementation and runtime results are tracked in `docs/history/tauri-benchmark-20261027.md`.
+
 ## Native file identity across macOS device changes — 2026-10-27
 
 User reports the persistent availability warning, then explicitly requests fixing

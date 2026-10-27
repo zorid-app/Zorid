@@ -9,6 +9,8 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+**Tauri feasibility benchmark — 2026-10-27.** User explicitly requests the proposed isolated shell prototype and matched comparison. Root owns `codex/tauri-benchmark` / `.worktrees/tauri-benchmark`, base `8507a855`; production shell remains Electron. Common installed editor + Node broker + Rust host isolates shell differences, with disposable vault/data roots. Tauri shell worker owns only the standalone prototype; audit worker owns transport review. Results, evidence, limitations and commits are recorded in `docs/history/tauri-benchmark-20261027.md`; prototype code stays isolated from main.
+
 **Native filesystem identity repaired — 2026-10-27.** User explicitly requested
 fixing the cause, beyond compact warning UX at `460f8dbc`. Native owner
 `bases_fixture_admission` delivered reviewed `b935857e`, composed as `64e605e4`;
