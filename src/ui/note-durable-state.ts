@@ -216,8 +216,10 @@ export class DurableNoteState {
   });}
   private async resume(validate:()=>void):Promise<void>{
     const op=this.state!.operation!;
-    // Resolve an uncertain checkpoint before authorizing its next phase.
-    if(this.uncertain)await this.persist();
+    // Persist the exact retained phase before any authorizing continuation.
+    // Deterministic serialization/budget failures happen before `uncertain`
+    // exists; a later retry must not prepare/commit that uncheckpointed state.
+    await this.persist();
     if(op.planningRejected){await this.releaseOperationCapture(op);this.state!.operation=undefined;await this.persist();this.changed();return;}
     if(!op.plan){
       this.checkInput(op);validate();

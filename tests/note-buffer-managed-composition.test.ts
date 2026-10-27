@@ -15,11 +15,11 @@ function deferred(){let resolve!:()=>void;const promise=new Promise<void>(r=>{re
 /** Native-side fixtures return a declared projection. This test exercises actual
  * NoteBuffer checkpoints, exact intent replay and committed read reconciliation;
  * native parsing/authority rules are tested at their Rust ownership boundary. */
-async function fixture(){
+async function fixture(initial=original){
   const scope={vaultId:'authority',clientId:'client'},checkpoints=new Map<string,Checkpoint>();
   const plans:{plan:DurableWritePlan;input:DurableWriteInput}[]=[],intents=new Map<string,DurableWriteIntent>();
-  const adapter=new MemoryAdapter({'One.md':original}) as MemoryAdapter&{durableWrites:DurableWrites};
-  let current:DurableWriteRead={entryId:'entry',revision:'r1',path:'One.md',content:original,stat:{ctime:1,mtime:1,size:original.length}};
+  const adapter=new MemoryAdapter({'One.md':initial}) as MemoryAdapter&{durableWrites:DurableWrites};
+  let current:DurableWriteRead={entryId:'entry',revision:'r1',path:'One.md',content:initial,stat:{ctime:1,mtime:1,size:initial.length}};
   let commits=0,acks=0,composes=0,sequence=1,failCommit=false,failAck=false;
   let commitGate:Promise<void>|undefined,commitStarted:(()=>void)|undefined,composeGate:Promise<void>|undefined,composeStarted:(()=>void)|undefined;
   let tamperCommitted=false;
@@ -39,7 +39,7 @@ async function fixture(){
     planWrite:async input=>{
       assert.ok(plans.length<3,'canonical reconciliation must not enter an automatic save loop');
       const content=input.content.replace(oldHeader,newHeader);
-      const plan:DurableWritePlan={version:1,...scope,operationId:input.operationId,entryId:'entry',encodedPlan:JSON.stringify({content}),canonicalContent:content};
+      const plan:DurableWritePlan={version:1,...scope,operationId:input.operationId,entryId:'entry',encodedPlan:JSON.stringify({content_base64:Buffer.from(content).toString('base64')}),canonicalContent:content};
       plans.push({plan,input:structuredClone(input)});return structuredClone(plan);
     },
     prepare:async plan=>{
@@ -146,4 +146,15 @@ test('definite managed-source planning conflict retains the original draft and d
   assert.equal(f.buffer.hasRecoveryConflict,true);assert.equal(f.buffer.text,draft);assert.equal(f.buffer.savedText,original);
   await assert.rejects(f.buffer.flush(),/draft preserved/);assert.equal(attempts,1);assert.equal(f.state().operation,undefined);
   const reopened=await f.reopen();assert.equal(reopened.hasRecoveryConflict,true);assert.equal(reopened.text,draft);await stop(reopened);await stop(f.buffer);
+});
+
+test('repeated canonical checkpoint overflow cannot prepare or commit an uncheckpointed operation',async()=>{
+  const largeBody='\\'.repeat(4*1024*1024),f=await fixture(oldHeader+largeBody),draft=oldHeader+largeBody.slice(0,-1);
+  let prepares=0;const prepare=f.writes.prepare;f.writes.prepare=async plan=>{prepares++;return prepare(plan);};
+  f.buffer.update(draft);
+  for(let attempt=0;attempt<3;attempt++)await assert.rejects(f.buffer.flush(),error=>(error as {code?:string}).code==='checkpoint_too_large');
+  assert.equal(f.plans.length,1,'retry retains the original inert plan');assert.equal(prepares,0);assert.equal(f.commits,0);
+  assert.equal(f.buffer.text,draft);assert.equal(f.current.content,oldHeader+largeBody);
+  assert.equal(f.state().draft,draft);assert.equal(f.state().operation,undefined,'last durable checkpoint retains the draft before the oversized operation');
+  await stop(f.buffer);
 });
