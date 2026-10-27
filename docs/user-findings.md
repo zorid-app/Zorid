@@ -2,6 +2,23 @@
 
 ## Bases actual acceptance findings — 2026-10-22
 
+Latest completed cutoff2026-10-26/archive010: durable fixture admission is
+boundedly verified in Config002 (all1023files/12Records/1005Export at34408ms),
+but whole Config002 still fails1/1 at the rendered twelve-record baseline with
+an indexing-wait error. Config001's original929/1023 timeout stays preserved.
+Cache generation6/watermark1026 matches core; metadata/index refresh repairs and
+matching frontend011 build are source/build results awaiting native rerun.
+
+Normalweb007 passes all five UI phases but whole acceptance fails read-only
+Worker Inspector reply deadline; preserve the explicit identity gate. Current
+reference typed005 passes13phases/111checks/856trustedinputs including native
+Date/DateTime exact fields/source/membership/reopen. Final restart is cleared
+baseline only; final cleanup requires SIGKILL/no leaks/private stale socket.
+Visual003 completes baseline only before stale Views locator; active successor
+is outside this cutoff. Vendor code/captures stay private. Source/build checks
+and archive010 preserve these limits; full Zorid native/visual/web and integration
+acceptance remains open.
+
 Next completed cutoff2026-10-26, archive009: Filter004/e184f114/frontend009
 FAILS83/23 after three complete String cases. Negated starts-with source and
 membership pass, then structured reopen fails with raw expression. Cause remains

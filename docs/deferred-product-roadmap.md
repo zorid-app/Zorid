@@ -9,6 +9,32 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Latest completed cutoff (2026-10-26, archive010; source throughc73b0805):
+Config001/e184/frontend009 FAILS1/1 at929/1023 durablefiles after180029ms.
+Config002/c0f5/frontend010 still FAILS1/1, but unchanged1023files/12Records/
+1005Export admission completes34408ms. The rendered twelve-record baseline then
+fails with an indexing-wait error despite published generation6/watermark1026
+matching the core. Reviewed metadata/index refresh fixes and desktop011/95338
+PASS333files producerc73 need a fresh runtime pass; desktop010/19330 also passes.
+Both completed config cleanups0/null/no leaks and exact provenance verify.
+
+Normalweb007/bd870 passes all five UI phases/11actions but FAILS read-only Worker
+Inspector Runtime.evaluate deadline; no waived identity proof. Normal Chrome/
+Vite cleanup and final provenance pass. Current reference bootstrap005 PASSES3/12;
+full typed005 PASSES13phases/111checks/856trustedCDP inputs incl native Date/
+DateTime exact fields/source/membership/reopen. Final restart verifies cleared
+baseline only; final reference SIGKILL/no leaks/private stale socket remains.
+Visual003 FAILS after baseline1/23plannedstates/3pointerrequests at stale Views
+selector. Active Visual004 is excluded. Vendor code/captures stay private.
+
+Saved composed source42/42, web/property42/42 and import23/23 logs all pass0skip;
+they establish source checks, not native acceptance. Append-only archive010
+preserves the exact completed evidence and nine selected reference metadata
+files; parts001–009 remain unchanged. Preserve all archives before retiring this
+worktree. Full safety/heavy/layout/filter/config/sidebar/visual/web-identity and
+reviewed main integration gates remain open; current reference typed pass is
+bounded to its authored protocol and does not establish Zorid parity.
+
 Coordinator update: composed implementation through02e34894 on isolated
 codex/types-bases-model; main remains e7d655e1 and sole integration ownership is
 unchanged. Reviewed typed-list preservation904e7145, unresolved relations9a5972ca,
@@ -26,7 +52,8 @@ uses SIGKILL fallback, no owned processes, private stale socket remains. Real
 user socket/source/framework identity protections pass. Visual003 stops after
 one of23states on a stale Views selector; immutable source successor pending.
 
-Root owns the next actual Config002 pass: unchanged1023physical files,1005export
+At that earlier checkpoint Config002 was next; its completed result is above.
+The fixture keeps unchanged1023physical files,1005export
 records,180s admission limit. Config001 genuinely stopped at929files: UI retry
 progress omitted durable inventory and periodic rescan used a rejected leased
 command. Both causes have reviewed causal fixes, not native acceptance yet.

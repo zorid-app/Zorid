@@ -632,6 +632,117 @@ this completed cutoff.
 Report: `/private/tmp/zorid-bases-filters-20261026-004/result.json`.
 SHA-256: `30e83559254387f341acb8a5356000a0d336f8aa50f2fa432f8a0a1d221daa39`.
 
+## Desktop010/011 and saved composed checks
+
+Desktop010/session19330 passes including TypeScript, with333 distribution files,
+producer `02e34894a053dc5e1716787f922e648ef593e40a`. Desktop011/session95338 also
+passes with333 files, producer `c73b0805e1f60dc1af79cdff0063c15cadc3975a`.
+The Rust/native/CLI identities remain unchanged. Frontend011 is newer than both
+completed configuration runs below; no matching011 runtime acceptance is inferred.
+
+| Receipt | SHA-256 |
+| --- | --- |
+| `frontend-receipt-010.json` | `18daca89a78cd331a5d44025a485c05c58d5a257aff22cadada791c517c6ddc6` |
+| `frontend-receipt-011.json` | `fd2d089925f3650d61de1977ed34cc1c655760aad4ef029191653fa4f74dd827` |
+
+Three retained composed logs separately record42/42 source-fix tests,42/42
+web/property-oracle tests and23/23 import/service tests, each zero failures/skips.
+These are source-level results. They do not replace the older stdout-only94/31
+runs or establish native acceptance of all composed changes.
+
+## Config001/002 — admission improves; query baseline still fails
+
+Config001/session83519 on `e184f1147602647027d71cd7277484d57938789b` and
+frontend009 **fails after one action and one check**. The unchanged180-second
+admission guard stops at180,029ms:929/1023 files,0/12 Records and923/1005 Export
+files durably admitted. Its failure capture shows the incomplete-vault message
+and a zero-result Base with an indexing-wait error. Read-only physical evidence
+contains1025 scan observations; the published cache generation5 holds931 entries
+(929files/two directories), watermark932 matching the core cursor. The remaining
+94 files have not been admitted; no configuration interaction acceptance follows.
+
+Config002/session99144 on `c0f5f9d710c6ef7fcd33827ccfc566053cad6408` and
+frontend010 **also fails after one action and one check**. Its admission
+precondition passes in34,408ms: all1023 files,12 Records and1005 Export files are
+admitted within the same180-second limit. This is bounded native acceptance of
+the admission fix. The next twelve-record rendered-baseline wait fails while
+the Base still shows the indexing-wait error. The cache has published generation6
+with1025 entries and watermark1026 matching the core cursor; complete core
+admission does not establish a working rendered query. The later metadata/index
+refresh source fix and frontend011 require a fresh actual campaign.
+
+Both runs close via SIGTERM with code0/null signal and no leaked children.
+Before/after provenance is equal. Independent audits verify837 frozen Git files,
+333 matching distribution hashes per run, and all1023 physical fixture hashes.
+SQLite inspection uses an immutable read-only connection. Causal source fixes
+remain separate from these observed run results.
+
+| Report | SHA-256 |
+| --- | --- |
+| `/private/tmp/zorid-bases-config-20261026-001/result.json` | `64bb40921d7f9583d14baab4fff55a1071b1f33b22d7f5cf15bf93f59546f7d4` |
+| `/private/tmp/zorid-bases-config-20261026-002/result.json` | `e7cc48e1933b2a86be8e0700337204c3cc2d45e33e69f493a9a5be8b3955761c` |
+
+## Normal web007 — UI phases pass; read-only Worker inspection times out
+
+Normal web007/session60296 on `bd87016e21b2a2fcffc80592c0f41836fba460a8`
+dispatches11 actions and passes all five UI phase statuses. **The whole campaign
+fails** the read-only Worker inspector's `Runtime.evaluate` reply deadline.
+Inspection is marked incomplete and detached; no product-Worker identity proof
+is waived or inferred from the successful UI phases. The proposed child-target
+inspector repair is source work, not acceptance for this run.
+
+Chrome exits normally0/null; Vite closes, HTTP listening is false, cleanup
+failures are empty and final provenance verifies. Independent audit matches385
+tracked and441 Rust-input hashes. The retained owned browser profile is excluded
+from the archive.
+
+Report: `/private/tmp/zorid-bases-web-20261026-007/report.json`.
+SHA-256: `5d91034571614e15a22b3c10de57272afe921037e5956e68a2cbe266f2f4dc17`.
+
+## Current reference005 — bootstrap and all13 typed phases pass
+
+The current Obsidian1.14.5 bootstrap/session50056 passes3 phases and12 checks,
+with134 trusted CDP input requests. It covers the Number operator catalog and
+value2 source/membership/reopen/clear, then passive public Accessibility discovery
+of native Date/DateTime fields. It does not itself complete native date entry or
+the full typed campaign. Cleanup finishes0/null with no remaining owned process.
+
+The full typed campaign005/session49428 **passes13 phases,111 checks and856
+trusted CDP input requests**, with replies recorded. It covers the authored
+String/List/Boolean/Number/Date/DateTime/empty cases, including focused native
+Date/DateTime exact value and validity before blur, saved source, membership and
+structured reopen. Two actually loaded app.js identity proofs match SHA-256
+`95b9fd3944625c3b88116878b03d655147fed8cdfe6ddf931f2064ead78ccd5b`.
+Prepared-source, framework and real-user-home/socket guards verify. Trusted CDP
+input establishes this reference protocol, without physical OS keyboard/IME or
+Zorid native equivalence claims.
+
+The final restart verifies the **cleared-filter source and four-note baseline**;
+it does not test restarting with an active filter value. The first reference
+process exits0/null; the last requires SIGKILL fallback, with no remaining owned
+process. Its private socket metadata remains stale after cleanup. No final
+normal-quit or socket-removal claim is made. Loaded vendor code and all reference
+screenshots/DOM captures remain private outside source and the archive.
+
+| Report | SHA-256 |
+| --- | --- |
+| `/private/tmp/zorid-obsidian-1.14.5-bootstrap-20261026-005/result.json` | `e87b8489632c99c9f3963016aabc39ecce293068bb555c306207f6a77eb2ed19` |
+| `/private/tmp/zorid-obsidian-1.14.5-typed-20261026-005/result.json` | `c95c89e2f8d86b497630a6f4624bade27b7741acba573e1b9227a0084b9a5793` |
+
+## Current reference Visual003 — baseline only; stale Views locator
+
+Visual003/session21272 fails after its baseline state, one of23 planned states,
+and three trusted pointer requests. It cannot find the current actionable
+`.bases-toolbar-view-text` selector; no Views interaction or full visual
+comparison completes. The original failed result remains preserved, with the
+source-backed selector successor separate. SIGTERM cleanup finishes0/null with
+no remaining owned process; source freeze, framework and user-socket guards
+verify. Active Visual004 is outside this cutoff. Only selected original metadata
+is archived; reference capture assets remain private.
+
+Report: `/private/tmp/zorid-obsidian-visual-1.14.5-captures-20261026-003/result.json`.
+SHA-256: `70e8256beed67d8500a4aad9f2f8e0c44bcce9d3543c00a61f5be9ba01b91b0a`.
+
 ## Durable local archive
 
 To survive temporary-directory cleanup, completed evidence and native products
@@ -759,6 +870,26 @@ launch log is reconstructed. Active Config001 evidence is excluded.
 | `fresh-validation-009.tar.gz` | 410,257 | `7364133b7194df93b8a32279c12794c5635c571757b20d1de2ad5031564ac1ba` |
 | `fresh-validation-009-manifest.json` | — | `1eab1a25c2635ad55c495805d3d1e8c670e8348be2ed6f44f32249c12817d01e` |
 | `independent-content-audit-009.json` | — | `723967d9e39e7689356b625348b2be6dda1395619e612b609936c368efc48ef6` |
+
+Part010 retains completed Config001/002 and normal-web007 evidence, matching
+frontend010/011 receipts/build logs and three saved composed-test logs. It also
+selects nine original reference result/discovery/source-freeze/producer JSON
+metadata files for bootstrap005, typed005 and Visual003. It contains **2101
+original regular files,84,526,737 original-file bytes, plus an embedded snapshot
+manifest**; the two complete owned configuration databases account for most
+uncompressed bytes. All three Zorid profiles are excluded. Reference loaded code,
+ASARs, profiles, vaults, journals, DOM capture files and screenshots are excluded;
+active Visual004 is excluded. No missing log is reconstructed.
+
+All original and compressed-member hashes verify, with parts001–009 and their
+manifests unchanged. This part records each campaign's exact source/cutoff;
+new builds/source repairs do not retroactively change failed statuses.
+
+| Additional local artifact | Bytes | SHA-256 |
+| --- | --- | --- |
+| `fresh-validation-010.tar.gz` | 12,829,185 | `3083d084079c060af8c44dadf4877e98ba8cb070f89f5e842a00928d3a03de15` |
+| `fresh-validation-010-manifest.json` | — | `b29f4200045cca8786e0cda013ac1251e703257ec9151adceec4688ce7f937b6` |
+| `independent-content-audit-010.json` | — | `e1e6472c8f04b484e1708f429e53dc730c2bf8cca27120b150e1e45a0088298d` |
 
 Full archive directory:
 `/Users/ctk/Projects/Zorid/.worktrees/types-bases-model/tmp/bases-validation-20261026/`.
