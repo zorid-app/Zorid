@@ -1786,3 +1786,37 @@ a newly verified regression. Typed Base rendering should resolve current option
 labels/colors from Type configuration while preserving stored IDs, unknown values
 and exact semantic filter/group identity. Implementation and actual UI verification
 remain pending. Keep separate from the active Base save-freshness reproduction.
+
+### 2026-10-26 — Sidebar following-context acknowledgement audit
+
+Internal source-audit follow-up, owned by `bases_safety_setup` on isolated
+`codex/bases-sidebar-follow-context` after reviewed Pin `0405a682`; no native
+run or main changes. The proposed draft-only stale-context failure is refuted
+by three actual Workspace tests: invalid row/main B/Escape; invalid row/latest
+prewarmed B then C/Escape; and failed empty view-name/main B/Cancel. Each keeps
+the draft and exact saved source, then automatically renders the latest main
+context after cancellation.
+
+A separate real current-file read failure reproduces stale following state:
+the first identity preflight for prewarmed main B rejects, its original sidebar
+row draft remains, and cancelling that draft leaves A rows while main B is
+active. Two bounded runs fail the same visible automatic-catch-up assertion.
+This is not a Pin composition regression and does not establish a native failure.
+Evidence:
+`/private/tmp/zorid-sidebar-follow-invalid-draft-20261026-002.log` (3/3 PASS),
+`/private/tmp/zorid-sidebar-follow-read-red-20261026-001.log` and `-002.log`
+(the separate current-file-read scenario fails in both).
+
+The isolated repair acknowledges the following context only after its latest
+owned setter resolves. Duplicate in-flight targets join; obsolete targets cannot
+acknowledge a new pane or sidebar. A failed target retries once after an explicit
+local pending-to-clean edit transition, including a transition arriving while
+the original read is still pending. Repeated failure does not poll or loop.
+Pin/closing ownership blocks dispatch; a refused Pin retains a concurrent read
+failure for the original draft's later cancellation. Successful Pin/Unpin clears
+that old failure. Ordinary no-fault draft query/deferred-render behavior remains.
+Author focused/adjacent checks pass 81/81, zero skipped, including latest B/C/A
+requests, accepted save preservation, same-path replacement refusal and both Pin
+overlap outcomes. Log:
+`/private/tmp/zorid-sidebar-follow-adjacent-20261026-001.log`.
+Independent review, integration and native validation remain separate gates.

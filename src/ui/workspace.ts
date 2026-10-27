@@ -96,6 +96,7 @@ interface SidebarBaseContext { path:string|null; entryId?:string; token?:symbol 
 interface SidebarBaseState {
   path:string;session:BaseSession;host:HTMLElement;context:string|null;contextEntryId?:string;
   pinned:boolean;pinnedContext?:SidebarBaseContext;pinning?:Promise<void>;closing?:Promise<void>;
+  following?:{context:SidebarBaseContext;retryOnFinish:boolean};failedContext?:SidebarBaseContext;
 }
 interface Tab {
   id:string; path:string|null; expectedEntryId?:string; mode:Mode; kind:'note'|'graph'|'calendar'|'tasks'; subpath?:string; calendarState?:CalendarViewState;
@@ -1475,10 +1476,11 @@ export class Workspace {
         }
       }
     }:undefined;
-    let session:BaseSession;
+    let session:BaseSession,composed:BaseSession|undefined;
     try{session=(this.viewFactories.base??createBaseSession)(host,{vault,basePath:path,validate,viewName,inlineSource,query:{currentFilePath:sourceContext.path,...(sourceContext.entryId?{currentFileEntryId:sourceContext.entryId}:{})},
             hoverFile:(row,event)=>{try{validate();const anchor=baseFileHoverAnchor(row,event);if(anchor)hover.hover(row,event,anchor);}catch(error){notice(error instanceof Error?error.message:String(error));}},
             ...(onSourceError?{onState:state=>onSourceError(state.error)}:{}),
+            onEditsSettled:()=>{const sidebar=this.sidebarBase;if(sidebar&&sidebar.session===composed)this.retrySidebarFollowingContext(sidebar);},
             onViewRenamed:event=>{validate();const identity=this.treeEntryToken(event.basePath);if(!identity)return;for(const sessions of new Set([this.baseNewItemEmbeds,...this.baseHoverEmbeds,...this.loadedViews().map(pane=>pane.baseEmbeds)].filter((sessions):sessions is BaseEmbedSessions=>!!sessions)))sessions.renameViewBinding(event.basePath,event.from,event.to,identity);},
             closeCreatedFile:()=>this.baseNewItem?.element.contains(host)?false:this.closeBaseNewItem(),
             openCreatedFile:async(target,_event,anchor)=>{
@@ -1528,7 +1530,7 @@ export class Workspace {
     let flushing:Promise<void>|undefined,closing:Promise<void>|undefined,closed=false;
     const flush=(options?:Parameters<BaseSession['flush']>[0]):Promise<void>=>{if(closed)return Promise.resolve();if(closing)return closing;if(flushing)return options?.dismissCleanPanels?flushing.then(()=>flush(options)):flushing;const pending=Promise.resolve().then(async()=>{await this.finishInlinePublicationAt(path);await hover.flush();await session.flush(options);});flushing=pending;const clear=()=>{if(flushing===pending)flushing=undefined;};void pending.then(clear,clear);return pending;};
     const close=()=>{if(closed)return Promise.resolve();if(closing)return closing;const pending=Promise.resolve().then(async()=>{await flushing;await this.finishInlinePublicationAt(path);await hover.close();await session.close();await hover.destroy();closed=true;});closing=pending;const clear=()=>{if(closing===pending)closing=undefined;};void pending.then(clear,clear);return pending;};
-    return{get ready(){return session.ready;},get state(){return session.state;},refresh:()=>session.refresh(),selectView:index=>session.selectView(index),setCurrentFile:(target,expectedEntryId)=>session.setCurrentFile(target,expectedEntryId),rebindViewName:(from,to)=>session.rebindViewName(from,to),flush,close,owns:node=>!closed&&!closing&&session.owns?.(node)===true,hasPendingChanges:()=>hover.hasPendingChanges()||session.hasPendingChanges()};
+    return composed={get ready(){return session.ready;},get state(){return session.state;},refresh:()=>session.refresh(),selectView:index=>session.selectView(index),setCurrentFile:(target,expectedEntryId)=>session.setCurrentFile(target,expectedEntryId),rebindViewName:(from,to)=>session.rebindViewName(from,to),flush,close,owns:node=>!closed&&!closing&&session.owns?.(node)===true,hasPendingChanges:()=>hover.hasPendingChanges()||session.hasPendingChanges()};
   }
 
   /** Base hover uses the ordinary shared draft, editor and embed save boundary. */
@@ -2381,6 +2383,29 @@ export class Workspace {
 
   private sidebarContextsEqual(a:SidebarBaseContext,b:SidebarBaseContext):boolean{return a.path===b.path&&a.entryId===b.entryId&&a.token===b.token;}
 
+  private retrySidebarFollowingContext(saved:SidebarBaseState):void{
+    if(this.sidebarBase!==saved||saved.pinned||saved.pinning||saved.closing||saved.session.hasPendingChanges())return;
+    if(saved.following){saved.following.retryOnFinish=true;return;}
+    if(saved.failedContext){saved.failedContext=undefined;this.renderRight();}
+  }
+
+  private followSidebarContext(saved:SidebarBaseState,context:SidebarBaseContext):void{
+    if(saved.following&&this.sidebarContextsEqual(saved.following.context,context)||saved.failedContext&&this.sidebarContextsEqual(saved.failedContext,context))return;
+    const vault=this.vault,generation=this.vaultGeneration,intent=this.sidebarBaseIntent,token=this.treeEntryToken(saved.path),request={context,retryOnFinish:false};
+    saved.following=request;saved.failedContext=undefined;
+    const owned=()=>this.vault===vault&&this.vaultGeneration===generation&&this.sidebarBase===saved&&saved.following===request&&this.sidebarBaseIntent===intent&&!saved.pinned&&!saved.closing&&!!token&&this.treeEntryToken(saved.path)===token&&this.sidebarContextsEqual(context,this.sidebarMainContext());
+    const current=()=>owned()&&!saved.pinning;
+    let retry=false;
+    void Promise.resolve().then(()=>{if(current())return saved.session.setCurrentFile(context.path,context.entryId);}).then(()=>{
+      if(current()){saved.context=context.path;saved.contextEntryId=context.entryId;}
+    }).catch(error=>{
+      if(owned()){saved.failedContext=context;if(!saved.pinning)notice(error instanceof Error?error.message:String(error));retry=request.retryOnFinish&&!saved.pinning&&!saved.session.hasPendingChanges();}
+    }).finally(()=>{
+      const retryCurrent=retry&&current();if(saved.following===request)saved.following=undefined;
+      if(retryCurrent){saved.failedContext=undefined;this.renderRight();}
+    });
+  }
+
   private renderSidebarPinControl():void{
     const control=this.sidebarBasePinButton,saved=this.sidebarBase;if(!control)return;
     control.hidden=this.rightTab!=='base'||!saved;
@@ -2402,6 +2427,7 @@ export class Workspace {
       const previous={pinned:saved.pinned,target:saved.pinnedContext,context:saved.context,entryId:saved.contextEntryId};
       saved.pinned=next.pinned;saved.pinnedContext=next.target;saved.context=next.context.path;saved.contextEntryId=next.context.entryId;
       try{this.saveSession();}catch(error){saved.pinned=previous.pinned;saved.pinnedContext=previous.target;saved.context=previous.context;saved.contextEntryId=previous.entryId;throw error;}
+      saved.failedContext=undefined;
     }).catch(async error=>{
       // A failed identity-bound setter must not leave an unacknowledged query
       // selector under the old pin flag. Only this same local owner may roll back.
@@ -2483,9 +2509,9 @@ export class Workspace {
       const saved=this.sidebarBase;if(!this.rightContent.contains(saved.host))this.rightContent.replaceChildren(saved.host);
       if(!saved.closing&&!saved.pinning){
         const context=saved.pinned&&saved.pinnedContext?this.resolveSidebarPinContext(saved.pinnedContext):this.sidebarMainContext();
-        if(context.path!==saved.context||context.entryId!==saved.contextEntryId){
+        if(context.path!==saved.context||context.entryId!==saved.contextEntryId||saved.following&&!this.sidebarContextsEqual(saved.following.context,context)){
           if(saved.pinned)this.run(()=>this.refreshPinnedSidebarContext(saved));
-          else{saved.context=context.path;saved.contextEntryId=context.entryId;void saved.session.setCurrentFile(context.path,context.entryId).catch(error=>notice(error instanceof Error?error.message:String(error)));}
+          else this.followSidebarContext(saved,context);
         }
       }
       return;

@@ -213,6 +213,8 @@ export interface BaseSessionOptions {
   readonly validate: () => void;
   readonly loadThumbnail?: BaseCardsViewOptions['loadThumbnail'];
   readonly onState?: (state: BaseControllerState) => void;
+  /** A local draft or accepted edit finished; query refreshes alone do not emit this. */
+  readonly onEditsSettled?: () => void;
   readonly onError?: (error: unknown) => void;
 }
 export interface BaseSession {
@@ -314,14 +316,22 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   };
   const propertyDraft = () => !!mounted?.hasActiveEdits?.() || !!content.querySelector('.zorid-bases-table-input, [data-base-editing]');
   const activeDraft = () => propertyDraft() || toolbarUI.hasDraft() || settings.hasDraft() || summaryDraft;
+  const editsPending = () => !!pending.size || !!mounted?.hasQueuedConfiguration?.() || controller.hasPendingViewReferences || activeDraft() || !!summaryHasRawDraft?.() || [...changedBuffers].some(buffer => buffer.dirty || !!buffer.error);
+  let editsWerePending = false;
   const schedule = () => {
-    if (disposed || scheduled !== undefined) return;
-    scheduled = setTimeout(() => { scheduled = undefined; if (deferred && !pending.size && !activeDraft()) { deferred = undefined; render(controller.state); } }, 0);
+    if (disposed) return;
+    if (editsPending()) editsWerePending = true;
+    if (scheduled !== undefined) return;
+    scheduled = setTimeout(() => {
+      scheduled = undefined;
+      if (deferred && !pending.size && !activeDraft()) { deferred = undefined; render(controller.state); }
+      if (!closing && editsWerePending && !editsPending()) { editsWerePending = false; try { options.onEditsSettled?.(); } catch (error) { report(error); } }
+    }, 0);
   };
   const releaseCleanBuffers = () => { for (const buffer of changedBuffers) if (!buffer.dirty && !buffer.error) changedBuffers.delete(buffer); };
   const track = <T>(operation: () => Promise<T>): Promise<T> => {
     action();
-    const promise = operation(); pending.add(promise); renderStatus(controller.state);
+    const promise = operation(); pending.add(promise); editsWerePending = true; renderStatus(controller.state);
     const settled = () => {
       pending.delete(promise);
       releaseCleanBuffers();
@@ -903,6 +913,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     finally {
       closing = false; renderStatus(controller.state);
       const metadata=options.vault.metadataFrame;if(metadata)refreshFilterMetadata(metadata);
+      if (editsWerePending) schedule();
     }
   }
   const stopDefinitions = (['create', 'modify', 'rename', 'delete', 'ready'] as const).map(event => options.vault.on(event, change => {

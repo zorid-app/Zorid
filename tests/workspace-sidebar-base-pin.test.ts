@@ -312,3 +312,168 @@ test('malformed persisted pin identity restores an absent context rather than si
   await rows(f, ['No current.md']); assert.equal(f.internal().sidebarBase.pinned, true); assert.equal(f.internal().sidebarBase.context, null);
   await toggle(f, false); await rows(f, ['Row Two.md']);
 });
+
+test('following sidebar catches the latest main note after the user cancels an invalid retained row edit', async t => {
+  const f = await setup(t); await rows(f, ['Row One.md']);
+  const input = scoreInput(f, 'Row One.md', 'invalid-number'); key(f, input, 'Enter');
+  await until(() => f.errors.length > 0, 'The ordinary property editor reports its invalid value'); assert.equal(input.isConnected, true);
+  await f.workspace.openNote('B.md'); assert.equal(f.internal().current().path, 'B.md'); await rows(f, ['Row Two.md']);
+  assert.equal(input.isConnected, true, 'Main context changes retain the original invalid draft'); assert.equal(input.value, 'invalid-number');
+  key(f, input, 'Escape');
+  await until(() => {
+    const paths = [...f.root.querySelectorAll<HTMLElement>('.sidebar-base-host [role="gridcell"][data-property="file.name"]')].map(cell => cell.dataset.path);
+    return !input.isConnected && JSON.stringify(paths) === JSON.stringify(['Row Two.md']);
+  }, 'Cancelling the old draft automatically publishes the already-current B context');
+  assert.equal(f.internal().sidebarBase.context, 'B.md'); assert.equal(await f.adapter.read('Row One.md'), fixtures['Row One.md']); assert.equal(await f.adapter.read('Context.base'), fixtures['Context.base']);
+});
+
+test('following sidebar catches the latest prewarmed pane after cancelling an invalid row draft', async t => {
+  const f = await setup(t), a = f.workspace.activePane;
+  await f.internal().split(); await f.workspace.openNote('B.md'); const b = f.workspace.activePane;
+  await f.internal().split(); await f.workspace.openNote('C.md'); const c = f.workspace.activePane; a.element.focus(); await rows(f, ['Row One.md']);
+  const input = scoreInput(f, 'Row One.md', 'invalid-number'); key(f, input, 'Enter'); await until(() => f.errors.length > 0, 'The invalid draft is retained');
+  b.element.focus(); c.element.focus(); await rows(f, ['Row Three.md']); assert.equal(input.isConnected, true); assert.equal(input.value, 'invalid-number');
+  key(f, input, 'Escape');
+  await until(() => !input.isConnected && f.root.querySelector<HTMLElement>('.sidebar-base-host [data-property="file.name"]')?.dataset.path === 'Row Three.md', 'Draft cancellation publishes the latest active C pane without another navigation');
+  assert.equal(f.internal().sidebarBase.context, 'C.md'); assert.equal(await f.adapter.read('Row One.md'), fixtures['Row One.md']);
+});
+
+test('following sidebar publishes the new main context after cancelling a failed configuration draft', async t => {
+  const f = await setup(t); await rows(f, ['Row One.md']);
+  f.root.querySelector<HTMLButtonElement>('.sidebar-base-host button[aria-label="Views"]')!.dispatchEvent(new f.dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+  const panel = document.querySelector<HTMLElement>('.bases-toolbar-popover[data-panel="View options"]')!, input = panel.querySelector<HTMLInputElement>('[aria-label="View name"]')!;
+  try {
+    input.value = ''; input.dispatchEvent(new f.dom.window.Event('input', { bubbles: true })); input.focus(); key(f, input, 'Enter');
+    await until(() => !!panel.querySelector('.bases-toolbar-error')?.textContent, 'The ordinary invalid view-name save fails visibly');
+    await f.workspace.openNote('B.md'); await rows(f, ['Row Two.md']); assert.equal(panel.isConnected, true); assert.equal(input.value, '');
+    panel.querySelector<HTMLButtonElement>('button[aria-label="Cancel"]')!.click();
+    await until(() => !panel.isConnected && f.root.querySelector<HTMLElement>('.sidebar-base-host [data-property="file.name"]')?.dataset.path === 'Row Two.md', 'Cancelling failed configuration follows main B without another activation');
+    assert.equal(f.internal().sidebarBase.context, 'B.md'); assert.equal(await f.adapter.read('Context.base'), fixtures['Context.base']);
+  } finally { panel.querySelector<HTMLButtonElement>('button[aria-label="Cancel"]')?.click(); }
+});
+
+test('cancelling a retained row edit retries a following context whose actual current-file read failed once', async t => {
+  const f = await setup(t, new IdentityAdapter(fixtures)), a = f.workspace.activePane;
+  await f.internal().split(); await f.workspace.openNote('B.md'); const b = f.workspace.activePane; a.element.focus(); await rows(f, ['Row One.md']);
+  const input = scoreInput(f, 'Row One.md', 'invalid-number'); key(f, input, 'Enter'); await until(() => f.errors.length > 0, 'The invalid property draft is retained');
+  const stat = f.adapter.stat.bind(f.adapter); let failures = 0;
+  f.adapter.stat = async path => { if (path === 'B.md' && failures++ === 0) throw new Error('Current note read failed once'); return stat(path); };
+  try {
+    b.element.focus(); await until(() => [...document.querySelectorAll('.notice')].some(node => node.textContent === 'Current note read failed once'), 'The actual current-file preflight failed visibly');
+    assert.equal(f.internal().current().path, 'B.md'); assert.equal(input.isConnected, true); assert.equal(input.value, 'invalid-number');
+    key(f, input, 'Escape');
+    await until(() => !input.isConnected && f.root.querySelector<HTMLElement>('.sidebar-base-host [data-property="file.name"]')?.dataset.path === 'Row Two.md', 'Explicit draft cancellation retries the still-current B context once without another activation');
+    assert.equal(await f.adapter.read('Row One.md'), fixtures['Row One.md']); assert.equal(await f.adapter.read('Context.base'), fixtures['Context.base']);
+  } finally { f.adapter.stat = stat; if (input.isConnected) key(f, input, 'Escape'); }
+});
+
+test('following context preserves an already accepted property save while the main pane advances', async t => {
+  const f = await setup(t), a = f.workspace.activePane;
+  await f.internal().split(); await f.workspace.openNote('B.md'); const b = f.workspace.activePane; a.element.focus(); await rows(f, ['Row One.md']);
+  const gate = deferred(), entered = deferred(), write = f.adapter.write.bind(f.adapter);
+  f.adapter.write = async (path, source) => { if (path === 'Row One.md' && source.includes('score: 99')) { entered.resolve(); await gate.promise; } await write(path, source); };
+  try {
+    const input = scoreInput(f, 'Row One.md', '99'); key(f, input, 'Enter'); await entered.promise; b.element.focus();
+    assert.equal(f.internal().current().path, 'B.md'); gate.resolve();
+    await until(() => !input.isConnected && f.root.querySelector<HTMLElement>('.sidebar-base-host [data-property="file.name"]')?.dataset.path === 'Row Two.md', 'The accepted save finishes before the latest following context is rendered');
+    assert.equal(await f.adapter.read('Row One.md'), fixtures['Row One.md'].replace('score: 11', 'score: 99')); assert.deepEqual(f.errors, []);
+  } finally { gate.resolve(); f.adapter.write = write; }
+});
+
+test('a repeated following read failure retries once on explicit draft finish without an automatic loop', async t => {
+  const f = await setup(t, new IdentityAdapter(fixtures)), a = f.workspace.activePane;
+  await f.internal().split(); await f.workspace.openNote('B.md'); const b = f.workspace.activePane; a.element.focus(); await rows(f, ['Row One.md']);
+  const input = scoreInput(f, 'Row One.md', 'invalid-number'); key(f, input, 'Enter'); await until(() => f.errors.length > 0, 'Invalid draft is retained');
+  const stat = f.adapter.stat.bind(f.adapter); let attempts = 0;
+  f.adapter.stat = async path => { if (path === 'B.md') { attempts++; throw new Error('Current note read still unavailable'); } return stat(path); };
+  try {
+    b.element.focus(); await until(() => attempts === 1 && !f.internal().sidebarBase.following, 'First read failure settles');
+    key(f, input, 'Escape'); await until(() => attempts === 2 && !f.internal().sidebarBase.following, 'One explicit cancellation permits one retry');
+    await new Promise<void>(resolve => setTimeout(resolve, 60)); assert.equal(attempts, 2, 'Ordinary render/status timers cannot retry the failed context');
+    assert.equal(f.internal().sidebarBase.context, 'A.md'); await rows(f, ['Row One.md']); assert.equal(await f.adapter.read('Row One.md'), fixtures['Row One.md']);
+  } finally { f.adapter.stat = stat; if (input.isConnected) key(f, input, 'Escape'); }
+});
+
+test('a draft finishing before its failed read settles still authorizes exactly one current-context retry', async t => {
+  const f = await setup(t, new IdentityAdapter(fixtures)), a = f.workspace.activePane;
+  await f.internal().split(); await f.workspace.openNote('B.md'); const b = f.workspace.activePane; a.element.focus(); await rows(f, ['Row One.md']);
+  const input = scoreInput(f, 'Row One.md', 'invalid-number'); key(f, input, 'Enter'); await until(() => f.errors.length > 0, 'Invalid draft is retained');
+  const gate = deferred(), entered = deferred(), stat = f.adapter.stat.bind(f.adapter); let attempts = 0;
+  f.adapter.stat = async path => { if (path === 'B.md' && ++attempts === 1) { entered.resolve(); await gate.promise; throw new Error('Held current read failed once'); } return stat(path); };
+  try {
+    b.element.focus(); await entered.promise; key(f, input, 'Escape'); await until(() => f.internal().sidebarBase.following?.retryOnFinish === true, 'The real draft-finish event is recorded while the read is pending');
+    gate.resolve(); await rows(f, ['Row Two.md']); await until(() => !f.internal().sidebarBase.following, 'The authorized retry acknowledges B');
+    assert.equal(f.internal().sidebarBase.context, 'B.md'); assert.equal(await f.adapter.read('Row One.md'), fixtures['Row One.md']);
+  } finally { gate.resolve(); f.adapter.stat = stat; }
+});
+
+test('following requests deduplicate the same target and only acknowledge the latest pane after a slow old read', async t => {
+  for (const latest of ['A.md', 'C.md']) await t.test(latest, async t => {
+    const f = await setup(t, new IdentityAdapter(fixtures)), a = f.workspace.activePane;
+    await f.internal().split(); await f.workspace.openNote('B.md'); const b = f.workspace.activePane;
+    await f.internal().split(); await f.workspace.openNote('C.md'); const c = f.workspace.activePane; a.element.focus(); await rows(f, ['Row One.md']);
+    const gate = deferred(), entered = deferred(), stat = f.adapter.stat.bind(f.adapter); let reads = 0;
+    f.adapter.stat = async path => { if (path === 'B.md' && ++reads === 1) { entered.resolve(); await gate.promise; } return stat(path); };
+    try {
+      b.element.focus(); await entered.promise; b.element.dispatchEvent(new f.dom.window.Event('pointerdown', { bubbles: true })); await Promise.resolve(); assert.equal(reads, 1, 'Repeated current-context renders join the owned in-flight request');
+      (latest === 'A.md' ? a : c).element.focus(); await rows(f, latest === 'A.md' ? ['Row One.md'] : ['Row Three.md']); gate.resolve();
+      await until(() => !f.internal().sidebarBase.following, 'Latest request settles'); assert.equal(f.internal().sidebarBase.context, latest);
+      assert.deepEqual([...document.querySelectorAll('.notice')].map(node => node.textContent), [], 'An obsolete request cannot report a new current-owner error'); assert.deepEqual(f.errors, []);
+    } finally { gate.resolve(); f.adapter.stat = stat; }
+  });
+});
+
+test('a failed following request cannot let its draft-finish retry adopt a same-path replacement', async t => {
+  const f = await setup(t, new IdentityAdapter(fixtures)), a = f.workspace.activePane;
+  await f.internal().split(); await f.workspace.openNote('B.md'); const b = f.workspace.activePane; a.element.focus(); await rows(f, ['Row One.md']);
+  const input = scoreInput(f, 'Row One.md', 'invalid-number'); key(f, input, 'Enter'); await until(() => f.errors.length > 0, 'Invalid draft is retained');
+  const stat = f.adapter.stat.bind(f.adapter); let attempts = 0;
+  f.adapter.stat = async path => { if (path === 'B.md' && ++attempts === 1) throw new Error('Current read interrupted'); return stat(path); };
+  try {
+    b.element.focus(); await until(() => !!f.internal().sidebarBase.failedContext, 'The real read failure is retained');
+    const replacement = fixtures['B.md'].replace('Two', 'Three'); await f.adapter.trash('B.md'); await f.adapter.write('B.md', replacement);
+    key(f, input, 'Escape'); await until(() => attempts === 2 && !f.internal().sidebarBase.following, 'Retry rejects the replaced identity');
+    assert.ok([...document.querySelectorAll('.notice')].some(node => /current note changed/.test(node.textContent ?? ''))); assert.equal(f.internal().sidebarBase.context, 'A.md'); await rows(f, ['Row One.md']);
+    assert.equal(await f.adapter.read('B.md'), replacement); assert.equal(await f.adapter.read('Row One.md'), fixtures['Row One.md']);
+  } finally { f.adapter.stat = stat; if (input.isConnected) key(f, input, 'Escape'); }
+});
+
+test('a newer sidebar mount retires an old following read without transferring its acknowledgement', async t => {
+  const f = await setup(t, new IdentityAdapter(fixtures)), a = f.workspace.activePane;
+  await f.internal().split(); await f.workspace.openNote('B.md'); const b = f.workspace.activePane; a.element.focus(); await rows(f, ['Row One.md']); const original = f.internal().sidebarBase;
+  const gate = deferred(), entered = deferred(), stat = f.adapter.stat.bind(f.adapter); let held = false;
+  f.adapter.stat = async path => { if (path === 'B.md' && !held) { held = true; entered.resolve(); await gate.promise; } return stat(path); };
+  try {
+    b.element.focus(); await entered.promise; await f.internal().openBaseSidebar('Other.base'); await rows(f, ['Row Two.md']); gate.resolve(); await until(() => !original.following, 'Old request retires');
+    assert.equal(f.internal().sidebarBase.path, 'Other.base'); assert.equal(f.internal().sidebarBase.context, 'B.md'); assert.equal(original.context, 'A.md'); assert.deepEqual(f.errors, []); assert.equal(document.querySelectorAll('.notice').length, 0);
+  } finally { gate.resolve(); f.adapter.stat = stat; }
+});
+
+test('Pin supersedes an in-flight following request and keeps its captured context frozen', async t => {
+  const f = await setup(t, new IdentityAdapter(fixtures)), a = f.workspace.activePane;
+  await f.internal().split(); await f.workspace.openNote('B.md'); const b = f.workspace.activePane;
+  await f.internal().split(); await f.workspace.openNote('C.md'); const c = f.workspace.activePane; a.element.focus(); await rows(f, ['Row One.md']);
+  const gate = deferred(), entered = deferred(), stat = f.adapter.stat.bind(f.adapter); let held = false;
+  f.adapter.stat = async path => { if (path === 'B.md' && !held) { held = true; entered.resolve(); await gate.promise; } return stat(path); };
+  try {
+    b.element.focus(); await entered.promise; await toggle(f, true); await rows(f, ['Row Two.md']);
+    c.element.focus(); gate.resolve(); await until(() => !f.internal().sidebarBase.following, 'The superseded following request releases');
+    assert.equal(f.internal().sidebarBase.context, 'B.md'); assert.equal(f.internal().sidebarBase.pinnedContext.path, 'B.md'); await rows(f, ['Row Two.md']);
+    assert.equal(document.querySelectorAll('.notice').length, 0); await toggle(f, false); await rows(f, ['Row Three.md']); assert.deepEqual(f.errors, []);
+  } finally { gate.resolve(); f.adapter.stat = stat; }
+});
+
+test('a refused Pin cannot lose the following read failure needed by the original draft cancellation', async t => {
+  const f = await setup(t, new IdentityAdapter(fixtures)), a = f.workspace.activePane;
+  await f.internal().split(); await f.workspace.openNote('B.md'); const b = f.workspace.activePane; a.element.focus(); await rows(f, ['Row One.md']);
+  const input = scoreInput(f, 'Row One.md', 'invalid-number'); key(f, input, 'Enter'); await until(() => f.errors.length > 0, 'Invalid draft is retained');
+  const gate = deferred(), entered = deferred(), stat = f.adapter.stat.bind(f.adapter); let attempts = 0;
+  f.adapter.stat = async path => { if (path === 'B.md' && ++attempts === 1) { entered.resolve(); await gate.promise; throw new Error('Current read failed during refused Pin'); } return stat(path); };
+  try {
+    b.element.focus(); await entered.promise; f.button()!.click(); await Promise.resolve(); assert.ok(f.internal().sidebarBase.pinning); gate.resolve();
+    await until(() => !f.internal().sidebarBase.pinning && !f.internal().sidebarBase.following, 'Both failed actions settle without changing the pin');
+    assert.equal(f.internal().sidebarBase.pinned, false); assert.equal(input.isConnected, true); key(f, input, 'Escape');
+    await until(() => !input.isConnected && f.root.querySelector<HTMLElement>('.sidebar-base-host [data-property="file.name"]')?.dataset.path === 'Row Two.md', 'Cancelling the original retained draft still follows B');
+    assert.equal(await f.adapter.read('Row One.md'), fixtures['Row One.md']);
+  } finally { gate.resolve(); f.adapter.stat = stat; if (input.isConnected) key(f, input, 'Escape'); }
+});
