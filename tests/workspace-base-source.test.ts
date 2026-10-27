@@ -99,14 +99,21 @@ test('external CAS conflict preserves both the saved Base and exact source edito
   assert.equal(await f.adapter.read('Invalid.base'), repaired);
 });
 
-test('Edit source cannot abandon an unfinished rendered property editor', async t => {
-  const f = await setup(t); await f.adapter.write('Invalid.base', repaired); await f.workspace.vault.reload(); await f.workspace.openNote('Invalid.base');
-  const session = f.workspace.activePane.baseView!, cell = f.workspace.activePane.element.querySelector('[data-property="note.status"][role="gridcell"]')!;
-  cell.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
-  const input = cell.querySelector<HTMLInputElement>('input')!; assert.ok(input); input.value = 'Unfinished';
-  sourceToggle(f.workspace, 'Edit source').click(); await until(() => [...document.querySelectorAll('.notice')].some(node => node.textContent?.includes('Finish or cancel')), 'pending control blocks source switch');
-  assert.equal(f.workspace.activePane.baseView, session); assert.equal(input.isConnected, true); assert.equal(input.value, 'Unfinished'); assert.equal(f.workspace.activePane.editor, undefined);
-  input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+test('Edit source cannot abandon an unfinished browsing-view configuration draft', async t => {
+  const browsing = 'views: [{type: table, name: Notes, source: {kind: untyped}, order: [file.name]}]\n';
+  const f = await setup(t); await f.adapter.write('Invalid.base', browsing); await f.workspace.vault.reload(); await f.workspace.openNote('Invalid.base');
+  const session = f.workspace.activePane.baseView!, host = f.workspace.activePane.element;
+  assert.deepEqual(session.state.result!.view.source, {kind: 'untyped'});
+  assert.equal(host.querySelector('[aria-label="Properties"]'), null);
+  assert.equal(host.querySelector('[data-property="note.status"]'), null);
+  host.querySelector<HTMLButtonElement>('[aria-label="Results"]')!.click();
+  const input = document.querySelector<HTMLInputElement>('[aria-label="Limit"]')!; assert.ok(input); input.value = '5'; input.dispatchEvent(new window.Event('input', {bubbles: true}));
+  assert.equal(session.hasPendingChanges(), true);
+  sourceToggle(f.workspace, 'Edit source').click(); await until(() => [...document.querySelectorAll('.notice')].some(node => node.textContent?.includes('Finish or cancel')), 'pending configuration blocks source switch');
+  assert.equal(f.workspace.activePane.baseView, session); assert.equal(input.isConnected, true); assert.equal(input.value, '5'); assert.equal(f.workspace.activePane.editor, undefined);
+  assert.equal(await f.adapter.read('Invalid.base'), browsing);
+  document.querySelector<HTMLButtonElement>('[aria-label="Cancel"]')!.click();
+  await editSource(f.workspace); assert.equal(sourceEditor(f.workspace).state.doc.toString(), browsing);
 });
 
 test('split source panes share one Base buffer and external clean changes update source without replacing editor instances', async t => {
