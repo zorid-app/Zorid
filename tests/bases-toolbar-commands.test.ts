@@ -168,12 +168,12 @@ test('nested searchable combobox keeps keyboard and Escape ownership inside the 
  }finally{f.cleanup();}
 });
 
-test('reference Add view commits its name on Enter and continues in the new view configuration',async()=>{
+test('Add view shows Create and Cancel, then Enter explicitly creates and closes the form',async()=>{
  const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),doc=dom.window.document;
  const document=BaseDocument.parse('views: [{type: table, name: A}]');let version=1,selectedIndex=0;
  const toolbar=createBaseToolbar(doc.querySelector('main')!,{immediate:true,preflight(){},async selectView(index){selectedIndex=index;refresh();},async save(){},commands:{async addView(expected,type,name){assert.equal(expected,version);selectedIndex=document.addView(type,name!);version++;refresh();},async updateView(){}},onDraftChange(){},onError(error){throw error;}});
  function refresh(){const result=executeBaseQuery(document,{version,files:[]},{viewIndex:selectedIndex});toolbar.update({result,views:document.views,selectedIndex,readOnly:false,allowRename:true,label:p=>p});}refresh();
- try{doc.querySelector<HTMLButtonElement>('[aria-label="Views"]')!.click();doc.querySelector<HTMLButtonElement>('[aria-label="Add view"]')!.click();assert.equal(doc.querySelector<HTMLElement>('.bases-toolbar-footer')?.hidden,true);const name=doc.querySelector<HTMLInputElement>('[aria-label="View name"]')!;name.value='New view';name.dispatchEvent(new dom.window.Event('input',{bubbles:true}));name.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));await tick();assert.equal(document.views.at(-1)?.name,'New view');assert.equal(doc.querySelector('[role="dialog"]')?.getAttribute('aria-label'),'View options');assert.equal(doc.querySelector<HTMLInputElement>('[aria-label="View name"]')?.value,'New view');assert.equal(toolbar.hasDraft(),false);}finally{toolbar.destroy();dom.window.close();}
+ try{doc.querySelector<HTMLButtonElement>('[aria-label="Views"]')!.click();doc.querySelector<HTMLButtonElement>('[aria-label="Add view"]')!.click();assert.equal(doc.querySelector<HTMLElement>('.bases-toolbar-footer')?.hidden,false);assert.equal(doc.querySelector('button[type=submit]')?.textContent,'Create view');assert.ok(doc.querySelector('[aria-label=Cancel]'));const name=doc.querySelector<HTMLInputElement>('[aria-label="View name"]')!;name.value='New view';name.dispatchEvent(new dom.window.Event('input',{bubbles:true}));name.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));await tick();assert.equal(document.views.at(-1)?.name,'New view');assert.equal(doc.querySelector('[role="dialog"]'),null);assert.equal(toolbar.hasDraft(),false);}finally{toolbar.destroy();dom.window.close();}
 });
 
 test('Add view exposes every layout setting and commits its initial draft in one command',async()=>{
@@ -191,7 +191,7 @@ test('Add view exposes every layout setting and commits its initial draft in one
    for(const [label,value] of Object.entries(scenario.defaults))assert.equal(f.get<HTMLInputElement>(label).value,value);
    for(const [label,value,event] of scenario.edits)f.input(label,value,event);
    if(scenario.type==='list'){const indent=f.get<HTMLInputElement>('Indent properties');assert.equal(indent.checked,false);indent.click();assert.equal(f.get<HTMLInputElement>('Property separator').closest('label')?.hidden,true);}
-   await new Promise(resolve=>setTimeout(resolve,270));assert.equal(f.calls.length,0,'layout edits stay local until name acceptance');
+   await new Promise(resolve=>setTimeout(resolve,270));assert.equal(f.calls.length,0,'layout edits stay local until explicit creation');
    name.focus();name.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));await tick();
    assert.deepEqual(f.calls,[['add',1,scenario.type,`New ${scenario.type}`,scenario.patch]]);assert.equal(f.toolbar.hasDraft(),false);assert.deepEqual(f.errors,[]);
   }finally{f.cleanup();}
@@ -215,7 +215,8 @@ test('Add view persistence retry retains its exact atomic layout patch without a
   doc.querySelector<HTMLButtonElement>('[role="combobox"][aria-label="Layout"]')!.focus();const layout=get<HTMLSelectElement>('Layout');layout.value='cards';layout.dispatchEvent(new dom.window.Event('change',{bubbles:true}));await tick();
   const size=get<HTMLInputElement>('Card size');size.value='440';size.dispatchEvent(new dom.window.Event('input',{bubbles:true}));name.focus();name.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));await tick();
   assert.deepEqual(calls,[[1,'cards','Gallery',{cardSize:440}]]);assert.equal(name.value,'Gallery');assert.equal(size.value,'440');assert.equal(size.disabled,true);assert.equal(toolbar.hasDraft(),true);
-  const retry=doc.querySelector<HTMLButtonElement>('button[type="submit"]')!;assert.equal(retry.textContent,'Retry save');retry.click();await tick();
+  const retry=doc.querySelector<HTMLButtonElement>('button[type="submit"]')!;assert.equal(retry.textContent,'Retry save');
+  doc.body.dispatchEvent(new dom.window.MouseEvent('pointerdown',{bubbles:true}));assert.equal(retry.isConnected,true,'outside cannot discard a retained accepted-save retry');assert.equal(toolbar.hasDraft(),true);retry.click();await tick();
   assert.equal(calls.length,1);assert.equal(retries,1);assert.match(String(document.views.at(-1)?.id),/^[a-z0-9]{12}$/);assert.deepEqual(document.views.at(-1),{type:'cards',name:'Gallery',id:document.views.at(-1)?.id,cardSize:440});assert.equal(toolbar.hasDraft(),false);assert.equal(doc.querySelector('[role="dialog"]'),null);assert.equal(errors.length,1);
  }finally{toolbar.destroy();dom.window.close();}
 });
@@ -300,7 +301,7 @@ test('view forms accept repeated display labels for creation and indexed rename'
  }finally{f.cleanup();}
 });
 
-test('Add view with a repeated label reopens options for its new stable identity',async()=>{
+test('Add view with a repeated label selects its new stable identity for explicit subsequent settings',async()=>{
  const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),doc=dom.window.document;
  const document=BaseDocument.parse('views: [{id: aaaaaaaaaaaa, type: table, name: Shared, rowHeight: medium}]');let version=1,selectedIndex=0;
  const updates:{index:number;id:unknown}[]=[],errors:unknown[]=[];
@@ -315,7 +316,8 @@ test('Add view with a repeated label reopens options for its new stable identity
   const layout=doc.querySelector<HTMLSelectElement>('[aria-label="Layout"]')!;layout.value='cards';layout.dispatchEvent(new dom.window.Event('change',{bubbles:true}));
   name.focus();name.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));await tick();
   assert.equal(document.views.length,2);const createdId=document.views[1].id;assert.notEqual(createdId,'aaaaaaaaaaaa');
-  assert.equal(doc.querySelector<HTMLSelectElement>('[aria-label="Layout"]')?.value,'cards','the follow-up menu belongs to the newly added view');
+  assert.equal(doc.querySelector('[role=dialog]'),null);doc.querySelector<HTMLButtonElement>('[aria-label="View options"]')!.click();
+  assert.equal(doc.querySelector<HTMLSelectElement>('[aria-label="Layout"]')?.value,'cards','explicit settings belongs to the newly added view');
   const size=doc.querySelector<HTMLInputElement>('[aria-label="Card size"]')!;assert.ok(size);size.focus();size.value='440';size.dispatchEvent(new dom.window.Event('input',{bubbles:true}));await new Promise(resolve=>setTimeout(resolve,280));
   assert.deepEqual(updates,[{index:1,id:createdId}]);assert.equal(document.views[1].cardSize,440);assert.equal(document.views[0].rowHeight,'medium');assert.equal(document.views[0].cardSize,undefined);assert.deepEqual(errors,[]);
  }finally{toolbar.destroy();dom.window.close();}
@@ -348,5 +350,27 @@ test('explicit settings opens with commands available and readonly hides mutatio
   f.click('View options');assert.equal(f.get<HTMLInputElement>('View name').value,'Library');f.click('Cancel');
   f.toolbar.update({...f.state,readOnly:true});assert.equal(f.doc.querySelector('[aria-label="View options"]'),null);
   assert.equal(f.get<HTMLButtonElement>('Add a view').hidden,true);assert.equal(f.doc.querySelectorAll('[role=tab]').length,2);
+ }finally{f.cleanup();}
+});
+
+
+test('Add view blur never creates; Escape, Cancel, Back and outside cancel without a command',async()=>{
+ for(const action of ['Escape','Cancel','Back','outside'] as const){
+  const f=fixture(true);try{
+   f.click('Add a view');f.input('View name','Discard this draft');const name=f.get<HTMLInputElement>('View name');
+   name.focus();name.blur();await new Promise(resolve=>setTimeout(resolve,270));assert.deepEqual(f.calls,[],'blurring creation input must never create');
+   if(action==='Escape'){name.focus();name.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));}
+   else if(action==='outside')f.doc.body.dispatchEvent(new f.dom.window.MouseEvent('pointerdown',{bubbles:true}));
+   else f.click(action);
+   await tick();assert.deepEqual(f.calls,[]);assert.equal(f.toolbar.hasDraft(),false);
+   assert.equal(f.doc.querySelector('[role=dialog]')?.getAttribute('aria-label')??null,action==='Back'?'Views':null);
+  }finally{f.cleanup();}
+ }
+});
+
+test('Create view button creates exactly once while its command is pending',async()=>{
+ const f=fixture(true);try{
+  f.click('Add a view');f.input('View name','Explicit create');const create=f.doc.querySelector<HTMLButtonElement>('button[type=submit]')!;
+  create.click();create.click();await tick();assert.deepEqual(f.calls,[['add',1,'table','Explicit create',{}]]);assert.equal(f.doc.querySelector('[role=dialog]'),null);
  }finally{f.cleanup();}
 });

@@ -199,7 +199,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     const node = doc.createElement('section'); node.className = 'bases-toolbar-popover'; node.dataset.panel = name; node.classList.toggle('is-immediate',!!options.immediate); node.setAttribute('role', 'dialog'); node.setAttribute('aria-label', name);
     const heading = doc.createElement('h3'); heading.textContent = name === 'View options' ? 'View settings' : name === 'Add view' ? 'Add a view' : name === 'Sort' ? 'Sort by' : name === 'Group' ? 'Group by' : name; if (['Views','Results','Properties','Filter'].includes(name)) heading.hidden = true;
     if (name === 'View options' || name === 'Add view' || name === 'Formula' || name === 'Property' || name === 'New item settings') {
-      const back = button(doc, '', () => { if (hasDraft()) { if (options.immediate) panel?.flush?.(); else report(new Error('Apply or cancel the current changes first.')); return; } panel?.close(false); open(name === 'Formula' || name === 'Property' ? 'Properties' : 'Views',trigger); }, 'Back'); back.className = 'bases-toolbar-menu-next'; back.append(icon('chevron-left',16,doc)); heading.prepend(back);
+      const back = button(doc, '', () => { if (name === 'Add view' && !own.saving) { own.close(false); open('Views',trigger); return; } if (hasDraft()) { if (options.immediate) panel?.flush?.(); else report(new Error('Apply or cancel the current changes first.')); return; } panel?.close(false); open(name === 'Formula' || name === 'Property' ? 'Properties' : 'Views',trigger); }, 'Back'); back.className = 'bases-toolbar-menu-next'; back.append(icon('chevron-left',16,doc)); heading.prepend(back);
     }
     const form = doc.createElement('form'), fields = doc.createElement('div'), footer = doc.createElement('div'), error = doc.createElement('div');
     fields.className = 'bases-toolbar-fields'; footer.className = 'bases-toolbar-footer'; error.className = 'bases-toolbar-error'; error.setAttribute('role', 'alert');
@@ -218,9 +218,8 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       (controls.find(control=>control.getAttribute('aria-label')===label)??controls[0]??fallback)?.focus();
     };
     const disposers: (()=>void)[] = [];
-    const autoAdd = options.immediate === true && name === 'Add view';
     const auto = options.immediate === true && !['Views','Add view','New item settings'].includes(name) && (name !== 'Formula' || !!formulaName);
-    if (auto || autoAdd) footer.hidden = true;
+    if (auto) footer.hidden = true;
     const own: Panel = { name, node, trigger, dirty: false, saving: false, failure: undefined,
       close(restore = true) {
         if (own.saving) return;
@@ -254,10 +253,11 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     const inputStates = () => new Map(Array.from(node.querySelectorAll<Control>('input,button,select,textarea'),input=>[input,input.disabled] as const));
     const place = () => { if (!node.isConnected) return; const anchor = trigger.getBoundingClientRect(), bounds = node.getBoundingClientRect(); node.style.left = `${Math.max(8, Math.min(anchor.left, (win?.innerWidth ?? 800) - bounds.width - 8))}px`; node.style.top = `${Math.max(8, Math.min(anchor.bottom + 6, (win?.innerHeight ?? 600) - bounds.height - 8))}px`; };
     const outside = (event: Event) => { if (!node.contains(event.target as Node) && !trigger.contains(event.target as Node)) {
-      if ((auto || autoAdd) && own.dirty && !retryPersistence) { submit(true); return; }
+      if (name === 'Add view' && !own.saving && !retryPersistence) { own.close(false); return; }
+      if (auto && own.dirty && !retryPersistence) { submit(true); return; }
       if (!hasDraft()) own.close(false);
     } };
-    const keydown = (event: KeyboardEvent) => { const target = event.target as Element; if (event.defaultPrevented || target.closest?.('.bases-filter-operand')?.querySelector('[role=combobox][aria-expanded=true]') || target.closest?.('.bases-toolbar-combobox-popover,.bases-manual-group-new,.bases-formula-editor') || target.closest?.('[role=combobox]') && (event.key !== 'Escape' || target.closest('[role=combobox]')?.getAttribute('aria-expanded') === 'true')) return; if (['ArrowDown','ArrowUp','Home','End'].includes(event.key) && !event.isComposing && (event.target instanceof doc.defaultView!.HTMLButtonElement || event.target === node)) { const buttons = Array.from(node.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')).filter(item => !item.closest('[hidden]')); if (buttons.length) { const index = buttons.indexOf(doc.activeElement as HTMLButtonElement); const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowUp' ? -1 : 1) + buttons.length) % buttons.length; buttons[next].focus(); event.preventDefault(); event.stopPropagation(); } } if (event.key === 'Escape' && !event.isComposing && !own.saving && node.contains(event.target as Node)) { event.preventDefault(); event.stopPropagation(); if ((auto || autoAdd) && own.dirty && !retryPersistence) submit(true); else own.close(); } };
+    const keydown = (event: KeyboardEvent) => { const target = event.target as Element; if (event.defaultPrevented || target.closest?.('.bases-filter-operand')?.querySelector('[role=combobox][aria-expanded=true]') || target.closest?.('.bases-toolbar-combobox-popover,.bases-manual-group-new,.bases-formula-editor') || target.closest?.('[role=combobox]') && (event.key !== 'Escape' || target.closest('[role=combobox]')?.getAttribute('aria-expanded') === 'true')) return; if (['ArrowDown','ArrowUp','Home','End'].includes(event.key) && !event.isComposing && (event.target instanceof doc.defaultView!.HTMLButtonElement || event.target === node)) { const buttons = Array.from(node.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')).filter(item => !item.closest('[hidden]')); if (buttons.length) { const index = buttons.indexOf(doc.activeElement as HTMLButtonElement); const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowUp' ? -1 : 1) + buttons.length) % buttons.length; buttons[next].focus(); event.preventDefault(); event.stopPropagation(); } } if (event.key === 'Escape' && !event.isComposing && !own.saving && node.contains(event.target as Node)) { event.preventDefault(); event.stopPropagation(); if (auto && own.dirty && !retryPersistence) submit(true); else own.close(); } };
     doc.addEventListener('pointerdown', outside, true); doc.addEventListener('keydown', keydown, true); win?.addEventListener('resize', place); win?.addEventListener('scroll', place, true);
     const observer = win && 'ResizeObserver' in win ? new win.ResizeObserver(place) : undefined; observer?.observe(container); observer?.observe(node);
     const changed = () => {
@@ -358,10 +358,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         if (!options.commands?.addView) throw new Error('View creation is unavailable.');
         return () => options.commands!.addView!(version,type,name,patch);
       };
-      if (autoAdd) {
-        input.addEventListener('blur',event=>{ if (event.relatedTarget && node.contains(event.relatedTarget as Node)) return; if (own.dirty) submit(false); });
-        input.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.isComposing){event.preventDefault();input.blur();}});
-      }
+      input.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.isComposing){event.preventDefault();submit(true);}});
     } else if (name === 'Results') {
       const limit = doc.createElement('input'); limit.type = 'number'; limit.min = '0'; limit.step = '1'; limit.placeholder = 'e.g. 10'; limit.value = typeof result.view.limit === 'number' && result.view.limit > 0 ? String(result.view.limit) : ''; limit.setAttribute('aria-label', 'Limit'); const label = doc.createElement('label'); label.append(doc.createTextNode('Limit number of results'), limit); fields.append(label); limit.addEventListener('input', changed);
       if (!opening.readOnly) { const showAll = menuAction('Show all results', () => options.save(version, {limit: undefined}),typeof result.view.limit === 'number' && result.view.limit > 0); showAll.replaceChildren(icon('rotate-ccw',16,doc),doc.createTextNode('Show all')); }
@@ -835,12 +832,6 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         if (!auto) {
           if(own.dirty){footer.hidden=false;error.textContent='The retained draft is saved. Your newer changes are still here.';options.onDraftChange();return;}
           own.dirty = false; const refreshed = deferredState; deferredState = undefined; own.close(); if (refreshed) update(refreshed);
-          if (autoAdd && !closeWhenSettled && refreshed) {
-            const index=refreshed.selectedIndex,created=refreshed.views[index];
-            // Add selects its new identity. Labels may repeat and cannot choose
-            // which view owns the follow-up configuration controls.
-            if(created&&typeof created.id==='string'&&!opening.views.some(view=>view.id===created.id))open('View options',trigger,index);
-          }
           return;
         }
         if (deferredState) {
