@@ -326,7 +326,10 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     if(definitionsLoading||definitionsError||!collection?.deleted||!deletedConfigurationRead||deletedConfigurationRead!==controller.configurationRead||deletedSourceContext!==sourceContext())return;
     try{const source=currentViewSource();if(source.kind==='collection'&&source.id===loadedCollectionId&&source.id===collection.id)return{kind:'collection-in-trash',collectionId:collection.id,message:'This collection is in Trash. Restore it or choose another source.'};}catch{/* Invalid configuration keeps its ordinary error presentation. */}
   };
-  const collectionPresentation = () => JSON.stringify([loadedCollectionId,collection,[...collectionEntries.values()].sort((a,b)=>a.entryId.localeCompare(b.entryId)),definitions,definitionsError]);
+  // Entry values/revisions are query data, not a new widget schema. Rebuilding
+  // the mounted view for an acknowledged value edit discards its next-cell
+  // focus. Membership/write authority still uses the fresh entry map below.
+  const collectionPresentation = () => JSON.stringify([loadedCollectionId,collection?.deleted,collection?.properties,definitions,definitionsError]);
   let definitionsPresentation=collectionPresentation();
   let definitionsLoad:{context:string;read:BaseConfigurationRead|undefined;promise:Promise<void>}|undefined;
   const publishDefinitions = () => {const presentation=collectionPresentation();if(presentation!==definitionsPresentation){definitionsPresentation=presentation;definitionsRevision++;}};
@@ -737,11 +740,13 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     try { formulaEditor = enhanceBaseSummaryEditor(expression, { onEscape: () => close(true), onCommit: () => { void save(); } }); } catch (failure) { cleanup(); throw failure; }
     place(); name.focus(); name.select(); mark();
   }
-  async function createItem(group?: { property: string; value: BaseValue }, anchor?: HTMLElement): Promise<void> {
+  function createItem(group?: { property: string; value: BaseValue }, anchor?: HTMLElement): Promise<void>;
+  function createItem(group: { property: string; value: BaseValue } | undefined, anchor: HTMLElement | undefined, inline: true): Promise<{path:string;entryId?:string}|void>;
+  async function createItem(group?: { property: string; value: BaseValue }, anchor?: HTMLElement, inline=false): Promise<{path:string;entryId?:string}|void> {
     action(); if (options.readOnly || !controller.state.result || sharedBasePreview(controller.state.result)) throw new Error('This base is read-only');
     const creatingSource=controller.state.source,creatingViewId=controller.selectedViewIdentity,creatingIndex=controller.selectedViewIndex;
     const validatePreparation=()=>{alive();if(controller.state.source!==creatingSource||controller.selectedViewIdentity!==creatingViewId||controller.selectedViewIndex!==creatingIndex)throw new Error('The view source changed while preparing New. No entry was created.');};
-    if (await options.closeCreatedFile?.()) return;
+    await options.closeCreatedFile?.();
     validatePreparation();
     if(pendingCollectionCreate){const source=currentViewSource(),owner=pendingCollectionCreateOwner;if(!owner||source.kind!=='collection'||source.id!==owner.collectionId||(owner.viewId?controller.selectedViewIdentity!==owner.viewId:controller.state.source!==owner.source))throw new Error('The unfinished New belongs to its original collection view. Reopen that view to retry it.');}
     if(collectionMode()){
@@ -768,6 +773,10 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       pendingCollectionCreate=undefined;pendingCollectionCreateOwner=undefined;
       await options.vault.reload();await loadDefinitions();await controller.refresh();
       notice=controller.state.result&&!controller.state.result.rows.some(row=>row.entryId===entry.entryId)?'Created entry is not shown in the current results.':undefined;renderStatus(controller.state);
+      if(inline&&controller.selectedViewIdentity===creatingViewId&&controller.selectedViewIndex===creatingIndex&&controller.state.source===creatingSource){
+        const result=controller.state.result;
+        if(result?.rows.some(row=>row.entryId===entry.entryId)&&result.properties.some(property=>property==='file.name'||property==='file.file'))return{path:entry.path,entryId:entry.entryId};
+      }
       const event=new(win?.MouseEvent??MouseEvent)('click');
       if(options.openCreatedFile)await options.openCreatedFile(entry.path,event,anchor??content);else options.openFile(entry.path,event);
       return;
@@ -854,7 +863,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     sourceBar.replaceChildren();
     const sourceButton=doc.createElement('button');sourceButton.type='button';sourceButton.className='collection-source-button';sourceButton.textContent=sourceUnavailable()?'Choose another source':source.kind==='untyped'?'Notes in your vault':collection?.name??'Collection';sourceButton.setAttribute('aria-label','Change view source');
     sourceButton.disabled=!!options.readOnly;sourceButton.onclick=()=>{const repair=sourceUnavailable()?deletedConfigurationRead:undefined;if(activeDraft()){report(new Error('Finish or cancel the current edit first.'));return;}void chooseSource(async next=>{await saveConfigurationCommand(()=>repair?controller.repairViewSource(repair,next):controller.setViewSource(controller.state.version,selectedIndex,next));}).catch(report);};sourceBar.append(sourceButton);
-    if(source.kind==='collection'&&collection&&!collection.deleted&&!options.readOnly){const configure=doc.createElement('button');configure.type='button';configure.textContent='Add property';configure.onclick=()=>{try{openCollectionProperties();}catch(failure){report(failure);}};sourceBar.append(configure);}
+    if(source.kind==='collection'&&collection&&!collection.deleted&&!options.readOnly){const configure=doc.createElement('button');configure.type='button';configure.textContent='Add property';configure.onclick=()=>{try{addCollectionProperty(configure);}catch(failure){report(failure);}};sourceBar.append(configure);}
     if(source.kind==='collection'&&databaseService&&!options.readOnly&&sourceUnavailable()&&!pendingCollectionRestore&&collection){
       const restoringCollection=collection;
       const restore=doc.createElement('button');restore.type='button';restore.textContent='Restore collection';restore.dataset.collectionRestore='';restore.disabled=!!pending.size;
@@ -1071,6 +1080,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         mounted?.destroy(); mounted = undefined; content.replaceChildren();
         switch (result.view.type) {
           case 'table': mounted = createBaseTableView(content, {...shared,...(writable?{
+            onNew:(anchor:HTMLElement)=>track(()=>createItem(undefined,anchor,true)).then(created=>{render(controller.state);return created;}),
             requestAddProperty:(anchor:HTMLElement)=>{try{addCollectionProperty(anchor);}catch(error){report(error);}},
             ...(options.buffers?.rename?{renameFile:(edit:import('./table-view.ts').BaseTableRename)=>track(async()=>{
               action();const active=controller.state.result,row=active?.rows.find(row=>row.path===edit.path),witness=active&&sharedBaseWitness(active,edit.path);

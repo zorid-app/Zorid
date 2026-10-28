@@ -49,6 +49,44 @@ function replace(workspace: Workspace, value: string) { const view = sourceEdito
 function sourceToggle(workspace: Workspace, label: string): HTMLButtonElement { const button = workspace.activePane.element.querySelector<HTMLButtonElement>(`.base-source-toggle[aria-label="${label}"]`); assert.ok(button); return button; }
 async function editSource(workspace: Workspace) { sourceToggle(workspace, 'Edit source').click(); await until(() => !!workspace.activePane.editor && !!workspace.activePane.element.querySelector('.base-source-view'), 'raw Base editor mounts'); }
 
+test('slash database full page creates durably before replacing its command and opening',async t=>{
+  const f=await setup(t);await f.workspace.openNote('One.md');
+  const handle=f.workspace.activePane.editor!,view=EditorView.findFromDOM(f.workspace.activePane.element.querySelector('.cm-editor')!)!;
+  view.dispatch({changes:{from:0,to:view.state.doc.length,insert:'/database'},selection:{anchor:9}});
+  const captured=view.state.doc,create=f.editorOptions.get(handle)!.onCreateDatabase!;assert.ok(create);
+  await create({layout:'table',mode:'page',view,from:0,to:9,isCurrent:()=>view.state.doc===captured});
+  await f.workspace.flush();
+  const path=f.workspace.activePane.viewPath!;assert.match(path,/\.base$/);assert.equal(await f.adapter.read(path),'views: []\n');
+  assert.equal(await f.adapter.read('One.md'),`[[${path}]]`);
+});
+
+test('slash database full page keeps a newer note draft when creation completes late',async t=>{
+  const f=await setup(t);await f.workspace.openNote('One.md');
+  const handle=f.workspace.activePane.editor!,view=EditorView.findFromDOM(f.workspace.activePane.element.querySelector('.cm-editor')!)!;
+  view.dispatch({changes:{from:0,to:view.state.doc.length,insert:'/database'},selection:{anchor:9}});
+  const captured=view.state.doc,write=f.adapter.write.bind(f.adapter);let release!:()=>void,started=false;
+  const gate=new Promise<void>(resolve=>{release=resolve;});
+  f.adapter.write=async(path,text)=>{if(path.endsWith('.base')&&path!=='Invalid.base'){started=true;await gate;}await write(path,text);};
+  const pending=f.editorOptions.get(handle)!.onCreateDatabase!({layout:'table',mode:'page',view,from:0,to:9,isCurrent:()=>view.state.doc===captured});
+  await until(()=>started,'new database reaches durable create');
+  view.dispatch({changes:{from:9,insert:' keep this draft'},selection:{anchor:25}});release();await pending;
+  assert.equal(f.workspace.activePane.editor,handle);assert.equal(view.state.doc.toString(),'/database keep this draft');
+  assert.equal(f.workspace.activePane.viewPath,'One.md');
+});
+
+test('slash database full page leaves the command available after a create failure',async t=>{
+  const f=await setup(t);await f.workspace.openNote('One.md');
+  const handle=f.workspace.activePane.editor!,view=EditorView.findFromDOM(f.workspace.activePane.element.querySelector('.cm-editor')!)!;
+  view.dispatch({changes:{from:0,to:view.state.doc.length,insert:'/database'},selection:{anchor:9}});
+  const captured=view.state.doc,write=f.adapter.write.bind(f.adapter);
+  f.adapter.write=async(path,text)=>{if(path.endsWith('.base')&&path!=='Invalid.base')throw new Error('Create unavailable');await write(path,text);};
+  await assert.rejects(Promise.resolve(f.editorOptions.get(handle)!.onCreateDatabase!({layout:'table',mode:'page',view,from:0,to:9,isCurrent:()=>view.state.doc===captured})),/Create unavailable/);
+  assert.equal(f.workspace.activePane.editor,handle);assert.equal(view.state.doc.toString(),'/database');
+  assert.equal(f.workspace.activePane.viewPath,'One.md');f.adapter.write=write;
+  await f.editorOptions.get(handle)!.onCreateDatabase!({layout:'table',mode:'page',view,from:0,to:9,isCurrent:()=>view.state.doc===captured});
+  assert.equal((await f.adapter.list()).filter(entry=>entry.path.endsWith('.base')&&entry.path!=='Invalid.base').length,1,'retry reconciles the original create');
+});
+
 test('actual invalid Base UI exposes source repair, saves invalid YAML, then returns repaired source to the normal Base', async t => {
   const f = await setup(t), workspace = f.workspace; await workspace.openNote('Invalid.base');
   assert.ok(workspace.activePane.baseView?.state.error);

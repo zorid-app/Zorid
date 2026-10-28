@@ -1535,6 +1535,10 @@ export class Workspace {
               validate();
               if(/^[a-z][\w+.-]*:/i.test(target)||target.startsWith('//')){if(/^(?:https?:\/\/|mailto:|tel:)/i.test(target))window.open(target,'_blank','noopener,noreferrer');return;}
               const newTab=('button'in event&&event.button===1)||event.metaKey||event.ctrlKey;
+              if(!newTab&&witness&&/\.md$/i.test(target)){
+                const targetNode=event.target instanceof host.ownerDocument.defaultView!.HTMLElement?event.target:host;
+                return this.openBaseNewItem(target,targetNode,host,true,witness);
+              }
               if(witness)return this.openPropertyLink(sourceContext.path??path,target,owner(),witness,newTab);
               return this.openNote(target,newTab,owner(),true,target.includes('#')?target.slice(target.indexOf('#')):'');
             }),
@@ -1673,11 +1677,14 @@ export class Workspace {
     const current=this.baseNewItem;if(!current)return false;
     await current.close();return true;
   }
-  private openBaseNewItem(path:string,anchor:HTMLElement,ownershipHost:HTMLElement=anchor):Promise<void>{
-    if(this.baseNewItemOpening)return this.baseNewItemOpening.then(()=>this.openBaseNewItem(path,anchor,ownershipHost));
+  private openBaseNewItem(path:string,anchor:HTMLElement,ownershipHost:HTMLElement=anchor,existing=false,expectedWitness?:{entryId:string;revision:string}):Promise<void>{
+    if(this.baseNewItemOpening)return this.baseNewItemOpening.then(()=>this.openBaseNewItem(path,anchor,ownershipHost,existing,expectedWitness));
     const vault=this.vault,generation=this.vaultGeneration;
     const opening=Promise.resolve().then(async()=>{
+      const validateOpening=()=>{const entry=vault.entries.get(path);if(vault!==this.vault||generation!==this.vaultGeneration||expectedWitness&&(entry?.entryId!==expectedWitness.entryId||entry.revision!==expectedWitness.revision))throw new Error('The page changed before its preview could open.');};
+      validateOpening();
       await this.baseNewItem?.close();
+      validateOpening();
       let disposed=false,buffer:NoteBuffer|undefined;
       const validate=()=>{
         if(disposed||vault!==this.vault||generation!==this.vaultGeneration||this.platformReleased||this.platformDrained)throw new Error('The new-item vault is no longer available.');
@@ -1712,7 +1719,7 @@ export class Workspace {
       };
       const cleanup=()=>{disposed=true;if(this.baseNewItemEmbeds===sessions)this.baseNewItemEmbeds=undefined;targets.destroy();embeds.destroy();this.canvasMarkdownEmbeds.delete(embeds);remounts.clear();if(this.baseNewItem===popup){this.baseNewItem=undefined;this.baseNewItemAnchor=undefined;}};
       try{
-        popup=await openBaseNewItemPopover({anchor,vault,path,getBuffer:async target=>{validateFile();if(target!==shared.path)throw new Error('The new note moved before opening.');return shared;},validate:validateFile,
+        popup=await openBaseNewItemPopover({anchor,vault,path,presentation:'side-peek',focusTitle:!existing,bodyExpanded:existing,propertiesExpanded:existing,getBuffer:async target=>{validateFile();if(target!==shared.path)throw new Error('The new note moved before opening.');return shared;},validate:validateFile,
           rename:async(source,destination,validateSelection,witness)=>{
             validateFile();validateSelection();await sessions.flush();const token=this.treeEntryToken(source);await shared.flush();
             await vault.rename(source,destination,()=>{validateFile();validateSelection();if(!token||this.treeEntryToken(source)!==token||shared.path!==source)throw new Error('The renamed note is no longer current.');this.requireAvailableTreePath(vault,destination,source);},witness);
