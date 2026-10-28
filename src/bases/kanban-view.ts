@@ -32,7 +32,7 @@ export interface BaseKanbanCreateRequest {
 }
 export interface BaseKanbanViewOptions extends Omit<BaseCardsViewOptions, 'onError'> {
   /** Presentation comes from the authoritative property schema, never inferred from a group label. */
-  readonly getGroupAppearance?: (group: BaseQueryGroup) => { readonly color?: string; readonly category?: 'todo' | 'in-progress' | 'done' } | undefined;
+  readonly getGroupAppearance?: (group: BaseQueryGroup) => { readonly label?: string; readonly color?: string; readonly category?: 'todo' | 'in-progress' | 'done' } | undefined;
   /** Host must validate version, perform a real vault transaction, and publish a new query result. */
   readonly requestMove?: (request: BaseKanbanMoveRequest) => Promise<void>;
   readonly onError?: (error: unknown, request: BaseKanbanMoveRequest) => void;
@@ -345,12 +345,13 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
       const column = doc.createElement('section'); column.className = 'bases-kanban-column';
       mountedColumns.set(column, group); column.style.left = `${index * (width + columnGap)}px`; column.style.width = `${width}px`;
       const appearance = options.getGroupAppearance?.(group);
+      const groupLabel = appearance?.label ?? label(group.key, result.shared !== undefined);
       if (appearance?.color && /^(?:red|orange|yellow|green|cyan|blue|purple|pink|gray|grey|brown)$/.test(appearance.color)) column.dataset.color = appearance.color;
       if (appearance?.category) column.dataset.category = appearance.category;
       const heading = doc.createElement('div'); heading.className = 'bases-kanban-column-header';
-      const name = doc.createElement('span'); name.className = 'bases-kanban-column-name'; name.textContent = label(group.key, result.shared !== undefined); heading.append(name);
+      const name = doc.createElement('span'); name.className = 'bases-kanban-column-name'; name.textContent = groupLabel; heading.append(name);
       const count = doc.createElement('span'); count.className = 'bases-kanban-column-count'; count.textContent = String(displayedRows(group).length); heading.append(count);
-      const body = doc.createElement('div'); body.className = 'bases-kanban-column-body'; body.setAttribute('role', 'listbox'); body.setAttribute('aria-label', label(group.key, result.shared !== undefined));
+      const body = doc.createElement('div'); body.className = 'bases-kanban-column-body'; body.setAttribute('role', 'listbox'); body.setAttribute('aria-label', groupLabel);
       column.append(heading, body);
       if (!options.readOnly && options.createItem && group.key) {
         const create = async (button: HTMLButtonElement) => {
@@ -378,7 +379,7 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
           paintColumnPreview();
           column.classList.add('is-being-dragged');
           event.dataTransfer.setDragImage?.(column, Math.min(event.offsetX, width), event.offsetY);
-          event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', label(group.key));
+          event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', groupLabel);
         });
         heading.addEventListener('dragend', () => {
           if (columnDrag === ownedColumnDrag) { columnDrag = undefined; paintColumnPreview(); render(); }

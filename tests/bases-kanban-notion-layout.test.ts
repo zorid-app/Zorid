@@ -90,3 +90,21 @@ test('initial and horizontally mounted columns fill the expanded viewport after 
   assertFilled();
   handle.destroy();
 });
+
+test('authoritative option labels replace opaque IDs in Board headers and accessible column names', async () => {
+  const { root } = setup(), initial = fixture();
+  const done = value('qu9qz58q1yvg');
+  const group = { key: done, rows: initial.rows };
+  let assigned: unknown;
+  const handle = createBaseKanbanView(root, { result: { ...initial, groups: [group] }, openFile() {},
+    getGroupAppearance: candidate => candidate === group ? { label: 'Done', color: 'green', category: 'done' } : undefined,
+    requestMove: async request => { assigned = request.destination; },
+  });
+  assert.equal(root.querySelector('.bases-kanban-column-name')!.textContent, 'Done');
+  assert.equal(root.querySelector('[role="listbox"]')!.getAttribute('aria-label'), 'Done');
+  assert.doesNotMatch(root.textContent!, /qu9qz58q1yvg/);
+  assert.equal(group.key, done, 'a display label must not replace the authoritative group value');
+  assert.equal(await handle.move('A.md', done), false);
+  assert.equal(assigned, undefined, 'display labeling does not manufacture a move between identical groups');
+  handle.destroy();
+});
