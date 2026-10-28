@@ -24,6 +24,8 @@ export interface PropertiesOptions {
   /** Keep an outer host's spacing in sync with the panel's presentation. */
   onVisibilityChange?: (visible: boolean) => void;
   collectionName?: () => string | undefined;
+  /** Managed hosts own collection schema authoring and its pending picker. */
+  onAddProperty?: (anchor: HTMLElement) => Promise<void> | void;
   onPropertyDefinitionChange?: (property: string, definition: BasePropertyDefinition) => Promise<void> | void;
   /** Optional Rust-filtered targets. A filtered relation is never evaluated locally. */
   getRelationTargets?: (property: string, definition: BasePropertyDefinition) => readonly BaseRelationTarget[] | undefined;
@@ -95,7 +97,7 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
   const addButton = button('Add property', 'metadata-add-button');
   root.append(heading, rowsContainer, globalError, addButton); container.append(root);
   const rows = new Map<string, Row>(), selectedTypes = new Map<string, PropertyType>();
-  let destroyed = false, pending = Promise.resolve(), addForm: HTMLElement | undefined;
+  let destroyed = false, pending = Promise.resolve(), addForm: HTMLElement | undefined, addingManagedProperty = false;
   let pendingGeneration=0,settledGeneration=0,mutationFailure:unknown,mutationFailureOwner:Row|undefined;
   function setPending(operation:Promise<void>):void {
     pending=operation;const generation=++pendingGeneration;
@@ -536,7 +538,19 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
   root.addEventListener('keydown', keyboardMenu);
 
   addButton.addEventListener('click', () => {
-    if (destroyed || addForm) return;
+    const addOwnerCurrent = () => { try { return live(); } catch { return false; } };
+    if (!addOwnerCurrent() || addForm || addingManagedProperty) return;
+    if (options.isManaged?.() && options.onAddProperty) {
+      addingManagedProperty = true; addButton.disabled = true; error(globalError);
+      let operation: Promise<void>;
+      try { operation = Promise.resolve(options.onAddProperty(addButton)); }
+      catch (problem) { operation = Promise.reject(problem); }
+      void operation.catch(problem => { if (addOwnerCurrent() && options.isManaged?.()) report(problem); }).finally(() => {
+        addingManagedProperty = false;
+        if (!destroyed && addButton.isConnected) addButton.disabled = false;
+      });
+      return;
+    }
     addForm = element('div', 'metadata-add-form');
     const name = element('input', 'metadata-property-key-input'); name.placeholder = 'Property name'; name.setAttribute('aria-label', 'New property name');
     const selector = selectType('New property type', 'text');
