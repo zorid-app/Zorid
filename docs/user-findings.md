@@ -1,5 +1,60 @@
 # User findings queue
 
+## Bases one-second Updating and select-field flashing — 2026-10-27
+
+**Closed within bounded desktop scope.** Product `86466ce8` is integrated on
+main: frontend `7008cb5c`, core `aaea9e54` composed as `86466ce8`, independently
+reviewed without must-fix findings. Final 59/59 focused frontend + 2/2 targeted
+legacy checks; main 59/59 + TypeScript; native frontend build; Rust 9/9 refresh
+hints +12/12 view sources pass. Static native CLI query changes from
+Instant/1000ms to None/null; legitimate clock dependencies remain covered.
+Serialized source-matched native host/CLI build passes; 318 Rust source hashes
+unchanged during build, compiler cache version v11.
+
+Actual normal desktop: old renderer/core 100 AX samples over 4.702s caught 9
+Updating samples and 1 table/control replacement sample. Fixed source app 80
+samples over 3.281s:0/0; real Status picker keeps search, saves Done and exact
+body. Installed356-file verified package at `/Users/ctk/Applications/Zorid.app`
+restores Done,80 samples over 3.698s show 0/0, normal quit exit 0. Previous app bundle
+deleted; vaults/preferences preserved; no owned test app. Temporary main and
+Rust build lanes released on completion.
+
+[Full evidence and limits](history/bases-refresh-stability-20261027.md),
+[delivery receipt](history/bases-refresh-stability-20261027.json). The investigation
+notes below are historical where superseded by this completion receipt.
+
+User reports Bases flashes Updating approximately once per second and the select
+field flashes; explicit request to fix, followed by Continue after an interrupted
+message. Preserve the unfinished request to "actually copy the" as incomplete
+steering; it supplies no additional implementable scope yet.
+
+Root owns `codex/bases-refresh-stability` from `debb7dd4`; integration owner
+acknowledged renewed exclusive temporary main integrate/test/commit lane and a
+serialized Rust test/native-host slot (`--jobs 1`), no competing builds. Toolbar
+worker owns session presentation/coalescing and focused regression; audit worker
+owns `codex/bases-refresh-core`/`program.rs` and refresh-hint regressions. Root
+owns native/packaging/evidence/integration. No iOS/Tauri/full-suite work.
+
+Reproduced through actual BaseSession test: unchanged refreshes announce
+Updating three times and replace an idle managed Select cell. Red002 0/2 in
+0.7s; initial fixture failure001 is not bug evidence. Ordinary-note Select loops
+(renderer-only and Vault→property-targets→renderer) are stable across 60 equal
+refreshes; no ordinary-note code change justified.
+
+Source audit found exact cadence cause: Rust explicit-source views are forced to
+Instant refresh dependency even without clocks; effective_view also forces
+summary previews Instant. Core regression authored before fix; compilation/red
+receipt pending. Correct own-view dependencies must preserve real now/today and
+selected summary deadlines without inheriting legacy root clocks.
+
+Frontend one-variable probe: equal schema response increments presentation
+revision and remounts the table; same-source in-flight lookups can overlap.
+Scoped fix/test work in progress: keep controls across equal revalidation,
+coalesce exact-context reads, delay foreground Updating for fast background
+checks, preserve stale/read-only/write guards and surface genuine changes/errors.
+Implementation, independent review, actual native and installed acceptance remain
+separate. Evidence: `/private/tmp/zorid-bases-refresh-20261027`.
+
 ## Notion-inspired Bases UX and automatic app installation — 2026-10-27
 
 Latest direct user steering replaces the earlier exact Obsidian UI target for

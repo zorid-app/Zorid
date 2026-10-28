@@ -1,0 +1,116 @@
+{
+  "productCommit": "86466ce8",
+  "frontendCommit": "7008cb5c",
+  "coreOriginalCommit": "aaea9e54aeec2f7789d5065cbb930817007959e9",
+  "frontendFocused": {
+    "pass": 59,
+    "fail": 0
+  },
+  "mainFocused": {
+    "pass": 59,
+    "fail": 0
+  },
+  "typescript": "PASS",
+  "nativeFrontend": "PASS",
+  "rustTargeted": {
+    "refreshHints": 9,
+    "viewSources": 12,
+    "fail": 0
+  },
+  "nativeArtifacts": {
+    "sourceHead": "86466ce8f6a8f2066f5e1fd7a00e19dcc6bbc103",
+    "sourceUnchanged": true,
+    "trees": {
+      "Cargo.toml": "dae521160181b50ce45ed9c7032b25609616b1c7",
+      "Cargo.lock": "37b73413ef620fa636567f292ba47562e2095050",
+      "crates/zorid-bases": "2295af24b2deb0ebd2841b4d99bd35fd64205fdb",
+      "crates/zorid-cli": "40ee577e062abe3759151f40690cf0bb7eb3fcd9",
+      "crates/zorid-client-sync": "7589748278f003ee534ffd2fe55a3d0f2ce447c1",
+      "crates/zorid-core": "82b6155352d20162021abb69234cca540abb397a",
+      "crates/zorid-crdt": "3232d3c311360e57137387f57e9ffe5ffe310420",
+      "crates/zorid-crypto": "db8b1db518a284639f14bae35087e319b98a3679",
+      "crates/zorid-desktop-host": "e3cceba938f1e49a1f70c3c4ec52bd8e23d763aa",
+      "crates/zorid-document": "4e32498089ecdc6b7cd2d260d1bac5ee8b01dd0c",
+      "crates/zorid-file-sync": "5d20af67e09d451f280ed5bd51d5b8e8659c6739",
+      "crates/zorid-index": "6f35a4123c88a243b828b359c189bd0ffefc9bc8",
+      "crates/zorid-native": "a5c15e77f24aeb70e3e3248d142472747a4b44dd",
+      "crates/zorid-native-sync": "5e4adf3a9488e6d29fb2956ac128fc2138dcd41f",
+      "crates/zorid-proto": "55096ba724af22f1cd44331391e7f0903f81fc64",
+      "crates/zorid-records": "6689bb90d4757c5a232be7abf17b85b715c2d42f",
+      "crates/zorid-recovery": "5583081e61c95ad524a3ae7959885c10207e89d2",
+      "crates/zorid-sqlite": "97d4c67fa0a14097e9f39da95110f859cabdf7a0",
+      "crates/zorid-store": "b7465afa86033cfe62e7050c343b7ad9b36d7e5d",
+      "crates/zorid-sync-protocol": "d82c59f8d12fc6b3c5fa57fceb88977c1726d462",
+      "crates/zorid-sync-rpc": "6730a745ba629a1af081d69b2f783126ab1213d2",
+      "crates/zorid-sync-server": "b49f2a4bedbd09d00cca117fd16c4aa2e89583bb",
+      "crates/zorid-wasm": "402c29c9c1474d789284cff235477462b4213e17"
+    },
+    "artifacts": {
+      "zorid": {
+        "path": "/private/tmp/zorid-bases-refresh-20261027/products/zorid",
+        "sha256": "09e718f39b0354484773e1e3e201250a8ec65c5d998d8ddf98e7c1b8835b2460",
+        "bytes": 25424272
+      },
+      "zorid-desktop-host": {
+        "path": "/private/tmp/zorid-bases-refresh-20261027/products/zorid-desktop-host",
+        "sha256": "b3e078781d8e36c9715479380ba2fd6577463f64362780ede6a80c6f33ea5409",
+        "bytes": 27857664
+      }
+    }
+  },
+  "desktop": {
+    "sourceProduct": "86466ce8",
+    "normalRendering": true,
+    "staticNativeHintBefore": {
+      "dependency": "instant",
+      "nextWakeMs": 1000
+    },
+    "staticNativeHintAfter": {
+      "dependency": "none",
+      "nextWakeMs": null
+    },
+    "baselineAX": {
+      "samples": 100,
+      "durationMs": 4702,
+      "updatingSamples": 9,
+      "replacementSamples": 1
+    },
+    "fixedNormalAX": {
+      "samples": 80,
+      "durationMs": 3281,
+      "updatingSamples": 0,
+      "replacementSamples": 0
+    },
+    "dockedDevtoolsSampling": "Earlier120-sample56.5s run also quiet; not used as normal-layout proof. DevTools was then closed.",
+    "selectSearchSurvived": true,
+    "statusSavedThroughUI": "Done",
+    "bodyPreservedExactly": true,
+    "normalExit": 0,
+    "limitations": [
+      "Bounded desktop scope; no mobile/web acceptance",
+      "Initial CLI-only fixture could not open in desktop; preserved separately, successful native fixture cloned previous verified desktop vault",
+      "Legacy preparation corpus InvalidVersion reproduces before this change",
+      "Two legacy JS refresh fixtures also fail unchanged baseline"
+    ],
+    "verificationOracleCorrection": "Initial plain Status: Done string assertion mismatched native quoted YAML; corrected exact quoted field plus exact body assertion passes."
+  },
+  "installation": {
+    "productCommit": "86466ce8",
+    "installedPath": "/Users/ctk/Applications/Zorid.app",
+    "previousAsarSha256": "245274f0746a8faf08eafe34aa82d54d233b18fa89d5025cbca2fd1a859ff3e6",
+    "installedAsarSha256": "09a2d78e54c9e41104bda01239436128d15e24bcef126f078311c98f4a44593b",
+    "nativeHostSha256": "b3e078781d8e36c9715479380ba2fd6577463f64362780ede6a80c6f33ea5409",
+    "previousDeleted": true,
+    "packageFilesVerified": 356,
+    "installedLaunchVerified": true,
+    "savedStatusAfterRestart": "Done",
+    "installedNormalExit": 0,
+    "installedIdle": {
+      "samples": 80,
+      "durationMs": 3698,
+      "updating": 0,
+      "replacements": 0
+    }
+  },
+  "evidenceDirectory": "/private/tmp/zorid-bases-refresh-20261027"
+}

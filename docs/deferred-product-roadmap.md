@@ -2,6 +2,17 @@
 
 ## Execution checkpoint — shared-core coordinator
 
+**Bases refresh/select flashing fix installed — 2026-10-27.** Product `86466ce8`
+is on main after scoped independent review, 59/59 main checks + TS, frontend build,
+9/9 Rust refresh-hints +12/12 source checks and source-matched native build.
+Explicit-source static views now have no one-second deadline; genuine time
+expressions retain theirs. Equal schema revalidation retains Select DOM/drafts
+and write guards; foreground Updating waits 350ms for slow refresh. Actual native
+select save/body preservation and installed restart/idle checks pass within
+bounded scope. Updated `/Users/ctk/Applications/Zorid.app`; previous bundle
+deleted, no test app remains. No iOS/Tauri/full-suite claim or push. Main/Rust
+lanes released on completion. [Evidence and limits](history/bases-refresh-stability-20261027.md).
+
 **Notion-inspired Bases first pass installed — 2026-10-27.** Product `399591a5`
 is integrated into main using the acknowledged temporary root lane. Named view
 tabs, explicit Create/Cancel with inherited source, direct settings/column menus,
