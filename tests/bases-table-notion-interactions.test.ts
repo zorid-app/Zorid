@@ -8,15 +8,15 @@ import type { BasePropertyWidgetEdit } from '../src/bases/property-widgets.ts';
 import type { BaseQueryResult } from '../src/bases/query.ts';
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
-function fixture(extra: Partial<BaseTableOptions> = {}, picker = false) {
+function fixture(extra: Partial<BaseTableOptions> = {}, picker = false, checkbox = false) {
   const dom = new JSDOM('<main></main><button id="outside">Outside</button>', { pretendToBeVisual: true }), doc = dom.window.document, main = doc.querySelector('main')!;
-  const rows = ['One', 'Two'].map((name, i) => ({ path: `${name}.md`, entryId: `entry-${i}`, revision: 'r1', values: { 'file.name': { type: 'string' as const, value: name }, 'note.text': { type: 'string' as const, value: 'Original' }, 'note.next': { type: 'string' as const, value: 'Next' } } }));
+  const rows = ['One', 'Two'].map((name, i) => ({ path: `${name}.md`, entryId: `entry-${i}`, revision: 'r1', values: { 'file.name': { type: 'string' as const, value: name }, 'note.text': { type: 'string' as const, value: 'Original' }, 'note.next': checkbox ? { type: 'boolean' as const, value: false } : { type: 'string' as const, value: 'Next' } } }));
   const result: BaseQueryResult = { version: 1, view: { type: 'table', name: 'Main' }, rows, groups: [{ key: null, rows }], properties: ['file.name', 'note.text', 'note.next'], availableProperties: [], groupOptions: [], diagnostics: [], counts: { scanned: 2, matched: 2, afterGroupOrder: 2, afterSearch: 2, returned: 2 } };
   let pending = false, release!: () => void, reject!: (error: Error) => void;
   const writes: BasePropertyWidgetEdit[] = [], opens: unknown[][] = [];
   let view!: BaseTableView;
   view = createBaseTableView(main, { result, openFile(...args) { opens.push(args); }, editProperty: async () => {}, canBeginPropertyEdit: () => !pending,
-    renderProperty(element, presentation) { return mountBasePropertyWidget(element, presentation, { getDefinition: property => picker && property === 'note.text' ? { type: 'select', options: [{ value: 'Original' }, { value: 'Done' }] } : { type: 'text' }, canBegin: () => !pending,
+    renderProperty(element, presentation) { return mountBasePropertyWidget(element, presentation, { getDefinition: property => picker && property === 'note.text' ? { type: 'select', options: [{ value: 'Original' }, { value: 'Done' }] } : checkbox && property === 'note.next' ? { type: 'checkbox' } : { type: 'text' }, canBegin: () => !pending,
       commit(edit) { writes.push(edit); pending = true; return new Promise<void>((yes, no) => { release = yes; reject = no; }).then(() => ({ version: 2, row: { ...edit.row, revision: 'r2' }, value: edit.value })).finally(() => { pending = false; }); },
       onEditorComplete: (element, presentation, intent) => view.completePropertyEdit(element, presentation, intent),
     }); }, ...extra,
@@ -47,6 +47,22 @@ test('a next-cell click swallowed during save activates that exact destination a
     f.cell('note.text').click(); const input = f.cell('note.text').querySelector<HTMLInputElement>('input')!; input.value = 'Changed';
     f.pointerClick(f.cell('note.next')); assert.equal(f.writes.length, 1); assert.equal(f.cell('note.next').querySelector('input'), null);
     f.release(); await tick(); const next = f.cell('note.next').querySelector('input'); assert.ok(next); assert.equal(f.doc.activeElement, next);
+  } finally { f.close(); }
+});
+
+test('a queued checkbox click toggles the fresh checkbox after the preceding save', async () => {
+  const f = fixture({}, false, true); try {
+    f.cell('note.text').click(); const input = f.cell('note.text').querySelector<HTMLInputElement>('input')!; input.value = 'Changed';
+    f.pointerClick(f.cell('note.next').querySelector<HTMLInputElement>('input[type="checkbox"]')!); assert.equal(f.writes.length, 1);
+    f.release(); await tick(); assert.equal(f.writes.length, 2); assert.deepEqual(f.writes[1].value, { type: 'boolean', value: true });
+    f.release(); await tick(); assert.equal(f.cell('note.next').querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked, true);
+  } finally { f.close(); }
+});
+
+test('plain title click clears an old cell range before entering the title editor', () => {
+  const f = fixture({ renameFile: async () => {} }); try {
+    f.cell('note.text').focus(); f.key(f.cell('note.text'), 'ArrowRight', true); assert.equal(f.doc.querySelectorAll('[aria-selected="true"]').length, 2);
+    f.cell('file.name').querySelector<HTMLElement>('.zorid-bases-table-title')!.click(); assert.ok(f.cell('file.name').querySelector('input')); assert.equal(f.doc.querySelectorAll('[aria-selected="true"]').length, 0);
   } finally { f.close(); }
 });
 
@@ -124,6 +140,15 @@ test('rename failure keeps the title draft and rejects its queued next click', a
   const f = fixture({ renameFile: () => new Promise<void>((_resolve, no) => { reject = no; }) }); try {
     f.cell('file.name').click(); const input = f.cell('file.name').querySelector<HTMLInputElement>('input')!; input.value = 'Unaccepted'; f.pointerClick(f.cell('note.text'));
     reject(new Error('Rename failed')); await tick(); assert.equal(input.isConnected, true); assert.equal(input.value, 'Unaccepted'); assert.equal(f.cell('note.text').querySelector('input'), null);
+  } finally { f.close(); }
+});
+
+test('Escape after a failed title rename cannot replay its stale queued Open action', async () => {
+  let reject!: (error: Error) => void;
+  const f = fixture({ renameFile: () => new Promise<void>((_resolve, no) => { reject = no; }) }); try {
+    f.cell('file.name').click(); const input = f.cell('file.name').querySelector<HTMLInputElement>('input')!; input.value = 'Unaccepted';
+    f.pointerClick(f.cell('file.name', 1).querySelector<HTMLElement>('.zorid-bases-table-open')!); reject(new Error('Rename failed')); await tick();
+    f.key(input, 'Escape'); assert.equal(f.opens.length, 0); assert.equal(f.doc.activeElement, f.cell('file.name')); assert.equal(f.main.querySelector('input'), null);
   } finally { f.close(); }
 });
 

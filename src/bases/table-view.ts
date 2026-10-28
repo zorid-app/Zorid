@@ -20,6 +20,7 @@ export interface BaseTableEdit {
 }
 export interface BaseTableFileWitness { readonly entryId: string; readonly revision: string }
 export interface BaseTableRename { readonly version: BaseQueryResult['version']; readonly path: string; readonly name: string; readonly witness?: BaseTableFileWitness }
+export interface BaseTableCreatedItem { readonly path: string; readonly entryId?: string }
 export interface BaseTableConfigurationAcknowledgement { readonly result: BaseQueryResult; readonly entryId?: string }
 export interface BaseTableOptions {
   readonly result: BaseQueryResult;
@@ -27,6 +28,9 @@ export interface BaseTableOptions {
   /** Rename this captured file identity; hosts must reject reused paths. */
   readonly renameFile?: (edit: BaseTableRename) => Promise<{ readonly path: string } | void>;
   readonly requestAddProperty?: (anchor: HTMLElement) => void;
+  /** Resolve after publishing the created row; return no row when the host opens
+   * another editor (for example, when filters hide the new item). */
+  readonly onNew?: (anchor: HTMLElement) => Promise<BaseTableCreatedItem | void>;
   /** Host must revalidate version/path/property and publish a new result after saving. */
   readonly editProperty?: (edit: BaseTableEdit) => Promise<void>;
   /** Live admission for new cell/bulk edits; header resize has its own queue. */
@@ -70,7 +74,7 @@ export interface BaseTableOptions {
   readonly getSummary?: (property: string, groupIndex: number | null) => { value: BaseExpressionValue; label?: string } | undefined;
   readonly onEditStateChange?: (active: boolean) => void;
 }
-export interface BaseTableView { completePropertyEdit(element: HTMLElement, presentation: BasePropertyPresentation, intent: BasePropertyEditorCompletionIntent): void; openSummaryPicker(property: string, anchor: HTMLElement, groupIndex?: number | null): void; update(result: BaseQueryResult): void; refreshLayout(): void; hasActiveEdits(): boolean; hasQueuedConfiguration(): boolean; dismissCleanPanels(): void; destroy(): void }
+export interface BaseTableView { editFileTitle(path: string, entryId: string): boolean; completePropertyEdit(element: HTMLElement, presentation: BasePropertyPresentation, intent: BasePropertyEditorCompletionIntent): void; openSummaryPicker(property: string, anchor: HTMLElement, groupIndex?: number | null): void; update(result: BaseQueryResult): void; refreshLayout(): void; hasActiveEdits(): boolean; hasQueuedConfiguration(): boolean; dismissCleanPanels(): void; destroy(): void }
 type Item = { row: BaseQueryRow; groupIndex: number; rowIndex: number; group?: never; summary?: never } | { group: number; row?: never; summary?: never } | { summary: number | null; row?: never; group?: never };
 type TableMenuEntry = { label: string; action?: () => void; disabled?: boolean; checked?: boolean; submenu?: readonly TableMenuEntry[] };
 type CellPoint = { group: number; row: number; column: number };
@@ -127,13 +131,16 @@ function display(value: BaseExpressionValue, shared = false): string {
 export function createBaseTableView(container: HTMLElement, options: BaseTableOptions): BaseTableView {
   const doc = container.ownerDocument, win = doc.defaultView;
   const root = doc.createElement('div'), header = doc.createElement('div'), body = doc.createElement('div'), footer = doc.createElement('div');
+  const newRow = doc.createElement('div'), newCell = doc.createElement('div'), newButton = doc.createElement('button');
   const status = doc.createElement('div');
   root.className = 'zorid-bases-table'; root.setAttribute('role', 'grid'); root.setAttribute('aria-multiselectable', 'true'); root.setAttribute('aria-label', options.result.view.name);
   header.className = 'zorid-bases-table-header'; header.setAttribute('role', 'row');
   body.className = 'zorid-bases-table-body'; body.setAttribute('role', 'rowgroup');
   status.className = 'zorid-bases-table-status'; status.setAttribute('role', 'status');
   footer.className = 'zorid-bases-table-footer zorid-bases-table-summary'; footer.setAttribute('role', 'row');
-  root.append(header, body, footer); container.append(root, status);
+  newRow.className = 'zorid-bases-table-new-row'; newRow.setAttribute('role', 'row'); newRow.hidden = !options.onNew;
+  newCell.setAttribute('role', 'gridcell'); newButton.type = 'button'; newButton.className = 'zorid-bases-table-new'; newButton.append(svgIcon(Plus), doc.createTextNode('New page')); newCell.append(newButton); newRow.append(newCell);
+  root.append(header, body, ...(options.onNew ? [newRow] : []), footer); container.append(root, status);
   let result = options.result, items: Item[] = [], rowHeight = 30, template = '';
   let destroyed = false, initialized = false, revision = 0, frame: number | undefined;
   let selection: { path: string; property: string; point?: CellPoint } | undefined;
@@ -146,10 +153,11 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
   const cellOwners = new WeakMap<HTMLElement, CellOwner>();
   const editFocusEpochs = new WeakMap<HTMLElement, number>();
   let focusEpoch = 0;
-  let blockedActivation: { cell: HTMLElement; event: MouseEvent; open: boolean; title: boolean } | undefined;
+  let blockedActivation: { cell: HTMLElement; event: MouseEvent; open: boolean; title: boolean; checkbox: boolean } | undefined;
   const collapsed = new Set<number>();
   const widgetDisposers = new Map<HTMLElement, () => void>();
   let bulkPending = false, configPending = false;
+  let newPending = false;
   let closeMenu: (() => void) | undefined, closePicker: (() => void) | undefined, pickerAnchor: HTMLElement | undefined;
   let widths = new Map<string, number>(), resizeWidths = new Map<string, number>();
   const measuredWidths = new Map<string, number>();
@@ -236,6 +244,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     const total = [...widths.values()].reduce((sum, width) => sum + width, options.requestAddProperty ? 42 : 0);
     footer.style.gridTemplateColumns = template; footer.style.minWidth = `${total}px`;
     header.style.gridTemplateColumns = template; header.style.minWidth = `${total}px`; body.style.minWidth = `${total}px`;
+    newRow.style.minWidth = `${total}px`;
     for (const row of body.children) if (row instanceof doc.defaultView!.HTMLElement) row.style.gridTemplateColumns = template;
   }
 
@@ -250,7 +259,8 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
       }
     }
     body.style.height = `${items.length * rowHeight}px`;
-    root.setAttribute('aria-rowcount', String(items.length + 1)); root.setAttribute('aria-colcount', String(result.properties.length));
+    newRow.setAttribute('aria-rowindex', String(items.length + 2)); newCell.setAttribute('aria-colspan', String(Math.max(1, result.properties.length)));
+    root.setAttribute('aria-rowcount', String(items.length + 1 + (options.onNew ? 1 : 0))); root.setAttribute('aria-colcount', String(result.properties.length));
   }
   function svgIcon(nodes: IconNode): SVGSVGElement {
     const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -467,7 +477,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
       if (cell.dataset.path === path && cell.dataset.property === property && (!point || cell.dataset.group === String(point.group) && cell.dataset.row === String(point.row))) { cell.focus(); break; }
     }
   }
-  const propertyAdmissionBlocked = () => configPending || !!resizeCommands.length || !!awaitingConfigurationResult || options.canBeginPropertyEdit?.() === false;
+  const propertyAdmissionBlocked = () => newPending || configPending || !!resizeCommands.length || !!awaitingConfigurationResult || options.canBeginPropertyEdit?.() === false;
   function currentOwner(owner: CellOwner) {
     if (destroyed || owner.scope !== configurationScope || !result.properties.includes(owner.property) || !owner.entryId && owner.version !== result.version) return;
     const matches = (item: Item) => item.row && (owner.entryId ? item.row.entryId === owner.entryId : item.row.path === owner.path);
@@ -490,6 +500,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     const point = { group: item.groupIndex, row: item.rowIndex, column: result.properties.indexOf(owner.property) };
     if (!blocked.event.shiftKey || blocked.event.metaKey || blocked.event.ctrlKey) { range = undefined; anchor = undefined; focusCell(item.row.path, owner.property, point); paintRange(); }
     const cell = [...body.querySelectorAll<HTMLElement>('[role="gridcell"][data-path]')].find(cell => cell.dataset.group === String(point.group) && cell.dataset.row === String(point.row) && cell.dataset.column === String(point.column));
+    if (blocked.checkbox && !blocked.event.shiftKey) { cell?.querySelector<HTMLInputElement>('input[type="checkbox"]')?.click(); return true; }
     const target = blocked.open ? cell?.querySelector<HTMLElement>('.zorid-bases-table-open') : blocked.title ? cell?.querySelector<HTMLElement>('.zorid-bases-table-title') : cell;
     target?.dispatchEvent(new win!.MouseEvent('click', { bubbles: true, cancelable: true, button: blocked.event.button, shiftKey: blocked.event.shiftKey, ctrlKey: blocked.event.ctrlKey, metaKey: blocked.event.metaKey, altKey: blocked.event.altKey }));
     return true;
@@ -531,7 +542,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     const save = async () => {
       if (saving || destroyed || token !== revision || editing !== cell) return;
       const name = input.value.trim();
-      if (!name || /[\\/:\u0000-\u001f]/.test(name) || name === '.' || name === '..') { input.setAttribute('aria-invalid', 'true'); report(new Error('Enter a name without path separators.')); return; }
+      if (!name || /[\\/:\u0000-\u001f]/.test(name) || name === '.' || name === '..') { blockedActivation = undefined; input.setAttribute('aria-invalid', 'true'); report(new Error('Enter a name without path separators.')); return; }
       if (name === initialName) { finish(completion !== 'blur'); return; }
       saving = true; input.disabled = true; cell.setAttribute('aria-busy', 'true');
       try {
@@ -540,14 +551,14 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
         status.textContent = ''; finish(completion !== 'blur');
       } catch (error) {
         if (destroyed || token !== revision || editing !== cell) return;
-        saving = false; input.disabled = false; cell.removeAttribute('aria-busy'); input.setAttribute('aria-invalid', 'true'); report(error);
+        blockedActivation = undefined; saving = false; input.disabled = false; cell.removeAttribute('aria-busy'); input.setAttribute('aria-invalid', 'true'); report(error);
         if (editFocusEpochs.get(cell) === focusEpoch && (doc.activeElement === doc.body || doc.activeElement === input)) input.focus();
       }
     };
     input.addEventListener('keydown', event => {
       if (event.isComposing) return;
       event.stopPropagation();
-      if (event.key === 'Escape' && !saving) { event.preventDefault(); completion = 'enter'; finish(true); }
+      if (event.key === 'Escape' && !saving) { event.preventDefault(); blockedActivation = undefined; completion = 'enter'; finish(true); }
       else if (event.key === 'Enter' || event.key === 'Tab') { event.preventDefault(); completion = event.key === 'Tab' ? 'tab' : 'enter'; direction = event.shiftKey ? -1 : 1; void save(); }
     });
     input.addEventListener('blur', () => { void save(); });
@@ -555,6 +566,39 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     doc.addEventListener('pointerdown', outside, true);
     stopRename = () => { doc.removeEventListener('pointerdown', outside, true); stopRename = undefined; };
   }
+  function editFileTitle(path: string, entryId: string): boolean {
+    if (!options.renameFile || !entryId || destroyed || hasActiveEdits() || propertyAdmissionBlocked()) return false;
+    const property = result.properties.find(property => property === 'file.name' || property === 'file.file');
+    if (!property) return false;
+    const group = result.groups.findIndex(group => group.rows.some(row => row.path === path && row.entryId === entryId && typeof row.revision === 'string'));
+    if (group < 0) return false;
+    if (collapsed.delete(group)) rebuildItems();
+    const item = items.find(item => item.row?.path === path && item.row.entryId === entryId && typeof item.row.revision === 'string');
+    if (!item?.row || !/\.md$/i.test(path)) return false;
+    range = undefined; anchor = undefined;
+    const point = { group: item.groupIndex, row: item.rowIndex, column: result.properties.indexOf(property) };
+    focusCell(path, property, point);
+    const cell = [...body.querySelectorAll<HTMLElement>('[role="gridcell"][data-path]')].find(cell => cell.dataset.group === String(point.group) && cell.dataset.row === String(point.row) && cell.dataset.property === property);
+    if (!cell) return false;
+    startRename(cell, item.row, property, Object.freeze({ entryId, revision: item.row.revision! }));
+    return editing === cell;
+  }
+  newButton.addEventListener('click', () => {
+    if (!options.onNew || destroyed || newPending || hasActiveEdits() || propertyAdmissionBlocked()) return;
+    const scope = configurationScope, epoch = focusEpoch;
+    newPending = true; newButton.disabled = true; newButton.setAttribute('aria-busy', 'true');
+    void (async () => {
+      let created: BaseTableCreatedItem | void = undefined;
+      try { created = await options.onNew!(newButton); }
+      catch (error) { blockedActivation = undefined; if (!destroyed) report(error); }
+      finally { newPending = false; if (!destroyed) { newButton.disabled = false; newButton.removeAttribute('aria-busy'); } }
+      if (!created?.entryId || destroyed || scope !== configurationScope || epoch !== focusEpoch) return;
+      const active = doc.activeElement;
+      if (active && active !== doc.body && active !== doc.documentElement && !root.contains(active)) return;
+      if (replayBlockedActivation()) return;
+      editFileTitle(created.path, created.entryId);
+    })();
+  });
   function startEdit(cell: HTMLElement, row: BaseQueryRow, property: string, value: BaseExpressionValue, toggle = false) {
     if (destroyed || editing || range || propertyAdmissionBlocked() || !editable(row, property, value)) return;
     const token = revision, version = result.version;
@@ -823,8 +867,8 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     const focused = footer.contains(doc.activeElement) ? (doc.activeElement as HTMLElement).dataset.summaryProperty : undefined;
     footer.replaceChildren(); footer.style.height = `${Number.parseFloat(win?.getComputedStyle(root).getPropertyValue('--bases-table-row-height') ?? '') || 30}px`;
     const visible = result.properties.some(property => options.getSummary?.(property, null));
-    footer.hidden = !visible; root.setAttribute('aria-rowcount', String(items.length + 1 + (visible ? 1 : 0))); if (!visible) return;
-    footer.setAttribute('aria-rowindex', String(items.length + 2));
+    footer.hidden = !visible; root.setAttribute('aria-rowcount', String(items.length + 1 + (options.onNew ? 1 : 0) + (visible ? 1 : 0))); if (!visible) return;
+    footer.setAttribute('aria-rowindex', String(items.length + 2 + (options.onNew ? 1 : 0)));
     for (const property of result.properties) footer.append(createSummaryCell(property, null));
     if (focused) for (const cell of footer.querySelectorAll<HTMLElement>('[data-summary-property]')) if (cell.dataset.summaryProperty === focused) cell.focus({ preventScroll: true });
   }
@@ -1008,13 +1052,13 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     if (!cell || !body.contains(cell)) return;
     const writableTarget = cell.dataset.property?.startsWith('note.') || options.renameFile && (cell.dataset.property === 'file.name' || cell.dataset.property === 'file.file');
     if ((propertyAdmissionBlocked() || hasActiveEdits()) && writableTarget && !cell.hasAttribute('data-base-editing') && !cell.querySelector('[data-base-editing]') && (!target?.closest('a,[role=link]') || options.renameFile)) {
-      blockedActivation = { cell, event, open: !!target?.closest('.zorid-bases-table-open'), title: !!target?.closest('.zorid-bases-table-title') };
+      blockedActivation = { cell, event, open: !!target?.closest('.zorid-bases-table-open'), title: !!target?.closest('.zorid-bases-table-title'), checkbox: !!target?.closest('input[type="checkbox"]') };
       event.preventDefault(); event.stopImmediatePropagation(); return;
     }
     if (suppressClick) { suppressClick = false; event.preventDefault(); event.stopImmediatePropagation(); return; }
     if (!hasActiveEdits()) {
       editFocusEpochs.set(cell, focusEpoch); blockedActivation = undefined;
-      if (event.type === 'click' && !event.shiftKey) cell.focus({ preventScroll: true });
+      if (event.type === 'click' && !event.shiftKey) { range = undefined; anchor = undefined; cell.focus({ preventScroll: true }); paintRange(); }
     }
     // Property widgets install their own target listeners before table handlers.
     // A selection gesture must reach table navigation without opening a widget.
@@ -1042,7 +1086,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
   function onWindowBlur() { focusEpoch++; blockedActivation = undefined; }
   function protectRangeKey(event: KeyboardEvent) {
     const cell = event.target as HTMLElement | null;
-    if (!event.isComposing && ['Enter', 'Tab'].includes(event.key) && cell?.closest('[data-base-editing]')) blockedActivation = undefined;
+    if (!event.isComposing && (['Enter', 'Tab', 'Escape'].includes(event.key) && cell?.closest('[data-base-editing]') || ['Enter', 'F2'].includes(event.key) && !hasActiveEdits())) blockedActivation = undefined;
     if (!event.isComposing && propertyAdmissionBlocked() && cell?.getAttribute('role') === 'gridcell' && body.contains(cell) && ['Enter', 'F2', 'Delete', 'Backspace'].includes(event.key)) { event.preventDefault(); event.stopImmediatePropagation(); return; }
     if (!event.isComposing && range && cell?.getAttribute('role') === 'gridcell' && body.contains(cell) && ['Enter', 'F2'].includes(event.key)) { event.preventDefault(); event.stopImmediatePropagation(); }
   }
@@ -1139,7 +1183,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     scheduleResizeCommands();
   }
   update(result);
-  return { completePropertyEdit, openSummaryPicker(property, anchor, groupIndex = null) {
+  return { editFileTitle, completePropertyEdit, openSummaryPicker(property, anchor, groupIndex = null) {
     if (destroyed || !root.isConnected || !result.properties.includes(property)) return;
     const origin = summaryOrigins.get(anchor);
     if (!origin || origin.property !== property || origin.scope !== configurationScope || origin.overall !== (groupIndex === null)) return;
