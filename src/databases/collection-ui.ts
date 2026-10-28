@@ -61,10 +61,11 @@ export interface SourceChooser { readonly element: HTMLElement; hasPendingChange
 /** First-view and Add-view onboarding share the same source selector. */
 export function mountSourceChooser(container: HTMLElement, options: SourceChooserOptions): SourceChooser {
   const doc = container.ownerDocument, root = element(doc, 'section'); root.className = 'collection-source-chooser'; root.setAttribute('aria-label', 'Choose view source');
-  const heading = element(doc, 'h2', 'What would you like to see?');
+  const heading = element(doc, 'h2', 'New database');
   const choices = element(doc, 'div'); choices.className = 'collection-source-choices';
   const form = element(doc, 'div'), error = element(doc, 'p'); error.setAttribute('role', 'alert'); error.hidden = true;
   let destroyed = false, busy = false, draft = false;
+  let emptyRequest: DatabaseRequest | undefined, emptySource: BaseViewSource | undefined;
   const live = () => !destroyed && options.isCurrent();
   async function run(action: () => Promise<void>) {
     if (busy || !live()) return;
@@ -72,23 +73,75 @@ export function mountSourceChooser(container: HTMLElement, options: SourceChoose
     for (const control of root.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>('input,button,select')) control.disabled = true;
     try { await action(); }
     catch (problem) { if (live()) { error.textContent = problemText(problem); error.hidden = false; options.onError?.(problem); } }
-    finally { busy = false; root.removeAttribute('aria-busy'); for (const control of root.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>('input,button,select')) control.disabled = false; }
+    finally { busy = false; root.removeAttribute('aria-busy'); for (const control of root.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>('input,button,select')) control.disabled = false; availability(); }
   }
   const select = (source: BaseViewSource) => run(async () => { if (!live()) throw new Error('This view changed.'); await options.choose(source); });
+  const empty = button(doc, 'New empty data source', () => { void createEmpty(); }); empty.className = 'collection-source-primary';
   const notes = button(doc, 'Notes in your vault', () => { void select({ kind: 'untyped' }); });
   notes.append(element(doc, 'small', 'Browse note titles, previews and file information.'));
-  const collection = button(doc, 'A collection of things', () => { draft = true; showCollections(); });
-  collection.append(element(doc, 'small', 'Organize entries with your own properties.'));
-  choices.append(notes, collection);
+  const collection = button(doc, 'Link to existing data source', () => { draft = true; showCollections(); });
+  choices.append(empty, collection, notes);
   root.append(heading, choices, form, error);
-  if (options.onCancel) root.append(button(doc, 'Cancel', () => { if (!busy) options.onCancel!(); }));
+  const cancel = options.onCancel ? button(doc, 'Cancel', () => { if (!busy && !emptyRequest && !emptySource) options.onCancel!(); }) : undefined;
+  if (cancel) root.append(cancel);
+  if (!options.service) root.append(element(doc, 'p', 'Collections are unavailable in this vault. You can browse existing notes.'));
   container.append(root);
+  function availability() {
+    const retained = !!emptyRequest || !!emptySource;
+    empty.disabled = !options.service || busy;
+    collection.disabled = !options.service || busy || retained;
+    notes.disabled = busy || retained;
+    if (cancel) cancel.disabled = busy || retained;
+    const available = [...choices.querySelectorAll<HTMLButtonElement>('button')].filter(control => !control.disabled);
+    available.forEach((control, index) => { control.tabIndex = index === 0 ? 0 : -1; });
+  }
+  async function createEmpty() {
+    if (!options.service || busy || !live()) return;
+    draft = true;
+    await run(async () => {
+      try {
+        if (!emptySource) {
+          if (!emptyRequest) {
+            const response = await options.service!.request({ op: 'list' }); if (!live()) return;
+            const names = new Set(response.collections.map(collection => collection.name.toLowerCase()));
+            let name = 'New database', suffix = 1;
+            while (names.has(name.toLowerCase())) name = `New database ${++suffix}`;
+            emptyRequest = { op: 'create', operationId: operationId(), name, preset: 'blank' };
+          }
+          const response = await options.service!.request(emptyRequest); if (!live()) return;
+          if (response.projection.pending || response.projection.issues.length) throw new Error(response.projection.issues.map(issue => issue.message).join('\n') || 'The data source is committed locally but its files still need publication. Retry this creation.');
+          const created = response.collections.find(collection => !collection.deleted && emptyRequest?.op === 'create' && collection.name === emptyRequest.name);
+          if (!created) throw new Error('The data source was not returned. Retry this creation.');
+          emptySource = { kind: 'collection', id: created.id };
+        }
+        if (!live()) return;
+        await options.choose(emptySource);
+        if (live()) { emptyRequest = undefined; emptySource = undefined; draft = false; }
+      } catch (problem) {
+        const rejected = problem as { source?: unknown; commitUncertain?: unknown };
+        if (!emptySource && rejected?.source === 'host' && rejected.commitUncertain === false) emptyRequest = undefined;
+        draft = !!emptyRequest || !!emptySource;
+        if (live()) empty.textContent = 'Retry data source';
+        throw problem;
+      }
+    });
+  }
+  choices.addEventListener('keydown', event => {
+    if (event.isComposing || busy || !live() || !(event.target instanceof doc.defaultView!.HTMLButtonElement)) return;
+    const available = [...choices.querySelectorAll<HTMLButtonElement>('button')].filter(control => !control.disabled);
+    const index = available.indexOf(event.target as HTMLButtonElement);
+    const next = event.key === 'ArrowDown' ? (index + 1) % available.length : event.key === 'ArrowUp' ? (index - 1 + available.length) % available.length : event.key === 'Home' ? 0 : event.key === 'End' ? available.length - 1 : undefined;
+    if (next !== undefined) { event.preventDefault(); event.stopPropagation(); available.forEach((control, index) => { control.tabIndex = index === next ? 0 : -1; }); available[next]?.focus(); }
+    else if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); (event.target as HTMLButtonElement).click(); }
+    else if (event.key === 'Escape' && !draft && !emptyRequest && !emptySource && cancel) { event.preventDefault(); event.stopPropagation(); cancel.click(); }
+  });
+  availability(); (options.service ? empty : notes).focus();
   function showCollections() {
     if (!options.service) { error.textContent = 'Collections are unavailable in this vault.'; error.hidden = false; return; }
     choices.hidden = true; heading.textContent = 'Choose a collection'; form.replaceChildren();
     const list = element(doc, 'div'); list.className = 'collection-source-existing';
     const create = button(doc, 'Create a collection', showCreate);
-    form.append(create, list, button(doc, 'Back', () => { draft = false; choices.hidden = false; heading.textContent = 'What would you like to see?'; form.replaceChildren(); error.hidden = true; }));
+    form.append(create, list, button(doc, 'Back', () => { draft = false; choices.hidden = false; heading.textContent = 'New database'; form.replaceChildren(); error.hidden = true; availability(); collection.focus(); }));
     void run(async () => {
       const response = await options.service!.request({ op: 'list' }); if (!live()) return;
       for (const item of response.collections.filter(item => !item.deleted)) list.append(button(doc, item.name, () => { void select({ kind: 'collection', id: item.id }); }));

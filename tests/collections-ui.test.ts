@@ -22,7 +22,7 @@ test('first view offers notes or a collection and does not create a global regis
 test('collection creation retries the identical operation after uncertainty and retains its form',async()=>{
   const f=fixture(),requests:DatabaseRequest[]=[],selected:unknown[]=[];let failed=false;
   const chooser=mountSourceChooser(f.host,{service:{async request(command){requests.push(command);if(command.op==='create'){if(!failed){failed=true;throw new Error('Reply lost');}return response([collection]);}return response();}},isCurrent:()=>true,choose:async source=>{selected.push(source);}});
-  click(f.host,'A collection of thingsOrganize entries with your own properties.');await tick();click(f.host,'Create a collection');
+  click(f.host,'Link to existing data source');await tick();click(f.host,'Create a collection');
   const name=f.host.querySelector<HTMLInputElement>('[aria-label="Collection name"]')!;name.value='Work tasks';click(f.host,'Create collection');await until(()=>f.host.querySelector('[role="alert"]')?.textContent==='Reply lost');
   assert.equal(name.value,'Work tasks');click(f.host,'Create collection');await until(()=>selected.length===1);
   const creates=requests.filter(request=>request.op==='create');assert.equal(creates.length,2);assert.deepEqual(creates[0],creates[1]);assert.deepEqual(selected,[{kind:'collection',id:collection.id}]);chooser.destroy();f.dom.window.close();
@@ -31,7 +31,7 @@ test('collection creation retries the identical operation after uncertainty and 
 test('source save failure retains the selected collection and creation identity',async()=>{
   const f=fixture();let saves=0;const requests:DatabaseRequest[]=[];
   const chooser=mountSourceChooser(f.host,{service:{async request(command){requests.push(command);return command.op==='list'?response([collection]):response([collection]);}},isCurrent:()=>true,choose:async()=>{saves++;throw new Error('Base save failed');}});
-  click(f.host,'A collection of thingsOrganize entries with your own properties.');await until(()=>!![...f.host.querySelectorAll('button')].find(button=>button.textContent==='Work tasks'));
+  click(f.host,'Link to existing data source');await until(()=>!![...f.host.querySelectorAll('button')].find(button=>button.textContent==='Work tasks'));
   click(f.host,'Work tasks');await until(()=>saves===1);await tick();assert.equal(chooser.element.isConnected,true);assert.equal(f.host.querySelector('[role="alert"]')?.textContent,'Base save failed');chooser.destroy();f.dom.window.close();
 });
 

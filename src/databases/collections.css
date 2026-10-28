@@ -8,6 +8,15 @@
 .collection-source-chooser button, .collection-property-editor button { cursor: pointer; border: 1px solid var(--background-modifier-border); border-radius: 5px; padding: 7px 10px; background: var(--background-primary); color: var(--text-normal); margin: 4px; }
 .collection-source-chooser input, .collection-source-chooser select, .collection-property-editor input, .collection-property-editor select { padding: 7px 9px; margin: 4px; max-width: 100%; background: var(--background-primary); color: var(--text-normal); border: 1px solid var(--background-modifier-border); border-radius: 5px; }
 .collection-source-existing { display: flex; flex-wrap: wrap; }
+.collection-source-chooser { max-width: 360px; padding: 12px; }
+.collection-source-chooser > h2 { margin: 2px 6px 10px; color: var(--text-muted); font-size: 13px; font-weight: 500; }
+.collection-source-choices { flex-direction: column; gap: 2px; margin: 0; }
+.collection-source-choices > button { flex: none; min-height: 34px; padding: 7px 9px; margin: 0; border: 0; text-align: left; font-size: 14px; }
+.collection-source-choices > button:hover, .collection-source-choices > button:focus-visible { background: var(--background-modifier-hover); }
+.collection-source-choices > button:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: -2px; }
+.collection-source-choices > button:disabled { opacity: .45; cursor: default; }
+.collection-source-choices small { margin-top: 3px; font-size: 12px; }
+.collection-source-chooser > p { margin: 8px 6px; color: var(--text-muted); font-size: 12px; }
 .collection-property-row { padding: 10px 0; border-bottom: 1px solid var(--background-modifier-border); }
 .collection-option-list { padding-left: 24px; }
 .collection-delete-confirmation { padding: 10px; border: 1px solid var(--color-red); border-radius: 5px; }
