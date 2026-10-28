@@ -1,3 +1,4 @@
+import {openBaseToolbarPanel} from './helpers/base-toolbar.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {JSDOM} from 'jsdom';
@@ -16,7 +17,7 @@ function fixture(immediate=false){
  const root={filters:source.getRoot('filters')!,formulas:source.getRoot('formulas')!,properties:source.getRoot('properties')!};
  const state={result,views:source.views,selectedIndex:0,root,rootFilters:root.filters,readOnly:false,allowRename:true,label:(property:string)=>property}; toolbar.update(state);
  const get=<T extends HTMLElement>(label:string)=>{const node=doc.querySelector<T>(`[aria-label="${label}"]`);assert.ok(node,label);return node;};
- const click=(label:string)=>get<HTMLButtonElement>(label).click();
+ const click=(label:string)=>{if(label==='Group'||label==='Properties'||label==='Results')openBaseToolbarPanel(doc,label);else get<HTMLButtonElement>(label).click();};
  const input=(label:string,value:string,event='input')=>{const node=get<HTMLInputElement>(label);node.value=value;node.dispatchEvent(new dom.window.Event(event,{bubbles:true}));};
  const submit=()=>doc.querySelector('form')!.dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));
  return{dom,doc,toolbar,result,state,calls,errors,get,click,input,submit,cleanup(){toolbar.destroy();dom.window.close();}};
@@ -91,7 +92,7 @@ test('same-name external sort changes invalidate cloned controls instead of adop
 
 test('a pointer-opened Results menu survives summary acknowledgement and rebases only its limit draft',async()=>{
  const f=fixture(true);try{
-  const pointerOpen=()=>{const trigger=f.get<HTMLButtonElement>('Results');trigger.dispatchEvent(new f.dom.window.MouseEvent('pointerdown',{bubbles:true,cancelable:true}));trigger.focus();trigger.click();return trigger;};
+  const pointerOpen=()=>{const trigger=f.get<HTMLButtonElement>('Settings');trigger.dispatchEvent(new f.dom.window.MouseEvent('pointerdown',{bubbles:true,cancelable:true}));trigger.focus();openBaseToolbarPanel(f.doc,'Results');return trigger;};
   const trigger=pointerOpen(),limit=f.get<HTMLInputElement>('Limit');assert.equal(f.doc.activeElement,limit);
   const view={...f.state.views[0],summaries:{'note.score':'RatingTotal'}},views=[view,f.state.views[1]],root={...f.state.root,summaries:{RatingTotal:'values.sum()'}};
   const accepted={...f.state,root,views,result:{...f.result,version:2,view}};f.toolbar.update(accepted);
@@ -154,7 +155,7 @@ test('actual query-backed immediate Group edits manual visibility and creates an
  function refresh(){current=executeBaseQuery(document,{version,files});toolbar.update({result:current,views:document.views,selectedIndex:0,readOnly:false,allowRename:true,label:p=>p,propertyType:()=> 'text'});}refresh();
  const get=<T extends HTMLElement>(label:string)=>{const node=doc.querySelector<T>(`[aria-label="${label}"]`);assert.ok(node,label);return node;};const settle=()=>new Promise(resolve=>setTimeout(resolve,280));
  try{
-  get<HTMLButtonElement>('Group').click();const direction=get<HTMLSelectElement>('Group direction');direction.value='MANUAL';direction.dispatchEvent(new dom.window.Event('change',{bubbles:true}));await settle();assert.deepEqual(document.views[0].groupOrder,[]);assert.equal(current!.rows.length,0);
+  openBaseToolbarPanel(doc,'Group');const direction=get<HTMLSelectElement>('Group direction');direction.value='MANUAL';direction.dispatchEvent(new dom.window.Event('change',{bubbles:true}));await settle();assert.deepEqual(document.views[0].groupOrder,[]);assert.equal(current!.rows.length,0);
   get<HTMLInputElement>('Show group Todo').click();await settle();assert.deepEqual(document.views[0].groupOrder,['Todo']);assert.deepEqual(current!.rows.map(row=>row.path),['One.md']);
   get<HTMLButtonElement>('Add group').click();get<HTMLInputElement>('Group name').value='Blocked';assert.equal(toolbar.hasDraft(),true);get<HTMLButtonElement>('Create group').click();await settle();assert.deepEqual(document.views[0].groupOrder,['Todo','Blocked']);assert.equal(current!.groupOptions.find(group=>group.key.type==='string'&&group.key.value==='Blocked')?.count,0);assert.equal(get<HTMLInputElement>('Show group Blocked').checked,true);assert.equal(toolbar.hasDraft(),false);assert.deepEqual(errors,[]);
  }finally{toolbar.destroy();dom.window.close();}
@@ -234,7 +235,7 @@ test('reference Add formula creates a visible field, then expression and identit
  function refresh(){const result=executeBaseQuery(document,{version,files:[{path:'One.md',properties:{score:4}}]});const root=Object.fromEntries(['formulas','properties','filters','summaries'].map(key=>[key,document.getRoot(key)]).filter(([,value])=>value!==undefined));toolbar.update({result,views:document.views,root:root as any,selectedIndex:0,readOnly:false,allowRename:true,label:p=>p});}refresh();
  const get=<T extends HTMLElement>(label:string)=>{const node=doc.querySelector<T>(`[aria-label="${label}"]`);assert.ok(node,label);return node;};const settle=()=>new Promise(resolve=>setTimeout(resolve,280));
  try{
-  get<HTMLButtonElement>('Properties').click();get<HTMLButtonElement>('Add formula').click();await tick();assert.deepEqual(calls[0],[undefined,'Untitled','']);assert.deepEqual(document.views[0].order,['file.name','formula.Untitled']);assert.equal(doc.querySelector<HTMLElement>('.bases-toolbar-footer')?.hidden,true);
+  openBaseToolbarPanel(doc,'Properties');get<HTMLButtonElement>('Add formula').click();await tick();assert.deepEqual(calls[0],[undefined,'Untitled','']);assert.deepEqual(document.views[0].order,['file.name','formula.Untitled']);assert.equal(doc.querySelector<HTMLElement>('.bases-toolbar-footer')?.hidden,true);
   const expression=get<HTMLTextAreaElement>('Formula expression');expression.focus();expression.value='score * 2';expression.dispatchEvent(new dom.window.Event('input',{bubbles:true}));await settle();assert.equal((document.getRoot('formulas') as any).Untitled,'score * 2');assert.equal(expression.isConnected,true);
   const name=get<HTMLInputElement>('Formula name');name.focus();name.value='Twice';name.dispatchEvent(new dom.window.Event('input',{bubbles:true}));name.blur();await tick();assert.equal((document.getRoot('formulas') as any).Twice,'score * 2',JSON.stringify({errors:errors.map(String),calls,text:doc.body.textContent}));assert.deepEqual(document.views[0].order,['file.name','formula.Twice']);assert.equal(expression.isConnected,true);
   expression.focus();expression.value='score * 3';expression.dispatchEvent(new dom.window.Event('input',{bubbles:true}));await settle();assert.deepEqual(calls.at(-1),['Twice','Twice','score * 3']);assert.equal(toolbar.hasDraft(),false);assert.deepEqual(errors,[]);
@@ -259,7 +260,7 @@ test('persistence retry settles its original generation then saves the newer que
  const toolbar=createBaseToolbar(doc.querySelector('main')!,{immediate:true,preflight(){},async selectView(){},async save(expected,patch){calls.push([expected,patch]);assert.equal(expected,version);if(calls.length===1)await new Promise<void>((_resolve,reject)=>{rejectFirst=reject;});document.updateView(0,patch);document=BaseDocument.parse(document.toString());version++;refresh();},onDraftChange(){},onError(){}});
  function refresh(){const result=executeBaseQuery(document,{version,files:[]});toolbar.update({result,views:document.views,selectedIndex:0,readOnly:false,allowRename:true,label:p=>p});}refresh();
  try{
-  doc.querySelector<HTMLButtonElement>('[aria-label="Results"]')!.click();const input=doc.querySelector<HTMLInputElement>('[aria-label="Limit"]')!;input.focus();input.value='10';input.dispatchEvent(new dom.window.Event('input',{bubbles:true}));await new Promise(resolve=>setTimeout(resolve,280));assert.equal(calls.length,1);
+  openBaseToolbarPanel(doc,'Results');const input=doc.querySelector<HTMLInputElement>('[aria-label="Limit"]')!;input.focus();input.value='10';input.dispatchEvent(new dom.window.Event('input',{bubbles:true}));await new Promise(resolve=>setTimeout(resolve,280));assert.equal(calls.length,1);
   input.value='20';input.dispatchEvent(new dom.window.Event('input',{bubbles:true}));rejectFirst!(new BaseToolbarSaveError('disk failed',async()=>{retries++;document.updateView(0,{limit:10});document=BaseDocument.parse(document.toString());version++;refresh();}));await tick();assert.equal(input.value,'20');assert.equal(input.disabled,true);
   const retry=doc.querySelector<HTMLButtonElement>('button[type="submit"]')!;assert.equal(retry.textContent,'Retry save');retry.click();await tick();await tick();assert.deepEqual(calls,[[1,{limit:10}],[2,{limit:20}]]);assert.equal(retries,1);assert.equal(document.views[0].limit,20);assert.equal(toolbar.hasDraft(),false);assert.equal(doc.querySelector('[role="dialog"]'),null);
  }finally{toolbar.destroy();dom.window.close();}
@@ -273,7 +274,7 @@ test('formula retry preserves its accepted identity before applying a newer queu
  function refresh(){const result=executeBaseQuery(document,{version,files:[{path:'One.md',properties:{score:4}}]});toolbar.update({result,views:document.views,root:{formulas:document.getRoot('formulas')!},selectedIndex:0,readOnly:false,allowRename:true,label:p=>p});}refresh();
  const get=<T extends HTMLElement>(label:string)=>{const node=doc.querySelector<T>(`[aria-label="${label}"]`);assert.ok(node,label);return node;};
  try{
-  get<HTMLButtonElement>('Properties').click();get<HTMLButtonElement>('Configure property formula.Original').click();get<HTMLButtonElement>('Edit formula').click();const name=get<HTMLInputElement>('Formula name');name.focus();name.value='Accepted';name.dispatchEvent(new dom.window.Event('input',{bubbles:true}));name.blur();await tick();assert.equal(calls.length,1);
+  openBaseToolbarPanel(doc,'Properties');get<HTMLButtonElement>('Configure property formula.Original').click();get<HTMLButtonElement>('Edit formula').click();const name=get<HTMLInputElement>('Formula name');name.focus();name.value='Accepted';name.dispatchEvent(new dom.window.Event('input',{bubbles:true}));name.blur();await tick();assert.equal(calls.length,1);
   name.focus();name.value='Newest';name.dispatchEvent(new dom.window.Event('input',{bubbles:true}));name.blur();rejectFirst!(new BaseToolbarSaveError('disk failed',async()=>{document=BaseDocument.parse(pendingDocument!.toString());version++;refresh();}));await tick();assert.equal(name.value,'Newest');doc.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();await tick();await tick();assert.deepEqual(calls,[['Original','Accepted','score * 2'],['Accepted','Newest','score * 2']]);assert.deepEqual(document.views[0].order,['file.name','formula.Newest']);assert.equal((document.getRoot('formulas') as any).Newest,'score * 2');assert.equal(toolbar.hasDraft(),false);
  }finally{toolbar.destroy();dom.window.close();}
 });
@@ -289,7 +290,7 @@ test('a synchronous host failure retains the editable toolbar draft and clears s
  const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),doc=dom.window.document;
  const document=BaseDocument.parse('views: [{type: table, name: A}]'),result=executeBaseQuery(document,{version:1,files:[]});
  const toolbar=createBaseToolbar(doc.querySelector('main')!,{immediate:true,preflight(){},async selectView(){},save():Promise<void>{throw new Error('host unavailable');},onDraftChange(){},onError(){}});toolbar.update({result,views:document.views,selectedIndex:0,readOnly:false,allowRename:true,label:p=>p});
- try{doc.querySelector<HTMLButtonElement>('[aria-label="Results"]')!.click();const input=doc.querySelector<HTMLInputElement>('[aria-label="Limit"]')!;input.value='5';input.dispatchEvent(new dom.window.Event('input',{bubbles:true}));doc.querySelector('form')!.dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));await tick();assert.equal(input.disabled,false);assert.equal(input.value,'5');assert.equal(toolbar.hasDraft(),true);assert.match(doc.querySelector('[role="alert"]')?.textContent??'',/host unavailable/);doc.querySelector<HTMLButtonElement>('[aria-label="Cancel"]')!.click();assert.equal(toolbar.hasDraft(),false);}finally{toolbar.destroy();dom.window.close();}
+ try{openBaseToolbarPanel(doc,'Results');const input=doc.querySelector<HTMLInputElement>('[aria-label="Limit"]')!;input.value='5';input.dispatchEvent(new dom.window.Event('input',{bubbles:true}));doc.querySelector('form')!.dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));await tick();assert.equal(input.disabled,false);assert.equal(input.value,'5');assert.equal(toolbar.hasDraft(),true);assert.match(doc.querySelector('[role="alert"]')?.textContent??'',/host unavailable/);doc.querySelector<HTMLButtonElement>('[aria-label="Cancel"]')!.click();assert.equal(toolbar.hasDraft(),false);}finally{toolbar.destroy();dom.window.close();}
 });
 
 

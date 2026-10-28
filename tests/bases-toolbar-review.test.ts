@@ -1,3 +1,4 @@
+import {openBaseToolbarPanel} from './helpers/base-toolbar.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
@@ -15,7 +16,7 @@ function fixture(view: Record<string, unknown> = {}, immediate = false) {
   const state = { result, views: [result.view], selectedIndex: 0, readOnly: false, allowRename: true, label: (property: string) => property };
   toolbar.update(state);
   const get = <T extends HTMLElement>(label: string) => doc.querySelector<T>(`[aria-label="${label}"]`)!;
-  return { dom, doc, result, state, toolbar, patches, errors, get, click(label: string) { get<HTMLButtonElement>(label).click(); }, change(label: string, value: string) { const input = get<HTMLInputElement>(label); input.value = value; input.dispatchEvent(new dom.window.Event('change', { bubbles: true })); }, submit() { doc.querySelector('form')!.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true })); }, cleanup() { toolbar.destroy(); dom.window.close(); } };
+  return { dom, doc, result, state, toolbar, patches, errors, get, click(label: string) { if(label==='Group'||label==='Properties'||label==='Results')openBaseToolbarPanel(doc,label);else get<HTMLButtonElement>(label).click(); }, change(label: string, value: string) { const input = get<HTMLInputElement>(label); input.value = value; input.dispatchEvent(new dom.window.Event('change', { bubbles: true })); }, submit() { doc.querySelector('form')!.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true })); }, cleanup() { toolbar.destroy(); dom.window.close(); } };
 }
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 

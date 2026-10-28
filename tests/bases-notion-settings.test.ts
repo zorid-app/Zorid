@@ -8,7 +8,7 @@ import type {BaseToolbarOptions} from '../src/bases/toolbar.ts';
 import type {BaseViewPatch} from '../src/bases/document.ts';
 const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
 function deferred(){let resolve!:()=>void;const promise=new Promise<void>(done=>{resolve=done;});return{promise,resolve};}
-function fixture(extra:Partial<BaseToolbarOptions>={},browseOnly=false){
+function fixture(extra:Partial<BaseToolbarOptions>={},browseOnly=false,readOnly=false){
  const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),doc=dom.window.document;
  const document=BaseDocument.parse('pluginRoot: keep\nviews: [{type: table, name: Library, order: [file.name, score], pluginView: keep}]');let version=1;
  const calls:unknown[][]=[],errors:unknown[]=[];let hold:ReturnType<typeof deferred>|undefined,fail=false,edited=0;
@@ -16,7 +16,7 @@ function fixture(extra:Partial<BaseToolbarOptions>={},browseOnly=false){
  const update=async(expected:unknown,index:number,patch:BaseViewPatch)=>{assert.equal(expected,version);assert.equal(index,0);calls.push(['update',expected,patch]);if(hold)await hold.promise;if(fail){fail=false;throw new BaseToolbarSaveError('Disk unavailable',async()=>publish(patch));}publish(patch);};
  const options:BaseToolbarOptions={immediate:true,preflight(){},async selectView(){},save:(version,patch)=>update(version,0,patch),commands:{updateView:update,async updateRoot(version,patch){calls.push(['root',version,patch]);}},onNew:async()=>{calls.push(['new']);},onEditProperties(){assert.equal(doc.querySelector('[role=dialog]'),null);edited++;},onDraftChange(){},onError:error=>errors.push(error),...extra};
  const toolbar=createBaseToolbar(doc.querySelector('main')!,options);
- function refresh(){const result=executeBaseQuery(document,{version,files:[{path:'Book.md',properties:{score:3}}]});toolbar.update({result,views:document.views,selectedIndex:0,root:{pluginRoot:'keep'},readOnly:false,browseOnly,allowRename:true,label:property=>property==='note.score'?'Rating':property==='file.name'?'Name':property,sourceLabel:'Books'});}
+ function refresh(){const result=executeBaseQuery(document,{version,files:[{path:'Book.md',properties:{score:3}}]});toolbar.update({result,views:document.views,selectedIndex:0,root:{pluginRoot:'keep'},readOnly,browseOnly,allowRename:true,label:property=>property==='note.score'?'Rating':property==='file.name'?'Name':property,sourceLabel:'Books'});}
  refresh();const get=<T extends HTMLElement>(label:string)=>{const element=doc.querySelector<T>(`[aria-label="${label}"]`);assert.ok(element,label);return element;};
  const click=(label:string)=>get<HTMLButtonElement>(label).click();const row=(setting:string)=>{const element=doc.querySelector<HTMLButtonElement>(`[data-setting="${setting}"]`);assert.ok(element,setting);return element;};
  const key=(element:HTMLElement,key:string)=>{const event=new dom.window.KeyboardEvent('keydown',{key,bubbles:true,cancelable:true});element.dispatchEvent(event);return event;};
@@ -51,4 +51,15 @@ test('a later Close cancels queued settings navigation while preserving the acce
 
 for(const phase of ['dirty','saving'] as const)test(`More view actions expands only after the ${phase} rename and queued navigation settle`,async()=>{
  const f=fixture();try{f.click('Settings');const input=f.get<HTMLInputElement>('View name'),release=f.hold();input.focus();input.value='Reading';input.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));if(phase==='saving')input.blur();f.row('more-view-actions').click();assert.equal(f.doc.querySelector('[role=dialog]')?.getAttribute('aria-label'),'View settings');release();await tick();assert.equal(f.document.views[0].name,'Reading');assert.equal(f.doc.querySelector('[role=dialog]')?.getAttribute('aria-label'),'View options');assert.equal(f.get<HTMLButtonElement>('View actions').getAttribute('aria-expanded'),'true');assert.equal(f.doc.querySelector<HTMLElement>('.bases-view-actions')?.hidden,false);assert.equal(f.calls.length,1);}finally{f.close();}
+});
+
+
+test('compact toolbar removes duplicate schema/count actions while keeping plain New and real settings routes',()=>{
+ const f=fixture();try{const toolbar=f.doc.querySelector('main')!;assert.deepEqual([...toolbar.querySelectorAll('.bases-toolbar-actions button')].map(button=>button.getAttribute('aria-label')),['Filter','Sort','Settings','New','New item options']);assert.equal(toolbar.querySelector('[aria-label=Group]'),null);assert.equal(toolbar.querySelector('[aria-label=Properties]'),null);assert.equal(toolbar.querySelector('[aria-label=Results]'),null);assert.equal(f.get('New').textContent,'New');assert.equal(f.get('New').querySelector('svg'),null);f.click('Settings');f.row('group').click();assert.ok(f.get('Group property'));f.click('Close settings');f.click('Settings');f.row('property-visibility').click();assert.ok(f.get('Find a property'));}finally{f.close();}
+});
+test('the active named tab opens view settings and retains unfinished rename guards',()=>{
+ const f=fixture();try{const active=f.doc.querySelector<HTMLButtonElement>('[role=tab][aria-selected=true]')!;active.click();assert.equal(f.doc.querySelector('[role=dialog]')?.getAttribute('aria-label'),'View settings');assert.deepEqual(f.calls,[]);const input=f.get<HTMLInputElement>('View name');input.value='Draft name';input.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));active.click();assert.equal(input.isConnected,true);assert.equal(input.value,'Draft name');assert.equal(f.toolbar.hasDraft(),true);assert.equal(f.errors.length,1);assert.deepEqual(f.calls,[]);}finally{f.close();}
+});
+test('readonly active tabs retain supported view and Results inspection without mutation controls',()=>{
+ const f=fixture({},false,true);try{assert.equal(f.doc.querySelector('[aria-label=Settings]'),null);f.doc.querySelector<HTMLButtonElement>('[role=tab][aria-selected=true]')!.click();assert.equal(f.doc.querySelector('[role=dialog]')?.getAttribute('aria-label'),'Views');f.click('Results');assert.equal(f.doc.querySelector('[role=dialog]')?.getAttribute('aria-label'),'Results');assert.equal(f.get<HTMLInputElement>('Limit').disabled,true);assert.deepEqual(f.calls,[]);}finally{f.close();}
 });

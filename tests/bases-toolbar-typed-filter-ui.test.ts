@@ -10,20 +10,21 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
 function fixture(filters?:BaseValue, kinds:Record<string,import('../src/bases/toolbar-filter-types.ts').BaseFilterPropertyDescriptor>={}){
   const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),doc=dom.window.document;
   const document=BaseDocument.parse(JSON.stringify({views:[{type:'table',name:'Library',...(filters===undefined?{}:{filters})},{type:'table',name:'Other'}]}));
+  let latest:ReturnType<typeof executeBaseQuery>;
   let version=1,selectedIndex=0,hook:((patch:Patch)=>Promise<void>)|undefined;
   type Patch={view?:BaseViewPatch;root?:Record<string,BaseValue|undefined>};
   const calls:Array<{version:unknown;patch:Patch}>=[],errors:unknown[]=[];
   const toolbar=createBaseToolbar(doc.querySelector('main')!,{immediate:true,preflight(){},async selectView(){},async save(_v,patch){commit({view:patch});},commands:{async updateRoot(){}},
     filterOperands:()=>({files:['Items/A "quoted".md'],folders:['/','Items'],tags:['#one','#two/child'],properties:['note.literal','status'],metadataStatus:'stale'}),
     async saveConfiguration(expected,patch){calls.push({version:expected,patch:structuredClone(patch)});if(hook)await hook(patch);else commit(patch);},onDraftChange(){},onError(error){errors.push(error);}});
-  function refresh(){const result=executeBaseQuery(document,{version,files:[{path:'A.md',properties:{score:2,text:'Alpha beta',items:['red','blue'],enabled:false,due:'2026-10-22'}},{path:'B.md',properties:{score:5,text:'gamma',items:[],enabled:true,due:'2026-10-23'}}]},{viewIndex:selectedIndex});toolbar.update({result,views:document.views,selectedIndex,root:{...(document.getRoot('filters')===undefined?{}:{filters:document.getRoot('filters')!})},rootFilters:document.getRoot('filters'),readOnly:false,allowRename:true,filterProperty:p=>kinds[p],label:p=>p==='file.file'?'file':p});}
+  function refresh(){const result=executeBaseQuery(document,{version,files:[{path:'A.md',properties:{score:2,text:'Alpha beta',items:['red','blue'],enabled:false,due:'2026-10-22'}},{path:'B.md',properties:{score:5,text:'gamma',items:[],enabled:true,due:'2026-10-23'}}]},{viewIndex:selectedIndex});latest=result;toolbar.update({result,views:document.views,selectedIndex,root:{...(document.getRoot('filters')===undefined?{}:{filters:document.getRoot('filters')!})},rootFilters:document.getRoot('filters'),readOnly:false,allowRename:true,filterProperty:p=>kinds[p],label:p=>p==='file.file'?'file':p});}
   function commit(patch:Patch){if(patch.view)document.updateView(selectedIndex,patch.view);if(patch.root)document.updateRoot(patch.root);version++;refresh();}
   refresh();
   const get=<T extends HTMLElement>(label:string,scope:ParentNode=doc)=>{const node=scope.querySelector<T>(`[aria-label=${JSON.stringify(label)}]`);assert.ok(node,label);return node;};
   const edit=(label:string,value:string,event='input',scope:ParentNode=doc)=>{const node=get<HTMLInputElement>(label,scope);node.value=value;node.dispatchEvent(new dom.window.Event(event,{bubbles:true}));};
   const click=(label:string)=>get<HTMLButtonElement>(label).click();
   const submit=()=>doc.querySelector('form')!.dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));
-  return {dom,doc,document,toolbar,calls,errors,get,edit,click,submit,commit,setHook(value:typeof hook){hook=value;},switchView(){selectedIndex=1;version++;refresh();},refreshNote(){version++;refresh();},get version(){return version;},cleanup(){toolbar.destroy();dom.window.close();}};
+  return {get result(){return latest;},dom,doc,document,toolbar,calls,errors,get,edit,click,submit,commit,setHook(value:typeof hook){hook=value;},switchView(){selectedIndex=1;version++;refresh();},refreshNote(){version++;refresh();},get version(){return version;},cleanup(){toolbar.destroy();dom.window.close();}};
 }
 
 const kinds={
@@ -35,7 +36,7 @@ const source=(f:ReturnType<typeof fixture>)=>f.document.views[0].filters;
 const enter=(f:ReturnType<typeof fixture>)=>f.get('Filter value').dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));
 async function save(f:ReturnType<typeof fixture>){f.submit();await tick();await tick();}
 test('captured String family survives zero rows and offers ordered positive then inverse methods',()=>{
- const f=fixture('note.text == "missing"',kinds);try{f.click('Filter');assert.equal(f.get('Results').textContent?.trim(),'0 results');assert.deepEqual([...f.get<HTMLSelectElement>('Condition').options].map(x=>x.value),['eq','neq','startsWith','endsWith','isEmpty','contains','containsAny','containsAll','notStartsWith','notEndsWith','isNotEmpty','notContains','notContainsAny','notContainsAll']);}finally{f.cleanup();}
+ const f=fixture('note.text == "missing"',kinds);try{f.click('Filter');assert.equal(f.result.counts.returned,0);assert.deepEqual([...f.get<HTMLSelectElement>('Condition').options].map(x=>x.value),['eq','neq','startsWith','endsWith','isEmpty','contains','containsAny','containsAll','notStartsWith','notEndsWith','isNotEmpty','notContains','notContainsAny','notContainsAll']);}finally{f.cleanup();}
 });
 test('String predicates author quoted literals and inverse whole calls without result sampling',async()=>{
  const f=fixture(undefined,kinds);try{f.click('Filter');f.edit('Filter property','note.text','change');f.edit('Condition','notStartsWith','change');f.edit('Filter value','Alpha "quoted"');await save(f);assert.deepEqual(source(f),{and:[String.raw`!note["text"].startsWith("Alpha \"quoted\"")`]});}finally{f.cleanup();}

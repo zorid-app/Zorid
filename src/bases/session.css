@@ -238,3 +238,8 @@
 .bases-toolbar-new.has-options { border-start-end-radius: 0; border-end-end-radius: 0; margin-inline-end: -2px; }
 .bases-toolbar-new-options { margin-inline-start: 0; border-start-start-radius: 0; border-end-start-radius: 0; background: var(--bases-accent, #2383e2); color: #fff; border-inline-start: 1px solid #ffffff30; min-width: 26px; padding-inline: 4px; }
 .bases-toolbar-new-options:hover { color: #fff; background: var(--bases-accent-hover, #1674cf); }
+
+/* The active database view reads as a tab, with secondary tools kept at right. */
+.bases-toolbar-tab[aria-selected=true] { background: transparent; font-weight: 600; }
+.bases-toolbar-tab[aria-selected=true]:hover { background: var(--background-modifier-hover); }
+.bases-toolbar-actions { margin-inline-start: auto; }

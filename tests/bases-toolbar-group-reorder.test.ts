@@ -1,3 +1,4 @@
+import {openBaseToolbarPanel} from './helpers/base-toolbar.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
@@ -130,7 +131,7 @@ test('normal Group menu reordering changes only groupOrder and preserves the ori
     function refresh() { const next = executeBaseQuery(document, { version, files }); toolbar.update({ result: next, views: document.views, selectedIndex: 0, readOnly: false, allowRename: true, label: property => property }); }
     const until = async (check: () => boolean) => { for (let i = 0; i < 600 && !check(); i++) await new Promise(resolve => setTimeout(resolve, 1)); assert.ok(check()); };
     try {
-      refresh(); doc.querySelector<HTMLButtonElement>('[aria-label="Group"]')!.click();
+      refresh(); openBaseToolbarPanel(doc,'Group');
       const row = doc.querySelector<HTMLElement>('.bases-manual-group-row')!; row.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'ArrowDown', altKey: true, bubbles: true, cancelable: true })); await until(() => saves === 1);
       const expected = structuredClone(before); expected.views[0].groupOrder = ['Done', 'Todo', 'Later']; assert.deepEqual(parse(document.toString()), expected); assert.deepEqual(errors, []);
       const property = doc.querySelector<HTMLSelectElement>('[aria-label="Group property"]')!; property.value = 'note.score'; property.dispatchEvent(new dom.window.Event('change', { bubbles: true })); await until(() => saves === 2);
