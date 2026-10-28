@@ -5,6 +5,7 @@ import type { BaseExpressionValue } from './expression.ts';
 import type { BasePropertyPresentation, BasePresentationOptions } from './presentation-common.ts';
 import { basePropertyValueDiagnostic, inferBasePropertyDefinition, parseBasePropertyInput } from './property-definitions.ts';
 import type { BasePropertyDefinition, BasePropertyOption } from './property-definitions.ts';
+import {configureBaseDateInput} from './property-date-input.ts';
 
 export interface BaseRelationTarget {
   readonly path: string;
@@ -540,7 +541,9 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     input.type = basePropertyValueDiagnostic(value, definition) || (type === 'datetime' && value.type === 'string' && /(?:Z|[+-]\d{2}:\d{2})$/.test(value.value)) ? 'text' : type === 'date' ? 'date' : type === 'datetime' ? 'datetime-local' : 'text';
     if (type === 'date' || type === 'datetime') input.max = type === 'date' ? '9999-12-31' : '9999-12-31T23:59:59';
     if (type === 'number') input.inputMode = 'decimal';
-    input.value = multiple || optionPicker ? '' : inputText(value, definition); selected = optionPicker ? -1 : 0;
+    input.value = multiple || optionPicker ? '' : inputText(value, definition);
+    if (type === 'date' || type === 'datetime') configureBaseDateInput(input, inputText(value, definition), type === 'datetime');
+    selected = optionPicker ? -1 : 0;
     input.addEventListener('focus', () => { blurDuringComposition = false; compositionEpoch++; });
     input.addEventListener('compositionstart', () => { composing = true; blurDuringComposition = false; compositionEpoch++; });
     input.addEventListener('compositionend', () => {
