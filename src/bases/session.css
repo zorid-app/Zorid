@@ -240,6 +240,6 @@
 .bases-toolbar-new-options:hover { color: #fff; background: var(--bases-accent-hover, #1674cf); }
 
 /* The active database view reads as a tab, with secondary tools kept at right. */
-.bases-toolbar-tab[aria-selected=true] { background: transparent; font-weight: 600; }
+.bases-toolbar-tab[aria-selected=true] { background: var(--background-modifier-hover); border-radius:16px; font-weight: 600; }
 .bases-toolbar-tab[aria-selected=true]:hover { background: var(--background-modifier-hover); }
 .bases-toolbar-actions { margin-inline-start: auto; }

@@ -600,7 +600,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     const retainedCheckbox = type === 'checkbox' && element.dataset.baseEditing === 'draft';
     if (!editable || !current() || pending || editing || options.readOnly?.(acceptedPresentation) || (!retainedCheckbox && options.canBegin?.() === false)) return;
     if (type === 'checkbox') {
-      if (event.key === ' ') { event.preventDefault(); event.stopPropagation(); if (!event.repeat) element.querySelector<HTMLInputElement>('.metadata-input-checkbox:not(:disabled)')?.click(); }
+      if (event.key === ' ' && !event.shiftKey) { event.preventDefault(); event.stopPropagation(); if (!event.repeat) element.querySelector<HTMLInputElement>('.metadata-input-checkbox:not(:disabled)')?.click(); }
       return;
     }
     // Range selection and native inputs own their key events before this

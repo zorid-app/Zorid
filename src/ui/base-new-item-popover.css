@@ -26,6 +26,11 @@
 .bases-page-peek-header .clickable-icon:hover, .bases-page-peek-header .clickable-icon:focus-visible { background:var(--background-modifier-hover); color:var(--text-normal); }
 .bases-new-item-popover.is-side-peek .markdown-embed-link { position:static; opacity:1; }
 .bases-new-item-popover.is-side-peek .inline-title { margin-bottom:24px; font-size:32px; }
+.bases-new-item-popover.is-side-peek .metadata-container:not(.is-collapsed) > .metadata-properties-heading { display:none; }
+.bases-new-item-popover.is-side-peek .metadata-property:has(.metadata-property-type:disabled) { grid-template-columns:minmax(100px, 140px) minmax(0, 1fr); gap:12px; align-items:center; min-height:32px; padding:1px 0; }
+.bases-new-item-popover.is-side-peek .metadata-property-type:disabled { display:none; }
+.bases-new-item-popover.is-side-peek .metadata-property-key-input[readonly] { color:var(--text-muted); cursor:default; }
+.bases-new-item-popover.is-side-peek .metadata-add-button { margin-top:8px; color:var(--text-muted); font-size:14px; }
 .bases-new-item-popover.is-side-peek .bases-new-item-body { margin-top:24px; }
 .bases-new-item-popover.is-side-peek .bases-new-item-body-preview { max-height:none; min-height:96px; }
 .bases-new-item-popover.is-side-peek .editor-host, .bases-new-item-popover.is-side-peek .cm-editor, .bases-new-item-popover.is-side-peek .cm-scroller { min-height:160px; }

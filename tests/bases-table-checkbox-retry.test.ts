@@ -38,6 +38,10 @@ test('the retained retry exception never admits a checkbox in another cell', asy
   const f = fixture(); try { await f.failFirst(); assert.equal(f.space('note.second').defaultPrevented, true); assert.equal(f.writes.length, 1); assert.equal(f.cell('note.second').dataset.baseEditing, undefined); } finally { f.close(); }
 });
 
+test('Shift Space keeps table row selection instead of toggling a checkbox',()=>{
+  const f=fixture();try{f.cell().focus();f.space('note.first',{shiftKey:true});assert.equal(f.writes.length,0);assert.equal(f.main.querySelectorAll('[role="gridcell"][aria-selected="true"]').length,2);}finally{f.close();}
+});
+
 test('host retry readiness and configuration closing still block the owning failed checkbox', async () => {
   const f = fixture(); try {
     await f.failFirst(); f.setRetryReady(false); assert.equal(f.space().defaultPrevented, true); assert.equal(f.writes.length, 1);

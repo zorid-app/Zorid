@@ -65,7 +65,10 @@ import type {BaseFileHoverTarget,BaseFileHoverContent} from './base-file-hover.t
 import {createNotePropertyTargets} from './note-property-targets.ts';
 import type {NotePropertyTargets} from './note-property-targets.ts';
 import type {DatabaseRequest} from '../core/databases.ts';
-import {collectionValue,mountCollectionBrowser} from '../databases/collection-ui.ts';
+import {collectionValue,mountCollectionBrowser,mountCollectionPropertyPicker} from '../databases/collection-ui.ts';
+import type {CollectionEditor} from '../databases/collection-ui.ts';
+import {prepareCollectionOptionCreation} from '../databases/collection-option-creation.ts';
+import type {CollectionOptionCreation} from '../databases/collection-option-creation.ts';
 import {newBaseViewId} from '../bases/document.ts';
 import {inlineBaseRequest,replaceInlineBaseSource} from '../bases/inline-base.ts';
 import type {InlineBaseRequest} from '../bases/inline-base.ts';
@@ -1720,8 +1723,9 @@ export class Workspace {
         contextMenu:(event,request,source)=>{validateFile();const target=vault.metadata.resolveLink(source,request.target,request.kind),entry=target?vault.entries.get(target):undefined;if(entry){const point=this.menuPoint(event);event.preventDefault();event.stopPropagation();this.fileMenu(entry,point.x,point.y);}},
       });
       this.canvasMarkdownEmbeds.add(embeds);
-      let popup:BaseNewItemPopoverHandle|undefined,observedPath=shared.path;
+      let popup:BaseNewItemPopoverHandle|undefined,propertyPicker:CollectionEditor|undefined,observedPath=shared.path;
       const targets=this.notePropertyTargets(()=>shared.path,()=>{try{validateFile();return true;}catch{return false;}},()=>popup?.refresh());
+      const optionCreations=new Map<string,CollectionOptionCreation>();
       const remounts=new Set<()=>void>();
       const renderChild=(create:()=>HTMLElement)=>{
         const host=el('div','bases-new-item-editor-embed');let node:HTMLElement|undefined,closed=false;
@@ -1729,24 +1733,44 @@ export class Workspace {
         mount();remounts.add(mount);
         return{dom:host,destroy:()=>{if(closed)return;closed=true;remounts.delete(mount);if(node)embeds.releaseEmbed(node);}};
       };
-      const cleanup=()=>{disposed=true;if(this.baseNewItemEmbeds===sessions)this.baseNewItemEmbeds=undefined;targets.destroy();embeds.destroy();this.canvasMarkdownEmbeds.delete(embeds);remounts.clear();if(this.baseNewItem===popup){this.baseNewItem=undefined;this.baseNewItemAnchor=undefined;}};
+      const cleanup=()=>{disposed=true;propertyPicker?.destroy();propertyPicker=undefined;if(this.baseNewItemEmbeds===sessions)this.baseNewItemEmbeds=undefined;targets.destroy();embeds.destroy();this.canvasMarkdownEmbeds.delete(embeds);remounts.clear();if(this.baseNewItem===popup){this.baseNewItem=undefined;this.baseNewItemAnchor=undefined;}};
+      const addPageProperty=async(anchor:HTMLElement)=>{
+        validateFile();if(propertyPicker){propertyPicker.element.querySelector<HTMLInputElement>('input')?.focus();return;}
+        await shared.flush();validateFile();const selected=await targets.prepareCollection();validateFile();
+        const service=vault.adapter.databases;if(!selected||!service)throw new Error('This database is unavailable.');
+        const collectionId=selected.collection.id,memberId=selected.entry.entryId;
+        propertyPicker=mountCollectionPropertyPicker(anchor.ownerDocument.body,{service,collection:selected.collection,anchor,
+          isCurrent:()=>{try{validateFile();return vault.adapter.databases===service&&vault.entries.get(shared.path)?.entryId===memberId;}catch{return false;}},
+          onSaved:async saved=>{validateFile();if(saved.id!==collectionId)throw new Error('The saved property belongs to a different database.');await vault.reload();await targets.prepareCollection();validateFile();popup?.refresh();},
+          onClose:()=>{propertyPicker?.destroy();propertyPicker=undefined;}});
+      };
+      const createPageOption=async(property:string,label:string)=>{
+        validateFile();await shared.flush();validateFile();const selected=await targets.prepareCollection();validateFile();
+        const service=vault.adapter.databases,field=selected?.collection.properties.find(field=>field.name===property);
+        if(!selected||!service||!field)throw new Error('The database property changed before its option could be created.');
+        const memberId=selected.entry.entryId,key=JSON.stringify([memberId,selected.collection.id,field.id,label]);
+        const validate=()=>{validateFile();if(vault.adapter.databases!==service||vault.entries.get(shared.path)?.entryId!==memberId)throw new Error('The page changed while its option was being created.');};
+        let operation=optionCreations.get(key);
+        if(!operation){operation=prepareCollectionOptionCreation({service,collection:selected.collection,propertyId:field.id,label,validate});optionCreations.set(key,operation);}
+        await operation.run();await vault.reload();await targets.prepareCollection();validate();popup?.refresh();optionCreations.delete(key);
+      };
       try{
-        popup=await openBaseNewItemPopover({anchor,vault,path,presentation:'side-peek',focusTitle:!existing,bodyExpanded:existing,propertiesExpanded:existing,getBuffer:async target=>{validateFile();if(target!==shared.path)throw new Error('The new note moved before opening.');return shared;},validate:validateFile,
+        popup=await openBaseNewItemPopover({anchor,vault,path,presentation:'side-peek',focusTitle:!existing,bodyExpanded:existing,propertiesExpanded:true,getBuffer:async target=>{validateFile();if(target!==shared.path)throw new Error('The new note moved before opening.');return shared;},validate:validateFile,
           rename:async(source,destination,validateSelection,witness)=>{
             validateFile();validateSelection();await sessions.flush();const token=this.treeEntryToken(source);await shared.flush();
             await vault.rename(source,destination,()=>{validateFile();validateSelection();if(!token||this.treeEntryToken(source)!==token||shared.path!==source)throw new Error('The renamed note is no longer current.');this.requireAvailableTreePath(vault,destination,source);},witness);
             await shared.relocate(destination);
           },
           deferSourceUpdate:()=>this.deferInlinePublication(shared),
-          ownsEditorPortal:node=>sessions.owns(node),
+          ownsEditorPortal:node=>sessions.owns(node)||!!propertyPicker?.element.contains(node),
           subscribeBuffer:(target,listener)=>this.bufferSubscriptions.subscribe(target,()=>{
             if(shared.path!==observedPath){observedPath=shared.path;for(const remount of [...remounts])remount();}
             listener();
             for(const pane of this.loadedViews())if(pane.viewPath===shared.path){pane.editor?.setValue(shared.text);pane.properties?.refresh();pane.refreshPreview?.();}
           }),
           changeProperties:(next,buffer)=>this.changeManagedNoteProperties(buffer,next,targets,validateFile),
-          properties:{managedOnly:true,getDefinitions:()=>targets.getDefinitions(),isManaged:()=>!!targets.getCollection(),collectionName:()=>targets.getCollection()?.collection.name,getRelationTargets:property=>targets.get(property),getDisplayValue:(property,raw)=>targets.getDisplayValue(property,raw)},
-          flushEditor:()=>sessions.flush(),hasPendingEditorChanges:()=>sessions.hasPendingChanges(),closeEditor:async()=>{await sessions.close();await targets.close();},
+          properties:{managedOnly:true,onAddProperty:addPageProperty,onCreateOption:createPageOption,getDefinitions:()=>targets.getDefinitions(),isManaged:()=>!!targets.getCollection(),collectionName:()=>targets.getCollection()?.collection.name,getRelationTargets:property=>targets.get(property),getDisplayValue:(property,raw)=>targets.getDisplayValue(property,raw)},
+          flushEditor:async()=>{await sessions.flush();if(propertyPicker?.hasPendingChanges())throw new Error('Finish or cancel the property creation before closing this page.');},hasPendingEditorChanges:()=>sessions.hasPendingChanges()||!!propertyPicker?.hasPendingChanges(),closeEditor:async()=>{if(propertyPicker?.hasPendingChanges())throw new Error('Finish or cancel the property creation before closing this page.');propertyPicker?.destroy();propertyPicker=undefined;await sessions.close();await targets.close();},
           openFile:async(target,event,witness)=>{validateFile();const newTab=('button'in event&&event.button===1)||event.metaKey||event.ctrlKey;if(witness){await this.openPropertyLink(shared.path,target,this.activePane,witness,newTab);return;}const resolved=vault.entries.has(target)?target:vault.metadata.resolveLink(shared.path,target,'wiki');if(!resolved)throw new Error('The linked note is unavailable.');await this.openNote(resolved,newTab,this.activePane);},
           editorFactory:(parent,options)=>this.editorFactory?this.editorFactory(parent,options):import('./editor.ts').then(module=>module.createEditor(parent,options)),
           editorOptions:{hotkeys:this.hotkeys,subscribeMetadata:this.subscribeDraftMetadata,paths:()=>{validateFile();return[...vault.entries.keys()];},

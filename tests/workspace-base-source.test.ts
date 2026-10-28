@@ -12,6 +12,7 @@ import type { VaultEntry } from '../src/core/types.ts';
 import { BaseDocument } from '../src/bases/document.ts';
 import type { BaseSessionOptions } from '../src/bases/session.ts';
 import {createBaseSession} from '../src/bases/session.ts';
+import {openBaseToolbarPanel} from './helpers/base-toolbar.ts';
 
 const invalid = '# user comment\npluginRoot: {quoted: "001", unknown: [one, two]}\nviews:\n  - type: table\n    name: [broken\n';
 const repaired = '# user comment\npluginRoot: {quoted: "001", unknown: [one, two]}\nfilters: file.name == "One"\nviews:\n  - type: table\n    name: Repaired\n    order: [file.name, status]\n';
@@ -175,7 +176,7 @@ test('Edit source cannot abandon an unfinished browsing-view configuration draft
   assert.deepEqual(session.state.result!.view.source, {kind: 'untyped'});
   assert.equal(host.querySelector('[aria-label="Properties"]'), null);
   assert.equal(host.querySelector('[data-property="note.status"]'), null);
-  host.querySelector<HTMLButtonElement>('[aria-label="Results"]')!.click();
+  openBaseToolbarPanel(host.ownerDocument,'Results');
   const input = document.querySelector<HTMLInputElement>('[aria-label="Limit"]')!; assert.ok(input); input.value = '5'; input.dispatchEvent(new window.Event('input', {bubbles: true}));
   assert.equal(session.hasPendingChanges(), true);
   sourceToggle(f.workspace, 'Edit source').click(); await until(() => [...document.querySelectorAll('.notice')].some(node => node.textContent?.includes('Finish or cancel')), 'pending configuration blocks source switch');

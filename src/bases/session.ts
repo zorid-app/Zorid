@@ -1,10 +1,12 @@
 import { BaseController, createBaseMutationHost } from './controller.ts';
 import type { BaseBufferHost, BaseControllerState, BaseViewRenamed, BaseConfigurationRead } from './controller.ts';
 import { BaseDocument, baseViewSource, baseViewSetting } from './document.ts';
-import type { BaseViewSource } from './document.ts';
+import type { BaseViewSource,BaseViewConfig } from './document.ts';
 import { mountSourceChooser, mountCollectionEditor, mountCollectionPropertyPicker, collectionPropertyDefinitions, collectionValue } from '../databases/collection-ui.ts';
 import type { SourceChooser, CollectionEditor } from '../databases/collection-ui.ts';
 import {planCollectionEntryCreation} from '../databases/creation.ts';
+import {prepareCollectionOptionCreation} from '../databases/collection-option-creation.ts';
+import type {CollectionOptionCreation} from '../databases/collection-option-creation.ts';
 import type { DatabaseCollection, DatabaseEntry, DatabaseRequest } from '../core/databases.ts';
 import { sharedBaseCoverage, sharedBasePreview, sharedBaseWitness } from './shared-query.ts';
 import { createBaseClockHost } from './clock.ts';
@@ -289,6 +291,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   const sourceContext=()=>JSON.stringify([configurationSource(),configurationIndex(),controller.selectedViewIdentity,controller.configurationRead?.entryId,controller.configurationRead?.revision]);
   let chooser: SourceChooser | undefined, collectionEditor: CollectionEditor | undefined;
   const collectionMutations = new Map<string, DatabaseRequest>();
+  const optionCreations = new Map<string,CollectionOptionCreation>();
   const collectionVersions = new Map<string|number,{collection:DatabaseCollection;entries:Map<string,DatabaseEntry>}>();
   let pendingCollectionCreate: DatabaseRequest | undefined;
   let pendingCollectionCreateOwner:{collectionId:string;viewId?:string;source:string}|undefined;
@@ -383,7 +386,9 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   let refreshIndicatorTimer:ReturnType<typeof setTimeout>|undefined,refreshIndicatorVisible=false;
   const pending = new Set<Promise<unknown>>(), changedBuffers = new Set<NoteBuffer>();
   let configurationLifecycle = 0;
-  const canBeginPropertyEdit = () => !disposed && !closing && !definitionsLoading && !definitionsError && !configurationLifecycle && !pendingCollectionRestore && !pendingCollectionCreate && !pending.size && !mounted?.hasQueuedConfiguration?.() && !mounted?.hasActiveEdits?.() && controller.canBeginPropertyEdit;
+  const propertyEditReady = () => !disposed && !closing && !definitionsLoading && !definitionsError && !configurationLifecycle && !pendingCollectionRestore && !pendingCollectionCreate && !pending.size && !mounted?.hasQueuedConfiguration?.() && controller.canBeginPropertyEdit;
+  const canBeginPropertyEdit = () => propertyEditReady() && !mounted?.hasActiveEdits?.();
+  const canRetryPropertyEdit = () => propertyEditReady()&&!toolbarUI.hasDraft()&&!settings.hasDraft()&&!summaryDraft&&!chooser?.hasPendingChanges()&&!collectionEditor?.hasPendingChanges();
   const alive = () => { options.validate(); if (disposed) throw new Error('This base view is closed'); };
   const action = () => { alive(); if (closing) throw new Error('This base view is closing'); notice = undefined;actionMessage=undefined; };
   const report = (error: unknown) => {
@@ -452,15 +457,20 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     if (disposed || closing) return false;
     try { options.validate(); return true; } catch { return false; }
   };
+  const layoutDefaults=(patch:BaseViewPatch,existing?:BaseViewConfig):BaseViewPatch=>{
+    if(patch.type!=='kanban'||Object.hasOwn(patch,'groupBy')||existing?.groupBy!=null)return patch;
+    const status=Object.entries(definitions.properties).find(([,definition])=>definition.type==='status')?.[0];
+    return status?{...patch,groupBy:{property:`note.${status}`,direction:'ASC'}}:patch;
+  };
   const toolbarUI = createBaseToolbar(toolbar, {
     immediate: true,
     filterOperands: () => baseSessionFilterOperands(options.vault, definitions, controller.state.result?.availableProperties ?? [], filterOwnerCurrent),
     preflight(kind) { action(); if(pendingCollectionRestore)throw new Error('Retry the unfinished Restore before changing this view.'); if(pendingCollectionCreate&&kind!=='new')throw new Error('Use New again to finish the original entry creation before changing this view.'); if (pending.size || propertyDraft() || settings.hasDraft() || summaryPanel || chooser?.hasPendingChanges() || collectionEditor?.hasPendingChanges()) throw new Error('Finish or cancel the current edit before changing the view.'); },
     selectView,
-    save(version, patch) { return saveConfigurationCommand(() => controller.updateView(numericVersion(version), patch)); },
+    save(version, patch) { return saveConfigurationCommand(() => controller.updateView(numericVersion(version), layoutDefaults(patch,BaseDocument.parse(controller.state.source).views[controller.selectedViewIndex]))); },
     saveConfiguration(version, patch) { return saveConfigurationCommand(() => controller.updateConfiguration(numericVersion(version), patch)); },
     commands: {
-      updateView: (version, index, patch) => saveConfigurationCommand(() => controller.updateViewAt(numericVersion(version), index, patch)),
+      updateView: (version, index, patch) => saveConfigurationCommand(() => controller.updateViewAt(numericVersion(version), index, layoutDefaults(patch,BaseDocument.parse(controller.state.source).views[index]))),
       editFormula: (version, originalName, name, expression) => saveConfigurationCommand(() => {
         if (originalName !== undefined) return controller.editFormula(numericVersion(version), originalName, name, expression);
         const state = controller.state, document = BaseDocument.parse(state.source), view = document.views[controller.selectedViewIndex];
@@ -474,7 +484,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       renameFormula: (version, from, to) => saveConfigurationCommand(() => controller.renameFormula(numericVersion(version), from, to)),
       addView: (version, type, name, patch?: BaseViewPatch) => {
         const source = currentViewSource();
-        return saveConfigurationCommand(() => controller.addView(numericVersion(version), type, name, {...patch,source}));
+        return saveConfigurationCommand(() => controller.addView(numericVersion(version), type, name, {...layoutDefaults({...patch,type}),source}));
       },
       duplicateView: (version, index, name) => saveConfigurationCommand(() => controller.duplicateView(numericVersion(version), index, name)),
       removeView: (version, index) => saveConfigurationCommand(() => controller.removeView(numericVersion(version), index)),
@@ -561,6 +571,19 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     await options.vault.reload();await loadDefinitions();await controller.refresh();await loadDefinitions();
   }
   const editCollectionProperty=(edit:Parameters<typeof actions.editProperty>[0])=>editCollectionProperties([edit]);
+  async function createCollectionOption(property:string,label:string,presentation:BasePropertyPresentation):Promise<void>{
+    action();if(options.readOnly||!databaseService||pendingCollectionRestore||pendingCollectionCreate)throw new Error('This database is unavailable for option creation.');
+    const captured=collectionVersions.get(presentation.version),result=widgetResults.get(presentation.version);
+    if(!captured||!result||widgetSources.get(presentation.version)!==controller.state.source)throw new Error('The property view changed before the option could be created.');
+    const witness=sharedBaseWitness(result,presentation.row.path),field=basePropertyName(property),source=controller.state.source;
+    if(!witness)throw new Error('The saved note identity is unavailable.');
+    const validate=()=>{action();const current=currentViewSource();if(current.kind!=='collection'||current.id!==captured.collection.id||controller.state.source!==source||options.vault.adapter.databases!==databaseService||options.vault.entries.get(presentation.row.path)?.entryId!==witness.entryId)throw new Error('The database or note changed while its option was being created.');};
+    validate();const key=JSON.stringify([captured.collection.id,presentation.version,field,label]);
+    let operation=optionCreations.get(key);
+    if(!operation){operation=prepareCollectionOptionCreation({service:databaseService,collection:captured.collection,propertyId:field,label,validate});optionCreations.set(key,operation);}
+    await operation.run();await options.vault.reload();await loadDefinitions();await controller.refresh();await loadDefinitions();validate();
+    optionCreations.delete(key);
+  }
   const editProperty=(edit:Parameters<typeof actions.editProperty>[0])=>collectionMode()?editCollectionProperty(edit):Promise.reject(new Error('Vault note views are browsing only. Open the note to edit its properties.'));
   function saveConfigurationCommand(operation: () => Promise<void>): Promise<void> {
     action();if(pendingCollectionRestore)throw new Error('Retry the unfinished Restore before changing this view.');if(pendingCollectionCreate)throw new Error('Use New again to finish the original entry creation before changing this view.'); if (options.readOnly) return Promise.reject(new Error('This base is read-only'));
@@ -997,6 +1020,14 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         commit: (edit: BasePropertyWidgetEdit) => track(async () => { assertPropertyWritable(edit.property, edit.value); await editProperty(edit); return acknowledgeWidget(edit, edit.value); }), readOnly: presentation => !writable || !!definitionsError || definitions.diagnostics.some(item => item.property === basePropertyName(presentation.property)),
         isCurrent: presentation => !disposed && !!mountedResult && widgetResults.has(presentation.version),
         getRelationTargets,
+        ...(writable?{createOption:(property:string,label:string,presentation:BasePropertyPresentation)=>track(async()=>{
+          const expected=baseEditablePropertyValue(presentation.row,property);
+          if(!expected)throw new Error('The saved property value is unavailable.');
+          await createCollectionOption(property,label,presentation);
+          const acknowledgement=acknowledgeWidget(presentation,expected);
+          if(!acknowledgement)throw new Error('Option created. Refresh the property before choosing its value.');
+          return acknowledgement;
+        })}:{}),
         loadImage: options.loadThumbnail ? (source, signal, presentation) => options.loadThumbnail!({ row: presentation.row, property: presentation.property, value: baseImageSourceValue(presentation.value, source), version: presentation.version, signal }) : undefined,
         openFile: openResultFile, onError: report,
         ...(result.view.type==='table'?{onEditorComplete:(element:HTMLElement,presentation:BasePropertyPresentation,intent:BasePropertyEditorCompletionIntent)=>mounted?.completePropertyEdit?.(element,presentation,intent)}:{}),
@@ -1079,6 +1110,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         mounted?.destroy(); mounted = undefined; content.replaceChildren();
         switch (result.view.type) {
           case 'table': mounted = createBaseTableView(content, {...shared,...(writable?{
+            canRetryPropertyEdit,
             onNew:(anchor:HTMLElement)=>track(()=>createItem(undefined,anchor,true)).then(created=>{render(controller.state);return created;}),
             requestAddProperty:(anchor:HTMLElement)=>{try{addCollectionProperty(anchor);}catch(error){report(error);}},
             ...(options.buffers?.rename?{renameFile:(edit:import('./table-view.ts').BaseTableRename)=>track(async()=>{

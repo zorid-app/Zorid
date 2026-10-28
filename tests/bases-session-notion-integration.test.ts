@@ -22,8 +22,8 @@ class Adapter extends MemoryAdapter{
  override async write(path:string,text:string){await super.write(path,text);this.revisions.set(path,(this.revisions.get(path)??1)+1);}
 }
 function documentValue(value:DatabaseValue):DocumentBaseValue{if(value===null)return{type:'null'};if(Array.isArray(value))return{type:'list',value:value.map(item=>({type:'string',value:item}))};return{type:typeof value,value}as DocumentBaseValue;}
-async function fixture(){
- const initialViews=[{id:'aaaaaaaaaaaa',type:'table',name:'Primary',source:{kind:'collection',id:collectionId},order:['file.name',`note.${score}`,`note.${notes}`]},{id:'bbbbbbbbbbbb',type:'table',name:'Secondary',source:{kind:'collection',id:collectionId},order:['file.name',`note.${notes}`]}];
+async function fixture(existingGroup=false){
+ const initialViews=[{id:'aaaaaaaaaaaa',type:'table',name:'Primary',...(existingGroup?{groupBy:{property:`note.${score}`,direction:'DESC'}}:{}),source:{kind:'collection',id:collectionId},order:['file.name',`note.${score}`,`note.${notes}`]},{id:'bbbbbbbbbbbb',type:'table',name:'Secondary',source:{kind:'collection',id:collectionId},order:['file.name',`note.${notes}`]}];
  const adapter=new Adapter({'Work.base':JSON.stringify({views:initialViews}),'One.md':'---\nScore: 1\nNotes: Original\n---\nExact body.\n'});
  let collection:DatabaseCollection={id:collectionId,name:'Tasks',revision:'schema-r1',deleted:false,properties:[{id:score,name:'Score',datatype:'number',options:[]},{id:notes,name:'Notes',datatype:'text',options:[]}]};
  let member:DatabaseEntry={entryId:'One.md',collectionId,revision:'member-r1',fileRevision:'r1',path:'One.md',values:{[score]:1,[notes]:'Original'},deleted:false,pendingProjection:false};
@@ -31,7 +31,7 @@ async function fixture(){
  const response=()=>structuredClone({collections:[collection],entries:[member],projection:{pending:0,issues:[]}});
  adapter.databases={async request(command){requests.push(structuredClone(command));if(command.op==='get'||command.op==='list')return response();
   if(command.op==='set_entry'){assert.equal(command.expectedRevision,member.revision);assert.equal(command.expectedCollectionRevision,collection.revision);await hold?.promise;if(fail)throw new Error('Property save rejected');const values={...member.values,...command.values};const frontmatter=Object.fromEntries(collection.properties.filter(field=>Object.hasOwn(values,field.id)).map(field=>[field.name,values[field.id]]));await adapter.write('One.md',`---\n${stringify(frontmatter)}---\nExact body.\n`);member={...member,values,revision:'member-r2',fileRevision:(await adapter.stat('One.md'))!.revision};return response();}
-  if(command.op==='update'){assert.equal(command.expectedRevision,collection.revision);await hold?.promise;collection={...collection,name:command.name,revision:'schema-r2',properties:command.properties.map(field=>({...field,id:field.id??added,options:(field.options??[]).map((option,index)=>({...option,id:option.id??`option${index}`}))}))};return response();}
+  if(command.op==='update'){assert.equal(command.expectedRevision,collection.revision);await hold?.promise;collection={...collection,name:command.name,revision:'schema-r2',properties:command.properties.map(field=>({...field,id:field.id??added,options:(field.options??[]).map((option,index)=>({...option,id:option.id??`option${String(index).padStart(6,'0')}`}))}))};return response();}
   throw new Error(`Unexpected database operation ${command.op}`);
  }};
  const actor=async()=>{const entry=(await adapter.stat('Work.base'))!;return{id:entry.entryId,revision:entry.revision,path:entry.path,kind:'file'as const,deleted:false};},unused=async():Promise<never>=>{throw new Error('Unexpected document operation');};
@@ -48,7 +48,7 @@ async function fixture(){
  const key=(element:Element,key:string)=>{const event=new dom.window.KeyboardEvent('keydown',{key,bubbles:true,cancelable:true});element.dispatchEvent(event);return event;};
  const edit=(property:string,value:string)=>{cell(property).click();const input=cell(property).querySelector<HTMLInputElement>('input')!;assert.ok(input);input.value=value;return input;};
  const pointer=(element:Element)=>{element.dispatchEvent(new dom.window.MouseEvent('pointerdown',{bubbles:true,cancelable:true,button:0}));(element as HTMLElement).click();};
- return{adapter,vault,dom,doc,host,session,requests,errors,cell,key,edit,pointer,hold(){hold=deferred();return()=>{hold?.resolve();hold=undefined;};},fail(){fail=true;},async saved(){return BaseDocument.parse(await adapter.read('Work.base'));},async close(){hold?.resolve();hold=undefined;fail=false;for(const input of doc.querySelectorAll('[data-base-editing] input'))key(input,'Escape');doc.querySelector<HTMLButtonElement>('.collection-property-picker-cancel')?.click();[...doc.querySelectorAll<HTMLButtonElement>('.collection-property-editor button')].find(button=>button.textContent==='Cancel')?.click();for(const button of doc.querySelectorAll<HTMLButtonElement>('[aria-label="Close"]'))button.click();await until(()=>!session.hasPendingChanges());await session.close();for(const buffer of buffers.values())await buffer.dispose();dom.window.close();}};
+ return{adapter,vault,dom,doc,host,session,requests,errors,cell,key,edit,pointer,hold(){hold=deferred();return()=>{hold?.resolve();hold=undefined;};},fail(value=true){fail=value;},async saved(){return BaseDocument.parse(await adapter.read('Work.base'));},async close(){hold?.resolve();hold=undefined;fail=false;for(const input of doc.querySelectorAll('[data-base-editing] input,.bases-property-popover input'))key(input,'Escape');doc.querySelector<HTMLButtonElement>('.collection-property-picker-cancel')?.click();[...doc.querySelectorAll<HTMLButtonElement>('.collection-property-editor button')].find(button=>button.textContent==='Cancel')?.click();for(const button of doc.querySelectorAll<HTMLButtonElement>('[aria-label="Close"]'))button.click();await until(()=>!session.hasPendingChanges(),JSON.stringify({pending:host.innerText,portals:[...doc.querySelectorAll('.bases-toolbar-popover,.bases-property-popover')].map(e=>e.textContent),errors:errors.map(String)}));await session.close();for(const buffer of buffers.values())await buffer.dispose();dom.window.close();}};
 }
 
 test('managed session Tab waits for accepted saved value then selects the adjacent cell without editing it',async()=>{
@@ -68,4 +68,40 @@ test('pending property creation cannot retarget visibility after an external sav
 });
 test('Settings uses the collection label and its Edit properties command mounts the actual collection editor',async()=>{
  const f=await fixture();try{f.host.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!.click();const settings=f.doc.querySelector<HTMLElement>('[data-panel="View settings"]')!;assert.equal(settings.querySelector('[data-setting="source"] .bases-settings-row-value')?.textContent,'Tasks');settings.querySelector<HTMLButtonElement>('[data-setting="edit-properties"]')!.click();await until(()=>!!f.doc.querySelector('.collection-property-editor'));assert.equal(f.doc.querySelector('[data-panel="View settings"]'),null);assert.equal(f.doc.querySelector<HTMLInputElement>('[aria-label="Collection name"]')?.value,'Tasks');assert.deepEqual(f.errors,[]);}finally{await f.close();}
+});
+
+test('managed option creation refreshes its schema then selects the returned stable ID exactly once',async()=>{
+ const f=await fixture();try{
+  f.host.querySelector<HTMLButtonElement>('[aria-label="Add property"]')!.click();const name=f.doc.querySelector<HTMLInputElement>('[aria-label="Type property name…"]')!;name.value='Category';f.doc.querySelector<HTMLButtonElement>('[data-datatype="select"]')!.click();
+  await until(()=>!!f.host.querySelector(`[role="gridcell"][data-property="note.${added}"]`)&&!f.doc.querySelector('.collection-property-picker'));
+  f.cell(added).click();const search=f.doc.querySelector<HTMLInputElement>('.bases-property-popover input')!;search.value='Blue';search.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));
+  f.doc.querySelector<HTMLButtonElement>('.bases-property-create-option')!.click();
+  await until(()=>f.requests.some(request=>request.op==='set_entry'));
+  await until(()=>!f.doc.querySelector('.bases-property-popover')&&!f.session.hasPendingChanges());
+  const selected=f.requests.filter((request):request is DatabaseRequest&{op:'set_entry'}=>request.op==='set_entry');
+  assert.equal(selected.length,1);assert.equal(selected[0].values[added],'option000000');assert.equal(f.cell(added).textContent,'Blue');
+  assert.match(await f.adapter.read('One.md'),/Exact body\.\n$/);assert.deepEqual(f.errors,[]);
+ }finally{await f.close();}
+});
+
+test('managed checkbox Space retries the same rejected mutation through table admission',async()=>{
+ const f=await fixture();try{
+  f.host.querySelector<HTMLButtonElement>('[aria-label="Add property"]')!.click();const name=f.doc.querySelector<HTMLInputElement>('[aria-label="Type property name…"]')!;name.value='Checked';f.doc.querySelector<HTMLButtonElement>('[data-datatype="checkbox"]')!.click();
+  await until(()=>!!f.host.querySelector(`[role="gridcell"][data-property="note.${added}"]`)&&!f.doc.querySelector('.collection-property-picker'));
+  f.fail();f.cell(added).focus();f.key(f.cell(added),' ');await until(()=>f.cell(added).dataset.baseEditing==='draft');f.fail(false);f.key(f.cell(added),' ');
+  await until(()=>!f.cell(added).hasAttribute('data-base-editing')&&!!f.cell(added).querySelector<HTMLInputElement>('input')?.checked);
+  const writes=f.requests.filter(request=>request.op==='set_entry');assert.equal(writes.length,2);assert.equal(writes[0].operationId,writes[1].operationId);
+  assert.match(await f.adapter.read('One.md'),/Exact body\.\n$/);
+ }finally{await f.close();}
+});
+
+for(const existingGroup of [false,true])test(`Board uses an existing Status by default while preserving configured grouping: ${existingGroup}`,async()=>{
+ const f=await fixture(existingGroup);try{
+  f.host.querySelector<HTMLButtonElement>('[aria-label="Add property"]')!.click();const name=f.doc.querySelector<HTMLInputElement>('[aria-label="Type property name…"]')!;name.value='Workflow';f.doc.querySelector<HTMLButtonElement>('[data-datatype="status"]')!.click();
+  await until(()=>!f.doc.querySelector('.collection-property-picker')&&!!f.host.querySelector(`[role="columnheader"][data-property="note.${added}"]`));
+  f.host.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!.click();f.doc.querySelector<HTMLButtonElement>('[data-setting="layout"]')!.click();f.doc.querySelector<HTMLButtonElement>('[data-layout="kanban"]')!.click();
+  await until(async()=>(await f.saved()).views[0].type==='kanban');
+  assert.deepEqual((await f.saved()).views[0].groupBy,{property:`note.${existingGroup?score:added}`,direction:existingGroup?'DESC':'ASC'});
+  assert.equal((await f.saved()).views[1].type,'table');assert.deepEqual(f.errors,[]);
+ }finally{await f.close();}
 });
