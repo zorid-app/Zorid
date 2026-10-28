@@ -35,6 +35,9 @@ export interface BaseTableOptions {
   readonly editProperty?: (edit: BaseTableEdit) => Promise<void>;
   /** Live admission for new cell/bulk edits; header resize has its own queue. */
   readonly canBeginPropertyEdit?: () => boolean;
+  /** Host readiness excluding this table's own retained draft. Only the owning
+   * failed checkbox may use this to retry; other edits still use full admission. */
+  readonly canRetryPropertyEdit?: () => boolean;
   readonly getPropertyType?: (property: string) => string | undefined;
   readonly getPropertyLabel?: (property: string) => string;
   readonly onError?: (error: unknown) => void;
@@ -1095,11 +1098,18 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     focusEpoch++; blockedActivation = undefined;
   }
   function onWindowBlur() { focusEpoch++; blockedActivation = undefined; }
+  function canRetryCheckboxSpace(event: KeyboardEvent, cell: HTMLElement | null): boolean {
+    if (event.key !== ' ' || event.repeat || event.isComposing || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || event.getModifierState('AltGraph') || !cell || cell.getAttribute('role') !== 'gridcell' || !body.contains(cell) || cell.dataset.baseEditing !== 'draft' || range || destroyed || editing || bulkPending || configPending || newPending || resizeCommands.length || awaitingConfigurationResult || options.isConfigurationClosing?.()) return false;
+    const owner = cellOwners.get(cell);
+    if (!owner || !currentOwner(owner) || !cell.querySelector<HTMLInputElement>('input.metadata-input-checkbox[type="checkbox"]:not(:disabled)')) return false;
+    if ([...root.querySelectorAll('[data-base-editing]')].some(draft => draft !== cell)) return false;
+    return options.canRetryPropertyEdit ? options.canRetryPropertyEdit() : options.canBeginPropertyEdit?.() !== false;
+  }
   function protectRangeKey(event: KeyboardEvent) {
     const cell = event.target as HTMLElement | null;
     const startsEdit = ['Enter', 'F2'].includes(event.key) || printableEditKey(event);
     if (!event.isComposing && (['Enter', 'Tab', 'Escape'].includes(event.key) && cell?.closest('[data-base-editing]') || ['Enter', 'F2'].includes(event.key) && !hasActiveEdits())) blockedActivation = undefined;
-    if (!event.isComposing && (propertyAdmissionBlocked() || hasActiveEdits()) && cell?.getAttribute('role') === 'gridcell' && body.contains(cell) && (startsEdit || ['Delete', 'Backspace'].includes(event.key))) { event.preventDefault(); event.stopImmediatePropagation(); return; }
+    if (!event.isComposing && (propertyAdmissionBlocked() || hasActiveEdits()) && cell?.getAttribute('role') === 'gridcell' && body.contains(cell) && (startsEdit || ['Delete', 'Backspace'].includes(event.key)) && !canRetryCheckboxSpace(event, cell)) { event.preventDefault(); event.stopImmediatePropagation(); return; }
     if (!event.isComposing && range && cell?.getAttribute('role') === 'gridcell' && body.contains(cell) && startsEdit) { event.preventDefault(); event.stopImmediatePropagation(); }
   }
   function onPointerDown(event: PointerEvent) {
