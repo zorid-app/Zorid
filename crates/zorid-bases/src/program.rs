@@ -2,7 +2,7 @@
 //! remains the document crate's responsibility; this module never writes source.
 use crate::{BaseValue, ExpressionDiagnostic, PropertyValue};
 /// Change whenever Base configuration compilation or language meaning changes.
-pub const BASE_COMPILER_VERSION: &str = "zorid-base-view-sources-v10";
+pub const BASE_COMPILER_VERSION: &str = "zorid-base-view-sources-v11";
 
 /// A view has exactly one source. Display labels never identify membership.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -64,7 +64,7 @@ impl BaseProgram {
             selected.filter = None;
             selected.formulas = named_expressions(&view.configuration, "formulas")?;
             selected.summaries = named_expressions(&view.configuration, "summaryDefinitions")?;
-            selected.summary_preview_dependency = crate::query::BaseClockDependency::Instant;
+            selected.summary_preview_dependency = view.summary_preview_dependency;
         }
         if matches!(view.source, BaseViewSource::Untyped) {
             let browsing = &mut selected.views[index];
@@ -143,6 +143,20 @@ pub(crate) struct View {
     pub limit: Option<usize>,
     pub summaries: Vec<(String, String)>,
     pub refresh_dependency: crate::query::BaseClockDependency,
+    pub summary_preview_dependency: crate::query::BaseClockDependency,
+}
+
+fn expressions_clock_dependency(
+    expressions: &[(String, String)],
+    check: &mut impl FnMut(usize) -> Option<()>,
+) -> crate::query::BaseClockDependency {
+    use crate::query::BaseClockDependency as Dependency;
+    let mut dependency = Dependency::None;
+    for (_, source) in expressions {
+        dependency = dependency.join(crate::expression::clock_dependency(source, check));
+        if dependency == Dependency::Instant { break; }
+    }
+    dependency
 }
 
 fn filter_clock_dependency(
@@ -369,27 +383,13 @@ pub fn compile_base(configuration: PropertyValue) -> Result<BaseProgram, Express
         refresh_work = refresh_work.checked_sub(work)?;
         Some(())
     };
-    let mut common_refresh = crate::query::BaseClockDependency::None;
     // Current query evaluation includes every formula in its available/needed
     // cells, including hidden formulas and transitive/dynamic formula members.
-    for (_, source) in &formulas {
-        common_refresh = common_refresh.join(crate::expression::clock_dependency(
-            source,
-            &mut refresh_check,
-        ));
-        if common_refresh == crate::query::BaseClockDependency::Instant {
-            break;
-        }
-    }
+    let mut common_refresh = expressions_clock_dependency(&formulas, &mut refresh_check);
     if let Some(filter) = &root_filter {
         common_refresh = common_refresh.join(filter_clock_dependency(filter, &mut refresh_check));
     }
-    let mut summary_preview_dependency = crate::query::BaseClockDependency::None;
-    for (_, source) in &summaries {
-        summary_preview_dependency = summary_preview_dependency.join(
-            crate::expression::clock_dependency(source, &mut refresh_check),
-        );
-    }
+    let summary_preview_dependency = expressions_clock_dependency(&summaries, &mut refresh_check);
     let defaults = vec![PropertyValue::Object(vec![
         ("type".into(), PropertyValue::String("table".into())),
         ("name".into(), PropertyValue::String("Table".into())),
@@ -416,10 +416,8 @@ pub fn compile_base(configuration: PropertyValue) -> Result<BaseProgram, Express
         }
         let source = view_source(get(configuration, "source"))?;
         let explicit_source = get(configuration, "source").is_some();
-        if explicit_source {
-            named_expressions(configuration, "formulas")?;
-            named_expressions(configuration, "summaryDefinitions")?;
-        }
+        let scoped_formulas = if explicit_source { named_expressions(configuration, "formulas")? } else { Vec::new() };
+        let scoped_summaries = if explicit_source { named_expressions(configuration, "summaryDefinitions")? } else { Vec::new() };
         let order = match get(configuration, "order") {
             None => vec!["file.name".into()],
             Some(PropertyValue::Array(values)) => values
@@ -477,9 +475,14 @@ pub fn compile_base(configuration: PropertyValue) -> Result<BaseProgram, Express
                 .collect::<Result<Vec<_>, _>>()?,
             _ => return Err(error("View summaries must be a property-to-name mapping")),
         };
-        let mut summary_refresh = common_refresh;
+        // Explicit sources own their expressions. A blanket Instant fallback
+        // would wake every static collection/untyped view once per second.
+        let mut summary_refresh = if explicit_source {
+            expressions_clock_dependency(&scoped_formulas, &mut refresh_check)
+        } else { common_refresh };
+        let summary_definitions = if explicit_source { &scoped_summaries } else { &summaries };
         for (_, name) in &view_summaries {
-            if let Some((_, source)) = summaries.iter().find(|(candidate, _)| candidate == name) {
+            if let Some((_, source)) = summary_definitions.iter().find(|(candidate, _)| candidate == name) {
                 summary_refresh = summary_refresh.join(crate::expression::clock_dependency(
                     source,
                     &mut refresh_check,
@@ -489,6 +492,9 @@ pub fn compile_base(configuration: PropertyValue) -> Result<BaseProgram, Express
         let refresh_dependency = view_filter.as_ref().map_or(summary_refresh, |filter| {
             summary_refresh.join(filter_clock_dependency(filter, &mut refresh_check))
         });
+        let view_preview_dependency = if explicit_source {
+            expressions_clock_dependency(&scoped_summaries, &mut refresh_check)
+        } else { summary_preview_dependency };
         views.push(View {
             configuration: configuration.clone(),
             source, explicit_source,
@@ -499,7 +505,8 @@ pub fn compile_base(configuration: PropertyValue) -> Result<BaseProgram, Express
             group_order,
             limit,
             summaries: view_summaries,
-            refresh_dependency: if explicit_source { crate::query::BaseClockDependency::Instant } else { refresh_dependency },
+            refresh_dependency,
+            summary_preview_dependency: view_preview_dependency,
         });
     }
     Ok(BaseProgram {

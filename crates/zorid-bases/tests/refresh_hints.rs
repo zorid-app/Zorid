@@ -1,9 +1,9 @@
 //! Shared query/answer-cache refresh metadata; expected deadlines are fixed
 //! calendar fixtures, not values obtained from the implementation under test.
 use zorid_bases::{
-    compile_base_source, query_base, query_generation, BaseClockDependency as Dependency,
+    compile_base_source, query_base, query_generation, query_generation_scoped, BaseClockDependency as Dependency,
     BasePreparationCache, BaseQueryResult, BaseSnapshot, FilePresentationFacts,
-    PreparationCacheOutcome, QueryOptions, RecordWitness,
+    PreparationCacheOutcome, QueryOptions, RecordWitness, BaseSourceScope, BaseViewSource,
 };
 use zorid_core::{EntryId, EntryKind, EntryState, OperationId, Revision, VaultPath};
 use zorid_index::{
@@ -68,6 +68,64 @@ fn assert_hint(
     assert_eq!(hint.next_wake_ms, next);
     let wire = serde_json::to_value(hint).unwrap();
     assert_eq!(wire["nextWakeMs"], serde_json::json!(next));
+}
+fn sourced_query(source: &str, collection: bool, preview: bool) -> BaseQueryResult {
+    let generation = generation();
+    let program = compile_base_source(source).unwrap();
+    let selected = if collection {
+        BaseViewSource::Collection { id: "abcdefghijkl".into() }
+    } else { BaseViewSource::Untyped };
+    let memberships = if collection {
+        generation.manifest().entries().iter().map(|entry| (entry.id.clone(), "abcdefghijkl".into())).collect()
+    } else { std::collections::BTreeMap::new() };
+    let scope = BaseSourceScope::captured(selected, "1".into(), &memberships, std::collections::BTreeMap::new(), vec![]).unwrap();
+    let mut options = options(0, "UTC");
+    if preview { options.summary_preview_property = Some("file.name".into()); }
+    query_generation_scoped(&program, &generation, &[], scope, &options).unwrap()
+}
+fn sourced_view(collection: bool, root: &str, view: &str) -> String {
+    let source = if collection { "{kind: collection, id: abcdefghijkl}" } else { "{kind: untyped}" };
+    format!("{root}\nviews:\n  - type: table\n    name: Table\n    source: {source}\n    order: [file.name]\n{view}")
+}
+#[test]
+fn explicit_static_sources_do_not_schedule_an_idle_heartbeat_or_inherit_root_clocks() {
+    for collection in [false, true] {
+        for root in ["", "filters: now() != null\nformulas: {hidden: 'now()'}\nsummaries: {Clock: 'now()'}"] {
+            let source = sourced_view(collection, root, "");
+            assert_eq!(compile_base_source(&source).unwrap().refresh_dependency(0), Dependency::None);
+            assert_hint(&sourced_query(&source, collection, false), Dependency::None, "UTC", None);
+        }
+    }
+}
+#[test]
+fn explicit_sources_schedule_only_their_own_filter_formula_and_selected_summary_clocks() {
+    for collection in [false, true] {
+        for (view, dependency, next) in [
+            ("    filters: today() != null\n", Dependency::Day, Some(86_400_000)),
+            ("    filters: now() != null\n", Dependency::Instant, Some(1_000)),
+            ("    formulas: {hidden: 'today()', chain: 'formula.hidden'}\n", Dependency::Day, Some(86_400_000)),
+            ("    formulas: {hidden: 'now()'}\n", Dependency::Instant, Some(1_000)),
+            ("    summaryDefinitions: {Counter: 'if(today() != null, values.length, 0)'}\n    summaries: {file.name: Counter}\n", Dependency::Day, Some(86_400_000)),
+            ("    summaryDefinitions: {UnusedClock: 'now()'}\n", Dependency::None, None),
+        ] {
+            let source = sourced_view(collection, "formulas: {legacy: 'now()'}", view);
+            assert_eq!(compile_base_source(&source).unwrap().refresh_dependency(0), dependency, "{source}");
+            assert_hint(&sourced_query(&source, collection, false), dependency, "UTC", next);
+        }
+    }
+}
+#[test]
+fn explicit_summary_previews_schedule_their_own_definitions_without_root_clock_leaks() {
+    for collection in [false, true] {
+        for (summary, dependency, next) in [
+            ("values.length", Dependency::None, None),
+            ("if(today() != null, values.length, 0)", Dependency::Day, Some(86_400_000)),
+            ("if(now() != null, values.length, 0)", Dependency::Instant, Some(1_000)),
+        ] {
+            let source = sourced_view(collection, "summaries: {RootClock: 'now()'}", &format!("    summaryDefinitions: {{Counter: '{summary}'}}\n"));
+            assert_hint(&sourced_query(&source, collection, true), dependency, "UTC", next);
+        }
+    }
 }
 #[test]
 fn selected_view_and_hidden_formula_dependencies_are_rust_owned() {
