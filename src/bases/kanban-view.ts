@@ -31,6 +31,8 @@ export interface BaseKanbanCreateRequest {
   readonly anchor?: HTMLElement;
 }
 export interface BaseKanbanViewOptions extends Omit<BaseCardsViewOptions, 'onError'> {
+  /** Presentation comes from the authoritative property schema, never inferred from a group label. */
+  readonly getGroupAppearance?: (group: BaseQueryGroup) => { readonly color?: string; readonly category?: 'todo' | 'in-progress' | 'done' } | undefined;
   /** Host must validate version, perform a real vault transaction, and publish a new query result. */
   readonly requestMove?: (request: BaseKanbanMoveRequest) => Promise<void>;
   readonly onError?: (error: unknown, request: BaseKanbanMoveRequest) => void;
@@ -53,7 +55,7 @@ export interface BaseKanbanView {
 }
 interface Pending { request: BaseKanbanMoveRequest }
 interface ColumnDrag { group: BaseQueryGroup; version: BaseQueryResult['version']; original: readonly BaseQueryGroup[]; preview: readonly BaseQueryGroup[] }
-const gap = 8, headerHeight = 40;
+const cardGap = 8, columnGap = 12, headerHeight = 40, footerHeight = 40;
 function propertyOf(result: BaseQueryResult): string | undefined {
   const group = result.view.groupBy;
   if (!group || typeof group !== 'object' || Array.isArray(group)) return undefined;
@@ -114,7 +116,7 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
   let groupOrderPending = false;
   const scrolls = new Map<BaseQueryGroup['key'] | string, number>();
   let rowOrder = new Map<string, number>();
-  let groups: readonly BaseQueryGroup[] = [], properties: readonly string[] = [], width = 280, rowHeight = 72;
+  let groups: readonly BaseQueryGroup[] = [], properties: readonly string[] = [], width = 276, rowHeight = 48;
   const columnScroll = (key: BaseQueryGroup['key']) => {
     if (result.shared !== undefined) return scrolls.get(sharedBaseGroupKeyId(result, key) ?? key) ?? 0;
     for (const [stored, top] of scrolls) if (typeof stored !== 'string' && equal(stored, key)) return top;
@@ -194,11 +196,11 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
   }
   function paintColumnPreview() {
     const displayed = columnDrag?.preview ?? pendingColumnOrder?.groups ?? groups;
-    for (const [element, group] of mountedColumns) element.style.left = `${displayed.indexOf(group) * (width + gap)}px`;
+    for (const [element, group] of mountedColumns) element.style.left = `${displayed.indexOf(group) * (width + columnGap)}px`;
     board.querySelector('.bases-kanban-column-drop-placeholder')?.remove();
     if (columnDrag) {
       const placeholder = doc.createElement('div'); placeholder.className = 'bases-kanban-column-drop-placeholder';
-      placeholder.style.left = `${displayed.indexOf(columnDrag.group) * (width + gap)}px`; placeholder.style.width = `${width}px`;
+      placeholder.style.left = `${displayed.indexOf(columnDrag.group) * (width + columnGap)}px`; placeholder.style.width = `${width}px`;
       board.append(placeholder);
     }
   }
@@ -206,7 +208,7 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
     const source = columnDrag;
     if (!source || source.version !== result.version || hasActiveEdits()) return;
     const bounds = board.getBoundingClientRect();
-    const target = bounds.width > 0 ? Math.max(0, Math.min(source.original.length - 1, Math.floor((event.clientX - bounds.left) / (width + gap))))
+    const target = bounds.width > 0 ? Math.max(0, Math.min(source.original.length - 1, Math.floor((event.clientX - bounds.left) / (width + columnGap))))
       : source.original.indexOf(group);
     if (target < 0) return;
     const next = source.original.filter(item => item !== source.group); next.splice(target, 0, source.group);
@@ -235,7 +237,7 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
   }
   function card(row: BaseQueryRow, index: number): HTMLElement {
     const item = doc.createElement('div'); item.className = 'bases-kanban-card'; item.dataset.path = row.path;
-    item.dataset.rowIndex = String(index); item.style.top = `${index * rowHeight}px`; item.style.height = `${rowHeight - gap}px`;
+    item.dataset.rowIndex = String(index); item.style.top = `${index * rowHeight}px`; item.style.height = `${rowHeight - cardGap}px`;
     item.setAttribute('role', 'option'); item.setAttribute('aria-selected', String(selected === row.path));
     item.classList.toggle('is-selected', selected === row.path);
     item.classList.toggle('is-pending', pending.has(row.path)); item.setAttribute('aria-busy', String(pending.has(row.path)));
@@ -247,7 +249,7 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
     const settings = baseCardsSettings(snapshot);
     if (settings.image) {
       const cover = doc.createElement('div'); cover.className = 'bases-kanban-card-cover';
-      cover.style.height = `${width * (typeof snapshot.view.imageAspectRatio === 'number' && snapshot.view.imageAspectRatio > 0 ? settings.imageAspectRatio : .5)}px`;
+      cover.style.height = `${(width - 16) * (typeof snapshot.view.imageAspectRatio === 'number' && snapshot.view.imageAspectRatio > 0 ? settings.imageAspectRatio : .5)}px`;
       item.append(cover);
       if (options.loadThumbnail) {
         const controller = new AbortController(); resources.push(() => controller.abort());
@@ -317,7 +319,7 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
     space.dataset.previewHeight = space.style.height; space.style.height = `${(rows.length + 1) * rowHeight}px`;
     for (const card of space.querySelectorAll<HTMLElement>('.bases-kanban-card')) if (Number(card.dataset.rowIndex) >= index) card.style.top = `${(Number(card.dataset.rowIndex) + 1) * rowHeight}px`;
     const placeholder = doc.createElement('div'); placeholder.className = 'bases-kanban-card-drop-placeholder';
-    placeholder.style.top = `${index * rowHeight}px`; placeholder.style.height = `${rowHeight - gap}px`; space.append(placeholder);
+    placeholder.style.top = `${index * rowHeight}px`; placeholder.style.height = `${rowHeight - cardGap}px`; space.append(placeholder);
   }
   function renderRows(body: HTMLElement, group: BaseQueryGroup, requestedTop = body.scrollTop) {
     if (hasActiveEdits()) return;
@@ -325,11 +327,12 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
     const pinned = drag ? [...body.querySelectorAll<HTMLElement>('.bases-kanban-card')].find(item => item.dataset.path === drag!.path && item.classList.contains('is-being-dragged')) : undefined;
     releaseRows(body, pinned);
     const rows = displayedRows(group);
+    const footer = body.querySelector<HTMLElement>(':scope > .bases-kanban-column-footer');
     const height = body.clientHeight || Math.max(100, (root.clientHeight || 600) - headerHeight);
     const space = pinned?.parentElement ?? doc.createElement('div'); space.className = 'bases-kanban-column-space'; space.style.height = `${rows.length * rowHeight}px`;
     if (pinned) { for (const child of [...space.children]) if (child !== pinned) child.remove(); }
-    else body.replaceChildren(space);
-    body.scrollTop = Math.min(requestedTop, Math.max(0, rows.length * rowHeight - height));
+    else body.replaceChildren(space, ...(footer ? [footer] : []));
+    body.scrollTop = Math.min(requestedTop, Math.max(0, rows.length * rowHeight + (footer ? footerHeight : 0) - height));
     saveScroll(group.key, body.scrollTop);
     const start = Math.max(0, Math.floor(body.scrollTop / rowHeight) - 2);
     const end = Math.min(rows.length, Math.ceil((body.scrollTop + height) / rowHeight) + 2);
@@ -338,8 +341,12 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
   }
   function mountColumn(group: BaseQueryGroup, index: number): HTMLElement {
       const column = doc.createElement('section'); column.className = 'bases-kanban-column';
-      mountedColumns.set(column, group); column.style.left = `${index * (width + gap)}px`; column.style.width = `${width}px`;
-      const heading = doc.createElement('div'); heading.className = 'bases-kanban-column-header'; heading.textContent = label(group.key, result.shared !== undefined);
+      mountedColumns.set(column, group); column.style.left = `${index * (width + columnGap)}px`; column.style.width = `${width}px`;
+      const appearance = options.getGroupAppearance?.(group);
+      if (appearance?.color && /^(?:red|orange|yellow|green|cyan|blue|purple|pink|gray|grey|brown)$/.test(appearance.color)) column.dataset.color = appearance.color;
+      if (appearance?.category) column.dataset.category = appearance.category;
+      const heading = doc.createElement('div'); heading.className = 'bases-kanban-column-header';
+      const name = doc.createElement('span'); name.className = 'bases-kanban-column-name'; name.textContent = label(group.key, result.shared !== undefined); heading.append(name);
       const count = doc.createElement('span'); count.className = 'bases-kanban-column-count'; count.textContent = String(displayedRows(group).length); heading.append(count);
       const body = doc.createElement('div'); body.className = 'bases-kanban-column-body'; body.setAttribute('role', 'listbox'); body.setAttribute('aria-label', label(group.key, result.shared !== undefined));
       column.append(heading, body);
@@ -353,12 +360,12 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
           finally { button.disabled = !groupWritable(group); }
         };
         const plus = doc.createElement('button'); plus.type = 'button'; plus.className = 'bases-kanban-column-create clickable-icon';
-        plus.disabled = !groupWritable(group); plus.setAttribute('aria-label', 'Create note'); plus.append(icon('plus', 16, doc));
+        plus.disabled = !groupWritable(group); plus.setAttribute('aria-label', 'New page'); plus.dataset.baseTooltip = 'New page'; plus.append(icon('plus', 16, doc));
         plus.addEventListener('click', () => void create(plus)); heading.append(plus);
         const footer = doc.createElement('div'); footer.className = 'bases-kanban-column-footer';
         const add = doc.createElement('button'); add.type = 'button'; add.className = 'text-icon-button';
-        add.disabled = !groupWritable(group); add.append(icon('plus', 16, doc), doc.createTextNode('New')); add.addEventListener('click', () => void create(add));
-        footer.append(add); column.append(footer);
+        add.disabled = !groupWritable(group); add.append(icon('plus', 16, doc), doc.createTextNode('New page')); add.addEventListener('click', () => void create(add));
+        footer.append(add); body.append(footer);
       }
       if (!options.readOnly && options.requestGroupOrder && group.key) {
         heading.draggable = !groupOrderPending && canOrderColumns();
@@ -412,8 +419,8 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
   function renderDragViewport() {
     const sourceGroup = columnDrag?.group ?? (drag ? locate(drag.path) : undefined);
     if (!sourceGroup || hasActiveEdits()) return;
-    const visibleGroups = columnDrag?.preview ?? groups, viewport = root.clientWidth || 900, stride = width + gap;
-    root.scrollLeft = Math.min(root.scrollLeft, Math.max(0, visibleGroups.length * stride - gap - viewport));
+    const visibleGroups = columnDrag?.preview ?? groups, viewport = root.clientWidth || 900, stride = width + columnGap;
+    root.scrollLeft = Math.min(root.scrollLeft, Math.max(0, visibleGroups.length * stride - columnGap - viewport));
     const start = Math.max(0, Math.floor(root.scrollLeft / stride) - 1), end = Math.min(visibleGroups.length, Math.ceil((root.scrollLeft + viewport) / stride) + 1);
     const wanted = new Set(visibleGroups.slice(start, end)); wanted.add(sourceGroup);
     for (const [column, group] of mountedColumns) if (!wanted.has(group)) {
@@ -434,10 +441,10 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
     const visibleGroups = pendingColumnOrder?.groups ?? groups;
     const restoreFocus = root.contains(doc.activeElement) && doc.activeElement?.closest('.bases-kanban-card') ? selected : undefined;
     epoch++; releaseRows(); mountedColumns.clear();
-    const viewport = root.clientWidth || 900, stride = width + gap;
-    root.scrollLeft = Math.min(root.scrollLeft, Math.max(0, visibleGroups.length * stride - gap - viewport));
+    const viewport = root.clientWidth || 900, stride = width + columnGap;
+    root.scrollLeft = Math.min(root.scrollLeft, Math.max(0, visibleGroups.length * stride - columnGap - viewport));
     const start = Math.max(0, Math.floor(root.scrollLeft / stride) - 1), end = Math.min(visibleGroups.length, Math.ceil((root.scrollLeft + viewport) / stride) + 1);
-    board.style.width = `${Math.max(0, visibleGroups.length * stride - gap)}px`;
+    board.style.width = `${Math.max(0, visibleGroups.length * stride - columnGap)}px`;
     const nodes: HTMLElement[] = [];
     for (let index = start; index < end; index++) nodes.push(mountColumn(visibleGroups[index], index));
     if (!visibleGroups.length) {
@@ -483,10 +490,10 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
         queryGroups.find(group => group.key && matchesBaseGroupKey(option.key, group.key)) ?? { ...option, rows: [] });
     } else groups = result.shared !== undefined ? queryGroups : [...queryGroups.filter(group => group.key?.type === 'null'), ...queryGroups.filter(group => group.key?.type !== 'null')];
     properties = result.properties;
-    width = typeof result.view.columnWidth === 'number' && Number.isFinite(result.view.columnWidth) ? Math.max(200, Math.min(500, result.view.columnWidth)) : 280;
+    width = typeof result.view.columnWidth === 'number' && Number.isFinite(result.view.columnWidth) ? Math.max(200, Math.min(500, result.view.columnWidth)) : 276;
     const settings = baseCardsSettings(result);
-    const coverHeight = settings.image ? width * (typeof result.view.imageAspectRatio === 'number' && result.view.imageAspectRatio > 0 ? settings.imageAspectRatio : .5) : 0;
-    rowHeight = coverHeight + 16 + 24 + Math.max(0, properties.length - 1) * 50 + gap;
+    const coverHeight = settings.image ? (width - 16) * (typeof result.view.imageAspectRatio === 'number' && result.view.imageAspectRatio > 0 ? settings.imageAspectRatio : .5) : 0;
+    rowHeight = coverHeight + 16 + 24 + Math.max(0, properties.length - 1) * 32 + cardGap;
     for (const [path, operation] of pending) {
       if (propertyOf(result) !== operation.request.property || !requestGroupIs(locate(path), operation.request, 'source') || !groups.some(group => requestGroupIs(group, operation.request, 'destination'))) pending.delete(path);
     }
@@ -515,7 +522,7 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
       if (!target) return;
       if (event.altKey && target.key) { void move(selected, target.key); return; }
       const row = displayedRows(target)[Math.min(index, displayedRows(target).length - 1)];
-      if (row) { selected = row.path; root.scrollLeft = Math.max(0, (groupIndex + direction) * (width + gap)); render(); root.querySelector<HTMLElement>('.bases-kanban-card.is-selected')?.focus(); }
+      if (row) { selected = row.path; root.scrollLeft = Math.max(0, (groupIndex + direction) * (width + columnGap)); render(); root.querySelector<HTMLElement>('.bases-kanban-card.is-selected')?.focus(); }
     }
     else if (event.key === 'ArrowUp'  || event.key === 'ArrowDown') {
       event.preventDefault(); const row = rows[Math.max(0, Math.min(rows.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)))];
