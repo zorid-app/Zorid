@@ -1012,7 +1012,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       }
       return targets;
     };
-    const shared = { result, canBeginPropertyEdit, getEditableValue: baseEditablePropertyValue, getPropertyLabel, getPropertyType: (property: string) => definitions.properties[basePropertyName(property)]?.type,
+    const shared = { result, ...(source.kind==='collection'?{pageTitleProperty:'file.name'}:{}), canBeginPropertyEdit, getEditableValue: baseEditablePropertyValue, getPropertyLabel, getPropertyType: (property: string) => definitions.properties[basePropertyName(property)]?.type,
       openFile: openResultFile,
       ...(writable ? { editProperty: (edit: Parameters<typeof actions.editProperty>[0]) => track(() => { assertPropertyWritable(edit.property, edit.value); return editProperty(edit); }) } : {}),
       onError: report, onEditStateChange: () => { renderStatus(controller.state); schedule(); },
