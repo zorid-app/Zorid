@@ -10,8 +10,11 @@ import type { EditorHandle, EditorOptions } from './editor.ts';
 export interface BaseNewItemPopoverOptions {
   readonly anchor: HTMLElement;
   readonly vault: Vault;
-  /** An ordinary note already created durably by the New action. */
+  /** An ordinary note already saved durably, including an existing database row. */
   readonly path: string;
+  readonly presentation?: 'popover' | 'side-peek';
+  /** Existing rows can open without selecting their title or entering body editing. */
+  readonly focusTitle?: boolean;
   readonly getBuffer: (path: string) => Promise<NoteBuffer>;
   readonly validate: () => void;
   /** Workspace rename must relocate the shared buffer before resolving. */
@@ -64,6 +67,7 @@ function bodyPreview(source: string): string {
 export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions): Promise<BaseNewItemPopoverHandle> {
   options.validate();
   const document = options.anchor.ownerDocument, win = document.defaultView;
+  const openingFocus = document.activeElement;
   let path = normalizePath(options.path);
   const initialEntry = options.vault.entries.get(path);
   if (initialEntry?.type !== 'file' || !/\.md$/i.test(path)) throw new Error('The new note is no longer available.');
@@ -71,20 +75,27 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
   const buffer = await options.getBuffer(path); options.validate();
   await buffer.load(entryId, options.validate); options.validate();
   if (buffer.path !== path || (entryId && options.vault.entries.get(path)?.entryId !== entryId)) throw new Error('The new note identity changed before opening.');
-  const root = document.createElement('div'); root.className = 'popover hover-popover is-editing bases-new-item-popover'; root.setAttribute('role', 'dialog'); root.setAttribute('aria-label', 'New item');
+  const sidePeek = options.presentation === 'side-peek';
+  const root = document.createElement('div'); root.className = 'popover hover-popover is-editing bases-new-item-popover'; root.classList.toggle('is-side-peek', sidePeek); root.setAttribute('role', 'dialog'); root.setAttribute('aria-label', sidePeek ? 'Page preview' : 'New item'); root.tabIndex = -1;
   const title = document.createElement('div'); title.className = 'inline-title'; title.contentEditable = 'true'; title.spellcheck = true; title.tabIndex = -1; title.setAttribute('role', 'textbox'); title.setAttribute('aria-label', 'Note title'); title.setAttribute('aria-multiline', 'false'); title.setAttribute('enterkeyhint', 'done'); title.textContent = noteName(path);
   const propertiesHost = document.createElement('div'); propertiesHost.className = 'bases-new-item-properties';
   const body = document.createElement('div'); body.className = 'bases-new-item-body';
   const preview = document.createElement('div'); preview.className = 'bases-new-item-body-preview'; preview.tabIndex = 0; preview.setAttribute('role', 'button'); preview.setAttribute('aria-label', 'Edit note body');
   const editorHost = document.createElement('div'); editorHost.className = 'editor-host markdown-source-view is-live-preview'; editorHost.hidden = true;
-  const open = document.createElement('button'); open.type = 'button'; open.className = 'markdown-embed-link clickable-icon'; open.setAttribute('aria-label', 'Open link'); open.append(icon('maximize', 16, document));
+  const open = document.createElement('button'); open.type = 'button'; open.className = 'markdown-embed-link clickable-icon'; open.setAttribute('aria-label', sidePeek ? 'Open as full page' : 'Open link'); open.append(icon('maximize', 16, document));
+  const closeButton = sidePeek ? document.createElement('button') : undefined;
+  if (closeButton) {
+    const header = document.createElement('div'); header.className = 'bases-page-peek-header';
+    closeButton.type = 'button'; closeButton.className = 'clickable-icon'; closeButton.setAttribute('aria-label', 'Close preview'); closeButton.append(icon('x', 16, document));
+    header.append(closeButton, open); root.append(header);
+  }
   const error = document.createElement('div'); error.className = 'bases-new-item-error'; error.setAttribute('role', 'alert'); error.hidden = true;
   const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'bases-new-item-retry'; retry.textContent = 'Retry'; retry.hidden = true;
-  body.append(preview, editorHost); root.append(title, propertiesHost, body, open, error, retry); document.body.append(root);
+  body.append(preview, editorHost); root.append(title, propertiesHost, body, ...(sidePeek ? [] : [open]), error, retry); document.body.append(root);
   let closed = false, expanded = false, composingTitle = false, titleBaseline = noteName(path), titleSerial = Promise.resolve();
   let titleDraft = titleBaseline, bodySnapshot = buffer.text, editor: EditorHandle | undefined, loading: Promise<void> | undefined, closing: Promise<void> | undefined;
   let titleAttempt: { requested: string; promise: Promise<void> } | undefined;
-  let ownedContextMenu = false;
+  let ownedContextMenu = false, closeFocusRetired = false, editorFocusEpoch = 0;
   let titleProblem = false, propertyDraft = false, propertyInputGeneration = 0;
   const writes = new Set<Promise<unknown>>(), unsubscribers: (() => void)[] = [];
   const live = () => !closed && root.isConnected;
@@ -98,6 +109,11 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
   const titleText = () => title.textContent ?? '';
   function position() {
     if (closed) return;
+    if (sidePeek) {
+      const width = Math.min(600, Math.max(0, win?.innerWidth ?? 1024));
+      root.style.width = `${width}px`; root.style.left = `${Math.max(0, (win?.innerWidth ?? 1024) - width)}px`; root.style.top = '0px';
+      root.style.height = `${Math.max(0, win?.innerHeight ?? 768)}px`; return;
+    }
     const rect = options.anchor.getBoundingClientRect(), width = Math.min(452, Math.max(0, (win?.innerWidth ?? 1024) - 16));
     root.style.width = `${width}px`;
     const left = Math.max(8, Math.min(rect.right - width, (win?.innerWidth ?? 1024) - width - 8));
@@ -133,10 +149,11 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
     if (buffer.error) report(buffer.error);
     position();
   }
-  async function expandBody(): Promise<void> {
+  async function expandBody(focus = true): Promise<void> {
     validate();
-    if (editor) { editor.focus(); return; }
+    if (editor) { if (focus) editor.focus(); return; }
     if (loading) return loading;
+    const requestedFocusEpoch = editorFocusEpoch;
     expanded = true; root.classList.add('is-body-expanded'); preview.hidden = true; editorHost.hidden = false; position();
     loading = (async () => {
       const factory = options.editorFactory ?? (await import('./editor.ts')).createEditor;
@@ -151,7 +168,7 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
         open: options.editorOptions?.open ?? ((target, _kind, event) => { void Promise.resolve(options.openFile(target, event ?? new (win?.MouseEvent ?? MouseEvent)('click'))).catch(report); }),
       });
       if (!live()) { handle.destroy(); return; }
-      editor = handle; if (buffer.text !== bodySnapshot) { bodySnapshot = buffer.text; editor.setValue(bodySnapshot); } editor.focus(); position();
+      editor = handle; if (buffer.text !== bodySnapshot) { bodySnapshot = buffer.text; editor.setValue(bodySnapshot); } if (focus && requestedFocusEpoch === editorFocusEpoch) editor.focus(); position();
     })().catch(failure => { if (live()) { expanded = false; root.classList.remove('is-body-expanded'); preview.hidden = false; editorHost.hidden = true; report(failure); } throw failure; }).finally(() => { loading = undefined; });
     return loading;
   }
@@ -218,16 +235,18 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
   function ownedPortal(target: Node) { return properties.owns(target) || options.ownsEditorPortal?.(target) === true; }
   function remove(restoreFocus: boolean) {
     if (closed) return;
+    const focused = document.activeElement, focusOwned = !focused || focused === document.body || focused === document.documentElement || root.contains(focused) || ownedPortal(focused);
     closed = true;
     const release = (operation: () => void) => { try { operation(); } catch (failure) { try { options.onError(failure); } catch {} } };
     release(() => properties.destroy()); release(() => editor?.destroy()); editor = undefined; unsubscribers.forEach(stop => release(stop));
-    document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', escape); document.removeEventListener('contextmenu', contextOwner, true); win?.removeEventListener('resize', position); win?.removeEventListener('scroll', position, true); observer?.disconnect(); root.remove();
-    if (restoreFocus && options.anchor.isConnected) options.anchor.focus({ preventScroll: true });
+    document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', escape); document.removeEventListener('contextmenu', contextOwner, true); document.removeEventListener('focusin', observeFocus, true); win?.removeEventListener('resize', position); win?.removeEventListener('scroll', position, true); win?.removeEventListener('blur', retireCloseFocus); observer?.disconnect(); root.remove();
+    if (restoreFocus && !closeFocusRetired && focusOwned && options.anchor.isConnected) options.anchor.focus({ preventScroll: true });
     try { options.onClose?.(); } catch (failure) { try { options.onError(failure); } catch {} }
   }
   async function close(closeOptions: { restoreFocus?: boolean } = {}): Promise<void> {
     if (closed) return;
     if (closing) return closing;
+    closeFocusRetired = false;
     const wasInert=root.inert;
     closing = flush().then(async () => {
       const closingText=buffer.text,closingSavedText=buffer.savedText,closingPath=buffer.path;
@@ -239,7 +258,9 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
     return closing;
   }
   function contextOwner(event: MouseEvent) { ownedContextMenu = root.contains(event.target as Node) || ownedPortal(event.target as Node); }
-  function outside(event: PointerEvent) { const target = event.target as Node; if (ownedContextMenu && (target as HTMLElement).closest?.('.context-menu')) return; if (!root.contains(target) && !ownedPortal(target)) void close().catch(() => {}); }
+  function retireCloseFocus() { closeFocusRetired = true; editorFocusEpoch++; }
+  function observeFocus(event: FocusEvent) { const target = event.target as Node; if (!root.contains(target) && !ownedPortal(target)) editorFocusEpoch++; }
+  function outside(event: PointerEvent) { const target = event.target as Node; if (ownedContextMenu && (target as HTMLElement).closest?.('.context-menu')) return; if (!root.contains(target) && !ownedPortal(target)) { if (closing) retireCloseFocus(); void close().catch(() => {}); } }
   function escape(event: KeyboardEvent) {
     if (event.key === 'ContextMenu' || event.key === 'F10' && event.shiftKey) ownedContextMenu = root.contains(event.target as Node) || ownedPortal(event.target as Node);
     if (event.defaultPrevented || event.isComposing || composingTitle || event.key !== 'Escape' || ownedPortal(event.target as Node)) return;
@@ -251,18 +272,21 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
   title.addEventListener('compositionstart', () => { composingTitle = true; }); title.addEventListener('compositionend', () => { composingTitle = false; titleDraft = titleText(); });
   title.addEventListener('beforeinput', event => { if ((event as InputEvent).inputType === 'insertParagraph' || (event as InputEvent).inputType === 'insertLineBreak') event.preventDefault(); });
   title.addEventListener('blur', () => { if (!closed && !composingTitle && (titleProblem || titleText().trim() !== titleBaseline)) void saveTitle().catch(() => {}); });
-  title.addEventListener('keydown', event => { if (event.isComposing || composingTitle) return; if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); void saveTitle().then(expandBody).catch(report); } });
+  title.addEventListener('keydown', event => { if (event.isComposing || composingTitle) return; if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); const focusEpoch = editorFocusEpoch; void saveTitle().then(() => expandBody(focusEpoch === editorFocusEpoch)).catch(report); } });
   editorHost.addEventListener('focusout', () => { queueMicrotask(refresh); });
   preview.addEventListener('click', () => { void expandBody().catch(() => {}); }); preview.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); void expandBody().catch(() => {}); } });
   open.addEventListener('mousedown', event => event.preventDefault()); open.addEventListener('click', event => { void close().then(() => options.openFile(path, event)).catch(report); });
+  closeButton?.addEventListener('click', () => { void close({ restoreFocus: true }).catch(() => {}); });
   retry.addEventListener('click', () => { void flush().catch(report); });
-  document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', escape); document.addEventListener('contextmenu', contextOwner, true); win?.addEventListener('resize', position); win?.addEventListener('scroll', position, true);
+  document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', escape); document.addEventListener('contextmenu', contextOwner, true); document.addEventListener('focusin', observeFocus, true); win?.addEventListener('resize', position); win?.addEventListener('scroll', position, true); win?.addEventListener('blur', retireCloseFocus);
   const observer = win?.ResizeObserver ? new win.ResizeObserver(position) : undefined; observer?.observe(root);
   for (const event of ['modify', 'rename', 'delete'] as const) unsubscribers.push(options.vault.on(event, change => { if (change.path === path || change.oldPath === path) refresh(); }));
   if (options.subscribeBuffer) unsubscribers.push(options.subscribeBuffer(buffer, refresh));
   refresh(); position();
-  title.focus(); const selection = document.getSelection(); if (selection) { const range = document.createRange(); range.selectNodeContents(title); selection.removeAllRanges(); selection.addRange(range); }
+  const focusStillOwned = document.activeElement === openingFocus || document.activeElement === document.body || root.contains(document.activeElement);
+  if (focusStillOwned && options.focusTitle !== false) { title.focus(); const selection = document.getSelection(); if (selection) { const range = document.createRange(); range.selectNodeContents(title); selection.removeAllRanges(); selection.addRange(range); } }
+  else if (focusStillOwned) root.focus({ preventScroll: true });
   const handle: BaseNewItemPopoverHandle = { element: root, get path() { return path; }, refresh, expandBody, hasPendingChanges, flush, close };
-  if (options.bodyExpanded) await expandBody().catch(() => {});
+  if (options.bodyExpanded) await expandBody(focusStillOwned && options.focusTitle !== false).catch(() => {});
   return handle;
 }

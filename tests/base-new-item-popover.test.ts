@@ -30,6 +30,86 @@ test('New focuses and selects DIV title of already saved note without mounting b
   assert.equal(s.handle.element.style.width, '452px'); assert.equal(s.handle.element.querySelector('.metadata-properties-heading')!.getAttribute('aria-expanded'), 'false'); assert.match(s.handle.element.textContent!, /Literal \{\{date\}\}/); assert.equal(s.handle.hasPendingChanges(), false); await s.cleanup();
 });
 
+async function untilPeek(check:()=>boolean) { for(let i=0;i<100&&!check();i++)await tick();assert.ok(check()); }
+
+test('side peek uses a viewport pane and opens existing rows without selecting or editing their title',async()=>{
+  const s=await setup(undefined,{presentation:'side-peek',focusTitle:false,bodyExpanded:true,propertiesExpanded:true});
+  try{
+    assert.equal(s.handle.element.getAttribute('aria-label'),'Page preview');assert.ok(s.handle.element.classList.contains('is-side-peek'));
+    assert.equal(s.handle.element.style.width,'600px');assert.equal(s.handle.element.style.left,'424px');assert.equal(s.handle.element.style.top,'0px');assert.equal(s.handle.element.style.height,'768px');
+    assert.equal(s.dom.window.document.activeElement,s.handle.element);assert.notEqual(s.dom.window.getSelection()?.toString(),'Untitled');
+    assert.equal(s.editorOptions.length,1);assert.equal(s.handle.element.querySelector('.metadata-properties-heading')!.getAttribute('aria-expanded'),'true');
+    assert.ok(s.handle.element.querySelector('.bases-page-peek-header [aria-label="Close preview"]'));
+    assert.ok(s.handle.element.querySelector('.bases-page-peek-header [aria-label="Open as full page"]'));
+    assert.equal(s.handle.hasPendingChanges(),false);
+    Object.defineProperty(s.dom.window,'innerWidth',{value:320,configurable:true});Object.defineProperty(s.dom.window,'innerHeight',{value:480,configurable:true});s.dom.window.dispatchEvent(new s.dom.window.Event('resize'));
+    assert.equal(s.handle.element.style.width,'320px');assert.equal(s.handle.element.style.left,'0px');assert.equal(s.handle.element.style.height,'480px');
+  }finally{await s.cleanup();}
+});
+
+test('side peek Close retains failed body drafts and closes only after the same shared save succeeds',async()=>{
+  const s=await setup(undefined,{presentation:'side-peek',focusTitle:false,bodyExpanded:true});
+  const write=s.adapter.write.bind(s.adapter);let fail=true;s.adapter.write=async(path,text)=>{if(fail)throw new Error('Peek disk unavailable');await write(path,text);};
+  try{
+    s.editorOptions[0].onChange(s.buffer.text+'\nRetained peek body');
+    const close=s.handle.element.querySelector<HTMLButtonElement>('[aria-label="Close preview"]')!;close.focus();close.click();
+    await untilPeek(()=>s.errors.length>0);assert.ok(s.handle.element.isConnected);assert.equal(s.closed,0);assert.equal(s.destroyedEditor,0);assert.match(s.buffer.text,/Retained peek body/);
+    fail=false;close.click();await untilPeek(()=>!s.handle.element.isConnected);assert.equal(s.closed,1);assert.equal(s.destroyedEditor,1);assert.equal(s.dom.window.document.activeElement,s.anchor);assert.match(await s.adapter.read('Untitled.md'),/Retained peek body/);
+  }finally{fail=false;await s.cleanup();}
+});
+
+test('side peek full-page action waits for save and close without restoring focus behind the page',async()=>{
+  let release!:()=>void,entered!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});
+  let savedAtOpen='',focusAtOpen:Element|null=null,s:Awaited<ReturnType<typeof setup>>;
+  s=await setup(undefined,{presentation:'side-peek',focusTitle:false,bodyExpanded:true,closeEditor:async()=>{entered();await gate;},openFile:async path=>{savedAtOpen=await s.adapter.read(path);focusAtOpen=s.dom.window.document.activeElement;s.opened.push(path);}});
+  try{
+    s.editorOptions[0].onChange(s.buffer.text+'\nSaved before full page');
+    const open=s.handle.element.querySelector<HTMLButtonElement>('[aria-label="Open as full page"]')!;open.focus();open.click();await started;
+    assert.deepEqual(s.opened,[]);assert.ok(s.handle.element.isConnected);release();await untilPeek(()=>s.opened.length===1);
+    assert.equal(s.handle.element.isConnected,false);assert.match(savedAtOpen,/Saved before full page/);assert.notEqual(focusAtOpen,s.anchor);
+  }finally{release();await s.cleanup();}
+});
+
+test('side peek Close cannot restore focus moved outside while an accepted save settles',async()=>{
+  let release!:()=>void,entered!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});
+  const s=await setup(undefined,{presentation:'side-peek',focusTitle:false,closeEditor:async()=>{entered();await gate;}});
+  try{
+    const close=s.handle.element.querySelector<HTMLButtonElement>('[aria-label="Close preview"]')!;close.focus();close.click();await started;
+    const sibling=s.dom.window.document.querySelector<HTMLButtonElement>('#sibling')!;sibling.focus();sibling.dispatchEvent(new s.dom.window.MouseEvent('pointerdown',{bubbles:true}));release();await untilPeek(()=>!s.handle.element.isConnected);
+    assert.equal(s.dom.window.document.activeElement,sibling);
+  }finally{release();await s.cleanup();}
+});
+
+test('lazy side peek editor mounting leaves newer outside focus alone',async()=>{
+  let release!:(editor:EditorHandle)=>void;const gate=new Promise<EditorHandle>(resolve=>{release=resolve;});let focused=0;
+  const s=await setup(undefined,{presentation:'side-peek',focusTitle:false,editorFactory:()=>gate});
+  try{
+    const loading=s.handle.expandBody();const sibling=s.dom.window.document.querySelector<HTMLButtonElement>('#sibling')!;sibling.focus();
+    release({getValue:()=>s.buffer.text,setValue(){},focus(){focused++;},destroy(){},insert(){}});await loading;
+    assert.equal(focused,0);assert.equal(s.dom.window.document.activeElement,sibling);
+  }finally{await s.cleanup();}
+});
+
+test('side peek Close cannot restore focus after its window loses focus during close',async()=>{
+  let release!:()=>void,entered!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});
+  const s=await setup(undefined,{presentation:'side-peek',focusTitle:false,closeEditor:async()=>{entered();await gate;}});
+  try{
+    const close=s.handle.element.querySelector<HTMLButtonElement>('[aria-label="Close preview"]')!;close.focus();close.click();await started;s.dom.window.dispatchEvent(new s.dom.window.Event('blur'));release();
+    await untilPeek(()=>!s.handle.element.isConnected);assert.notEqual(s.dom.window.document.activeElement,s.anchor);
+  }finally{release();await s.cleanup();}
+});
+
+test('title Enter does not take focus back after a delayed accepted rename',async()=>{
+  let release!:()=>void,entered!:()=>void,s:Awaited<ReturnType<typeof setup>>;
+  const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});
+  s=await setup(undefined,{presentation:'side-peek',rename:async(_path,destination,validate)=>{entered();await gate;validate();await s.buffer.rename(destination);}});
+  try{
+    s.setTitle('Renamed');s.title.dispatchEvent(new s.dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));await started;
+    const sibling=s.dom.window.document.querySelector<HTMLButtonElement>('#sibling')!;sibling.focus();release();await untilPeek(()=>s.editorOptions.length===1);
+    assert.equal(s.handle.path,'Renamed.md');assert.equal(s.dom.window.document.activeElement,sibling);
+  }finally{release();await s.cleanup();}
+});
+
 test('workspace New hides ordinary YAML properties and reveals a late confirmed collection membership',async()=>{
   let managed=false;
   const source='---\n_id: trusted-note\n_type: Books\nrating: 4\n---\nExact body';
