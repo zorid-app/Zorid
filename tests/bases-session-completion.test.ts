@@ -33,22 +33,29 @@ test('New copies complete literal template and opens one committed note', async 
   } finally { await f.cleanup(); }
 });
 
-test('a second New closes its existing note popover before preparing another file', async () => {
-  let existing = false, opened = 0;
+test('each New closes the previous peek before creating and opening one new note', async () => {
+  let existing: string | undefined;
+  const opened: string[] = [], events: string[] = [];
   const f = await fixture({ 'Work.base': base, 'One.md': 'Existing' }, {
-    openCreatedFile() { existing = true; opened++; },
-    async closeCreatedFile() { if (!existing) return false; existing = false; return true; },
+    openCreatedFile(path) { existing = path; opened.push(path); events.push(`open:${path}`); },
+    async closeCreatedFile() { if (!existing) return false; events.push(`close:${existing}`); existing = undefined; return true; },
   });
   try {
     const newItem = () => f.host.querySelector<HTMLButtonElement>('[aria-label="New"]')!.click();
-    newItem(); for (let i = 0; i < 30 && (!existing || f.session.hasPendingChanges()); i++) await tick();
-    const created = [...f.vault.entries.keys()].filter(path => path.endsWith('.md'));
-    assert.equal(opened, 1); assert.equal(created.length, 2);
-    newItem(); for (let i = 0; i < 30 && (existing || f.session.hasPendingChanges()); i++) await tick();
-    assert.equal(existing, false); assert.equal(opened, 1);
-    assert.deepEqual([...f.vault.entries.keys()].filter(path => path.endsWith('.md')), created);
+    for (let count = 1; count <= 3; count++) {
+      const previous = existing;
+      newItem(); for (let i = 0; i < 30 && (opened.length < count || f.session.hasPendingChanges()); i++) await tick();
+      assert.equal(opened.length, count, 'one new peek opens for each New');
+      assert.equal(existing, opened[count - 1]);
+      assert.equal(new Set(opened).size, count, 'each New creates a distinct note');
+      assert.equal([...f.vault.entries.keys()].filter(path => path.endsWith('.md')).length, count + 1);
+      for (const path of opened) assert.ok(f.vault.entries.has(path));
+      assert.deepEqual(events.slice(previous ? -2 : -1), previous ? [`close:${previous}`, `open:${existing}`] : [`open:${existing}`]);
+    }
+    assert.deepEqual(f.errors, []);
   } finally { await f.cleanup(); }
 });
+
 
 test('reused table renderer can edit again after its own saved refresh', async () => {
   const f = await fixture({ 'Work.base': base, 'One.md': '---\nstatus: Todo\n---\nbody\n' });
