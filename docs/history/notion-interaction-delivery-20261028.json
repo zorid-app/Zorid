@@ -1,6 +1,6 @@
 {
   "date": "2026-10-28",
-  "status": "IN_PROGRESS",
+  "status": "NATIVE_ACCEPTED_INSTALL_PENDING",
   "completed": false,
   "candidate": {
     "commit": "3b2ce849ee259a92c14177a3675f933bf5be3def",
@@ -174,5 +174,128 @@
   "documentationWorker": {
     "actions": "receipt/log/source reads and new documentation only",
     "testsBuildsGuiRun": false
+  },
+  "nativeAcceptance": {
+    "status": "PASS",
+    "allEightDatatypes": true,
+    "selectStatusMultiOptionCreation": true,
+    "bodyPreservedThroughPropertyAndClipboardWrites": true,
+    "clipboard": {
+      "copy": [
+        {
+          "defaultPrevented": true,
+          "fixtureMatch": true,
+          "kind": "copy",
+          "trusted": true,
+          "types": [
+            "text/plain",
+            "text/markdown",
+            "obsidian/table",
+            "obsidian/bases-cells"
+          ],
+          "unknownTypeCount": 0
+        }
+      ],
+      "copyRoute": "CDP keyboard",
+      "copied": {
+        "formats": [
+          "public.utf8-plain-text",
+          "org.chromium.web-custom-data"
+        ],
+        "unknownFormatCount": 2,
+        "plainBytes": 8
+      },
+      "seeded": {
+        "formats": [
+          "public.utf8-plain-text"
+        ],
+        "unknownFormatCount": 2,
+        "plainBytes": 8
+      },
+      "paste": [
+        {
+          "defaultPrevented": false,
+          "fixtureMatch": true,
+          "kind": "paste",
+          "trusted": true,
+          "types": [
+            "text/plain"
+          ],
+          "unknownTypeCount": 0
+        }
+      ],
+      "pasteRoute": "CDP keyboard",
+      "bodyPreserved": true,
+      "pass": true,
+      "clipboardRestore": {
+        "restored": true
+      },
+      "actions": [
+        {
+          "action": "click",
+          "selector": "[role=gridcell][data-property=\"note.rpa83oc3xsd5\"]",
+          "index": 0,
+          "button": "left",
+          "modifiers": 0,
+          "count": 1,
+          "point": {
+            "label": null,
+            "role": "gridcell",
+            "tag": "DIV",
+            "x": 571.5,
+            "y": 259
+          }
+        },
+        {
+          "action": "key",
+          "key": "Escape",
+          "modifiers": 0,
+          "raw": false
+        },
+        {
+          "action": "key",
+          "key": "ArrowRight",
+          "modifiers": 8,
+          "raw": false
+        },
+        {
+          "action": "key",
+          "key": "c",
+          "modifiers": 4,
+          "commands": [
+            "Copy"
+          ],
+          "raw": true
+        },
+        {
+          "action": "key",
+          "key": "v",
+          "modifiers": 4,
+          "commands": [
+            "Paste"
+          ],
+          "raw": true
+        }
+      ]
+    },
+    "slashCreation": "desktop-slash009.json",
+    "propertyCreationAndSettings": "desktop-settings010.json",
+    "viewsAndIdle": "desktop-views011.json",
+    "invalidNumberEscapeClose": "desktop-final008.json",
+    "idle": {
+      "samples": 80,
+      "updatingSamples": 0,
+      "pickerStable": true
+    },
+    "testAppExit": 0
+  },
+  "package": {
+    "status": "PASS",
+    "files": 356,
+    "log": "package-verify001.log",
+    "unsignedLocal": true
+  },
+  "installed": {
+    "status": "PENDING"
   }
 }

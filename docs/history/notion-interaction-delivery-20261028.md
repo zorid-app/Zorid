@@ -113,3 +113,46 @@ integrated/product commit, installed artifact and remaining limitations. The
 standing installation instruction requires staging and verifying the replacement
 before removing the previous app, while preserving vaults/preferences. No push,
 iOS, Tauri, full-platform, full-suite or exact Notion parity claim is made.
+
+
+## Source desktop acceptance — passed before integration
+
+The normal Electron app ran against the correctly initialized disposable family
+vault using the source-matched host. Public Electron debugger CDP targeted only
+its exact window and local source URL; the renderer discovery endpoint timed out.
+REA process captures established early input/DOM observations; persistent scoped
+input plans completed the final acceptance. Generic CUA Electron selection was
+rejected; after proving the unique owned process, path-scoped inspection succeeded.
+No generic selection was retried.
+
+All eight supported types have actual accepted edits: text, number, checkbox via
+Space, date and nanosecond datetime with explicit offset, Select, Multi-select and
+Status. Blue/Red/Green option creation and Status arrow/Enter selection succeeded;
+leaving Multi-select with Tab retained both opaque stored option identities. The
+shared note body remained unchanged through later schema/property/clipboard writes.
+A rejected number validation followed by Escape then Close succeeded without
+leaving an orphan error (`desktop-final008.json`). Native date display values must
+be read from readonly input values, not innerText; failed early oracle waits did
+not establish a save failure.
+
+`clipboard-native.json` confirms trusted keyboard-generated Copy and Paste,
+custom table/cell formats, raw TSV conversion to a number, exact body preservation
+and verified restoration of the original private system clipboard. No clipboard
+contents unrelated to the fixture were retained. `/database` + Enter, new empty
+source + Enter, inline row/title creation + Enter and ordinary-note Properties
+hiding passed (`desktop-slash009.json`). Property authoring via Enter, settings
+visibility and reorder controls, List and schema-labeled Board passed. The
+configured rich List row measured54px; minimal List measured33px in the previous
+bounded pass. Board columns measured276px. Explicit view settings remain honored.
+
+An eighty-sample/four-second Status search test retained the exact input and query
+with zero Updating samples (`desktop-views011.json`). Unrecorded view/body changes
+were observed between earlier plans, so those failed assumptions are not parity
+receipts. The final plan receipts and exact body comparison are the accepted
+results. The source app was closed normally, exit0.
+
+The staged directory package verifies356files (`package-verify001.log`). Packaging
+used the previously established staged-project electron-builder route to avoid
+the unchanged pnpm importer/lockfile collector issue; dependency manifests and
+root build files were not modified. Main integration and installed restart remain
+pending in this checkpoint.
