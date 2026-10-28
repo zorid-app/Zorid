@@ -11,6 +11,22 @@ Editing focus/blur and swallowed next clicks are a priority. Preserve ordinary-n
 Properties hiding and the installed refresh-flashing fix. Unsupported Notion
 features are excluded, rather than shown as inert menu entries.
 
+**2026-10-28 acceptance checkpoint:** composed frontend candidate `253de0fa`,
+262/262 final focused checks and TS/native frontend build pass; frozen predecessor
+322/322 is a separate bounded receipt. Native real-service checks confirm slash/Enter
+creation, durable row/title, add properties, text/number/Status/select editing,
+next-click/Tab/Enter handoff, page body preservation, List33px, Board276px plus
+schema Done label, empty page fields28px and rejected-option Escape/close. Static
+picker idle60 samples/3s retains input identity/query and shows zero Updating;
+ordinary note Properties absent. Full delivery remains open: nullable Multi-select
+core bug blocks additive schema updates. Reviewed narrow core proposal prepared,
+user exception to no-Rust-build limit requested and pending. No unsafe confirm
+bypass, main change or new install. Final native clipboard shortcut input could not
+be exercised by CDP commands; OS keystrokes denied Accessibility permission; unit
+clipboard/range contracts remain separate evidence. Complete core/native/installed
+acceptance before closing this finding. Temporary main lane released pending
+exception; reacquire before integration. No test app remains.
+
 Root owns `codex/notion-interaction-match` from `e4c8a6d0`, reference experiments,
 `session.ts`/`workspace.ts` integration, packaging and native verification. Main
 owner acknowledged the exclusive temporary reviewed/validated integrate/test/commit

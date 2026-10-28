@@ -107,3 +107,49 @@ frontend helper review does not close that finding or authorize a success claim.
 Root owns the scoped correction and its verification. No exact full parity,
 all-datatype native completion, installed-package or mobile acceptance is inferred
 from this report.
+
+
+## Final frontend checkpoint and native limits — 2026-10-28
+
+Composed product candidate `253de0fa` passes **262/262** final focused tests
+(`final-focused004.log`) and full TypeScript/native frontend build
+(`frontend-build008.log`). The earlier frozen candidate passed322/322; these are
+separate bounded selections, not a full-suite claim. Seventeen neighboring UI
+fixture failures reproduce against original main `e4c8a6d0` unchanged.
+
+REA `capture_process_scenario` drove the normal Electron app against an owned
+scratch vault through loopback CDP mouse/keyboard input and visible DOM reads.
+No internal model/IPC injection or unrelated application data was used. Actual
+service checks confirmed inline creation/source/save witnesses, row rename,
+property authoring, text/number/select/status edits, Tab and click handoff,
+page-peek property creation and exact body preservation, compact List/Board and
+human-readable Board option labels. Empty page properties measure28px. A confirmed
+rejected option can be canceled and the peek closed; uncertain outcomes remain
+tied to their exact labels in focused regression tests. Latest native idle60samples
+across3s retains picker DOM/query and reports zero Updating samples. Ordinary-note
+Properties remain hidden. Test app closed after the pass.
+
+Native acceptance is incomplete. A pre-existing core update bug rewrites null
+Multi-select values to[] and requests destructive confirmation on ordinary additive
+schema edits. This blocks native multi-option creation and further schema authoring
+in that fixture. The independently reviewed [proposed fix](../plans/notion-nullable-multiselect-core-fix.md)
+is not applied; the user has been asked for an exception to the frontend-only
+build limit. No Rust build or generic destructive-confirm bypass was performed.
+Native clipboard shortcut testing also remains incomplete: CDP editing commands did
+not exercise Electron clipboard actions; OS keystrokes were denied Accessibility
+permission. The range-selection DOM and focused clipboard tests do not establish
+native shortcut parity. All-type/native restart/installed acceptance remain open.
+Main and the installed app remain at their previously verified version.
+
+Current scratch-vault screenshots (content crop, not delivery/parity receipts):
+
+| Surface | Capture |
+| --- | --- |
+| Table | [Zorid](assets/notion-interactions-20261027/zorid-table-delivery.png) |
+| List | [Zorid](assets/notion-interactions-20261027/zorid-list-delivery.png) |
+| Board | [Zorid](assets/notion-interactions-20261027/zorid-board-delivery.png) |
+| Settings | [Zorid](assets/notion-interactions-20261027/zorid-settings-delivery.png) |
+| Page peek | [Zorid](assets/notion-interactions-20261027/zorid-peek-delivery.png) |
+
+Temporary native receipt IDs/frames and failure plans are retained under
+`/private/tmp/zorid-notion-interactions-20261027/native-final-receipts.json`.

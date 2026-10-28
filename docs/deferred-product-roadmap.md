@@ -2,20 +2,28 @@
 
 ## Execution checkpoint — shared-core coordinator
 
-**Full supported Notion database interaction match in progress — 2026-10-27.**
-Root `codex/notion-interaction-match` from `e4c8a6d0` owns the acknowledged
-temporary exclusive main integrate/test/commit lane after review/validation.
-Expanded user scope includes slash creation, all supported views/settings/types,
-mouse/hover/tooltips/selection/clipboard and keyboard/edit focus transitions.
-Named isolated worker commits compose widgets, tooltips, table, List, Board,
-settings, schema picker and direct source creation; root owns session/workspace
-seams and native/package/install acceptance. Ordinary-note Properties hiding and
-refresh-flashing fix remain requirements. Independent review found Board initial
-measurement and failed-title Escape handoff issues; successor fixes pending.
-No installation/parity/completion claim yet. REA public-bundle static inspection
-and tab-scoped Notion experiments recorded; signed-in REA runtime CDP unavailable.
-See [current queue](user-findings.md#full-supported-notion-database-interaction-match--2026-10-27).
-No push, Rust/iOS/Tauri build or other owner's main writes authorized here.
+**Full supported Notion database interactions — frontend candidate; core gate pending (2026-10-28).**
+Root `codex/notion-interaction-match` from `e4c8a6d0` holds reviewed composed frontend
+at `253de0fa`: slash/source creation, focused schema picker, toolbar/settings,
+Table/List/Board, page peek, supported property editing, keyboard/focus handoff
+and tooltips. Actual Electron/REA verification caught and fixed missing inline
+save witness, empty-database readiness, native date normalization, empty page
+value hit targets, Board height/opaque option labels and failed-option cancellation.
+Latest 262/262 focused checks + TS/native frontend build pass; earlier frozen
+322/322 pass remains a separate receipt. Existing 17 neighbor-suite failures also
+reproduce on original `e4c8a6d0`; no full-suite/parity claim.
+
+**Acceptance blocker:** actual native option creation after a nullable Multi-select
+exists triggers core destructive confirmation: schema update normalizes null to [].
+No frontend confirm bypass. Reviewed proposal and required regressions are in
+[core remedy](plans/notion-nullable-multiselect-core-fix.md) and adjacent patch;
+Rust source remains unchanged. User exception requested to the explicit frontend-only
+build limit; no response yet. Core fix, source-matched host build, remaining native
+clipboard/all-type/restart checks, main integration/package/install/replacement
+remain unfinished. Current installed app and main `e4c8a6d0` are untouched.
+Temporary main lane returned to coordinator while awaiting the exception; reacquire
+and reconcile before integration. No test app remains, push/iOS/Tauri work or Rust
+build. [Reference/evidence](reference/notion-database-interactions-20261027.md).
 
 **Bases refresh/select flashing fix installed — 2026-10-27.** Product `86466ce8`
 is on main after scoped independent review, 59/59 main checks + TS, frontend build,
