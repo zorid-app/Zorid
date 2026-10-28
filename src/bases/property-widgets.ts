@@ -120,6 +120,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   const multiple = ['list', 'tags', 'multiselect'].includes(type) || (type === 'relation' && !!definition.relation?.multiple);
   const inlineList = type === 'list' || type === 'tags';
   const picker = multiple || ['select', 'status', 'relation', 'link'].includes(type);
+  const optionPicker = type === 'select' || type === 'status';
   let acceptedPresentation = presentation;
   element.dataset.baseWidgetVersion = String(acceptedPresentation.version);
   let disposed = false, pending = false, editing = false, composing = false;
@@ -131,6 +132,8 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   let input: HTMLInputElement | undefined, popup: HTMLDivElement | undefined;
   let draftChanged = false;
   let draft: { text: string; value: BaseExpressionValue }[] = [], selected = 0, choices: { value: string; label: string; option?: BasePropertyOption; missing?: boolean; target?: BaseRelationTarget }[] = [];
+  let choiceRows: HTMLButtonElement[] = [];
+  let choiceActivated = false;
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const later = (fn: () => void) => { const timer = setTimeout(() => { timers.delete(timer); if (!disposed) fn(); }, 0); timers.add(timer); };
   const current = () => !disposed && (options.isCurrent?.(acceptedPresentation) ?? true);
@@ -363,7 +366,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   }
   function position() {
     if (!popup || inlineList) return;
-    const rect = element.getBoundingClientRect(), width = Math.max(260, Math.min(360, win?.innerWidth ?? 360));
+    const rect = element.getBoundingClientRect(), width = Math.min(320, Math.max(240, rect.width), Math.max(0, (win?.innerWidth ?? 1024) - 8));
     popup.style.left = `${Math.max(4, Math.min(rect.left, (win?.innerWidth ?? 1024) - width - 4))}px`;
     popup.style.width = `${width}px`; popup.style.top = `${Math.max(4, Math.min(rect.bottom + 4, (win?.innerHeight ?? 768) - Math.min(popup.scrollHeight || 200, 320) - 4))}px`;
   }
@@ -378,29 +381,48 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     blurDuringComposition = false; compositionEpoch++;
     editing = false; closePopup(); draw(); if (restoreFocus) element.focus();
   }
+  function activateChoice(index: number, scroll = false) {
+    if (!input || !popup || pending || !choiceRows[index] || choiceRows[index].disabled) return;
+    selected = index; choiceActivated = true;
+    choiceRows.forEach((row, current) => { row.classList.toggle('is-selected', current === selected); row.setAttribute('aria-selected', String(current === selected)); });
+    const row = choiceRows[selected];
+    if (row) { input.setAttribute('aria-activedescendant', row.id); if (scroll) row.scrollIntoView?.({block:'nearest'}); }
+  }
   function renderChoices() {
     if (!popup || !input) return;
-    popup.querySelector('.suggestion-container')?.remove();
     if (inlineList) return;
-    const list = document.createElement('div'); list.className = 'suggestion-container'; list.setAttribute('role', 'listbox'); list.id = `base-options-${Math.random().toString(36).slice(2)}`;
+    choiceActivated = false;
+    let list = popup.querySelector<HTMLDivElement>('.suggestion-container');
+    if (!list) { list = document.createElement('div'); list.className = 'suggestion-container'; list.setAttribute('role', 'listbox'); list.id = `base-options-${Math.random().toString(36).slice(2)}`; popup.append(list); }
+    list.replaceChildren(); choiceRows = [];
     input.setAttribute('aria-controls', list.id); input.setAttribute('aria-expanded', 'true');
     const needle = input.value.toLocaleLowerCase();
-    const all = type === 'relation' || type === 'link'
+    const all: typeof choices = type === 'relation' || type === 'link'
       ? targets().map(target => ({ value: targetValue(target), label: target.label ?? target.path, missing: target.missing, target }))
       : (definition.options ?? []).map(option => ({ value: option.value, label: option.label ?? option.value, option }));
+    const categories = {'todo':'To-do', 'in-progress':'In progress', 'done':'Complete'} as const;
+    const categoryOrder = Object.keys(categories);
+    if (type === 'status') all.sort((a,b) => (a.option?.category ? categoryOrder.indexOf(a.option.category) : 3) - (b.option?.category ? categoryOrder.indexOf(b.option.category) : 3));
     choices = all.filter(choice => (!multiple || !draft.some((item, index) => item.text === choice.value && index !== editingIndex)) && (choice.label.toLocaleLowerCase().includes(needle) || choice.value.toLocaleLowerCase().includes(needle)));
-    selected = Math.max(0, Math.min(selected, choices.length - 1));
+    selected = Math.max(optionPicker ? -1 : 0, Math.min(selected, choices.length - 1));
     if (choices[selected]?.missing) selected = choices.findIndex(choice => !choice.missing);
+    let category: BasePropertyOption['category'];
     choices.forEach((choice, index) => {
-      const row = document.createElement('button'); row.type = 'button'; row.className = `suggestion-item${index === selected ? ' is-selected' : ''}`; row.id = `${list.id}-${index}`; row.setAttribute('role', 'option'); row.setAttribute('aria-selected', String(index === selected)); row.textContent = choice.label; row.disabled = !!choice.missing;
-      row.addEventListener('mousedown', event => event.preventDefault()); row.addEventListener('click', () => { void choose(choice.value); }); list.append(row);
+      if (type === 'status' && choice.option?.category && category !== choice.option.category) { category = choice.option.category; const heading = document.createElement('div'); heading.className = 'bases-property-option-group'; heading.textContent = categories[category]; heading.setAttribute('role','presentation'); list!.append(heading); }
+      const row = document.createElement('button'); row.type = 'button'; row.className = `suggestion-item${index === selected ? ' is-selected' : ''}`; row.id = `${list!.id}-${index}`; row.setAttribute('role', 'option'); row.setAttribute('aria-selected', String(index === selected)); row.disabled = !!choice.missing; row.tabIndex = -1;
+      if (choice.option) { const pill = document.createElement('span'); pill.className = 'multi-select-pill'; pill.textContent = choice.label; if (choice.option.color && /^(?:red|orange|yellow|green|cyan|blue|purple|pink|gray|grey|brown)$/.test(choice.option.color)) pill.dataset.color = choice.option.color; if (choice.option.category) pill.dataset.category = choice.option.category; row.append(pill); }
+      else row.textContent = choice.label;
+      row.addEventListener('mouseenter', () => activateChoice(index));
+      row.addEventListener('mousedown', event => event.preventDefault()); row.addEventListener('click', () => { void choose(choice.value); }); list!.append(row); choiceRows.push(row);
     });
     if (choices[selected] && !choices[selected].missing) input.setAttribute('aria-activedescendant', `${list.id}-${selected}`); else input.removeAttribute('aria-activedescendant');
     if (input.value && options.createOption && ['select', 'multiselect', 'status'].includes(type) && !definition.options?.some(option => option.value === input!.value)) {
-      const add = document.createElement('button'); add.type = 'button'; add.className = 'suggestion-item bases-property-create-option'; add.textContent = `Create “${input.value}”`; add.addEventListener('mousedown', event => event.preventDefault()); add.addEventListener('click', async () => { if (pending) return; const next = input!.value; pending = true; mark('pending'); if (input) input.disabled = true; try { const acknowledgement = await options.createOption!(presentation.property, next, acceptedPresentation); acknowledge(acknowledgement, value); const updated = options.getDefinition(presentation.property); if (updated?.type === type) definition = updated; pending = false; if (!current()) { editing = false; closePopup(); draw(); report(new Error('Option created. Reopen the property to use the refreshed definition.')); return; } mark('draft'); if (input) input.disabled = false; await choose(next); } catch (failure) { pending = false; if (input) input.disabled = false; error(failure); } }); list.append(add);
+      const add = document.createElement('button'); add.type = 'button'; add.className = 'suggestion-item bases-property-create-option'; add.textContent = `Create “${input.value}”`; add.id = `${list.id}-create`; add.setAttribute('role','option'); add.setAttribute('aria-selected','false'); add.tabIndex = -1;
+      add.addEventListener('mouseenter',()=>activateChoice(choices.length));
+      add.addEventListener('mousedown', event => event.preventDefault()); add.addEventListener('click', async () => { if (pending || !current()) return; const next = input!.value; pending = true; mark('pending'); if (input) input.disabled = true; try { const acknowledgement = await options.createOption!(presentation.property, next, acceptedPresentation); acknowledge(acknowledgement, value); const updated = options.getDefinition(presentation.property); if (updated?.type === type) definition = updated; pending = false; if (!current()) { editing = false; closePopup(); draw(); report(new Error('Option created. Reopen the property to use the refreshed definition.')); return; } mark('draft'); if (input) input.disabled = false; await choose(next); } catch (failure) { pending = false; if (input) input.disabled = false; error(failure); } }); list.append(add); choiceRows.push(add);
     }
     if (!list.children.length) { const empty = document.createElement('div'); empty.className = 'suggestion-empty'; empty.textContent = type === 'relation' && definition.relation?.targetFilter && options.getRelationTargets?.(presentation.property, acceptedPresentation) === undefined ? 'Relation choices are unavailable until the shared index is ready.' : type === 'link' ? 'Type a link or URL' : ['list', 'tags'].includes(type) ? 'Type a value and press Enter' : 'No matching options'; list.append(empty); }
-    popup.append(list); position();
+    position();
   }
   function validateRelationChoice(next: string, selected = type === 'relation'): boolean {
     // A plain link is still free text/URL input. Only selecting an offered note
@@ -417,6 +439,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   async function choose(next: string, intent?: BasePropertyEditorCompletionIntent) {
     if (!current() || pending || !validateRelationChoice(next, true)) return;
     if (choices.find(choice => choice.value === next)?.missing || ((type === 'relation' || type === 'link') && targetFor(next)?.missing)) { error(new Error('This related note is unavailable. Choose another note.')); return; }
+    if (!multiple && value.type === 'string' && value.value === next) { cancel(); completed(intent); return; }
     if (multiple) {
       const duplicate = draft.findIndex((item, index) => item.text === next && index !== editingIndex);
       if (duplicate >= 0) { popup?.querySelectorAll<HTMLElement>('.multi-select-pill')[duplicate]?.focus(); return; }
@@ -424,7 +447,25 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
       else { draft.push({text:next,value:str(next)}); draftChanged = true; }
       if (input) input.value = ''; renderEditor(); input?.focus(); await saveDraft();
     }
-    else await commit(str(next), false, true, intent);
+    else {
+      // A picker keeps focus in its search while a choice saves. Return it to
+      // the owning cell only if that ownership survives the asynchronous write.
+      const field = input, owned = !!field && document.activeElement === field && document.hasFocus();
+      let moved = false;
+      const focus = (event: FocusEvent) => { if (!element.contains(event.target as Node) && !popup?.contains(event.target as Node)) moved = true; };
+      const pointer = (event: PointerEvent) => { if (!element.contains(event.target as Node) && !popup?.contains(event.target as Node)) moved = true; };
+      const leave = () => { moved = true; };
+      const navigate = (event: KeyboardEvent) => { if (event.key === 'Tab') moved = true; };
+      const removeObservers = () => { document.removeEventListener('focusin',focus,true); document.removeEventListener('pointerdown',pointer,true); document.removeEventListener('keydown',navigate,true); win?.removeEventListener('blur',leave); };
+      if (owned) { document.addEventListener('focusin',focus,true); document.addEventListener('pointerdown',pointer,true); document.addEventListener('keydown',navigate,true); win?.addEventListener('blur',leave); removeFocusObserver = removeObservers; }
+      try {
+        const accepted = await commit(str(next), false, true, intent), active = document.activeElement;
+        if (accepted && owned && !moved && !editing && current() && element.isConnected && (!intent || !options.onEditorComplete)
+          && (active === field || active === document.body || active === document.documentElement)) element.focus();
+        else if (!accepted && owned && !moved && editing && current() && field?.isConnected
+          && (active === field || active === document.body || active === document.documentElement)) field.focus();
+      } finally { removeObservers(); if (removeFocusObserver === removeObservers) removeFocusObserver = undefined; }
+    }
   }
   function removeChip(index: number) {
     if (editingIndex === index) { editingIndex = undefined; if (input) input.value = ''; }
@@ -442,7 +483,9 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     if (!popup || !input) return;
     let chips = popup.querySelector<HTMLElement>('.multi-select-container');
     if (!chips) { chips = document.createElement('div'); chips.className = 'multi-select-container'; popup.prepend(chips); }
-    chips.replaceChildren(); if (multiple) draft.forEach((item, index) => chips!.append(chip(item.text, true, index))); chips.append(input); renderChoices();
+    chips.replaceChildren(); if (multiple) draft.forEach((item, index) => chips!.append(chip(item.text, true, index)));
+    else if (optionPicker && value.type !== 'null') chips.append(chip(renderText(value)));
+    chips.append(input); renderChoices();
   }
   async function finish(restoreFailureFocus = true, intent?: BasePropertyEditorCompletionIntent) {
     if (!current() || !editing || pending || composing || !input) return;
@@ -451,6 +494,9 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
       let next: BaseExpressionValue;
       if (picker) {
         if (multiple) {
+          // Configured option search is transient advice, not an authored
+          // value. Dismiss unchosen search on leave; accepted chips are retained.
+          if (type === 'multiselect') input.value = '';
           if (!draftChanged && !input.value) { unchanged(); return; }
           if (input.value) {
             if (inlineList) {
@@ -463,6 +509,9 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
           }
           next = { type: 'list', value: draft.map(item => item.value) };
         } else {
+          // Select/Status search is a query, including exact label matches.
+          // Only an explicit choice authors a value; blur/Tab discard the query.
+          if (optionPicker) { unchanged(); return; }
           if (input.value === inputText(value, definition)) { unchanged(); return; }
           const choice = choices.find(choice => !choice.missing && (choice.value === input!.value || choice.label === input!.value));
           if (input.value && !choice && ['select', 'status', 'relation'].includes(type)) { error(new Error('Choose a matching option.')); return; }
@@ -484,11 +533,11 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     // Chip labels are editable text; untouched persisted values retain their
     // types and nested data until that specific chip is explicitly changed.
     draft = (value.type === 'list' ? value.value : value.type === 'null' ? [] : [value]).map(item => ({text:renderText(item),value:item}));
-    input = document.createElement('input'); input.className = 'metadata-input metadata-input-text'; input.setAttribute('aria-label', presentation.property.replace(/^note\./, '')); input.placeholder = 'Empty';
+    input = document.createElement('input'); input.className = 'metadata-input metadata-input-text'; input.setAttribute('aria-label', presentation.property.replace(/^note\./, '')); input.placeholder = optionPicker ? 'Search for an option…' : 'Empty';
     input.type = basePropertyValueDiagnostic(value, definition) || (type === 'datetime' && value.type === 'string' && /(?:Z|[+-]\d{2}:\d{2})$/.test(value.value)) ? 'text' : type === 'date' ? 'date' : type === 'datetime' ? 'datetime-local' : 'text';
     if (type === 'date' || type === 'datetime') input.max = type === 'date' ? '9999-12-31' : '9999-12-31T23:59:59';
     if (type === 'number') input.inputMode = 'decimal';
-    input.value = multiple ? '' : inputText(value, definition);
+    input.value = multiple || optionPicker ? '' : inputText(value, definition); selected = optionPicker ? -1 : 0;
     input.addEventListener('focus', () => { blurDuringComposition = false; compositionEpoch++; });
     input.addEventListener('compositionstart', () => { composing = true; blurDuringComposition = false; compositionEpoch++; });
     input.addEventListener('compositionend', () => {
@@ -498,17 +547,19 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
       // finish when a synthetic/native blur leaves activeElement on this input.
       later(() => { if (epoch !== compositionEpoch) return; if (picker) renderChoices(); if (blurred || (!element.contains(document.activeElement) && !popup?.contains(document.activeElement))) void finish(false); });
     });
-    input.addEventListener('input', () => { input?.removeAttribute('aria-invalid'); if (picker && !composing) { selected = 0; renderChoices(); } });
+    input.addEventListener('input', () => { input?.removeAttribute('aria-invalid'); if (picker && !composing) { selected = optionPicker && !input?.value ? -1 : 0; renderChoices(); } });
     input.addEventListener('blur', () => { if (composing) { blurDuringComposition = true; return; } later(() => { if (!element.contains(document.activeElement) && !popup?.contains(document.activeElement)) void finish(false); }); });
     input.addEventListener('keydown', event => {
       event.stopPropagation();
       if (composing || event.isComposing || pending) return;
       if (event.key === 'Escape') { event.preventDefault(); if (editingIndex !== undefined) { const index = editingIndex; editingIndex = undefined; if (input) input.value = ''; renderChoices(); popup?.querySelectorAll<HTMLElement>('.multi-select-pill')[index]?.focus(); } else cancel(); }
-      else if (picker && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) { event.preventDefault(); const direction = event.key === 'ArrowDown' ? 1 : -1; let next = selected + direction; while (next >= 0 && next < choices.length && choices[next].missing) next += direction; if (next >= 0 && next < choices.length) selected = next; renderChoices(); }
+      else if (picker && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) { event.preventDefault(); const direction = event.key === 'ArrowDown' ? 1 : -1; let next = selected < 0 && direction < 0 ? choiceRows.length - 1 : selected + direction; while (next >= 0 && next < choiceRows.length && choiceRows[next].disabled) next += direction; if (next >= 0 && next < choiceRows.length) activateChoice(next,true); }
       else if (event.key === 'Enter') {
         event.preventDefault();
         const intent: BasePropertyEditorCompletionIntent = {reason:'enter',key:'Enter',shiftKey:event.shiftKey};
-        if (picker && choices[selected] && !choices[selected].missing && input?.value) void choose(choices[selected].value, intent);
+        if (picker && choiceActivated && choiceRows[selected]?.classList.contains('bases-property-create-option')) choiceRows[selected].click();
+        else if (picker && choices[selected] && !choices[selected].missing && (input?.value || optionPicker || choiceActivated)) void choose(choices[selected].value, intent);
+        else if (optionPicker || type === 'multiselect' && input?.value) return;
         else if (multiple && input?.value && ['list', 'tags'].includes(type)) void choose(input.value);
         else void finish(true, intent);
       } else if (multiple && (event.key === 'Backspace' || event.key === 'ArrowLeft') && !input?.value && draft.length) { event.preventDefault(); popup?.querySelectorAll<HTMLElement>('.multi-select-pill')[draft.length - 1]?.focus(); }
@@ -522,6 +573,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     if (picker) {
       input.setAttribute('role', 'combobox'); input.setAttribute('aria-autocomplete', 'list');
       popup = document.createElement('div'); popup.className = inlineList ? 'bases-property-inline-editor' : 'bases-property-popover popover';
+      popup.dataset.propertyType = type;
       propertyPopoverOwners.set(popup,element);
       if (inlineList) element.replaceChildren(popup); else document.body.append(popup); renderEditor(); document.addEventListener('pointerdown', outside, true); win?.addEventListener('resize', position); win?.addEventListener('scroll', position, true);
     } else {

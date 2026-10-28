@@ -1,20 +1,30 @@
-/* The metadata widget vocabulary follows Obsidian 1.14.4. Select/status and
-   relation configuration are deliberate additions using that same vocabulary. */
+/* Shared property controls. Database pickers use compact anchored option rows
+   and restrained chips; all persistence remains with the owning session. */
 .bases-metadata-value { min-width:0; display:flex; align-items:center; gap:4px; flex-wrap:wrap; }
 .bases-metadata-value:focus-visible { outline:2px solid var(--interactive-accent); outline-offset:-2px; }
 .bases-metadata-value .metadata-input { width:100%; min-width:20px; border:0; border-radius:0; box-shadow:none; padding:0; background:transparent; color:var(--text-normal); font:inherit; }
 .bases-metadata-value.mod-error { text-decoration:underline dotted var(--text-warning, #bf8d35); text-underline-offset:4px; }
 .bases-metadata-value[data-base-editing="pending"] { opacity:.65; }
-.bases-property-popover { position:fixed; z-index:var(--layer-popover, 1000); padding:6px; max-height:320px; overflow:auto; border:1px solid var(--background-modifier-border); border-radius:var(--radius-m, 8px); background:var(--background-primary); box-shadow:var(--shadow-s, 0 2px 8px #0003); color:var(--text-normal); font-size:var(--font-ui-small, 13px); }
-.bases-property-popover .multi-select-container { display:flex; flex-wrap:wrap; align-items:center; gap:4px; padding:4px; margin-bottom:4px; border-bottom:1px solid var(--background-modifier-border); }
-.bases-property-popover .metadata-input { flex:1; min-width:100px; width:100%; padding:4px 0; border:0; box-shadow:none; background:transparent; color:var(--text-normal); font:inherit; }
+.bases-property-popover { box-sizing:border-box; position:fixed; z-index:var(--layer-popover, 1000); padding:4px; max-height:320px; overflow:auto; border:1px solid var(--background-modifier-border); border-radius:6px; background:var(--background-secondary); box-shadow:var(--shadow-s, 0 4px 16px #0003); color:var(--text-normal); font-size:var(--font-ui-small, 13px); line-height:1.5; }
+.bases-property-popover .multi-select-container { display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:6px 8px; margin-bottom:4px; border-bottom:1px solid var(--background-modifier-border); }
+.bases-property-popover .metadata-input { flex:1; min-width:100px; width:100%; padding:4px 0; border:0; outline:0; border-radius:0; box-shadow:none; background:transparent; color:var(--text-normal); font:inherit; }
+.bases-property-popover .metadata-input::placeholder { color:var(--text-faint); }
 .bases-metadata-value .multi-select-pill, .bases-property-popover .multi-select-pill { display:inline-flex; align-items:center; gap:4px; min-width:0; border-radius:4px; padding:1px 6px; background:var(--background-modifier-hover); color:var(--text-normal); font-size:inherit; line-height:1.5; }
 .bases-metadata-value .multi-select-pill-content, .bases-property-popover .multi-select-pill-content { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .bases-property-popover .multi-select-pill-remove-button { border:0; background:none; box-shadow:none; padding:0; height:16px; min-width:12px; color:var(--text-muted); cursor:pointer; }
 .bases-metadata-value .is-unknown, .bases-property-popover .is-unknown { border:1px dashed var(--background-modifier-border); }
 .bases-metadata-value .is-unresolved, .bases-property-popover .is-unresolved { color:var(--text-muted); text-decoration:underline dotted; }
-.bases-property-popover .suggestion-item { display:block; text-align:start; width:100%; border:0; box-shadow:none; padding:6px 8px; margin:0; border-radius:var(--radius-s, 4px); color:var(--text-normal); background:transparent; font:inherit; }
+.bases-property-popover .suggestion-item { display:flex; align-items:center; min-height:30px; text-align:start; width:100%; border:0; box-shadow:none; padding:4px 8px; margin:0; border-radius:4px; color:var(--text-normal); background:transparent; font:inherit; cursor:pointer; }
 .bases-property-popover .suggestion-item.is-selected, .bases-property-popover .suggestion-item:hover { background:var(--background-modifier-hover); }
+.bases-property-popover .suggestion-item:disabled { opacity:.5; cursor:default; }
+.bases-property-popover .suggestion-item:disabled:hover { background:transparent; }
+.bases-property-popover .bases-property-option-group { padding:12px 8px 4px; color:var(--text-muted); font-size:12px; }
+.bases-property-popover .bases-property-option-group:first-child { padding-top:6px; }
+.bases-metadata-value[data-property-type="status"] .multi-select-pill, .bases-property-popover[data-property-type="status"] .multi-select-pill { border-radius:999px; padding:0 6px; }
+.bases-metadata-value[data-property-type="status"] .multi-select-pill::before, .bases-property-popover[data-property-type="status"] .multi-select-pill::before { content:''; flex:none; width:7px; height:7px; border-radius:50%; background:currentColor; opacity:.55; }
+.bases-metadata-value [data-category="todo"]:not([data-color]), .bases-property-popover [data-category="todo"]:not([data-color]) { background:rgba(128,128,128,.2); }
+.bases-metadata-value [data-category="in-progress"]:not([data-color]), .bases-property-popover [data-category="in-progress"]:not([data-color]) { background:rgba(70,130,220,.2); }
+.bases-metadata-value [data-category="done"]:not([data-color]), .bases-property-popover [data-category="done"]:not([data-color]) { background:rgba(72,170,100,.2); }
 .bases-property-popover .suggestion-empty, .bases-property-popover .bases-property-error { padding:8px; color:var(--text-muted); }
 .bases-property-popover .bases-property-error { color:var(--text-error); }
 .bases-metadata-value [data-color="red"], .bases-property-popover [data-color="red"] { background:rgba(224,82,82,.2); }
