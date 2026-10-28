@@ -127,10 +127,132 @@ export interface CollectionEditorOptions {
 }
 export interface CollectionEditor { readonly element: HTMLElement; hasPendingChanges(): boolean; destroy(): void }
 
+export interface CollectionPropertyPickerOptions extends Omit<CollectionEditorOptions, 'entries' | 'propertyId'> {
+  /** Optional header/button anchor. Unanchored hosts may position the picker themselves. */
+  readonly anchor?: HTMLElement;
+}
+
+const datatypeIcons: Record<typeof datatypes[number], string> = {
+  text: 'Aa', number: '#', select: '⌄', 'multi-select': '≡', status: '◉', date: '▦', datetime: '◷', checkbox: '☑',
+};
+const pickerDatatypes = ['text', 'number', 'select', 'multi-select', 'status', 'date', 'checkbox', 'datetime'] as const;
+
+/** Add one property through the same revision-bound schema command as the full editor. */
+export function mountCollectionPropertyPicker(container: HTMLElement, options: CollectionPropertyPickerOptions): CollectionEditor {
+  const doc = container.ownerDocument, root = element(doc, 'section');
+  root.className = 'collection-property-picker'; root.setAttribute('role', 'dialog'); root.setAttribute('aria-label', 'Add property');
+  const header = element(doc, 'div'); header.className = 'collection-property-picker-header';
+  const icon = element(doc, 'span', 'Aa'); icon.className = 'collection-property-type-icon'; icon.setAttribute('aria-hidden', 'true');
+  const name = element(doc, 'input'); name.placeholder = 'Type property name…'; name.setAttribute('aria-label', 'Type property name…');
+  const grid = element(doc, 'div'); grid.className = 'collection-property-type-grid'; grid.setAttribute('role', 'grid'); grid.setAttribute('aria-label', 'Property type');
+  const error = element(doc, 'p'); error.setAttribute('role', 'alert'); error.hidden = true;
+  const retry = button(doc, 'Retry creation', () => { void save(); }); retry.hidden = true;
+  let destroyed = false, busy = false, dirty = false, selected = 0, request: DatabaseRequest | undefined;
+  let accepted: DatabaseCollection | undefined;
+  const live = () => !destroyed && options.isCurrent();
+  const choices: HTMLButtonElement[] = [];
+  const setSelected = (index: number, focus = false) => {
+    selected = Math.max(0, Math.min(choices.length - 1, index));
+    choices.forEach((choice, index) => { choice.tabIndex = index === selected ? 0 : -1; choice.classList.toggle('is-active', index === selected); });
+    if (focus) choices[selected]?.focus();
+  };
+  function controls() {
+    name.readOnly = busy || !!request;
+    choices.forEach(choice => { choice.disabled = busy || !!request; });
+    retry.disabled = busy;
+    cancel.disabled = busy || !!request;
+  }
+  function close() {
+    if (busy || request || !live()) return;
+    dirty = false; options.onClose();
+  }
+  async function save(type = pickerDatatypes[selected]) {
+    if (busy || !live()) return;
+    if (!request) {
+      setSelected(pickerDatatypes.indexOf(type));
+      let propertyName = name.value.trim();
+      if (!propertyName) {
+        propertyName = labels[type]; let suffix = 1;
+        while (options.collection.properties.some(property => property.name === propertyName)) propertyName = `${labels[type]} ${++suffix}`;
+      }
+      const property: DatabasePropertyInput = { name: propertyName, datatype: type,
+        options: type === 'status' ? categories.map((category, index) => ({ name: categoryLabels[index], category })) : [] };
+      request = { op: 'update', operationId: operationId(), collectionId: options.collection.id,
+        expectedRevision: options.collection.revision, name: options.collection.name,
+        properties: [...structuredClone(options.collection.properties), property] };
+    }
+    busy = true; root.setAttribute('aria-busy', 'true'); error.hidden = true; controls();
+    try {
+      if (!accepted) {
+        const response = await options.service.request(request); if (!live()) return;
+        if (response.projection.pending || response.projection.issues.length) throw new Error(response.projection.issues.map(issue => issue.message).join('\n') || 'The property is committed locally but its files still need publication. Retry creation.');
+        accepted = response.collections.find(collection => collection.id === options.collection.id);
+        if (!accepted) throw new Error('The updated collection was not returned. Retry creation.');
+      }
+      await options.onSaved(accepted);
+      if (live()) { request = undefined; dirty = false; options.onClose(); }
+    } catch (problem) {
+      if (live()) {
+        // Only a verified terminal host rejection permits a new command. Lost
+        // replies/publication failures retain the original operation identity.
+        const rejected = problem as { source?: unknown; commitUncertain?: unknown };
+        if (!accepted && rejected?.source === 'host' && rejected.commitUncertain === false) request = undefined;
+        error.textContent = problemText(problem); error.hidden = false; retry.hidden = false;
+        if (request) retry.focus(); else name.focus();
+      }
+    } finally {
+      busy = false; root.removeAttribute('aria-busy'); controls();
+    }
+  }
+  const cancel = button(doc, 'Cancel', close); cancel.className = 'collection-property-picker-cancel';
+  name.addEventListener('input', () => { dirty = true; });
+  name.addEventListener('keydown', event => {
+    if (event.isComposing || busy || request) return;
+    if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); void save('text'); }
+    else if (event.key === 'ArrowDown') { event.preventDefault(); event.stopPropagation(); setSelected(0, true); }
+  });
+  pickerDatatypes.forEach((type, index) => {
+    if (index % 2 === 0) { const row = element(doc, 'div'); row.className = 'collection-property-type-row'; row.setAttribute('role', 'row'); grid.append(row); }
+    const cell = element(doc, 'div'); cell.setAttribute('role', 'gridcell');
+    const choice = button(doc, labels[type], () => { void save(type); }); choice.dataset.datatype = type;
+    const symbol = element(doc, 'span', datatypeIcons[type]); symbol.className = 'collection-property-type-icon'; symbol.setAttribute('aria-hidden', 'true'); choice.prepend(symbol);
+    choice.addEventListener('pointerenter', () => { if (!busy && !request) setSelected(index); });
+    choice.addEventListener('focus', () => { if (!busy && !request) setSelected(index); });
+    choice.addEventListener('keydown', event => {
+      if (event.isComposing || busy || request) return;
+      const next = event.key === 'ArrowRight' ? index + 1 : event.key === 'ArrowLeft' ? index - 1 : event.key === 'ArrowDown' ? index + 2 : event.key === 'ArrowUp' ? index - 2 : event.key === 'Home' ? 0 : event.key === 'End' ? choices.length - 1 : undefined;
+      if (next === undefined) return;
+      event.preventDefault(); event.stopPropagation();
+      if (event.key === 'ArrowUp' && index < 2) name.focus(); else setSelected(next, true);
+    });
+    choices.push(choice); cell.append(choice); grid.lastElementChild!.append(cell);
+  });
+  root.addEventListener('keydown', event => { if (event.key === 'Escape' && !event.isComposing) { event.preventDefault(); event.stopPropagation(); close(); } });
+  const outside = (event: PointerEvent) => {
+    if (!root.contains(event.target as Node) && !options.anchor?.contains(event.target as Node) && !dirty) close();
+  };
+  const position = () => {
+    if (!options.anchor?.isConnected) return;
+    const rect = options.anchor.getBoundingClientRect(), view = doc.defaultView;
+    root.classList.add('is-anchored');
+    root.style.left = `${Math.max(8, Math.min(rect.left, (view?.innerWidth ?? 1024) - 316))}px`;
+    root.style.top = `${Math.max(8, Math.min(rect.bottom + 4, (view?.innerHeight ?? 768) - root.offsetHeight - 8))}px`;
+  };
+  header.append(icon, name); root.append(header, element(doc, 'p', 'Select type'), grid, error, retry, cancel); container.append(root);
+  setSelected(0); position(); name.focus();
+  doc.addEventListener('pointerdown', outside, true); doc.addEventListener('scroll', position, true); doc.defaultView?.addEventListener('resize', position);
+  return { element: root, hasPendingChanges: () => busy || dirty || !!request, destroy() {
+    destroyed = true; doc.removeEventListener('pointerdown', outside, true); doc.removeEventListener('scroll', position, true); doc.defaultView?.removeEventListener('resize', position); root.remove();
+  } };
+}
+
 /** Failed saves retain the exact names/options and their original revision. */
 export function mountCollectionEditor(container: HTMLElement, options: CollectionEditorOptions): CollectionEditor {
+  if (options.propertyId && !options.collection.properties.some(property => property.id === options.propertyId)) throw new Error('This property is no longer available.');
   const doc = container.ownerDocument, root = element(doc, 'section'); root.className = 'collection-property-editor'; root.setAttribute('role', 'dialog'); root.setAttribute('aria-label', 'Collection properties');
   const title = element(doc, 'h3', 'Collection properties'), name = element(doc, 'input'); name.value = options.collection.name; name.setAttribute('aria-label', 'Collection name');
+  const focusedProperty = options.propertyId ? options.collection.properties.find(property => property.id === options.propertyId) : undefined;
+  if (focusedProperty) { root.classList.add('is-single-property'); root.setAttribute('aria-label', 'Edit property'); title.textContent = 'Edit property'; name.hidden = true; }
   const list = element(doc, 'div'), error = element(doc, 'p'); error.setAttribute('role', 'alert'); error.hidden = true;
   let properties: DatabasePropertyInput[] = [...structuredClone(options.collection.properties)], busy = false, destroyed = false, dirty = false, destructiveConfirmed = false;
   let request: DatabaseRequest | undefined;
@@ -144,19 +266,38 @@ export function mountCollectionEditor(container: HTMLElement, options: Collectio
   function render() {
     list.replaceChildren();
     properties.forEach((property, index) => {
+      if (focusedProperty && property.id !== focusedProperty.id) return;
       const row = element(doc, 'div'); row.className = 'collection-property-row'; row.dataset.propertyId = property.id ?? '';
       const label = element(doc, 'input'); label.value = property.name; label.setAttribute('aria-label', `${property.name || 'New property'} name`);
       label.addEventListener('input', () => { properties[index] = { ...properties[index], name: label.value }; changed(); });
       const type = element(doc, 'select'); type.setAttribute('aria-label', `${property.name || 'New property'} type`);
       for (const value of datatypes) { const option = element(doc, 'option', labels[value]); option.value = value; type.append(option); } type.value = property.datatype;
-      type.addEventListener('change', () => {
+      const changeType = () => {
         const datatype = type.value as DatabaseProperty['datatype'], hasOptions = ['select', 'multi-select', 'status'].includes(datatype);
         const options = hasOptions ? properties[index].options?.map(option => ({ ...option, ...(datatype === 'status' ? { category: option.category ?? 'not_started' as const } : { category: undefined }) })) ?? [] : [];
         if (datatype === 'status' && !options.length) for (let i = 0; i < categories.length; i++) options.push({ name: categoryLabels[i], category: categories[i] });
         properties[index] = { ...properties[index], datatype, options,default:undefined }; changed(); render();
-      });
+        if (focusedProperty) list.querySelector<HTMLButtonElement>('.collection-property-current-type')?.focus();
+      };
+      type.addEventListener('change', changeType);
       const count = options.entries.filter(entry => property.id && entry.values[property.id] != null).length;
-      row.append(label, type, button(doc,'Move property up',()=>{if(index===0)return;[properties[index-1],properties[index]]=[properties[index],properties[index-1]];changed();render();}),button(doc,'Move property down',()=>{if(index===properties.length-1)return;[properties[index+1],properties[index]]=[properties[index],properties[index+1]];changed();render();}), button(doc, 'Remove property', () => confirmRemoval(`“${label.value}”`, count, () => { properties.splice(index, 1); }, row)));
+      row.append(label, type);
+      if (focusedProperty) {
+        type.hidden = true;
+        const types = element(doc, 'div'); types.className = 'collection-property-edit-types'; types.hidden = true; types.setAttribute('role', 'menu'); types.setAttribute('aria-label', 'Property type');
+        const toggle = button(doc, labels[property.datatype], () => { types.hidden = !types.hidden; toggle.setAttribute('aria-expanded', String(!types.hidden)); if (!types.hidden) types.querySelector<HTMLButtonElement>(`[data-datatype="${property.datatype}"]`)?.focus(); });
+        toggle.className = 'collection-property-current-type'; toggle.setAttribute('aria-expanded', 'false'); toggle.setAttribute('aria-haspopup', 'menu'); toggle.setAttribute('aria-label', `${property.name} type`);
+        pickerDatatypes.forEach((datatype, typeIndex) => {
+          const choice = button(doc, labels[datatype], () => { type.value = datatype; changeType(); }); choice.dataset.datatype = datatype; choice.setAttribute('role', 'menuitemradio'); choice.setAttribute('aria-checked', String(property.datatype === datatype));
+          const symbol = element(doc, 'span', datatypeIcons[datatype]); symbol.className = 'collection-property-type-icon'; symbol.setAttribute('aria-hidden', 'true'); choice.prepend(symbol);
+          choice.addEventListener('keydown', event => {
+            const delta = event.key === 'ArrowDown' ? 2 : event.key === 'ArrowUp' ? -2 : event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : undefined;
+            if (delta !== undefined) { event.preventDefault(); event.stopPropagation(); types.querySelectorAll<HTMLButtonElement>('button')[Math.max(0, Math.min(pickerDatatypes.length - 1, typeIndex + delta))]?.focus(); }
+            if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); types.hidden = true; toggle.setAttribute('aria-expanded', 'false'); toggle.focus(); }
+          }); types.append(choice);
+        }); row.append(toggle, types);
+      }
+      row.append(button(doc,'Move property up',()=>{if(index===0)return;[properties[index-1],properties[index]]=[properties[index],properties[index-1]];changed();render();}),button(doc,'Move property down',()=>{if(index===properties.length-1)return;[properties[index+1],properties[index]]=[properties[index],properties[index+1]];changed();render();}), button(doc, 'Remove property', () => confirmRemoval(`“${label.value}”`, count, () => { properties.splice(index, 1); }, row)));
       if (['select', 'multi-select', 'status'].includes(property.datatype)) {
         const choices = element(doc, 'div'); choices.className = 'collection-option-list';
         (property.options ?? []).forEach((option, optionIndex) => {
@@ -194,12 +335,18 @@ export function mountCollectionEditor(container: HTMLElement, options: Collectio
     });
   }
   const add = button(doc, 'Add property', () => { properties.push({ name: 'New property', datatype: 'text', options: [] }); changed(); render(); list.lastElementChild?.querySelector('input')?.focus(); });
+  add.hidden = !!focusedProperty;
   const cancel = button(doc, 'Cancel', () => { if (!busy) options.onClose(); });
   const save = button(doc, 'Apply', () => { if (busy || !live()) return; busy = true; root.setAttribute('aria-busy', 'true');
     for (const control of root.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>('input,button,select')) control.disabled = true;
     error.hidden = true;
     if (!request) request = { op: 'update', operationId: operationId(), collectionId: options.collection.id, expectedRevision: options.collection.revision, name: name.value.trim(), properties: structuredClone(properties), confirmDestructive: destructiveConfirmed };
     void options.service.request(request).then(async response => { if (!live()) return; if(response.projection.pending||response.projection.issues.length)throw new Error(response.projection.issues.map(issue=>issue.message).join('\n')||'The properties are committed locally but their files still need publication. Retry Apply.'); const collection = response.collections.find(item => item.id === options.collection.id); if (!collection) throw new Error('The updated collection was not returned.'); await options.onSaved(collection); if (live()) { dirty = false; options.onClose(); } }).catch(problem => { if (live()) { error.textContent = problemText(problem); error.hidden = false; } }).finally(() => { busy = false; root.removeAttribute('aria-busy'); for (const control of root.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>('input,button,select')) control.disabled = false; });
+  });
+  if (focusedProperty) root.addEventListener('keydown', event => {
+    if (event.isComposing || busy) return;
+    if (event.key === 'Escape' && !request) { event.preventDefault(); event.stopPropagation(); dirty = false; options.onClose(); }
+    else if (event.key === 'Enter' && event.target === list.querySelector('.collection-property-row > input')) { event.preventDefault(); event.stopPropagation(); save.click(); }
   });
   root.append(title, name, list, add, error, cancel, save); container.append(root); render();
   const first = options.propertyId ? list.querySelector<HTMLElement>(`[data-property-id="${options.propertyId}"] input`) : name;
