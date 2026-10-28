@@ -56,6 +56,20 @@ test('creation requires activating the explicit create action before Enter and r
   f.key(input,'ArrowDown');const add=f.doc.querySelector('.bases-property-create-option')!;assert.equal(input.getAttribute('aria-activedescendant'),add.id);assert.equal(add.getAttribute('aria-selected'),'true');f.key(input,'Enter');await tick();assert.equal(created,1);assert.deepEqual(f.edits[0].value,baseExpressionValue('New option'));
  }finally{f.close();}
 });
+for(const type of ['select','status'] as const)for(const method of ['button','chip Delete'] as const){
+ test(`${type} explicitly clears a selected value through ${method} without requiring a grid`,async()=>{
+  const f=fixture({type,options:[{value:'Saved'}]},'Saved');try{f.open();const button=f.doc.querySelector<HTMLButtonElement>('[aria-label="Clear selected value"]')!;assert.ok(button);if(method==='button'){button.focus();button.click();}else{const chip=f.doc.querySelector<HTMLElement>('.multi-select-container .multi-select-pill')!;chip.focus();chip.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Delete',bubbles:true,cancelable:true}));}await tick();assert.deepEqual(f.edits[0].value,baseExpressionValue(null));assert.equal(f.edits.length,1);assert.equal(f.cell.textContent,'');assert.equal(f.doc.querySelector('.bases-property-popover'),null);assert.equal(f.doc.activeElement,f.cell);}finally{f.close();}
+ });
+}
+test('rejected explicit clear preserves the selected value and exact query for retry',async()=>{
+ let fail=true;const f=fixture({type:'select',options:[{value:'Saved'}]},'Saved',{commit:edit=>{if(fail)throw new Error('Clear failed');return{version:2,row:edit.row,value:edit.value};}});try{
+  const input=f.open();input.value='query';input.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));f.doc.querySelector<HTMLButtonElement>('[aria-label="Clear selected value"]')!.click();await tick();assert.equal(input.value,'query');assert.equal(f.doc.querySelector('.multi-select-pill-content')?.textContent,'Saved');assert.equal(f.cell.dataset.baseEditing,'draft');assert.equal(input.getAttribute('aria-invalid'),'true');assert.equal(f.doc.activeElement,input);
+  fail=false;f.doc.querySelector<HTMLButtonElement>('[aria-label="Clear selected value"]')!.click();await tick();assert.equal(f.cell.textContent,'');assert.equal(f.doc.activeElement,f.cell);
+ }finally{f.close();}
+});
+test('pending explicit clear is issued once and never steals subsequent outside focus',async()=>{
+ let resolve!:(value:undefined)=>void,writes=0;const pending=new Promise<undefined>(yes=>{resolve=yes;}),f=fixture({type:'status',options:[{value:'Saved'}]},'Saved',{commit:()=>{writes++;return pending;}});try{f.open();const clear=f.doc.querySelector<HTMLButtonElement>('[aria-label="Clear selected value"]')!;clear.click();clear.click();assert.equal(writes,1);assert.equal(f.cell.dataset.baseEditing,'pending');f.outside.focus();resolve(undefined);await tick();assert.equal(f.cell.textContent,'');assert.equal(f.doc.activeElement,f.outside);}finally{resolve(undefined);f.close();}
+});
 test('status choices display their configured labels, colors and grouped category names',()=>{
  const f=fixture({type:'status',options:[{value:'done',label:'Done',color:'green',category:'done'},{value:'todo',label:'Not started',color:'gray',category:'todo'},{value:'doing',label:'In progress',color:'blue',category:'in-progress'}]});try{
   f.open();assert.deepEqual([...f.doc.querySelectorAll('.bases-property-option-group')].map(e=>e.textContent),['To-do','In progress','Complete']);assert.deepEqual(f.options().map(e=>e.textContent),['Not started','In progress','Done']);assert.equal(f.options()[2].querySelector('.multi-select-pill')?.getAttribute('data-color'),'green');assert.equal(f.options()[2].querySelector('.multi-select-pill')?.getAttribute('data-category'),'done');

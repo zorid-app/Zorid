@@ -274,14 +274,16 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
       pill.addEventListener('keydown', event => { if (event.key === 'Enter') open(event); });
     }
     if (removable) {
-      const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'multi-select-pill-remove-button'; remove.textContent = '×'; remove.setAttribute('aria-label', `Remove ${text}`);
+      const clear = () => { if (multiple) removeChip(index); else if (optionPicker && current() && !pending) void commitChoice(BASE_NULL); };
+      const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'multi-select-pill-remove-button'; remove.textContent = '×'; remove.setAttribute('aria-label', multiple ? `Remove ${text}` : 'Clear selected value');
       remove.addEventListener('mousedown', event => event.preventDefault());
-      remove.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); if (!pending) { removeChip(index); } }); pill.append(remove);
-      pill.addEventListener('dblclick', event => { event.preventDefault(); event.stopPropagation(); editChip(index); });
+      remove.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); if (!pending) clear(); }); pill.append(remove);
+      pill.addEventListener('dblclick', event => { event.preventDefault(); event.stopPropagation(); if (multiple) editChip(index); else input?.focus(); });
       pill.addEventListener('keydown', event => {
         if (event.isComposing || pending) return;
-        if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); editChip(index); }
-        else if (event.key === 'Backspace' || event.key === 'Delete') { event.preventDefault(); event.stopPropagation(); removeChip(index); }
+        if (event.target === remove) return; // The named button keeps native Enter/Space activation.
+        if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); if (multiple) editChip(index); else input?.focus(); }
+        else if (event.key === 'Backspace' || event.key === 'Delete') { event.preventDefault(); event.stopPropagation(); clear(); }
         else if (event.key === 'Escape' || event.key === 'ArrowDown') { event.preventDefault(); input?.focus(); }
         else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); const sibling = event.key === 'ArrowLeft' ? pill.previousElementSibling : pill.nextElementSibling; (sibling as HTMLElement | null)?.focus(); }
       });
@@ -447,10 +449,12 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
       else { draft.push({text:next,value:str(next)}); draftChanged = true; }
       if (input) input.value = ''; renderEditor(); input?.focus(); await saveDraft();
     }
-    else {
+    else await commitChoice(str(next), intent);
+  }
+  async function commitChoice(next: BaseExpressionValue, intent?: BasePropertyEditorCompletionIntent) {
       // A picker keeps focus in its search while a choice saves. Return it to
       // the owning cell only if that ownership survives the asynchronous write.
-      const field = input, owned = !!field && document.activeElement === field && document.hasFocus();
+      const field = input, owned = !!field && (document.activeElement === field || !!popup?.contains(document.activeElement)) && document.hasFocus();
       let moved = false;
       const focus = (event: FocusEvent) => { if (!element.contains(event.target as Node) && !popup?.contains(event.target as Node)) moved = true; };
       const pointer = (event: PointerEvent) => { if (!element.contains(event.target as Node) && !popup?.contains(event.target as Node)) moved = true; };
@@ -459,13 +463,12 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
       const removeObservers = () => { document.removeEventListener('focusin',focus,true); document.removeEventListener('pointerdown',pointer,true); document.removeEventListener('keydown',navigate,true); win?.removeEventListener('blur',leave); };
       if (owned) { document.addEventListener('focusin',focus,true); document.addEventListener('pointerdown',pointer,true); document.addEventListener('keydown',navigate,true); win?.addEventListener('blur',leave); removeFocusObserver = removeObservers; }
       try {
-        const accepted = await commit(str(next), false, true, intent), active = document.activeElement;
+        const accepted = await commit(next, false, true, intent), active = document.activeElement;
         if (accepted && owned && !moved && !editing && current() && element.isConnected && (!intent || !options.onEditorComplete)
           && (active === field || active === document.body || active === document.documentElement)) element.focus();
         else if (!accepted && owned && !moved && editing && current() && field?.isConnected
           && (active === field || active === document.body || active === document.documentElement)) field.focus();
       } finally { removeObservers(); if (removeFocusObserver === removeObservers) removeFocusObserver = undefined; }
-    }
   }
   function removeChip(index: number) {
     if (editingIndex === index) { editingIndex = undefined; if (input) input.value = ''; }
@@ -484,7 +487,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     let chips = popup.querySelector<HTMLElement>('.multi-select-container');
     if (!chips) { chips = document.createElement('div'); chips.className = 'multi-select-container'; popup.prepend(chips); }
     chips.replaceChildren(); if (multiple) draft.forEach((item, index) => chips!.append(chip(item.text, true, index)));
-    else if (optionPicker && value.type !== 'null') chips.append(chip(renderText(value)));
+    else if (optionPicker && value.type !== 'null') chips.append(chip(renderText(value), true));
     chips.append(input); renderChoices();
   }
   async function finish(restoreFailureFocus = true, intent?: BasePropertyEditorCompletionIntent) {
