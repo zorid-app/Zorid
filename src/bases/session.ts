@@ -1131,7 +1131,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
               const definition=definitions.properties[basePropertyName(grouping.property)];
               const key=group.key?.type==='string'?group.key.value:undefined;
               const option=key===undefined?undefined:definition?.options?.find(option=>option.value===key||option.id===key);
-              return option?{color:option.color,category:option.category}:undefined;
+              return option?{label:option.label??option.value,color:option.color,category:option.category}:undefined;
             },
             readOnly: !writable, showColumnControls: false,
             isGroupWritable: (group: BaseQueryGroup) => {
