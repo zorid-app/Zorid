@@ -23,7 +23,7 @@ export interface BaseNewItemPopoverOptions {
   readonly onError: (error: unknown) => void;
   readonly onClose?: () => void;
   readonly editorOptions?: Partial<Omit<EditorOptions, 'value' | 'onChange' | 'validateChange' | 'canMutate' | 'isCurrent'>>;
-  readonly properties?: Pick<PropertiesOptions, 'onPropertyDefinitionChange' | 'onAddProperty' | 'getRelationTargets' | 'getDisplayValue' | 'getDefinitions' | 'isManaged' | 'collectionName' | 'managedOnly'>;
+  readonly properties?: Pick<PropertiesOptions, 'onPropertyDefinitionChange' | 'onAddProperty' | 'onCreateOption' | 'getRelationTargets' | 'getDisplayValue' | 'getDefinitions' | 'isManaged' | 'collectionName' | 'managedOnly'>;
   /** True means the host committed typed values and refreshed the same buffer. */
   readonly changeProperties?: (next:string,buffer:NoteBuffer)=>Promise<boolean>;
   /** The workspace owns subscriptions and the buffer's lifetime. */

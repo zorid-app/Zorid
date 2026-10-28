@@ -26,6 +26,8 @@ export interface PropertiesOptions {
   collectionName?: () => string | undefined;
   /** Managed hosts own collection schema authoring and its pending picker. */
   onAddProperty?: (anchor: HTMLElement) => Promise<void> | void;
+  /** Add one choice through the managed schema owner without enabling conversion. */
+  onCreateOption?: (property: string, label: string) => Promise<void> | void;
   onPropertyDefinitionChange?: (property: string, definition: BasePropertyDefinition) => Promise<void> | void;
   /** Optional Rust-filtered targets. A filtered relation is never evaluated locally. */
   getRelationTargets?: (property: string, definition: BasePropertyDefinition) => readonly BaseRelationTarget[] | undefined;
@@ -209,18 +211,23 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
           });
           setPending(operation.then(() => {}, problem => {mutationFailure=problem;mutationFailureOwner=row;})); return operation;
         },
-        ...(options.onPropertyDefinitionChange ? { createOption: (_property: string, value: string, presentation: import('../bases/presentation-common.ts').BasePropertyPresentation) => {
+        ...(options.onCreateOption || options.onPropertyDefinitionChange ? { createOption: (_property: string, value: string, presentation: import('../bases/presentation-common.ts').BasePropertyPresentation) => {
           const operation = pending.then(async () => {
             mutationFailure=undefined;mutationFailureOwner=undefined;
             if (!live() || rows.get(row.key) !== row || JSON.stringify(current(options.getSource(), row).value) !== baseline) throw new Error('This property changed before the option could be created.');
-            const latest = definitionFor(row.key) ?? definition;
-            if (JSON.stringify(latest) !== definitionBaseline) throw new Error('This property definition changed before the option could be created.');
+            const supplied = definitionFor(row.key), latest = options.onCreateOption ? supplied : supplied ?? definition;
+            if (!latest || JSON.stringify(latest) !== definitionBaseline) throw new Error('This property definition changed before the option could be created.');
             const nextDefinition = { ...latest, options: [...latest.options ?? [], { value }] };
-            await options.onPropertyDefinitionChange!(row.key, nextDefinition);
+            if (options.onCreateOption) await options.onCreateOption(row.key, value);
+            else await options.onPropertyDefinitionChange!(row.key, nextDefinition);
             await loadDefinitions();
-            if (!live() || JSON.stringify(current(options.getSource(), row).value) !== baseline) throw new Error('This property changed while the option was created; the draft is preserved.');
-            if (JSON.stringify(definitionFor(row.key)) !== JSON.stringify(nextDefinition)) throw new Error('Property settings changed while the option was created; the draft is preserved.');
-            definitionBaseline = JSON.stringify(nextDefinition);
+            if (!live() || rows.get(row.key) !== row || JSON.stringify(current(options.getSource(), row).value) !== baseline) throw new Error('This property changed while the option was created; the draft is preserved.');
+            const accepted = definitionFor(row.key);
+            if (options.onCreateOption) {
+              const matches = accepted?.options?.filter(option => option.value === value || option.label === value) ?? [];
+              if (accepted?.type !== latest.type || matches.length !== 1) throw new Error('The created option could not be confirmed; refresh the property settings before using it. The draft is preserved.');
+            } else if (JSON.stringify(accepted) !== JSON.stringify(nextDefinition)) throw new Error('Property settings changed while the option was created; the draft is preserved.');
+            definitionBaseline = JSON.stringify(accepted);
             return { version: 0, row: presentation.row, value: baseExpressionValue(current(options.getSource(), row).value) };
           });
           setPending(operation.then(() => {}, problem => {mutationFailure=problem;mutationFailureOwner=row;})); return operation;
