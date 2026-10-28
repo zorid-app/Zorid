@@ -60,7 +60,7 @@ async function fixture(initialVisible = true) {
 test('refresh reports activity separately and retains the exact coherent mounted result until completion', async () => {
   const f = await fixture(); try {
     const before = f.session.state, table = f.host.querySelector('.zorid-bases-table'), gate = f.hold(), pending = f.session.refresh();
-    assert.equal(f.session.state.updating, true); assert.equal(f.session.state.result, before.result); assert.equal(f.status(), 'Updating…'); assert.equal(f.busy(), 'true');
+    assert.equal(f.session.state.updating, true); assert.equal(f.session.state.result, before.result); assert.equal(f.status(), ''); assert.equal(f.busy(), 'true');
     await settled(() => f.state.calls === 2); assert.equal(f.host.querySelector('.zorid-bases-table'), table);
     gate.resolve(); await pending;
     assert.equal(f.session.state, before, 'no-op returns the existing settled state'); assert.equal(f.host.querySelector('.zorid-bases-table'), table); assert.equal(f.status(), ''); assert.equal(f.busy(), 'false');
@@ -71,7 +71,7 @@ test('a focused draft and prior rows survive an updating refresh and its failure
     const before = f.session.state.result, cell = f.host.querySelector('[data-property="note.status"][role="gridcell"]')!;
     f.key(cell, 'Enter'); const input = cell.querySelector('input')!; input.value = 'unsaved local draft'; input.focus();
     const gate = f.hold(), pending = f.session.refresh(); await settled(() => f.state.calls === 2);
-    assert.equal(input.isConnected, true); assert.equal(input.value, 'unsaved local draft'); assert.equal(f.status(), 'Updating…');
+    assert.equal(input.isConnected, true); assert.equal(input.value, 'unsaved local draft'); assert.equal(f.status(), '');
     f.state.fail = true; gate.resolve(); await pending;
     assert.equal(f.session.state.updating, false); assert.equal(f.session.state.result, before); assert.equal(f.status(), 'Saved results unavailable'); assert.equal(f.busy(), 'false'); assert.equal(input.isConnected, true); assert.equal(input.value, 'unsaved local draft');
   } finally { await f.cleanup(); }

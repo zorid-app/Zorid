@@ -323,13 +323,17 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     if(definitionsLoading||definitionsError||!collection?.deleted||!deletedConfigurationRead||deletedConfigurationRead!==controller.configurationRead||deletedSourceContext!==sourceContext())return;
     try{const source=currentViewSource();if(source.kind==='collection'&&source.id===loadedCollectionId&&source.id===collection.id)return{kind:'collection-in-trash',collectionId:collection.id,message:'This collection is in Trash. Restore it or choose another source.'};}catch{/* Invalid configuration keeps its ordinary error presentation. */}
   };
-  const loadDefinitions = async () => {
+  const collectionPresentation = () => JSON.stringify([loadedCollectionId,collection,[...collectionEntries.values()].sort((a,b)=>a.entryId.localeCompare(b.entryId)),definitions,definitionsError]);
+  let definitionsPresentation=collectionPresentation();
+  let definitionsLoad:{context:string;read:BaseConfigurationRead|undefined;promise:Promise<void>}|undefined;
+  const publishDefinitions = () => {const presentation=collectionPresentation();if(presentation!==definitionsPresentation){definitionsPresentation=presentation;definitionsRevision++;}};
+  const readDefinitions = async () => {
     const source = currentViewSource(), epoch = ++collectionLoad, context=sourceContext();
     loadedSourceContext=context;loadedConfigurationRead=controller.configurationRead;deletedSourceContext=undefined;deletedConfigurationRead=undefined;
     if (source.kind === 'untyped') {
       collectionLabelSource=undefined;collectionPropertyLabels.clear();
       loadedCollectionId = undefined; collection = undefined; collectionEntries.clear();
-      definitions = { properties: {}, diagnostics: [] }; definitionsLoading = false; definitionsError = undefined; definitionsRevision++;unavailableCard.hidden=true;options.onState?.(controller.state);
+      definitions = { properties: {}, diagnostics: [] }; definitionsLoading = false; definitionsError = undefined; publishDefinitions();unavailableCard.hidden=true;options.onState?.(controller.state);
       return;
     }
     if(collectionLabelSource!==source.id){collectionLabelSource=source.id;collectionPropertyLabels.clear();}
@@ -356,16 +360,24 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       if (disposed || epoch !== collectionLoad) return;
       definitions = {properties:{},diagnostics:[]}; definitionsError = failure instanceof Error ? failure.message : String(failure);
     }
-    definitionsLoading = false; definitionsRevision++;
+    definitionsLoading = false; publishDefinitions();
     render(controller.state);options.onState?.(controller.state,sourceUnavailable());
+  };
+  const loadDefinitions = () => {
+    const context=sourceContext(),read=controller.configurationRead;
+    if(definitionsLoad?.context===context&&definitionsLoad.read===read)return definitionsLoad.promise;
+    const promise=readDefinitions(),load={context,read,promise};definitionsLoad=load;
+    const settled=()=>{if(definitionsLoad===load)definitionsLoad=undefined;};void promise.then(settled,settled);
+    return promise;
   };
   let selectedIndex = options.query?.viewIndex ?? 0;
   let notice: string | undefined;
   let actionMessage:string|undefined;
   let scheduled: ReturnType<typeof setTimeout> | undefined;
+  let refreshIndicatorTimer:ReturnType<typeof setTimeout>|undefined,refreshIndicatorVisible=false;
   const pending = new Set<Promise<unknown>>(), changedBuffers = new Set<NoteBuffer>();
   let configurationLifecycle = 0;
-  const canBeginPropertyEdit = () => !disposed && !closing && !configurationLifecycle && !pendingCollectionRestore && !pendingCollectionCreate && !pending.size && !mounted?.hasQueuedConfiguration?.() && !mounted?.hasActiveEdits?.() && controller.canBeginPropertyEdit;
+  const canBeginPropertyEdit = () => !disposed && !closing && !definitionsLoading && !definitionsError && !configurationLifecycle && !pendingCollectionRestore && !pendingCollectionCreate && !pending.size && !mounted?.hasQueuedConfiguration?.() && !mounted?.hasActiveEdits?.() && controller.canBeginPropertyEdit;
   const alive = () => { options.validate(); if (disposed) throw new Error('This base view is closed'); };
   const action = () => { alive(); if (closing) throw new Error('This base view is closing'); notice = undefined;actionMessage=undefined; };
   const report = (error: unknown) => {
@@ -761,6 +773,9 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   }
   function renderStatus(state: BaseControllerState): void {
     if (disposed) return;
+    if(state.updating&&state.result){
+      if(!refreshIndicatorVisible&&refreshIndicatorTimer===undefined)refreshIndicatorTimer=setTimeout(()=>{refreshIndicatorTimer=undefined;if(!disposed&&controller.state.updating&&controller.state.result){refreshIndicatorVisible=true;renderStatus(controller.state);}},350);
+    }else{if(refreshIndicatorTimer!==undefined)clearTimeout(refreshIndicatorTimer);refreshIndicatorTimer=undefined;refreshIndicatorVisible=false;}
     renderRestoreRecovery();
     root.dataset.baseControllerVersion = String(state.version);
     root.dataset.baseControllerUpdating = String(!!state.updating);
@@ -791,7 +806,10 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     }
     if (state.previewStatus) { status.textContent = state.previewStatus; return; }
     if (configurationBusy) { status.textContent = 'Saving view…'; return; }
-    if (state.updating || !controller.canBeginPropertyEdit) { status.textContent = state.result ? 'Updating…' : 'Loading saved results…'; return; }
+    // Keep fast background revalidation quiet; long requests still expose
+    // activity, and write admission remains blocked until fresh authority returns.
+    if(state.updating&&state.result&&refreshIndicatorVisible){status.textContent='Updating…';return;}
+    if (!state.result && (state.updating || !controller.canBeginPropertyEdit)) { status.textContent = 'Loading saved results…'; return; }
     const coverage = state.result && sharedBaseCoverage(state.result);
     status.textContent = coverage && !coverage.generationComplete ? 'Some saved files are unavailable in these results.'
       : coverage && !coverage.metadataComplete ? 'Some saved properties are unavailable in these results.' : notice ?? '';
@@ -870,6 +888,9 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       } catch(failure) { report(failure); }
       return;
     }
+    // An updating publication still carries the last admitted result. Do not
+    // reload schema or rebuild its controls against a temporary missing proof.
+    if(state.updating&&mountedResult){deferred=state;return;}
     toolbar.hidden=false;sourceBar.hidden=false;
     const result = state.result;
     selectedIndex = controller.selectedViewIndex;
@@ -881,6 +902,9 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     const source=baseViewSource(document.views[selectedIndex]??result.view);
     if(source.kind==='collection'&&(loadedCollectionId!==source.id||loadedSourceContext!==sourceContext()||loadedConfigurationRead!==controller.configurationRead)){void loadDefinitions();}
     else if(source.kind==='untyped'&&loadedCollectionId!==undefined){void loadDefinitions();}
+    // Same-source schema reads revoke write authority while in flight, but the
+    // existing controls are presentation we can retain until that read settles.
+    if(definitionsLoading&&mountedResult&&mountedIndex===selectedIndex&&JSON.stringify(baseViewSource(mountedResult.view))===JSON.stringify(source)){deferred=state;return;}
     renderSourceBar(source);
     const toolbarState=filterToolbarState(result,document,selectedIndex),writable=!toolbarState.readOnly&&source.kind==='collection'&&!definitionsLoading&&!definitionsError;
     toolbarUI.update(toolbarState);
@@ -1103,6 +1127,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         closeSourceChooser();collectionEditor?.destroy();collectionEditor=undefined;if(collectionRefreshTimer!==undefined)clearTimeout(collectionRefreshTimer);
         toolbarUI.destroy(); settings.destroy(); destroySummaryEditor?.(); stopDefinitions.forEach(stop => stop()); stopFilterMetadata(); mounted?.destroy(); mounted = undefined; observer?.disconnect();
         if (scheduled !== undefined) clearTimeout(scheduled);
+        if(refreshIndicatorTimer!==undefined)clearTimeout(refreshIndicatorTimer);
         root.removeEventListener('keydown', switchViewKey, true); controller.dispose(); disposed = true; root.remove();
       }
     } catch (error) { report(error); throw error; }
