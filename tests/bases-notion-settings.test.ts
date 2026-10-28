@@ -48,3 +48,7 @@ test('untyped views hide schema-only commands, and New split exists only for act
 test('a later Close cancels queued settings navigation while preserving the accepted rename',async()=>{
  const f=fixture();try{f.click('Settings');const input=f.get<HTMLInputElement>('View name'),release=f.hold();input.value='Accepted';input.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));f.row('layout').click();f.click('Close settings');release();await tick();assert.equal(f.document.views[0].name,'Accepted');assert.equal(f.doc.querySelector('[role=dialog]'),null);assert.equal(f.toolbar.hasDraft(),false);}finally{f.close();}
 });
+
+for(const phase of ['dirty','saving'] as const)test(`More view actions expands only after the ${phase} rename and queued navigation settle`,async()=>{
+ const f=fixture();try{f.click('Settings');const input=f.get<HTMLInputElement>('View name'),release=f.hold();input.focus();input.value='Reading';input.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));if(phase==='saving')input.blur();f.row('more-view-actions').click();assert.equal(f.doc.querySelector('[role=dialog]')?.getAttribute('aria-label'),'View settings');release();await tick();assert.equal(f.document.views[0].name,'Reading');assert.equal(f.doc.querySelector('[role=dialog]')?.getAttribute('aria-label'),'View options');assert.equal(f.get<HTMLButtonElement>('View actions').getAttribute('aria-expanded'),'true');assert.equal(f.doc.querySelector<HTMLElement>('.bases-view-actions')?.hidden,false);assert.equal(f.calls.length,1);}finally{f.close();}
+});

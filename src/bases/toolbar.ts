@@ -318,8 +318,8 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       }
       action();
     }
-    function navigatePanel(next:PanelName,parent:PanelName|undefined='View settings') {
-      transition(()=>{own.close(false);open(next,trigger,selectedIndex,undefined,parent);});
+    function navigatePanel(next:PanelName,parent:PanelName|undefined='View settings',afterOpen?:()=>void) {
+      transition(()=>{own.close(false);open(next,trigger,selectedIndex,undefined,parent);afterOpen?.();});
     }
     if(name==='View settings'||returnTo){
       const close=button(doc,'',()=>{if(auto&&own.dirty&&!retryPersistence)submit(true);else own.close();},'Close settings');
@@ -348,7 +348,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       const source=doc.createElement('div');source.className='bases-settings-row is-readonly';source.dataset.setting='source';
       const sourceTitle=doc.createElement('span');sourceTitle.className='bases-settings-row-label';sourceTitle.textContent='Source';const sourceValue=doc.createElement('span');sourceValue.className='bases-settings-row-value';sourceValue.textContent=opening.sourceLabel??(opening.browseOnly?'Notes in your vault':'Collection');source.append(icon('link',16,doc),sourceTitle,sourceValue);menu.append(source);
       if(!opening.browseOnly&&options.onEditProperties)row('Edit properties','list','',()=>transition(()=>{own.close(false);options.onEditProperties!();}));
-      row('More view actions','more','',()=>{navigatePanel('View options');panel?.node.querySelector<HTMLButtonElement>('[aria-label="View actions"]')?.click();});
+      row('More view actions','more','',()=>navigatePanel('View options','View settings',()=>panel?.node.querySelector<HTMLButtonElement>('[aria-label="View actions"]')?.click()));
       refreshPanel=()=>{sourceValue.textContent=opening.sourceLabel??(opening.browseOnly?'Notes in your vault':'Collection');};
     } else if (name === 'Views') {
       footer.hidden = true;
