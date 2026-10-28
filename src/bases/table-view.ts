@@ -268,11 +268,14 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     for (const [name, attributes] of nodes) { const path = doc.createElementNS(svg.namespaceURI, name); for (const [key, value] of Object.entries(attributes)) if (value !== undefined) path.setAttribute(key, String(value)); svg.append(path); }
     return svg;
   }
-  function propertyGlyph(property: string): SVGSVGElement {
+  function propertyGlyph(property: string): SVGSVGElement | HTMLSpanElement {
+    if (property === 'file.name' || property === 'file.file') {
+      const glyph = doc.createElement('span'); glyph.className = 'zorid-bases-table-title-type'; glyph.setAttribute('aria-hidden', 'true'); return glyph;
+    }
     const value = result.rows.find(row => row.values[property]?.type !== 'null')?.values[property];
     const kind = options.getPropertyType?.(property) ?? value?.type ?? 'text';
     const glyphs: Record<string, IconNode> = { text: Text, string: Text, number: Binary, checkbox: SquareCheck, boolean: SquareCheck, date: Calendar, datetime: CalendarClock, 'date-time': CalendarClock, list: List, tags: Tags, multiselect: Tags, link: Link, relation: Link, select: ListFilter, status: CircleDot, rating: Star };
-    return svgIcon(property.startsWith('formula.') ? CodeXml : property === 'file.name' || property === 'file.file' ? Text : glyphs[kind] ?? Text);
+    return svgIcon(property.startsWith('formula.') ? CodeXml : glyphs[kind] ?? Text);
   }
   function showMenu(event: MouseEvent, entries: readonly TableMenuEntry[], returnFocus: HTMLElement) {
     event.preventDefault(); event.stopPropagation(); closeMenu?.(); closePicker?.();
@@ -385,7 +388,8 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
   }
   function autoWidth(property: string): number {
     const probe = doc.createElement('span'); probe.className = 'zorid-bases-table-measure'; probe.style.font = win?.getComputedStyle(root).font ?? ''; doc.body.append(probe);
-    const min = Number.parseFloat(win?.getComputedStyle(root).getPropertyValue('--bases-table-column-min-width') ?? '') || 40;
+    const defaultMin = property === 'file.name' || property === 'file.file' ? 280 : 200;
+    const min = Number.parseFloat(win?.getComputedStyle(root).getPropertyValue('--bases-table-column-min-width') ?? '') || defaultMin;
     const max = Number.parseFloat(win?.getComputedStyle(root).getPropertyValue('--bases-table-column-max-width') ?? '') || 300;
     let width = min;
     for (const [index, text] of [options.getPropertyLabel?.(property) ?? property.replace(/^(?:note|file|formula)\./, ''), ...result.rows.map(row => display(row.values[property] ?? BASE_NULL, result.shared !== undefined))].entries()) {

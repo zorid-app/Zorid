@@ -59,6 +59,8 @@ textarea.zorid-bases-table-input { height: 100%; resize: none; }
 .zorid-bases-table-summary-cell:hover { background: var(--background-modifier-hover, #f5f5f5); }
 
 .zorid-bases-table-column > .svg-icon { flex-shrink: 0; opacity: .75; }
+.zorid-bases-table-title-type { flex: 0 0 16px; width: 16px; font-size: 13px; font-weight: 500; line-height: 1; letter-spacing: -1px; opacity: .75; }
+.zorid-bases-table-title-type::before { content: 'Aa'; }
 
 .zorid-bases-table-column.is-drop-target.is-drop-after { box-shadow: inset -3px 0 var(--interactive-accent, #7f5af0); }
 [dir=rtl] .zorid-bases-table-column.is-drop-target { box-shadow: inset -3px 0 var(--interactive-accent, #7f5af0); }
