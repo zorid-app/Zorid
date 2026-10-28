@@ -1,0 +1,63 @@
+{
+  "productCommit": "399591a5",
+  "focused": {
+    "pass": 162,
+    "fail": 0
+  },
+  "mainFocused": {
+    "pass": 63,
+    "fail": 0
+  },
+  "typescript": "PASS",
+  "nativeFrontend": "PASS",
+  "packageFilesVerified": 356,
+  "install": {
+    "installedPath": "/Users/ctk/Applications/Zorid.app",
+    "productCommit": "399591a5",
+    "previousAsarSha256": "92e592034ee456613a4dec5ed75a651dbe73527fc3053db67b0e9e9ba7345aad",
+    "installedAsarSha256": "245274f0746a8faf08eafe34aa82d54d233b18fa89d5025cbca2fd1a859ff3e6",
+    "previousBundle": "/Users/ctk/Applications/.Zorid-previous-20261027.app",
+    "previousDeleted": true,
+    "stagedPackageVerifiedFiles": 356,
+    "installedLaunchVerified": true,
+    "installedNormalExit": 0,
+    "savedViewsAndStatusColumnPersist": true,
+    "ordinaryNotePropertiesHidden": true
+  },
+  "desktop": {
+    "productCommit": "399591a5",
+    "frontendBuild": "build-delivery.log",
+    "focusedTests": {
+      "pass": 162,
+      "fail": 0
+    },
+    "desktop": {
+      "ordinaryNotePropertiesHidden": true,
+      "managedNotePropertiesVisible": true,
+      "columnClickOpensMenu": true,
+      "densityMediumToShortSaved": true,
+      "cancelAddViewPreservedSource": true,
+      "createInheritedSourceView": "All entries",
+      "createdViewResultCount": 3,
+      "statusColumnVisibilitySaved": true,
+      "humanPropertyNames": [
+        "Status",
+        "Planned date",
+        "Deadline"
+      ],
+      "ordinaryNoteExactBytesPreserved": true,
+      "ordinaryNoteSha256": "133c00da3818ffb70b4afb535077ebf8cad8dc82a1d68eca4120df12fcbab703",
+      "normalSourceAppExit": 0,
+      "softwareRenderingUsedForLaterCaptures": true
+    },
+    "captureLimit": "Native screenshots intermittently blank; Notion browser screenshots readable. Blank files are not visual evidence. Tool-emitted readable native captures/AX observations support only bounded desktop scope.",
+    "limits": [
+      "Not full suite",
+      "No mobile/web broad parity",
+      "No Rust rebuild",
+      "No Tauri changes"
+    ]
+  },
+  "evidenceDirectory": "/private/tmp/zorid-notion-ux-20261027",
+  "baselineFailures": "Broader392-case check had six failures, each identical on untouched0d90cfc5; properties-only two obsolete fixtures also reproduce on baseline."
+}

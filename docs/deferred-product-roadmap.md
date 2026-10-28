@@ -2,6 +2,19 @@
 
 ## Execution checkpoint — shared-core coordinator
 
+**Notion-inspired Bases first pass installed — 2026-10-27.** Product `399591a5`
+is integrated into main using the acknowledged temporary root lane. Named view
+tabs, explicit Create/Cancel with inherited source, direct settings/column menus,
+quieter grid/primary New, readable property labels through refresh and database-only
+Properties are delivered. Final 162/162 focused, TS/native frontend, 356-file package
+verification pass; main 63/63 + TS pass. Installed
+`/Users/ctk/Applications/Zorid.app` passed bounded normal-renderer restart/view/column/
+ordinary-note checks; previous app bundle deleted, vaults/preferences preserved.
+AGENTS.md records automatic build/install/replacement after completed requests.
+No Rust/iOS/Tauri build or push. No test app remains; lane released on completion.
+[Reference and limits](reference/notion-database-ux-20261027.md),
+[delivery receipt](history/bases-notion-ux-20261027.json).
+
 Current as of2026-10-26. Read this summary first; dated execution evidence below
 is historical where it conflicts with this checkpoint. The maintained stage
 sequence is in [roadmap.md](roadmap.md); S1 scope is in

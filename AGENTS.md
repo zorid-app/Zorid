@@ -1,5 +1,15 @@
 # Zorid development instructions
 
+## Completed-work installation
+
+- Standing user instruction (2026-10-27): whenever requested work is complete,
+  build and verify the updated macOS app, install it as
+  `/Users/ctk/Applications/Zorid.app`, and replace/delete the previous app build
+  without asking again. Stage and verify the replacement before removing the
+  old bundle; preserve vaults, preferences and unrelated applications. Report
+  the installed result or a concrete build/install blocker. Coordinate main
+  integration and resource use under the ownership rules below.
+
 ## Parallel development and verification
 
 - `main` is the canonical integration branch and the primary workspace checkout.

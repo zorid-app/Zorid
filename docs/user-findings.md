@@ -1,5 +1,50 @@
 # User findings queue
 
+## Notion-inspired Bases UX and automatic app installation — 2026-10-27
+
+Latest direct user steering replaces the earlier exact Obsidian UI target for
+Bases: inspect the current confusing/unattractive UI, experiment in Notion, take
+screenshots and adapt its database interactions. Ordinary notes should not show
+the Properties block. User also requests installation to their Applications
+folder, deleting the previous app build, and records standing authorization in
+AGENTS.md to do this whenever requested work is completed.
+
+Root owns isolated `codex/notion-bases-ux` at `.worktrees/notion-bases-ux`, from
+`0d90cfc5`; main owner explicitly acknowledged the exclusive temporary main
+integrate/test/commit lane and no editor/property ownership conflicts. Toolbar/
+table worker owns the UI, note-presentation worker owns managed-only Properties,
+root owns evidence/AGENTS/package/integration; independent scoped reviews clear
+initial changes and explicit Create successor. No push or Tauri work.
+
+Implementation: named view tabs/+ and direct settings, explicit column menus,
+quiet controls/primary blue New/softer grid; ordinary-note Properties hidden by
+authoritative membership without changing YAML or losing existing drafts.
+Native inspection additionally found implicit Add-view creation on dismissal;
+successor uses explicit Create/Cancel. Saved views should reuse current source;
+source inheritance is implemented and verified; product `399591a5` is on main.
+Final 162/162 focused checks + TS/native frontend/package verification pass; main
+63/63 focused checks + TS pass. Installed package at
+`/Users/ctk/Applications/Zorid.app` restores the saved view and Status column,
+hides Properties for ordinary notes, and quits normally. Previous installed app
+bundle deleted; vaults/preferences preserved. AGENTS.md records standing install
+authorization. No owned test app remains; temporary main lane released on completion.
+
+Evidence and bounded results: [reference/implementation record](reference/notion-database-ux-20261027.md).
+111/111 initial toolbar/table, 92/92 explicit-Create focused checks, TS/native
+frontend pass. Broader composed 386/392; all six failures match unchanged main's
+toolbar-session baseline. Properties-only 94/96 has two separately reproduced
+obsolete global-schema fixture failures. No full-suite/platform parity claim.
+Normal desktop confirms ordinary YAML note hides Properties and collection entry
+retains managed controls. Software-rendered capture verifies settings/density/
+column menu after GPU screenshots returned blank. Initial packaging failed on
+pnpm staged dependency collection; supported staged-project invocation succeeded.
+Final native/install receipts are linked from the reference record.
+
+Follow-up findings retained: source/schema surfaces still need design work;
+the managed column-visibility raw-ID refresh finding is fixed by a presentation-only
+source-scoped label cache and clean-menu relabel. Source/schema forms and broader
+layout/mobile checks remain explicit limits, not completed UI parity.
+
 ## Local core flows integrated — 2026-10-27
 
 Latest direct user instruction: root integrates main itself. The previous owner
