@@ -320,3 +320,33 @@ test('Add view with a repeated label reopens options for its new stable identity
   assert.deepEqual(updates,[{index:1,id:createdId}]);assert.equal(document.views[1].cardSize,440);assert.equal(document.views[0].rowHeight,'medium');assert.equal(document.views[0].cardSize,undefined);assert.deepEqual(errors,[]);
  }finally{toolbar.destroy();dom.window.close();}
 });
+
+
+test('visible named tabs switch through guarded host commands and retain the current selection until acknowledgement',async()=>{
+ const f=fixture();try{
+  const tabs=[...f.doc.querySelectorAll<HTMLButtonElement>('[role=tab]')];
+  assert.deepEqual(tabs.map(tab=>[tab.textContent,tab.getAttribute('aria-selected'),tab.tabIndex]),[['Library','true',0],['Covers','false',-1]]);
+  tabs[0].focus();tabs[0].dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true,cancelable:true}));
+  assert.equal(f.doc.activeElement,tabs[1]);assert.deepEqual(f.calls,[],'arrow keys explore tabs without changing data or selection');
+  tabs[1].click();await tick();assert.deepEqual(f.calls,[['select',1]]);assert.equal(tabs[0].getAttribute('aria-selected'),'true');
+  f.toolbar.update({...f.state,selectedIndex:1,result:{...f.result,view:f.state.views[1]}});
+  assert.equal(tabs[1].getAttribute('aria-selected'),'true');assert.equal(tabs[1].tabIndex,0);
+ }finally{f.cleanup();}
+});
+
+test('view tabs and direct add-view affordance preserve an unfinished toolbar draft',async()=>{
+ const f=fixture();try{
+  f.click('View options');f.input('View name','Unfinished name');const input=f.get<HTMLInputElement>('View name');
+  f.doc.querySelector<HTMLButtonElement>('[role=tab][aria-selected=false]')!.click();f.click('Add a view');await tick();
+  assert.deepEqual(f.calls,[]);assert.equal(input.isConnected,true);assert.equal(input.value,'Unfinished name');assert.equal(f.toolbar.hasDraft(),true);
+  assert.equal(f.errors.length,2);f.click('Cancel');f.click('Add a view');assert.equal(f.doc.querySelector('[role=dialog]')?.getAttribute('aria-label'),'Add view');
+ }finally{f.cleanup();}
+});
+
+test('explicit settings opens with commands available and readonly hides mutation affordances',()=>{
+ const f=fixture();try{
+  f.click('View options');assert.equal(f.get<HTMLInputElement>('View name').value,'Library');f.click('Cancel');
+  f.toolbar.update({...f.state,readOnly:true});assert.equal(f.doc.querySelector('[aria-label="View options"]'),null);
+  assert.equal(f.get<HTMLButtonElement>('Add a view').hidden,true);assert.equal(f.doc.querySelectorAll('[role=tab]').length,2);
+ }finally{f.cleanup();}
+});

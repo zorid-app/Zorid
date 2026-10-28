@@ -123,7 +123,10 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
   const viewWrap = doc.createElement('div'); viewWrap.className = 'bases-toolbar-view';
   const viewButton = button(doc, '', () => open('Views', viewButton), 'Views'); viewButton.className = 'bases-toolbar-action'; viewButton.setAttribute('aria-haspopup', 'dialog');
   viewButton.addEventListener('contextmenu', event => { event.preventDefault(); open('View options', viewButton); });
-  viewWrap.append(viewButton, selector);
+  const tabs = doc.createElement('div'); tabs.className = 'bases-toolbar-tabs'; tabs.setAttribute('role', 'tablist'); tabs.setAttribute('aria-label', 'Database views');
+  const addView = button(doc, '', () => open('Add view', addView), 'Add a view'); addView.className = 'bases-toolbar-action bases-toolbar-add-view'; addView.title = 'Add a view'; addView.setAttribute('aria-haspopup', 'dialog'); addView.append(icon('plus',16,doc));
+  viewButton.title = 'All views';
+  viewWrap.append(tabs, addView, viewButton, selector);
   const count = button(doc, '', () => open('Results', count), 'Results'); count.className = 'bases-toolbar-action bases-toolbar-count'; count.setAttribute('aria-live', 'polite'); count.setAttribute('aria-haspopup', 'dialog');
   const actions = doc.createElement('div'); actions.className = 'bases-toolbar-actions';
   container.append(viewWrap, count, actions);
@@ -140,13 +143,45 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
   let activeViewDrag: { source: HTMLElement; from: number; version: BaseQueryResult['version']; token: string } | undefined;
   const report = (error: unknown) => { try { options.onError(error); } catch { /* Error rendering cannot mutate configuration. */ } };
   const hasDraft = () => !!panel && (panel.dirty || panel.innerDraft || panel.saving || !!panel.failure);
-  selector.addEventListener('change', () => {
-    if (!state) return; const index = Number(selector.value), previous = state.selectedIndex;
+  function selectView(index: number) {
+    if (!state || destroyed || index < 0 || index >= state.views.length) return;
+    const previous = state.selectedIndex;
     try {
       options.preflight(); if (hasDraft()) throw new Error('Apply or cancel the toolbar changes before switching views.');
       panel?.close(false);
       void options.selectView(index).catch(error => { if (!destroyed) { selector.value = String(previous); report(error); } });
     } catch (error) { selector.value = String(previous); report(error); }
+  }
+  selector.addEventListener('change', () => selectView(Number(selector.value)));
+  // Reuse the actual tab nodes while a clean popover survives a query refresh.
+  // Its trigger remains connected and can still receive focus when dismissed.
+  function updateTabs(next: BaseToolbarState) {
+    const children = Array.from(tabs.children) as HTMLButtonElement[];
+    next.views.forEach((view,index) => {
+      let tab = children[index];
+      if (!tab) {
+        tab = button(doc, '', () => { if (!tab.isConnected) return; selectView(index); });
+        tab.className = 'bases-toolbar-tab'; tab.setAttribute('role','tab');
+        tab.addEventListener('contextmenu',event => { event.preventDefault(); if (tab.isConnected) open('View options',tab,index); });
+        tabs.append(tab);
+      }
+      tab.setAttribute('aria-label',`${view.name} view`); tab.title = view.name;
+      tab.setAttribute('aria-selected',String(index === next.selectedIndex)); tab.tabIndex = index === next.selectedIndex ? 0 : -1;
+      tab.replaceChildren(icon(layoutIcon(view.type),16,doc),doc.createTextNode(view.name));
+    });
+    for (const extra of children.slice(next.views.length)) extra.remove();
+    addView.hidden = next.readOnly || !options.commands?.addView;
+    viewButton.replaceChildren(icon('chevron-down',14,doc));
+  }
+  tabs.addEventListener('keydown',event => {
+    if (event.isComposing || !['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return;
+    const children = Array.from(tabs.querySelectorAll<HTMLButtonElement>('[role=tab]'));
+    const index = children.indexOf(doc.activeElement as HTMLButtonElement); if (index < 0) return;
+    event.preventDefault();
+    const rtl = win?.getComputedStyle(tabs).direction === 'rtl';
+    const step = (event.key === 'ArrowRight' ? 1 : -1) * (rtl ? -1 : 1);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? children.length - 1 : (index + step + children.length) % children.length;
+    children[next]?.focus();
   });
   function open(name: PanelName, trigger: HTMLElement, targetIndex?: number, formulaName?: string) {
     if (!state || destroyed || state.readOnly && !['Views', 'Results'].includes(name)) return;
@@ -162,7 +197,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     const selectedIndex = targetIndex ?? opening.selectedIndex;
     let configuredView = opening.views[selectedIndex] ?? result.view;
     const node = doc.createElement('section'); node.className = 'bases-toolbar-popover'; node.dataset.panel = name; node.classList.toggle('is-immediate',!!options.immediate); node.setAttribute('role', 'dialog'); node.setAttribute('aria-label', name);
-    const heading = doc.createElement('h3'); heading.textContent = name === 'View options' || name === 'Add view' ? 'Configure view' : name === 'Sort' ? 'Sort by' : name === 'Group' ? 'Group by' : name; if (['Views','Results','Properties','Filter'].includes(name)) heading.hidden = true;
+    const heading = doc.createElement('h3'); heading.textContent = name === 'View options' ? 'View settings' : name === 'Add view' ? 'Add a view' : name === 'Sort' ? 'Sort by' : name === 'Group' ? 'Group by' : name; if (['Views','Results','Properties','Filter'].includes(name)) heading.hidden = true;
     if (name === 'View options' || name === 'Add view' || name === 'Formula' || name === 'Property' || name === 'New item settings') {
       const back = button(doc, '', () => { if (hasDraft()) { if (options.immediate) panel?.flush?.(); else report(new Error('Apply or cancel the current changes first.')); return; } panel?.close(false); open(name === 'Formula' || name === 'Property' ? 'Properties' : 'Views',trigger); }, 'Back'); back.className = 'bases-toolbar-menu-next'; back.append(icon('chevron-left',16,doc)); heading.prepend(back);
     }
@@ -869,7 +904,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     if (panel && options.immediate) {
       if (!panel.rebase?.(next)) { panel.close(false); update(next); return; }
       state = next;
-      viewButton.replaceChildren(icon(layoutIcon(next.result.view.type),16,doc),doc.createTextNode(next.result.view.name),icon('chevrons-up-down',14,doc));
+      updateTabs(next);
       count.replaceChildren(doc.createTextNode(`${next.result.counts.returned} results`));
       return;
     }
@@ -877,11 +912,11 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     panel?.close(false);
     state = next;
     selector.replaceChildren(...next.views.map((view, index) => { const option = doc.createElement('option'); option.value = String(index); option.textContent = view.name; return option; })); selector.value = String(next.selectedIndex);
-    viewButton.replaceChildren(icon(layoutIcon(next.result.view.type),16,doc),doc.createTextNode(next.result.view.name),icon('chevrons-up-down',14,doc));
+    updateTabs(next);
     count.replaceChildren(icon('text-align-start',16,doc),doc.createTextNode(`${next.result.counts.returned} ${next.result.counts.returned === 1 ? 'result' : 'results'}`));
     searchCount.textContent = searchInput.value ? `${next.result.counts.returned} results` : '';
     actions.replaceChildren();
-    if (!next.readOnly) for (const [name, glyph] of [['Sort','arrow-up-down'],['Group','stretch-horizontal'],['Filter','list-filter'],['Properties','list']] as const) {
+    if (!next.readOnly) for (const [name, glyph] of [['Filter','list-filter'],['Sort','arrow-up-down'],['Group','stretch-horizontal'],['Properties','list']] as const) {
       if (next.browseOnly && (name === 'Group' || name === 'Properties')) continue;
       const node = button(doc, '', () => open(name, node), name); node.className = 'bases-toolbar-action'; node.title = name; node.setAttribute('aria-haspopup','dialog');
       const label = doc.createElement('span'); label.className = 'bases-toolbar-label'; label.textContent = name;
@@ -889,10 +924,9 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       if (name === 'Filter' && next.result.view.filters !== undefined || name === 'Sort' && Array.isArray(next.result.view.sort) && next.result.view.sort.length || name === 'Group' && next.result.view.groupBy !== undefined) node.classList.add('is-active');
       actions.append(node);
     }
-    if (options.onSearch) { const node = button(doc, '', () => { if (!searchRow.hidden) { closeSearch(); return; } searchRow.hidden = false; searchInput.value = state?.search ?? ''; node.classList.add('is-active'); searchInput.focus(); searchInput.select(); }, 'Search'); node.className = 'bases-toolbar-action'; node.append(icon('search',16,doc),doc.createTextNode('Search')); node.classList.toggle('is-active',!searchRow.hidden); actions.append(node); }
+    if (options.onSearch) { const node = button(doc, '', () => { if (!searchRow.hidden) { closeSearch(); return; } searchRow.hidden = false; searchInput.value = state?.search ?? ''; node.classList.add('is-active'); searchInput.focus(); searchInput.select(); }, 'Search'); node.className = 'bases-toolbar-action'; node.title = 'Search'; node.append(icon('search',16,doc)); node.classList.toggle('is-active',!searchRow.hidden); actions.append(node); }
+    if (!next.readOnly) { const node = button(doc, '', () => open('View options',node), 'View options'); node.className = 'bases-toolbar-action bases-toolbar-settings'; node.title = 'View settings'; node.append(icon('sliders-horizontal',16,doc)); actions.append(node); }
     if (!next.readOnly && options.onNew) { const node = button(doc, '', () => { try { options.preflight('new'); if (hasDraft()) throw new Error('Finish the current changes first.'); node.disabled = true; void options.onNew!().catch(report).finally(() => { if (!destroyed) node.disabled = false; }); } catch (error) { report(error); } }, 'New'); node.className = 'bases-toolbar-action bases-toolbar-new'; node.append(icon('plus',16,doc),doc.createTextNode('New')); actions.append(node); }
-    // Existing integrations can open the same configuration from its current view menu.
-    if (!next.readOnly && !options.commands) { const node = button(doc, 'View', () => open('View options',node), 'View options'); node.className = 'bases-toolbar-action'; actions.append(node); }
     if (focusedLabel) Array.from(actions.querySelectorAll<HTMLButtonElement>('button')).find(node => node.getAttribute('aria-label') === focusedLabel)?.focus({ preventScroll: true });
   }
   return { update, refreshFilterAdvice(next) {

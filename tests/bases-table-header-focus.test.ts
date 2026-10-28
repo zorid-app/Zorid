@@ -30,6 +30,9 @@ test('same-view query refresh preserves the property header through column reord
   const f = fixture(); f.header().focus();
   f.table.update({ ...f.result, version: 2, properties: ['note.other', 'note.rating'] });
   assert.equal(f.doc.activeElement, f.header()); f.key('Enter'); await Promise.resolve();
+  assert.deepEqual(f.patches, [], 'opening the column menu does not change ordering');
+  const sort = [...f.doc.querySelectorAll<HTMLButtonElement>('[role=menuitem]')].find(item=>item.textContent==='Sort A → Z')!;
+  assert.ok(sort); sort.click(); await new Promise(resolve=>setTimeout(resolve,0));
   assert.deepEqual(f.patches, [{ sort: [{ property: 'note.rating', direction: 'ASC' }] }]); f.close();
 });
 

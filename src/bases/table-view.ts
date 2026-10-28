@@ -399,14 +399,15 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
       if (sorted && typeof sorted === 'object' && !Array.isArray(sorted)) { const indicator = doc.createElement('span'); indicator.className = 'zorid-bases-table-sort-indicator'; indicator.setAttribute('aria-label', sorted.direction === 'DESC' ? 'Sorted descending' : 'Sorted ascending'); indicator.textContent = sorted.direction === 'DESC' ? '↓' : '↑'; cell.setAttribute('aria-sort', sorted.direction === 'DESC' ? 'descending' : 'ascending'); cell.append(indicator); }
       const token = revision, current = () => !destroyed && token === revision && header.contains(cell);
       cell.addEventListener('contextmenu', event => { if (current()) columnMenu(event, property, index, cell); });
-      const toggleSort = () => {
-        const sort = Array.isArray(result.view.sort) ? result.view.sort.filter(item => item && typeof item === 'object' && !Array.isArray(item) && item.property !== property) : [];
-        const previous = Array.isArray(result.view.sort) ? result.view.sort.find(item => item && typeof item === 'object' && !Array.isArray(item) && item.property === property) : undefined;
-        const direction = previous && typeof previous === 'object' && !Array.isArray(previous) ? previous.direction === 'ASC' ? 'DESC' : undefined : 'ASC';
-        void patch({ sort: direction ? [{ property, direction }, ...sort] : sort });
-      };
-      cell.addEventListener('click', event => { if (current() && !event.defaultPrevented && !(event.target as Element).closest('.zorid-bases-table-resize')) { event.preventDefault(); toggleSort(); } });
-      cell.addEventListener('keydown', event => { if ((event.key === 'Enter' || event.key === ' ') && current()) { event.preventDefault(); toggleSort(); } });
+      cell.setAttribute('aria-haspopup', 'menu');
+      cell.addEventListener('click', event => { if (current() && !event.defaultPrevented && !(event.target as Element).closest('.zorid-bases-table-resize')) columnMenu(event, property, index, cell); });
+      cell.addEventListener('keydown', event => {
+        if (event.target !== cell || event.isComposing || event.defaultPrevented || !current()) return;
+        if (event.key === 'Enter' || event.key === ' ' || event.key === 'ContextMenu' || event.key === 'F10' && event.shiftKey) {
+          event.preventDefault();
+          columnMenu(new win!.MouseEvent('contextmenu', { bubbles: true, cancelable: true }), property, index, cell);
+        }
+      });
       if (options.patchView) {
         cell.draggable = true;
         cell.addEventListener('dragstart', event => { if (!current() || hasActiveEdits()) { event.preventDefault(); return; } draggedColumn = property; event.dataTransfer?.setData('application/x-zorid-base-column', property); if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'; });

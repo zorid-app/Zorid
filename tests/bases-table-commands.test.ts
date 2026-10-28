@@ -72,12 +72,13 @@ test('text inputs own paste, undo and composition while table history routes thr
   assert.equal(f.paste(input, { 'text/plain': 'native' }).defaultPrevented, false); f.key(input, 'z', { metaKey: true }); await tick(); assert.equal(undo, 1); f.close();
 });
 
-test('header click toggles sort; context menu uses reference actions and stale menu actions cannot save', async () => {
+test('header click opens its menu without sorting; right click shares actions and stale menus cannot save', async () => {
   const f = fixture({ requestEditProperty() {}, summaryOptions: [{ id: 'Sum', label: 'Sum' }], requestSummary() {} });
   const header = f.main.querySelectorAll<HTMLElement>('[role=columnheader]')[1]; header.click(); await tick();
-  assert.deepEqual(f.patches[0], { sort: [{ property: 'note.text', direction: 'ASC' }] });
-  const menu = f.menu(header); assert.deepEqual(menu.map(item => item.textContent), ['Hide column', 'Summarize...', 'Group by this property', 'Sort A → Z', 'Sort Z → A', 'Edit property...', 'Property type']);
-  f.view.update({ ...f.result, version: 8 }); menu[0].click(); await tick(); assert.equal(f.patches.length, 1); f.close();
+  assert.deepEqual(f.patches, []);
+  const clickedMenu = [...f.dom.window.document.querySelectorAll<HTMLButtonElement>('[role=menuitem]')].map(item=>item.textContent);
+  const menu = f.menu(header); assert.deepEqual(menu.map(item=>item.textContent), clickedMenu); assert.deepEqual(menu.map(item => item.textContent), ['Hide column', 'Summarize...', 'Group by this property', 'Sort A → Z', 'Sort Z → A', 'Edit property...', 'Property type']);
+  f.view.update({ ...f.result, version: 8 }); menu[0].click(); await tick(); assert.equal(f.patches.length, 0); f.close();
 });
 
 test('resizer keyboard persists width and double-click resets custom width', async () => {
@@ -102,11 +103,13 @@ test('rich widget drafts stay mounted across scrolling and every acquired widget
 });
 
 
-test('header sort cycles ascending, descending and unsorted while retaining other criteria', async () => {
+test('explicit column menu sorting preserves other criteria and supports clearing a sort', async () => {
   const f = fixture();
-  for (const [direction, expected] of [['ASC', 'DESC'], ['DESC', undefined]] as const) {
+  for (const [direction, action, expected] of [['ASC', 'Sort Z → A', 'DESC'], ['DESC', 'Remove sort', undefined]] as const) {
     f.view.update({ ...f.result, version: direction, view: { ...f.result.view, sort: [{ property: 'note.text', direction }, { property: 'note.score', direction: 'DESC' }] } });
-    f.main.querySelectorAll<HTMLElement>('[role=columnheader]')[1].click(); await tick();
+    const header=f.main.querySelectorAll<HTMLElement>('[role=columnheader]')[1]; header.click(); await tick();
+    const actions=[...f.dom.window.document.querySelectorAll<HTMLButtonElement>('[role=menuitem]')];
+    actions.find(button=>button.textContent===action)!.click(); await tick();
     assert.deepEqual(f.patches.at(-1), { sort: [...(expected ? [{ property: 'note.text', direction: expected }] : []), { property: 'note.score', direction: 'DESC' }] });
   }
   f.close();
