@@ -360,3 +360,40 @@ replacement, parent-change and blocked retention gates survive. Raw NativeVault
 byte reads are not universally a CRDT scrub today, so do not invent that claim.
 Startup_audit owns source/tests; root owns controlled native validation/build.
 Source is still pending at this contract decision, not measured or installed.
+
+## Follow-up trace attribution while installation awaits normal closure
+
+Read-only audit at main `2d0da423` partitioned the earlier R5 request trace into
+its five actual Enter-to-ready windows. This is **not a final R6 benchmark**.
+Receipt: `tmp/bases-edit-performance-20261028/base-edit-trace-partition.json`.
+Each window starts four list snapshots, two collection-definition reads and two
+Base queries. Metadata-page starts are 22/58/56/58/48 within those windows; another
+66 starts occur outside them. Do not attribute all 308 pages to the edit windows
+or sum nested/overlapping RPC, service and runtime durations.
+
+The 19 rejected `get_entry` probes are consistent with expected absence for the
+ordinary host note `Performance embed.md`, which has no collection membership;
+all five `set_entry` writes succeeded. This attribution is source plus fixture
+inference: the trace intentionally stores no request arguments or error content.
+`note-property-targets.ts` registers both `requestCollection` and `invalidate`
+for the same vault events, while `invalidate` itself requests membership. A
+concurrent second request marks the current request invalidated and queues a
+successor. Future coalescing must retain definite host-absence-only handling,
+selected actor/path/revision guards and a real database/source invalidation epoch.
+
+Four lists do not mean four full Workspace reloads. Two follow explicit mutation
+reload plus the normal durable-change notification/Workspace reload path. The
+other two are the relation-target query's before/after inventory fences in
+`src/bases/property-targets.ts`. Any replacement must preserve selected-note
+identity/revision and the final same-pin/source status fence. BaseController's
+notification refresh can overlap the explicit refresh in `src/bases/session.ts`;
+joining it requires proof it covers the same invalidation epoch, configuration,
+view, clock and postcommit target witness. Newer invalidation must still rerun.
+Two definition reads follow the sequential `loadDefinitions` calls around that
+refresh; reuse requires matching collection revision, source context and
+configuration witness. Metadata-page wake coalescing must retain complete page,
+source, snapshot and coverage validation. These are bounded follow-up seams,
+not implemented fixes or permission to remove correctness fences.
+
+Current accepted startup/opening package remains unchanged. This separate
+Base-edit finding stays OPEN and does not delay its installation.
