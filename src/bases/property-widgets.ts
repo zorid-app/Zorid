@@ -32,6 +32,10 @@ export interface BasePropertyWidgetAcknowledgement {
   readonly row: BasePropertyPresentation['row'];
   readonly value?: BaseExpressionValue;
 }
+export type BasePropertyEditorCompletionIntent =
+  | { readonly reason: 'enter'; readonly key: 'Enter'; readonly shiftKey: boolean }
+  | { readonly reason: 'tab'; readonly key: 'Tab'; readonly direction: 1 | -1 }
+  | { readonly reason: 'pointer'; readonly target: EventTarget | null; readonly button: number; readonly shiftKey: boolean; readonly ctrlKey: boolean; readonly metaKey: boolean; readonly altKey: boolean };
 export interface BasePropertyWidgetOptions {
   /** Same-snapshot persisted source value, before link/date/rich inference. */
   readonly getEditableValue?: (presentation: BasePropertyPresentation) => BaseExpressionValue | undefined;
@@ -51,6 +55,10 @@ export interface BasePropertyWidgetOptions {
   readonly canBegin?: () => boolean;
   readonly isCurrent?: (presentation: BasePropertyPresentation) => boolean;
   readonly createOption?: (property: string, value: string, presentation: BasePropertyPresentation) => void | BasePropertyWidgetAcknowledgement | Promise<void | BasePropertyWidgetAcknowledgement>;
+  /** Successful or unchanged editor completion, after its draft/pending marker
+   * clears. The owner decides navigation and revalidates the destination/focus;
+   * failures, Escape and plain blur never grant a continuation. */
+  readonly onEditorComplete?: (element: HTMLElement, presentation: BasePropertyPresentation, intent: BasePropertyEditorCompletionIntent) => void;
   readonly onError?: (error: unknown) => void;
 }
 const str = (value: string): BaseExpressionValue => ({ type: 'string', value });
@@ -117,6 +125,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   let disposed = false, pending = false, editing = false, composing = false;
   let blurDuringComposition = false, compositionEpoch = 0;
   let finishAfterPending = false, editingIndex: number | undefined;
+  let pendingCompletionIntent: BasePropertyEditorCompletionIntent | undefined;
   let disposeRich: (() => void) | undefined;
   let removeFocusObserver: (() => void) | undefined;
   let input: HTMLInputElement | undefined, popup: HTMLDivElement | undefined;
@@ -126,6 +135,10 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   const later = (fn: () => void) => { const timer = setTimeout(() => { timers.delete(timer); if (!disposed) fn(); }, 0); timers.add(timer); };
   const current = () => !disposed && (options.isCurrent?.(acceptedPresentation) ?? true);
   const report = (error: unknown) => { try { options.onError?.(error); } catch { /* report failures cannot discard the draft */ } };
+  const completed = (intent?: BasePropertyEditorCompletionIntent) => {
+    if (!intent || !current() || !element.isConnected) return;
+    try { options.onEditorComplete?.(element, acceptedPresentation, intent); } catch (failure) { report(failure); }
+  };
   const mark = (state?: string) => { if (state) element.dataset.baseEditing = state; else element.removeAttribute('data-base-editing'); };
   const optionFor = (text: string) => definition.options?.find(option => option.value === text);
   const targets = () => options.getRelationTargets?.(presentation.property, acceptedPresentation) ?? [];
@@ -187,7 +200,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     displayValue = options.getDisplayValue?.(acceptedPresentation) ?? acceptedPresentation.value; value = options.getEditableValue?.(acceptedPresentation) ?? next; pairTargets();
     return true;
   };
-  const commit = async (next: BaseExpressionValue, keepOpen = false, restoreFailureFocus = true): Promise<boolean> => {
+  const commit = async (next: BaseExpressionValue, keepOpen = false, restoreFailureFocus = true, intent?: BasePropertyEditorCompletionIntent): Promise<boolean> => {
     if (!editable || !current() || pending) return false;
     const focusInput = !picker && restoreFailureFocus ? input : undefined;
     const ownedFocus = !!focusInput && document.activeElement === focusInput && document.hasFocus();
@@ -207,6 +220,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
       document.addEventListener('keydown', navigated, true); win?.addEventListener('blur', leftWindow);
       removeFocusObserver = removeObservers;
     }
+    pendingCompletionIntent = intent;
     pending = true; let accepted = false; mark('pending'); if (input) input.disabled = true;
     try {
       const acknowledgement = await options.commit({ ...acceptedPresentation, path: acceptedPresentation.row.path, value: next });
@@ -231,6 +245,8 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
           && (document.activeElement === input || document.activeElement === document.body || document.activeElement === document.documentElement)) input.focus();
       }
       finishAfterPending = false;
+      const completion = pendingCompletionIntent; pendingCompletionIntent = undefined;
+      if (accepted && !editing) completed(completion);
     }
   };
   function chip(text: string, removable = false, index = -1): HTMLElement {
@@ -351,15 +367,16 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     popup.style.left = `${Math.max(4, Math.min(rect.left, (win?.innerWidth ?? 1024) - width - 4))}px`;
     popup.style.width = `${width}px`; popup.style.top = `${Math.max(4, Math.min(rect.bottom + 4, (win?.innerHeight ?? 768) - Math.min(popup.scrollHeight || 200, 320) - 4))}px`;
   }
+  const pointerIntent = (event: PointerEvent): BasePropertyEditorCompletionIntent => ({ reason:'pointer', target:event.target, button:event.button, shiftKey:event.shiftKey, ctrlKey:event.ctrlKey, metaKey:event.metaKey, altKey:event.altKey });
   function outside(event: PointerEvent) {
     if (!editing || element.contains(event.target as Node) || popup?.contains(event.target as Node)) return;
-    if (pending) { finishAfterPending = true; return; }
-    if (!composing) void finish();
+    if (pending) { finishAfterPending = true; pendingCompletionIntent ??= pointerIntent(event); return; }
+    if (!composing) void finish(false, pointerIntent(event));
   }
-  function cancel() {
+  function cancel(restoreFocus = true) {
     if (pending) return;
     blurDuringComposition = false; compositionEpoch++;
-    editing = false; closePopup(); draw(); element.focus();
+    editing = false; closePopup(); draw(); if (restoreFocus) element.focus();
   }
   function renderChoices() {
     if (!popup || !input) return;
@@ -397,7 +414,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
       return true;
     } catch (failure) { error(failure); return false; }
   }
-  async function choose(next: string) {
+  async function choose(next: string, intent?: BasePropertyEditorCompletionIntent) {
     if (!current() || pending || !validateRelationChoice(next, true)) return;
     if (choices.find(choice => choice.value === next)?.missing || ((type === 'relation' || type === 'link') && targetFor(next)?.missing)) { error(new Error('This related note is unavailable. Choose another note.')); return; }
     if (multiple) {
@@ -407,7 +424,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
       else { draft.push({text:next,value:str(next)}); draftChanged = true; }
       if (input) input.value = ''; renderEditor(); input?.focus(); await saveDraft();
     }
-    else await commit(str(next));
+    else await commit(str(next), false, true, intent);
   }
   function removeChip(index: number) {
     if (editingIndex === index) { editingIndex = undefined; if (input) input.value = ''; }
@@ -427,13 +444,14 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     if (!chips) { chips = document.createElement('div'); chips.className = 'multi-select-container'; popup.prepend(chips); }
     chips.replaceChildren(); if (multiple) draft.forEach((item, index) => chips!.append(chip(item.text, true, index))); chips.append(input); renderChoices();
   }
-  async function finish(restoreFailureFocus = true) {
+  async function finish(restoreFailureFocus = true, intent?: BasePropertyEditorCompletionIntent) {
     if (!current() || !editing || pending || composing || !input) return;
+    const unchanged = () => { cancel(intent ? intent.reason === 'enter' : restoreFailureFocus); completed(intent); };
     try {
       let next: BaseExpressionValue;
       if (picker) {
         if (multiple) {
-          if (!draftChanged && !input.value) { cancel(); return; }
+          if (!draftChanged && !input.value) { unchanged(); return; }
           if (input.value) {
             if (inlineList) {
               const duplicate = draft.findIndex((item, index) => item.text === input!.value && index !== editingIndex);
@@ -445,18 +463,18 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
           }
           next = { type: 'list', value: draft.map(item => item.value) };
         } else {
-          if (input.value === inputText(value, definition)) { cancel(); return; }
+          if (input.value === inputText(value, definition)) { unchanged(); return; }
           const choice = choices.find(choice => !choice.missing && (choice.value === input!.value || choice.label === input!.value));
           if (input.value && !choice && ['select', 'status', 'relation'].includes(type)) { error(new Error('Choose a matching option.')); return; }
           if (input.value && !validateRelationChoice(choice?.value ?? input.value, !!choice)) return;
           next = input.value ? str(choice?.value ?? input.value) : BASE_NULL;
         }
       } else {
-        if (input.value === inputText(value, definition)) { cancel(); return; }
+        if (input.value === inputText(value, definition)) { unchanged(); return; }
         next = parseBasePropertyInput(input.value, definition, value);
       }
-      if (JSON.stringify(next) === JSON.stringify(value)) { cancel(); return; }
-      await commit(next, false, restoreFailureFocus);
+      if (JSON.stringify(next) === JSON.stringify(value)) { unchanged(); return; }
+      await commit(next, false, restoreFailureFocus, intent);
     } catch (failure) { error(failure); }
   }
   function begin(event: MouseEvent | KeyboardEvent) {
@@ -478,10 +496,10 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
       const blurred = blurDuringComposition, epoch = compositionEpoch; blurDuringComposition = false;
       // The final input event follows compositionend. A retained blur must still
       // finish when a synthetic/native blur leaves activeElement on this input.
-      later(() => { if (epoch !== compositionEpoch) return; if (picker) renderChoices(); if (blurred || (!element.contains(document.activeElement) && !popup?.contains(document.activeElement))) void finish(); });
+      later(() => { if (epoch !== compositionEpoch) return; if (picker) renderChoices(); if (blurred || (!element.contains(document.activeElement) && !popup?.contains(document.activeElement))) void finish(false); });
     });
     input.addEventListener('input', () => { input?.removeAttribute('aria-invalid'); if (picker && !composing) { selected = 0; renderChoices(); } });
-    input.addEventListener('blur', () => { if (composing) { blurDuringComposition = true; return; } later(() => { if (!element.contains(document.activeElement) && !popup?.contains(document.activeElement)) void finish(); }); });
+    input.addEventListener('blur', () => { if (composing) { blurDuringComposition = true; return; } later(() => { if (!element.contains(document.activeElement) && !popup?.contains(document.activeElement)) void finish(false); }); });
     input.addEventListener('keydown', event => {
       event.stopPropagation();
       if (composing || event.isComposing || pending) return;
@@ -489,18 +507,29 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
       else if (picker && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) { event.preventDefault(); const direction = event.key === 'ArrowDown' ? 1 : -1; let next = selected + direction; while (next >= 0 && next < choices.length && choices[next].missing) next += direction; if (next >= 0 && next < choices.length) selected = next; renderChoices(); }
       else if (event.key === 'Enter') {
         event.preventDefault();
-        if (picker && choices[selected] && !choices[selected].missing && input?.value) void choose(choices[selected].value);
+        const intent: BasePropertyEditorCompletionIntent = {reason:'enter',key:'Enter',shiftKey:event.shiftKey};
+        if (picker && choices[selected] && !choices[selected].missing && input?.value) void choose(choices[selected].value, intent);
         else if (multiple && input?.value && ['list', 'tags'].includes(type)) void choose(input.value);
-        else void finish();
+        else void finish(true, intent);
       } else if (multiple && (event.key === 'Backspace' || event.key === 'ArrowLeft') && !input?.value && draft.length) { event.preventDefault(); popup?.querySelectorAll<HTMLElement>('.multi-select-pill')[draft.length - 1]?.focus(); }
-      else if (event.key === 'Tab') { void finish(false); }
+      else if (event.key === 'Tab') {
+        // A grid owner resumes Tab only after acceptance. Other hosts keep the
+        // browser's native focus order and never reclaim a blur-initiated save.
+        if(options.onEditorComplete)event.preventDefault();
+        void finish(!!options.onEditorComplete, {reason:'tab',key:'Tab',direction:event.shiftKey?-1:1});
+      }
     });
     if (picker) {
       input.setAttribute('role', 'combobox'); input.setAttribute('aria-autocomplete', 'list');
       popup = document.createElement('div'); popup.className = inlineList ? 'bases-property-inline-editor' : 'bases-property-popover popover';
       propertyPopoverOwners.set(popup,element);
       if (inlineList) element.replaceChildren(popup); else document.body.append(popup); renderEditor(); document.addEventListener('pointerdown', outside, true); win?.addEventListener('resize', position); win?.addEventListener('scroll', position, true);
-    } else element.replaceChildren(input);
+    } else {
+      element.replaceChildren(input);
+      // A navigation owner needs the pointer target before the following blur
+      // disables this scalar input and blocks another cell's activation.
+      if (options.onEditorComplete) document.addEventListener('pointerdown', outside, true);
+    }
     input.focus(); if (!multiple) input.select();
   }
   const activate = (event: MouseEvent) => { if (!event.defaultPrevented && event.button === 0) begin(event); };
