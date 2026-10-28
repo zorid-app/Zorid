@@ -1397,6 +1397,12 @@ export class Workspace {
           listOptions:{useTab:this.settings.useTab,tabSize:this.settings.tabSize,smartIndentList:this.settings.smartIndentList},
           renderEmbed:(request,context)=>{const dom=embeds.render(request,path,[],undefined,context);return{dom,destroy:()=>embeds.releaseEmbed(dom)};},
           renderBase:(request,context)=>{const dom=embeds.renderBase(request,path,context);return{dom,destroy:()=>embeds.releaseEmbed(dom)};},
+          onCreateDatabase:request=>this.newBase(parentOf(path),createdPath=>{
+            if(!ownsEditor()||!request.isCurrent())return false;
+            const link=`[[${createdPath}]]`;
+            request.view.dispatch({changes:{from:request.from,to:request.to,insert:link},selection:{anchor:request.from+link.length}});
+            return true;
+          }),
           transfers:{autoConvertHtml:()=>this.settings.autoConvertHtml,importFile:file=>this.importAttachment(file,path,generation),nativePath:file=>window.zorid?.getPathForFile?.(file)??'',onError:error=>notice(error instanceof Error?error.message:String(error))},
           onChange:value=>{this.updateMarkdownBuffer(buffer,value);runtime.touch();this.renderStatus();for(const other of this.loadedViews()){if(this.current(other)?.path===path){if(other!==pane)other.editor?.setValue(value);clearTimeout(other.propertyTimer);const properties=other.properties,preview=other.refreshPreview;other.propertyTimer=setTimeout(()=>{properties?.refresh();preview?.();},150);}}},open:(target,kind)=>{if(generation===this.vaultGeneration&&pane.renderVersion===version&&pane.viewPath===path)this.run(()=>this.followLink(path,target,pane,kind));}});
       }
@@ -2719,7 +2725,7 @@ export class Workspace {
     const observer=new MutationObserver(()=>{if(!content.isConnected){browser.destroy();observer.disconnect();}});observer.observe(document.body,{childList:true});
   }
   private hasPendingBaseCreation():boolean{return !!this.pendingBaseCreation&&this.pendingBaseCreation.operation?.status!=='committed';}
-  private async newBase(folder=''):Promise<void>{
+  private async newBase(folder='',beforeOpen?:(path:string)=>boolean):Promise<void>{
     const vault=this.vault,generation=this.vaultGeneration,pane=this.activePane,version=pane.renderVersion,activation=this.paneActivationRevision;
     const intent=(this.navigationIntent.get(pane)??0)+1;this.navigationIntent.set(pane,intent);
     let retained=this.pendingBaseCreation;
@@ -2734,6 +2740,7 @@ export class Workspace {
     catch(error){if(this.pendingBaseCreation===retained)this.pendingBaseCreation=undefined;throw error;}
     const path=operation.path;await operation.run();
     if(vault!==this.vault||generation!==this.vaultGeneration||!this.panes.includes(pane)||pane.renderVersion!==version||this.navigationIntent.get(pane)!==intent||activation!==this.paneActivationRevision)return;
+    if(beforeOpen&&!beforeOpen(path))return;
     await this.openNote(path,false,pane,true,'',activation);
   }
   private async newCanvas(folder=''):Promise<void>{

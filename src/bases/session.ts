@@ -2,7 +2,7 @@ import { BaseController, createBaseMutationHost } from './controller.ts';
 import type { BaseBufferHost, BaseControllerState, BaseViewRenamed, BaseConfigurationRead } from './controller.ts';
 import { BaseDocument, baseViewSource, baseViewSetting } from './document.ts';
 import type { BaseViewSource } from './document.ts';
-import { mountSourceChooser, mountCollectionEditor, collectionPropertyDefinitions, collectionValue } from '../databases/collection-ui.ts';
+import { mountSourceChooser, mountCollectionEditor, mountCollectionPropertyPicker, collectionPropertyDefinitions, collectionValue } from '../databases/collection-ui.ts';
 import type { SourceChooser, CollectionEditor } from '../databases/collection-ui.ts';
 import {planCollectionEntryCreation} from '../databases/creation.ts';
 import type { DatabaseCollection, DatabaseEntry, DatabaseRequest } from '../core/databases.ts';
@@ -10,6 +10,7 @@ import { sharedBaseCoverage, sharedBasePreview, sharedBaseWitness } from './shar
 import { createBaseClockHost } from './clock.ts';
 import type { BaseClockHost } from './clock.ts';
 import { BaseToolbarSaveError, createBaseToolbar } from './toolbar.ts';
+import { mountBaseTooltips } from './tooltips.ts';
 import type { BaseFilterOperandsSnapshot, BaseFilterPropertyDescriptor, BaseToolbarState } from './toolbar.ts';
 import { createBaseViewActions } from './view-actions.ts';
 import { createBaseTableView } from './table-view.ts';
@@ -31,7 +32,7 @@ import { baseEditablePropertyValue, baseImageSourceValue, baseEditValue, baseGro
 import type { BaseValue, BaseViewPatch } from './document.ts';
 import type { BasePresentationOptions, BasePropertyPresentation } from './presentation-common.ts';
 import { createBasePropertyRenderer } from './property-widgets.ts';
-import type { BasePropertyWidgetEdit, BasePropertyWidgetAcknowledgement } from './property-widgets.ts';
+import type { BasePropertyWidgetEdit, BasePropertyWidgetAcknowledgement, BasePropertyEditorCompletionIntent } from './property-widgets.ts';
 import { baseValuesEqual, baseExpressionValue } from './expression.ts';
 import { icon } from '../ui/icons.ts';
 import { enhanceBaseSummaryEditor } from './toolbar-formula-editor.ts';
@@ -246,6 +247,7 @@ interface MountedView {
   hasQueuedConfiguration?(): boolean;
   dismissCleanPanels?(): void;
   openSummaryPicker?(property: string, anchor: HTMLElement, groupIndex?: number | null): void;
+  completePropertyEdit?(element: HTMLElement, presentation: BasePropertyPresentation, intent: BasePropertyEditorCompletionIntent): void;
 }
 
 /** Compose existing Bases modules for a workspace pane or an embedded base. */
@@ -266,6 +268,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   const unavailableMessage=doc.createElement('p'),unavailableActions=doc.createElement('div');unavailableCard.append(unavailableMessage,unavailableActions);
   const restoreRecovery=doc.createElement('div');restoreRecovery.className='collection-restore-recovery';restoreRecovery.hidden=true;
   root.append(toolbar, sourceBar, sourcePanel, unavailableCard, restoreRecovery, content, status); container.append(root);
+  const tooltips = mountBaseTooltips(root);
   let disposed = false, closing = false, mounted: MountedView | undefined, mountedType: string | undefined;
   let mountedResult: BaseQueryResult | undefined, renderingResult: BaseQueryResult | undefined, deferred: BaseControllerState | undefined;
   let mountedIndex = -1, mountedMove = false, mountedWritable = false;
@@ -301,7 +304,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       const config=(labels as Record<string,unknown>)[property]??(labels as Record<string,unknown>)[property.replace(/^note\./,'')];
       if(config&&typeof config==='object'&&'displayName' in config&&typeof config.displayName==='string')return config.displayName;
     }
-    return property.startsWith('file.')?property.replace(/^file\./,'file '):property.replace(/^(?:note|formula)\./,'');
+    return property==='file.name'||property==='file.file'?'Name':property.startsWith('file.')?property.replace(/^file\./,'file '):property.replace(/^(?:note|formula)\./,'');
   };
   // Presentation survives same-source reloads; this cache never supplies schema,
   // membership or write authority while the actual collection is unavailable.
@@ -481,6 +484,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     onNew: () => track(() => createItem()),
     onExport: (format, copy) => track(() => exportResults(format, copy)),
     onPropertySettings: property => openCollectionProperties(basePropertyName(property)),
+    onEditProperties:()=>openCollectionProperties(),
     onDraftChange: schedule,
     onError: report,
   });
@@ -503,6 +507,30 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     collectionEditor=mountCollectionEditor(sourcePanel,{service:databaseService,collection:editingCollection,entries:[...collectionEntries.values()],propertyId,
       isCurrent:()=>!disposed&&!closing&&currentViewSource().kind==='collection'&&(currentViewSource() as {id:string}).id===editingCollection.id,
       onSaved:async()=>{await options.vault.reload();await loadDefinitions();await controller.refresh();},
+      onClose:()=>{collectionEditor?.destroy();collectionEditor=undefined;schedule();}});
+  }
+  function addCollectionProperty(anchor:HTMLElement):void {
+    action();if(options.readOnly||!databaseService||!collection||collection.deleted)throw new Error('This collection is unavailable.');
+    if(pendingCollectionRestore||pendingCollectionCreate||pending.size||propertyDraft()||toolbarUI.hasDraft()||collectionEditor)throw new Error('Finish editing the current value before adding a property.');
+    const editingCollection=collection, previousIds=new Set(collection.properties.map(field=>field.id));
+    const editingSource=controller.state.source,editingViewId=controller.selectedViewIdentity,editingIndex=controller.selectedViewIndex;
+    const ownerCurrent=()=>!disposed&&!closing&&currentViewSource().kind==='collection'&&(currentViewSource() as {id:string}).id===editingCollection.id;
+    const visibilityOwnerCurrent=()=>ownerCurrent()&&controller.state.source===editingSource&&controller.selectedViewIdentity===editingViewId&&controller.selectedViewIndex===editingIndex;
+    collectionEditor=mountCollectionPropertyPicker(sourcePanel,{service:databaseService,collection:editingCollection,anchor,
+      isCurrent:ownerCurrent,
+      onSaved:async saved=>{
+        await options.vault.reload();await loadDefinitions();await controller.refresh();
+        if(!visibilityOwnerCurrent()){
+          notice='Property added. The original view changed; choose its visibility in Settings.';renderStatus(controller.state);return;
+        }
+        const added=saved.properties.filter(field=>!previousIds.has(field.id));
+        const state=controller.state, view=BaseDocument.parse(state.source).views[controller.selectedViewIndex];
+        if(added.length&&view&&state.result){
+          const order=Array.isArray(view.order)?view.order.filter((id):id is string=>typeof id==='string'):[...state.result.properties];
+          for(const field of added){const id=`note.${field.id}`;if(!order.includes(id))order.push(id);}
+          await controller.updateView(numericVersion(state.version),{order});
+        }
+      },
       onClose:()=>{collectionEditor?.destroy();collectionEditor=undefined;schedule();}});
   }
   async function editCollectionProperties(edits:readonly Parameters<typeof actions.editProperty>[0][]):Promise<void> {
@@ -907,7 +935,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     if(definitionsLoading&&mountedResult&&mountedIndex===selectedIndex&&JSON.stringify(baseViewSource(mountedResult.view))===JSON.stringify(source)){deferred=state;return;}
     renderSourceBar(source);
     const toolbarState=filterToolbarState(result,document,selectedIndex),writable=!toolbarState.readOnly&&source.kind==='collection'&&!definitionsLoading&&!definitionsError;
-    toolbarUI.update(toolbarState);
+    toolbarUI.update({...toolbarState,...(collection?{sourceLabel:collection.name}:{})});
     // Toolbar rebases its own in-flight configuration without replacing row drafts.
     if (pending.size || activeDraft()) { deferred = state; return; }
     deferred = undefined;
@@ -963,6 +991,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         getRelationTargets,
         loadImage: options.loadThumbnail ? (source, signal, presentation) => options.loadThumbnail!({ row: presentation.row, property: presentation.property, value: baseImageSourceValue(presentation.value, source), version: presentation.version, signal }) : undefined,
         openFile: openResultFile, onError: report,
+        ...(result.view.type==='table'?{onEditorComplete:(element:HTMLElement,presentation:BasePropertyPresentation,intent:BasePropertyEditorCompletionIntent)=>mounted?.completePropertyEdit?.(element,presentation,intent)}:{}),
       }),
       getSummary: (property: string, groupIndex: number | null) => {
         const active = renderingResult ?? mountedResult ?? result;
@@ -1041,10 +1070,28 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       else {
         mounted?.destroy(); mounted = undefined; content.replaceChildren();
         switch (result.view.type) {
-          case 'table': mounted = createBaseTableView(content, shared); break;
+          case 'table': mounted = createBaseTableView(content, {...shared,...(writable?{
+            requestAddProperty:(anchor:HTMLElement)=>{try{addCollectionProperty(anchor);}catch(error){report(error);}},
+            ...(options.buffers?.rename?{renameFile:(edit:import('./table-view.ts').BaseTableRename)=>track(async()=>{
+              action();const active=controller.state.result,row=active?.rows.find(row=>row.path===edit.path),witness=active&&sharedBaseWitness(active,edit.path);
+              if(!row||!edit.witness||!witness||witness.entryId!==edit.witness.entryId||witness.revision!==edit.witness.revision)throw new Error('The note changed before its title could be saved.');
+              const slash=edit.path.lastIndexOf('/'),extension=/\.[^/.]+$/.exec(edit.path)?.[0]??'';
+              if(!edit.name||/[\\/:\u0000-\u001f]/.test(edit.name)||edit.name==='.'||edit.name==='..')throw new Error('Enter a name without path separators.');
+              const destination=`${slash<0?'':edit.path.slice(0,slash+1)}${edit.name}${extension}`;
+              await controller.renameFile(numericVersion(edit.version),edit.path,destination);return{path:destination};
+            })}:{})
+          }:{})}); break;
           case 'cards': mounted = createBaseCardsView(content, { ...shared, loadThumbnail: options.loadThumbnail }); break;
-          case 'list': mounted = createBaseListView(content, shared); break;
+          case 'list': mounted = createBaseListView(content, {...shared,...(writable?{onNew:(anchor:HTMLElement)=>track(()=>createItem(undefined,anchor))}:{})}); break;
           case 'kanban': mounted = createBaseKanbanView(content, { ...shared, loadThumbnail: options.loadThumbnail, onError: report, onPresentationError: report,
+            getGroupAppearance:group=>{
+              const active=renderingResult??mountedResult??result, grouping=active.view.groupBy;
+              if(!grouping||typeof grouping!=='object'||Array.isArray(grouping)||!('property'in grouping)||typeof grouping.property!=='string')return undefined;
+              const definition=definitions.properties[basePropertyName(grouping.property)];
+              const key=group.key?.type==='string'?group.key.value:undefined;
+              const option=key===undefined?undefined:definition?.options?.find(option=>option.value===key||option.id===key);
+              return option?{color:option.color,category:option.category}:undefined;
+            },
             readOnly: !writable, showColumnControls: false,
             isGroupWritable: (group: BaseQueryGroup) => {
               const active = renderingResult ?? mountedResult ?? result, grouping = active.view.groupBy;
@@ -1125,7 +1172,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       if (dismissCleanPanels) { mounted?.dismissCleanPanels?.(); toolbarUI.dismissCleanPanel(); settings.destroy(); destroySummaryEditor?.(); }
       if (close) {
         closeSourceChooser();collectionEditor?.destroy();collectionEditor=undefined;if(collectionRefreshTimer!==undefined)clearTimeout(collectionRefreshTimer);
-        toolbarUI.destroy(); settings.destroy(); destroySummaryEditor?.(); stopDefinitions.forEach(stop => stop()); stopFilterMetadata(); mounted?.destroy(); mounted = undefined; observer?.disconnect();
+        tooltips.destroy(); toolbarUI.destroy(); settings.destroy(); destroySummaryEditor?.(); stopDefinitions.forEach(stop => stop()); stopFilterMetadata(); mounted?.destroy(); mounted = undefined; observer?.disconnect();
         if (scheduled !== undefined) clearTimeout(scheduled);
         if(refreshIndicatorTimer!==undefined)clearTimeout(refreshIndicatorTimer);
         root.removeEventListener('keydown', switchViewKey, true); controller.dispose(); disposed = true; root.remove();

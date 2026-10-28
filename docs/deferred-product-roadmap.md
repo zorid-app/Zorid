@@ -2,6 +2,21 @@
 
 ## Execution checkpoint — shared-core coordinator
 
+**Full supported Notion database interaction match in progress — 2026-10-27.**
+Root `codex/notion-interaction-match` from `e4c8a6d0` owns the acknowledged
+temporary exclusive main integrate/test/commit lane after review/validation.
+Expanded user scope includes slash creation, all supported views/settings/types,
+mouse/hover/tooltips/selection/clipboard and keyboard/edit focus transitions.
+Named isolated worker commits compose widgets, tooltips, table, List, Board,
+settings, schema picker and direct source creation; root owns session/workspace
+seams and native/package/install acceptance. Ordinary-note Properties hiding and
+refresh-flashing fix remain requirements. Independent review found Board initial
+measurement and failed-title Escape handoff issues; successor fixes pending.
+No installation/parity/completion claim yet. REA public-bundle static inspection
+and tab-scoped Notion experiments recorded; signed-in REA runtime CDP unavailable.
+See [current queue](user-findings.md#full-supported-notion-database-interaction-match--2026-10-27).
+No push, Rust/iOS/Tauri build or other owner's main writes authorized here.
+
 **Bases refresh/select flashing fix installed — 2026-10-27.** Product `86466ce8`
 is on main after scoped independent review, 59/59 main checks + TS, frontend build,
 9/9 Rust refresh-hints +12/12 source checks and source-matched native build.

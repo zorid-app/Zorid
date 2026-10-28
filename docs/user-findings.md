@@ -1,5 +1,45 @@
 # User findings queue
 
+## Full supported Notion database interaction match — 2026-10-27
+
+**In progress; supersedes the presentation-only scope of the first pass.** User
+requests closely matching Notion's supported database UI and complete interaction
+behavior: `/` creation and Enter, Table/List/Kanban, spacing, view settings,
+property add/reorder, Open, selection, every supported datatype, clipboard,
+mouse/hover/tooltips and keyboard/arrows/Enter/Tab/Escape. Explicitly use REA.
+Editing focus/blur and swallowed next clicks are a priority. Preserve ordinary-note
+Properties hiding and the installed refresh-flashing fix. Unsupported Notion
+features are excluded, rather than shown as inert menu entries.
+
+Root owns `codex/notion-interaction-match` from `e4c8a6d0`, reference experiments,
+`session.ts`/`workspace.ts` integration, packaging and native verification. Main
+owner acknowledged the exclusive temporary reviewed/validated integrate/test/commit
+lane; no conflicts, push, iOS or Tauri work. Named isolated workers own widget
+completion, table interaction/geometry, slash creation and shared tooltips.
+Build/install/replacement remains required after completion.
+
+Reference experiment uses a disposable Notion page, scoped to its browser tab.
+REA is connected but the signed-in browser has no available CDP endpoint;
+native discovery yielded no matching target. App-wide Chrome observation was
+automatically rejected because it could reveal unrelated tabs; do not retry broad
+capture. Tab-scoped browser observations continue; no REA runtime parity claim.
+Reference captures: `/private/tmp/zorid-notion-interactions-20261027`.
+REA static inspection succeeded for the public, page-observed property menu asset
+`TableHeaderPropertyCreationMenu-d9dadff0adfcd8b0.js` (55,304 bytes, 51 modules,
+zero parse failures). Evidence `ev_f77ec172ac12e704c59071c11b3a3a9e4ae35e5f5ce10b10640ce7addb31ba99`;
+bounded semantic graph is partial, no runtime or behavioral equivalence claim.
+The downloaded proprietary artifact stays in temporary evidence, outside source.
+
+Confirmed reference transitions so far: `/database` + Enter inserts a database
+shell and source chooser; Add property focuses a name/type picker; New page
+creates an inline title editor; existing title single-click edits; Tab closes
+title editing and selects the adjacent cell; hover Open is separate. View settings
+use a compact right-side panel. Other behaviors remain to be observed and verified.
+Source audit identifies async outside-pointer save followed by pending admission
+as the cause of swallowed next-cell clicks. A successful-save continuation is
+being implemented without weakening failed-save or stale-identity protections.
+
+
 ## Bases one-second Updating and select-field flashing — 2026-10-27
 
 **Closed within bounded desktop scope.** Product `86466ce8` is integrated on

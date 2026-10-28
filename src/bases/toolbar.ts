@@ -127,8 +127,8 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
   const viewButton = button(doc, '', () => open('Views', viewButton), 'Views'); viewButton.className = 'bases-toolbar-action'; viewButton.setAttribute('aria-haspopup', 'dialog');
   viewButton.addEventListener('contextmenu', event => { event.preventDefault(); open('View options', viewButton); });
   const tabs = doc.createElement('div'); tabs.className = 'bases-toolbar-tabs'; tabs.setAttribute('role', 'tablist'); tabs.setAttribute('aria-label', 'Database views');
-  const addView = button(doc, '', () => open('Add view', addView), 'Add a view'); addView.className = 'bases-toolbar-action bases-toolbar-add-view'; addView.title = 'Add a view'; addView.setAttribute('aria-haspopup', 'dialog'); addView.append(icon('plus',16,doc));
-  viewButton.title = 'All views';
+  const addView = button(doc, '', () => open('Add view', addView), 'Add a view'); addView.className = 'bases-toolbar-action bases-toolbar-add-view'; addView.dataset.baseTooltip = 'Add a view'; addView.setAttribute('aria-haspopup', 'dialog'); addView.append(icon('plus',16,doc));
+  viewButton.dataset.baseTooltip = 'All views';
   viewWrap.append(tabs, addView, viewButton, selector);
   const count = button(doc, '', () => open('Results', count), 'Results'); count.className = 'bases-toolbar-action bases-toolbar-count'; count.setAttribute('aria-live', 'polite'); count.setAttribute('aria-haspopup', 'dialog');
   const actions = doc.createElement('div'); actions.className = 'bases-toolbar-actions';
@@ -168,7 +168,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         tab.addEventListener('contextmenu',event => { event.preventDefault(); if (tab.isConnected) open('View options',tab,index); });
         tabs.append(tab);
       }
-      tab.setAttribute('aria-label',`${view.name} view`); tab.title = view.name;
+      tab.setAttribute('aria-label',`${view.name} view`); tab.dataset.baseTooltip = view.name;
       tab.setAttribute('aria-selected',String(index === next.selectedIndex)); tab.tabIndex = index === next.selectedIndex ? 0 : -1;
       tab.replaceChildren(icon(layoutIcon(view.type),16,doc),doc.createTextNode(view.name));
     });
@@ -975,16 +975,16 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     actions.replaceChildren();
     if (!next.readOnly) for (const [name, glyph] of [['Filter','list-filter'],['Sort','arrow-up-down'],['Group','stretch-horizontal'],['Properties','list']] as const) {
       if (next.browseOnly && (name === 'Group' || name === 'Properties')) continue;
-      const node = button(doc, '', () => open(name, node), name); node.className = 'bases-toolbar-action'; node.title = name; node.setAttribute('aria-haspopup','dialog');
+      const node = button(doc, '', () => open(name, node), name); node.className = 'bases-toolbar-action'; node.dataset.baseTooltip = name; node.setAttribute('aria-haspopup','dialog');
       const label = doc.createElement('span'); label.className = 'bases-toolbar-label'; label.textContent = name;
       node.append(icon(glyph,16,doc),label);
       if (name === 'Filter' && next.result.view.filters !== undefined || name === 'Sort' && Array.isArray(next.result.view.sort) && next.result.view.sort.length || name === 'Group' && next.result.view.groupBy !== undefined) node.classList.add('is-active');
       actions.append(node);
     }
-    if (options.onSearch) { const node = button(doc, '', () => { if (!searchRow.hidden) { closeSearch(); return; } searchRow.hidden = false; searchInput.value = state?.search ?? ''; node.classList.add('is-active'); searchInput.focus(); searchInput.select(); }, 'Search'); node.className = 'bases-toolbar-action'; node.title = 'Search'; node.append(icon('search',16,doc)); node.classList.toggle('is-active',!searchRow.hidden); actions.append(node); }
-    if (!next.readOnly) { const node = button(doc, '', () => open('View settings',node), 'Settings'); node.className = 'bases-toolbar-action bases-toolbar-settings'; node.title = 'Settings'; node.dataset.toolbarAction='settings'; node.setAttribute('aria-haspopup','dialog'); node.append(icon('sliders-horizontal',16,doc)); actions.append(node); }
+    if (options.onSearch) { const node = button(doc, '', () => { if (!searchRow.hidden) { closeSearch(); return; } searchRow.hidden = false; searchInput.value = state?.search ?? ''; node.classList.add('is-active'); searchInput.focus(); searchInput.select(); }, 'Search'); node.className = 'bases-toolbar-action'; node.dataset.baseTooltip = 'Search'; node.append(icon('search',16,doc)); node.classList.toggle('is-active',!searchRow.hidden); actions.append(node); }
+    if (!next.readOnly) { const node = button(doc, '', () => open('View settings',node), 'Settings'); node.className = 'bases-toolbar-action bases-toolbar-settings'; node.dataset.baseTooltip = 'Settings'; node.dataset.toolbarAction='settings'; node.setAttribute('aria-haspopup','dialog'); node.append(icon('sliders-horizontal',16,doc)); actions.append(node); }
     if (!next.readOnly && options.onNew) { const node = button(doc, '', () => { try { options.preflight('new'); if (hasDraft()) throw new Error('Finish the current changes first.'); node.disabled = true; void options.onNew!().catch(report).finally(() => { if (!destroyed) node.disabled = false; }); } catch (error) { report(error); } }, 'New'); node.className = 'bases-toolbar-action bases-toolbar-new'; node.append(icon('plus',16,doc),doc.createTextNode('New')); actions.append(node);
-      if(options.commands?.updateRoot){node.classList.add('has-options');const more=button(doc,'',()=>open('New item settings',more),'New item options');more.className='bases-toolbar-action bases-toolbar-new-options';more.title='New item options';more.setAttribute('aria-haspopup','dialog');more.append(icon('down',14,doc));actions.append(more);}
+      if(options.commands?.updateRoot){node.classList.add('has-options');const more=button(doc,'',()=>open('New item settings',more),'New item options');more.className='bases-toolbar-action bases-toolbar-new-options';more.dataset.baseTooltip='New item options';more.setAttribute('aria-haspopup','dialog');more.append(icon('down',14,doc));actions.append(more);}
     }
     if (focusedLabel) Array.from(actions.querySelectorAll<HTMLButtonElement>('button')).find(node => node.getAttribute('aria-label') === focusedLabel)?.focus({ preventScroll: true });
   }

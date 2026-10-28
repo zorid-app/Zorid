@@ -33,6 +33,7 @@ import './canvas/markdown-card.css';
 import './canvas/attachment-card.css';
 import './canvas/embed-preview.css';
 import './bases/session.css';
+import './bases/tooltips.css';
 import './bases/property-widgets.css';
 import './bases/property-settings-panel.css';
 import './bases/table-view.css';
