@@ -1,4 +1,4 @@
-import { baseRowOpenWitness, disposePresentationResources, reportPresentationError, mountBaseProperty, propertyValue, displaySharedBaseValue, sameBasePresentationGroup, sharedBaseGroupKeyId } from './presentation-common.ts';
+import { basePresentationProperties, baseRowOpenWitness, disposePresentationResources, reportPresentationError, mountBaseProperty, propertyValue, displaySharedBaseValue, sameBasePresentationGroup, sharedBaseGroupKeyId } from './presentation-common.ts';
 import type { BaseCardsViewOptions } from './cards-view.ts';
 import { baseCardsSettings } from './cards-view.ts';
 import type { BasePresentationOptions } from './presentation-common.ts';
@@ -492,7 +492,7 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
       } else groups = result.groupOptions.filter(option => option.listed).map(option =>
         queryGroups.find(group => group.key && matchesBaseGroupKey(option.key, group.key)) ?? { ...option, rows: [] });
     } else groups = result.shared !== undefined ? queryGroups : [...queryGroups.filter(group => group.key?.type === 'null'), ...queryGroups.filter(group => group.key?.type !== 'null')];
-    properties = result.properties;
+    properties = basePresentationProperties(result.properties, options.pageTitleProperty);
     width = typeof result.view.columnWidth === 'number' && Number.isFinite(result.view.columnWidth) ? Math.max(200, Math.min(500, result.view.columnWidth)) : 276;
     const settings = baseCardsSettings(result);
     const coverHeight = settings.image ? (width - 16) * (typeof result.view.imageAspectRatio === 'number' && result.view.imageAspectRatio > 0 ? settings.imageAspectRatio : .5) : 0;

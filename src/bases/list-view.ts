@@ -1,5 +1,5 @@
 import type { BaseQueryResult, BaseQueryRow } from './query.ts';
-import { baseRowOpenWitness, createBaseVirtualSurface, createGroupUnit, disposePresentationResources, emptyListValue, groupIdentity, mountBaseProperty, propertyValue, reportPresentationError } from './presentation-common.ts';
+import { basePresentationProperties, baseRowOpenWitness, createBaseVirtualSurface, createGroupUnit, disposePresentationResources, emptyListValue, groupIdentity, mountBaseProperty, propertyValue, reportPresentationError } from './presentation-common.ts';
 import type { BasePresentationHandle, BasePresentationOptions, VirtualUnit } from './presentation-common.ts';
 import { icon } from '../ui/icons.ts';
 
@@ -114,6 +114,7 @@ export function createBaseListView(container: HTMLElement, options: BaseListView
   };
   const surface = createBaseVirtualSurface(container, `bases-list-container${options.showIndentationGuides ? ' show-indentation-guide' : ''}`, () => {
     const snapshot = result; const settings = baseListSettings(snapshot); const units: VirtualUnit[] = [];
+    const orderedProperties = settings.indentProperties ? snapshot.properties : basePresentationProperties(snapshot.properties, options.pageTitleProperty);
     rowTargets = []; let offset = 0;
     const append = (unit: VirtualUnit) => { units.push(unit); offset += unit.height; };
     snapshot.groups.forEach((group, groupIndex) => {
@@ -125,8 +126,8 @@ export function createBaseListView(container: HTMLElement, options: BaseListView
       let number = 0;
       group.rows.forEach(row => {
         // An indented row's first configured property is its parent; absent parents suppress the entire row.
-        if (settings.indentProperties && (!snapshot.properties.length || emptyListValue(propertyValue(row, snapshot.properties[0])))) return;
-        const properties = snapshot.properties.filter(property => !emptyListValue(propertyValue(row, property)));
+        if (settings.indentProperties && (!orderedProperties.length || emptyListValue(propertyValue(row, orderedProperties[0])))) return;
+        const properties = orderedProperties.filter(property => !emptyListValue(propertyValue(row, property)));
         if (!properties.length) return;
         const index = ++number, position = rowTargets.length; rowTargets.push({ path: row.path, offset });
         append({ key: `list:${groupIndex}:${row.path}`, height: settings.indentProperties ? properties.length * 28 : 32,

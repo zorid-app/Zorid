@@ -19,6 +19,9 @@ export function baseRowOpenWitness(row: BaseQueryRow): BaseRowOpenWitness | unde
 }
 export interface BasePresentationOptions {
   readonly result: BaseQueryResult;
+  /** Collection page identity stays primary in page-like layouts after column reordering.
+   * The preferred property is never added if the view has hidden it. */
+  readonly pageTitleProperty?: string;
   readonly openFile: (path: string, event: MouseEvent | KeyboardEvent, witness?: BaseRowOpenWitness) => void;
   /** New interactions only; existing drafts retain their original guards. */
   readonly canBeginPropertyEdit?: () => boolean;
@@ -33,6 +36,11 @@ export interface BasePresentationOptions {
   readonly onError?: (error: unknown) => void;
   /** Structural view switches must wait until all drafts and in-flight primitive writes settle. */
   readonly onEditStateChange?: (active: boolean) => void;
+}
+/** Presentation order only; saved/query column order remains authoritative and unchanged. */
+export function basePresentationProperties(properties: readonly string[], pageTitleProperty?: string): readonly string[] {
+  const index = pageTitleProperty === undefined ? -1 : properties.indexOf(pageTitleProperty);
+  return index > 0 ? [properties[index], ...properties.slice(0, index), ...properties.slice(index + 1)] : properties;
 }
 export interface BasePresentationHandle {
   update(result: BaseQueryResult): void;
