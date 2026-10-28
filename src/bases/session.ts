@@ -5,6 +5,7 @@ import type { BaseViewSource,BaseViewConfig } from './document.ts';
 import { mountSourceChooser, mountCollectionEditor, mountCollectionPropertyPicker, collectionPropertyDefinitions, collectionValue } from '../databases/collection-ui.ts';
 import type { SourceChooser, CollectionEditor } from '../databases/collection-ui.ts';
 import {planCollectionEntryCreation} from '../databases/creation.ts';
+import {collectionClipboardValue} from '../databases/collection-clipboard.ts';
 import {prepareCollectionOptionCreation} from '../databases/collection-option-creation.ts';
 import type {CollectionOptionCreation} from '../databases/collection-option-creation.ts';
 import type { DatabaseCollection, DatabaseEntry, DatabaseRequest } from '../core/databases.ts';
@@ -1069,7 +1070,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       }),
       } : {}),
       isPropertyEditable: (property: string) => { try { assertPropertyWritable(property); return writable; } catch { return false; } },
-      validatePropertyValue: (value: import('./expression.ts').BaseExpressionValue, property: string) => { assertPropertyWritable(property); return value; },
+      validatePropertyValue: (value: import('./expression.ts').BaseExpressionValue, property: string) => { assertPropertyWritable(property); return source.kind==='collection'&&collection?collectionClipboardValue(collection,property,value):value; },
       parsePropertyInput: (raw: string, property: string, row: import('./query.ts').BaseQueryRow) => parseBasePropertyInput(raw, definitions.properties[basePropertyName(property)] ?? inferBasePropertyDefinition(row.values[property] ?? { type: 'null' }), row.values[property]),
       ...(writable ? {
         ...(options.deleteFiles ? { deleteFiles: (rows: readonly import('./query.ts').BaseQueryRow[]) => track(async () => {

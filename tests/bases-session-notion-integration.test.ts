@@ -105,3 +105,14 @@ for(const existingGroup of [false,true])test(`Board uses an existing Status by d
   assert.equal((await f.saved()).views[1].type,'table');assert.deepEqual(f.errors,[]);
  }finally{await f.close();}
 });
+
+for(const valid of [true,false])test(`typed collection TSV paste validates the whole range before mutation: ${valid}`,async()=>{
+ const f=await fixture();try{
+  f.cell(score).focus();f.cell(score).dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'ArrowRight',shiftKey:true,bubbles:true,cancelable:true}));
+  const paste=new f.dom.window.Event('paste',{bubbles:true,cancelable:true});
+  Object.defineProperty(paste,'clipboardData',{value:{getData:(type:string)=>type==='text/plain'?`${valid?'6':'invalid'}\tPasted`:''}});
+  f.doc.activeElement!.dispatchEvent(paste);
+  if(valid){await until(()=>f.requests.some(request=>request.op==='set_entry'));const command=f.requests.find(request=>request.op==='set_entry');assert.ok(command?.op==='set_entry');assert.deepEqual(command.values,{[score]:6,[notes]:'Pasted'});await until(()=>!f.session.hasPendingChanges());assert.deepEqual(f.errors,[]);assert.match(await f.adapter.read('One.md'),/Exact body\.\n$/);}
+  else{await tick();await tick();assert.equal(f.requests.filter(request=>request.op==='set_entry').length,0);assert.ok(f.errors.some(error=>/valid number/i.test(String(error))));assert.match(await f.adapter.read('One.md'),/Score: 1/);}
+ }finally{await f.close();}
+});
