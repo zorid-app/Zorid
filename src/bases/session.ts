@@ -267,7 +267,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   const unavailableCard=doc.createElement('section');unavailableCard.className='bases-source-unavailable';unavailableCard.setAttribute('aria-label','Collection in Trash');unavailableCard.hidden=true;
   const unavailableMessage=doc.createElement('p'),unavailableActions=doc.createElement('div');unavailableCard.append(unavailableMessage,unavailableActions);
   const restoreRecovery=doc.createElement('div');restoreRecovery.className='collection-restore-recovery';restoreRecovery.hidden=true;
-  root.append(toolbar, sourceBar, sourcePanel, unavailableCard, restoreRecovery, content, status); container.append(root);
+  root.append(sourceBar, toolbar, sourcePanel, unavailableCard, restoreRecovery, content, status); container.append(root);
   const tooltips = mountBaseTooltips(root);
   let disposed = false, closing = false, mounted: MountedView | undefined, mountedType: string | undefined;
   let mountedResult: BaseQueryResult | undefined, renderingResult: BaseQueryResult | undefined, deferred: BaseControllerState | undefined;
@@ -509,7 +509,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     const editingCollection=collection;
     collectionEditor=mountCollectionEditor(sourcePanel,{service:databaseService,collection:editingCollection,entries:[...collectionEntries.values()],propertyId,
       isCurrent:()=>!disposed&&!closing&&currentViewSource().kind==='collection'&&(currentViewSource() as {id:string}).id===editingCollection.id,
-      onSaved:async()=>{await options.vault.reload();await loadDefinitions();await controller.refresh();},
+      onSaved:async()=>{await options.vault.reload();await loadDefinitions();await controller.refresh();await loadDefinitions();},
       onClose:()=>{collectionEditor?.destroy();collectionEditor=undefined;schedule();}});
   }
   function addCollectionProperty(anchor:HTMLElement):void {
@@ -522,7 +522,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     collectionEditor=mountCollectionPropertyPicker(sourcePanel,{service:databaseService,collection:editingCollection,anchor,
       isCurrent:ownerCurrent,
       onSaved:async saved=>{
-        await options.vault.reload();await loadDefinitions();await controller.refresh();
+        await options.vault.reload();await loadDefinitions();await controller.refresh();await loadDefinitions();
         if(!visibilityOwnerCurrent()){
           notice='Property added. The original view changed; choose its visibility in Settings.';renderStatus(controller.state);return;
         }
@@ -558,7 +558,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       completed.push(signature);
     }
     for(const signature of completed)collectionMutations.delete(signature);
-    await options.vault.reload();await loadDefinitions();await controller.refresh();
+    await options.vault.reload();await loadDefinitions();await controller.refresh();await loadDefinitions();
   }
   const editCollectionProperty=(edit:Parameters<typeof actions.editProperty>[0])=>editCollectionProperties([edit]);
   const editProperty=(edit:Parameters<typeof actions.editProperty>[0])=>collectionMode()?editCollectionProperty(edit):Promise.reject(new Error('Vault note views are browsing only. Open the note to edit its properties.'));
@@ -764,16 +764,16 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       try{response=await databaseService.request(request);}
       catch(failure){
         const rejection=failure as {source?:unknown;commitUncertain?:unknown};
-        if(rejection?.source==='host'&&rejection.commitUncertain===false){pendingCollectionCreate=undefined;pendingCollectionCreateOwner=undefined;try{await options.vault.reload();await loadDefinitions();await controller.refresh();}catch{/* Keep the original definitive rejection visible. */}}
+        if(rejection?.source==='host'&&rejection.commitUncertain===false){pendingCollectionCreate=undefined;pendingCollectionCreateOwner=undefined;try{await options.vault.reload();await loadDefinitions();await controller.refresh();await loadDefinitions();}catch{/* Keep the original definitive rejection visible. */}}
         throw failure;
       }
       alive();
       const entry=response.entries.find(entry=>request.op==='create_entry'&&entry.entryId===request.entryId);
       if(!entry||entry.pendingProjection)throw new Error('The entry is committed locally but its note still needs publication. Use New again to retry.');
       pendingCollectionCreate=undefined;pendingCollectionCreateOwner=undefined;
-      await options.vault.reload();await loadDefinitions();await controller.refresh();
+      await options.vault.reload();await loadDefinitions();await controller.refresh();await loadDefinitions();
       notice=controller.state.result&&!controller.state.result.rows.some(row=>row.entryId===entry.entryId)?'Created entry is not shown in the current results.':undefined;renderStatus(controller.state);
-      if(inline&&controller.selectedViewIdentity===creatingViewId&&controller.selectedViewIndex===creatingIndex&&controller.state.source===creatingSource){
+      if(inline&&options.buffers?.rename&&controller.selectedViewIdentity===creatingViewId&&controller.selectedViewIndex===creatingIndex&&controller.state.source===creatingSource){
         const result=controller.state.result;
         if(result?.rows.some(row=>row.entryId===entry.entryId)&&result.properties.some(property=>property==='file.name'||property==='file.file'))return{path:entry.path,entryId:entry.entryId};
       }
@@ -862,8 +862,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   function renderSourceBar(source:BaseViewSource):void{
     sourceBar.replaceChildren();
     const sourceButton=doc.createElement('button');sourceButton.type='button';sourceButton.className='collection-source-button';sourceButton.textContent=sourceUnavailable()?'Choose another source':source.kind==='untyped'?'Notes in your vault':collection?.name??'Collection';sourceButton.setAttribute('aria-label','Change view source');
-    sourceButton.disabled=!!options.readOnly;sourceButton.onclick=()=>{const repair=sourceUnavailable()?deletedConfigurationRead:undefined;if(activeDraft()){report(new Error('Finish or cancel the current edit first.'));return;}void chooseSource(async next=>{await saveConfigurationCommand(()=>repair?controller.repairViewSource(repair,next):controller.setViewSource(controller.state.version,selectedIndex,next));}).catch(report);};sourceBar.append(sourceButton);
-    if(source.kind==='collection'&&collection&&!collection.deleted&&!options.readOnly){const configure=doc.createElement('button');configure.type='button';configure.textContent='Add property';configure.onclick=()=>{try{addCollectionProperty(configure);}catch(failure){report(failure);}};sourceBar.append(configure);}
+    sourceButton.disabled=!!options.readOnly;sourceButton.setAttribute('aria-haspopup','dialog');sourceButton.dataset.baseTooltip='Change data source';sourceButton.onclick=()=>{const repair=sourceUnavailable()?deletedConfigurationRead:undefined;if(activeDraft()){report(new Error('Finish or cancel the current edit first.'));return;}void chooseSource(async next=>{await saveConfigurationCommand(()=>repair?controller.repairViewSource(repair,next):controller.setViewSource(controller.state.version,selectedIndex,next));}).catch(report);};sourceBar.append(sourceButton);
     if(source.kind==='collection'&&databaseService&&!options.readOnly&&sourceUnavailable()&&!pendingCollectionRestore&&collection){
       const restoringCollection=collection;
       const restore=doc.createElement('button');restore.type='button';restore.textContent='Restore collection';restore.dataset.collectionRestore='';restore.disabled=!!pending.size;
@@ -890,7 +889,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         if(reply.projection.pending||reply.projection.issues.length)throw new Error('Some collection files still need publication. Retry Restore.');
         pendingCollectionRestore=undefined;
       }catch(failure){const rejection=failure as {source?:unknown;commitUncertain?:unknown};if(rejection?.source==='host'&&rejection.commitUncertain===false)pendingCollectionRestore=undefined;throw failure;}
-      await options.vault.reload();await loadDefinitions();await controller.refresh();
+      await options.vault.reload();await loadDefinitions();await controller.refresh();await loadDefinitions();
     }).catch(()=>{/* track retains the action failure. */});
   }
 
@@ -920,7 +919,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
           toolbar.hidden=true;sourceBar.hidden=true;
           if(pending.size||toolbarUI.hasDraft()){deferred=state;return;}
           mounted?.destroy();mounted=undefined;mountedResult=undefined;content.replaceChildren();
-          if(!chooser)void chooseSource(async source=>{await saveConfigurationCommand(()=>controller.addView(controller.state.version,'table','View',{source}));},false);
+          if(!chooser)void chooseSource(async source=>{await saveConfigurationCommand(()=>controller.addView(controller.state.version,'table','Table',{source}));},false);
         }
       } catch(failure) { report(failure); }
       return;
@@ -948,7 +947,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     // Toolbar rebases its own in-flight configuration without replacing row drafts.
     if (pending.size || activeDraft()) { deferred = state; return; }
     deferred = undefined;
-    if (mountedResult === result && mountedDefinitionsRevision === definitionsRevision) return;
+    if (mountedResult === result && mountedDefinitionsRevision === definitionsRevision && mountedWritable === writable) return;
     rememberWidgetResult(result, state.source);
     const acknowledgeWidget = (original: BasePropertyPresentation, savedValue?: import('./expression.ts').BaseExpressionValue): BasePropertyWidgetAcknowledgement | undefined => {
       const before = widgetResults.get(original.version), latest = controller.state.result;
@@ -1088,7 +1087,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
               const slash=edit.path.lastIndexOf('/'),extension=/\.[^/.]+$/.exec(edit.path)?.[0]??'';
               if(!edit.name||/[\\/:\u0000-\u001f]/.test(edit.name)||edit.name==='.'||edit.name==='..')throw new Error('Enter a name without path separators.');
               const destination=`${slash<0?'':edit.path.slice(0,slash+1)}${edit.name}${extension}`;
-              await controller.renameFile(numericVersion(edit.version),edit.path,destination);return{path:destination};
+              await controller.renameFile(numericVersion(edit.version),edit.path,destination);await loadDefinitions();return{path:destination};
             })}:{})
           }:{})}); break;
           case 'cards': mounted = createBaseCardsView(content, { ...shared, loadThumbnail: options.loadThumbnail }); break;

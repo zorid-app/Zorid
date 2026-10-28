@@ -1425,11 +1425,11 @@ export class Workspace {
       getBuffer:async(target,admit)=>{validate();admit();if(!isMarkdown(target.path))return undefined;const buffer=await this.baseBufferFor(target.path,()=>{validate();admit();});admit();return buffer;},
       mount:(content,context)=>this.mountBaseFileHover(content,context,owner,validate),
       onError:error=>notice(error instanceof Error?error.message:String(error))});
-    let captured=inline;const inlineOwner={};
+    let captured=inline;const inlineOwner={},inlineEntryId=inline?vault.entries.get(path)?.entryId:undefined;
     let inlineRetry:(()=>Promise<void>)|undefined,inlineRetryAvailable=()=>false;
     const inlineSource=inline?{
       captureSaveRetry:()=>inlineRetryAvailable()?inlineRetry:undefined,
-      read:async()=>{validate();const request=captured!;const source=await vault.read(path);validate();if(source!==request.documentText)throw new Error('The containing note changed. Refresh this embedded Base.');return{source:request.source,startByte:new TextEncoder().encode(source.slice(0,request.from)).length,endByte:new TextEncoder().encode(source.slice(0,request.to)).length};},
+      read:async()=>{validate();const request=captured!;const source=await vault.read(path);validate();if(source!==request.documentText)throw new Error('The containing note changed. Refresh this embedded Base.');const entry=vault.adapter.stat?await vault.adapter.stat(path):vault.entries.get(path);validate();if(captured!==request||!entry?.entryId||!entry.revision||inlineEntryId&&entry.entryId!==inlineEntryId)throw new Error('The containing note identity changed. Refresh this embedded Base.');return{source:request.source,startByte:new TextEncoder().encode(source.slice(0,request.from)).length,endByte:new TextEncoder().encode(source.slice(0,request.to)).length,witness:{entryId:entry.entryId,revision:entry.revision}};},
       transform:async(expected:string,next:string,validateSelection:()=>void)=>{
         validate();validateSelection();const request=captured!;
         if(expected!==request.source&&next!==request.source)throw new Error('The fenced Base configuration changed.');
@@ -1677,13 +1677,24 @@ export class Workspace {
     const current=this.baseNewItem;if(!current)return false;
     await current.close();return true;
   }
-  private openBaseNewItem(path:string,anchor:HTMLElement,ownershipHost:HTMLElement=anchor,existing=false,expectedWitness?:{entryId:string;revision:string}):Promise<void>{
-    if(this.baseNewItemOpening)return this.baseNewItemOpening.then(()=>this.openBaseNewItem(path,anchor,ownershipHost,existing,expectedWitness));
+  private openBaseNewItem(path:string,anchor:HTMLElement,ownershipHost:HTMLElement=anchor,existing=false,expectedWitness?:{entryId:string;revision:string},openingOwner?:{current():boolean;release():void}):Promise<void>{
+    if(!openingOwner){
+      const pane=this.activePane,activation=this.paneActivationRevision,navigation=this.navigationIntent.get(pane),version=pane.renderVersion;
+      const doc=anchor.ownerDocument,win=doc.defaultView,focused=doc.activeElement;let retired=false;
+      const retire=()=>{retired=true;},focus=(event:FocusEvent)=>{if(event.target!==focused)retire();};
+      doc.addEventListener('pointerdown',retire,true);doc.addEventListener('focusin',focus,true);win?.addEventListener('blur',retire);
+      openingOwner={current:()=>!retired&&ownershipHost.isConnected&&this.activePane===pane&&this.panes.includes(pane)&&this.paneActivationRevision===activation&&this.navigationIntent.get(pane)===navigation&&pane.renderVersion===version,
+        release:()=>{doc.removeEventListener('pointerdown',retire,true);doc.removeEventListener('focusin',focus,true);win?.removeEventListener('blur',retire);}};
+    }
+    const owner=openingOwner;
+    if(this.baseNewItemOpening)return this.baseNewItemOpening.then(()=>this.openBaseNewItem(path,anchor,ownershipHost,existing,expectedWitness,owner)).finally(owner.release);
     const vault=this.vault,generation=this.vaultGeneration;
     const opening=Promise.resolve().then(async()=>{
+      if(!owner.current())return;
       const validateOpening=()=>{const entry=vault.entries.get(path);if(vault!==this.vault||generation!==this.vaultGeneration||expectedWitness&&(entry?.entryId!==expectedWitness.entryId||entry.revision!==expectedWitness.revision))throw new Error('The page changed before its preview could open.');};
       validateOpening();
       await this.baseNewItem?.close();
+      if(!owner.current())return;
       validateOpening();
       let disposed=false,buffer:NoteBuffer|undefined;
       const validate=()=>{
@@ -1691,6 +1702,7 @@ export class Workspace {
         if(buffer&&(this.buffers.get(buffer.path)!==buffer||vault.entries.get(buffer.path)?.type!=='file'))throw new Error('The new-item note changed. Its draft is retained.');
       };
       buffer=await this.baseBufferFor(path,validate);validate();
+      if(!owner.current())return;
       const shared=buffer,entryId=shared.savedDurableWitness?.entryId??vault.entries.get(path)?.entryId;
       const validateFile=()=>{validate();const token=this.treeEntryToken(shared.path);if(!token||this.bufferEntries.get(shared)!==token||entryId&&vault.entries.get(shared.path)?.entryId!==entryId)throw new Error('The new-item note was replaced. Its draft is retained.');};
       const recovery=el('div','bases-new-item-embed-recovery');
@@ -1751,7 +1763,7 @@ export class Workspace {
       }catch(error){if(popup?.element.isConnected){this.baseNewItem=popup;this.baseNewItemAnchor=ownershipHost;throw error;}cleanup();await sessions.close();throw error;}
     });
     this.baseNewItemOpening=opening;
-    const clear=()=>{if(this.baseNewItemOpening===opening)this.baseNewItemOpening=undefined;};void opening.then(clear,clear);
+    const clear=()=>{owner.release();if(this.baseNewItemOpening===opening)this.baseNewItemOpening=undefined;};void opening.then(clear,clear);
     return opening;
   }
 

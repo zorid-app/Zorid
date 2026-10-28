@@ -11,6 +11,7 @@ import { MemoryAdapter } from '../src/core/memory-adapter.ts';
 import type { VaultEntry } from '../src/core/types.ts';
 import { BaseDocument } from '../src/bases/document.ts';
 import type { BaseSessionOptions } from '../src/bases/session.ts';
+import {createBaseSession} from '../src/bases/session.ts';
 
 const invalid = '# user comment\npluginRoot: {quoted: "001", unknown: [one, two]}\nviews:\n  - type: table\n    name: [broken\n';
 const repaired = '# user comment\npluginRoot: {quoted: "001", unknown: [one, two]}\nfilters: file.name == "One"\nviews:\n  - type: table\n    name: Repaired\n    order: [file.name, status]\n';
@@ -85,6 +86,36 @@ test('slash database full page leaves the command available after a create failu
   assert.equal(f.workspace.activePane.viewPath,'One.md');f.adapter.write=write;
   await f.editorOptions.get(handle)!.onCreateDatabase!({layout:'table',mode:'page',view,from:0,to:9,isCurrent:()=>view.state.doc===captured});
   assert.equal((await f.adapter.list()).filter(entry=>entry.path.endsWith('.base')&&entry.path!=='Invalid.base').length,1,'retry reconciles the original create');
+});
+
+for(const leave of ['focus','navigation','window'] as const)test(`page peek retires slow opening after newer ${leave}`,async t=>{
+  const f=await setup(t);await f.workspace.openNote('One.md');
+  const anchor=document.createElement('button');anchor.textContent='Open page';f.root.append(anchor);anchor.focus();
+  const outside=document.createElement('button');outside.textContent='Other action';document.body.append(outside);
+  const owner=f.workspace as any,load=owner.baseBufferFor.bind(owner);let started=false,release!:()=>void;
+  const gate=new Promise<void>(resolve=>{release=resolve;});
+  owner.baseBufferFor=async(...args:unknown[])=>{started=true;await gate;return load(...args);};
+  const entry=f.workspace.vault.entries.get('Other.md')!;
+  const pending=owner.openBaseNewItem('Other.md',anchor,f.root,true,{entryId:entry.entryId,revision:entry.revision});
+  await until(()=>started,'page opening reaches shared buffer load');
+  if(leave==='focus')outside.focus();
+  else if(leave==='navigation')await f.workspace.openNote('Other.md');
+  else window.dispatchEvent(new window.Event('blur'));
+  release();await pending;owner.baseBufferFor=load;
+  assert.equal(document.querySelector('[aria-label="Page preview"]'),null,'retired preview never mounts over newer work');
+  if(leave==='focus')assert.equal(document.activeElement,outside);
+  outside.remove();anchor.remove();
+});
+
+test('inline database source reads carry the saved containing-note witness and retire replacements',async t=>{
+  const captures:BaseSessionOptions[]=[];
+  const f=await setup(t,(host,options)=>{captures.push(options);return createBaseSession(host,options);});
+  await f.adapter.write('Other.md','```base\nviews: []\n```\n');await f.workspace.vault.reload();await f.workspace.openNote('Other.md');
+  await until(()=>captures.some(options=>!!options.inlineSource),'inline database session mounts');
+  const source=captures.find(options=>options.inlineSource)!.inlineSource!,read=await source.read(),entry=(await f.adapter.stat('Other.md'))!;
+  assert.deepEqual(read.witness,{entryId:entry.entryId,revision:entry.revision});assert.equal(read.source,'views: []\n');
+  f.adapter.ids.set('Other.md','replacement-containing-note');await f.workspace.vault.reload();
+  await assert.rejects(source.read(),/changed|current|replaced/);
 });
 
 test('actual invalid Base UI exposes source repair, saves invalid YAML, then returns repaired source to the normal Base', async t => {

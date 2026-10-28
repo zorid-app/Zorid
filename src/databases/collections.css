@@ -1,4 +1,5 @@
-.collection-source-bar { display: flex; align-items: center; gap: 8px; padding: 5px 12px; color: var(--text-muted); }
+.collection-source-bar { display: flex; align-items: center; gap: 8px; padding: 8px 4px 4px; color: var(--text-normal); }
+.collection-source-bar .collection-source-button { font-size: 20px; font-weight: 600; line-height: 1.35; padding: 3px 4px; }
 .collection-source-bar button { padding: 5px 8px; background: transparent; border: 0; border-radius: 5px; color: inherit; cursor: pointer; }
 .collection-source-bar button:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
 .collection-source-chooser, .collection-property-editor { padding: 24px; max-width: 720px; margin: 16px auto; border: 1px solid var(--background-modifier-border); border-radius: 8px; background: var(--background-primary); }

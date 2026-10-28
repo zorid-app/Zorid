@@ -108,7 +108,7 @@ export function liveBases(render: InlineBaseRenderer, options: RenderExclusionOp
   });
   return [field, interaction, EditorView.baseTheme({
     '.cm-live-base': { position: 'relative' },
-    '.cm-live-base > .edit-block-button': { position: 'absolute', right: '6px', top: '6px', zIndex: '1', opacity: '0' },
+    '.cm-live-base > .edit-block-button': { position: 'absolute', left: '-28px', right: 'auto', top: '6px', width: '24px', padding: '4px', zIndex: '1', opacity: '0' },
     '.cm-live-base:hover > .edit-block-button, .cm-live-base:focus-within > .edit-block-button': { opacity: '1' },
   })];
 }
