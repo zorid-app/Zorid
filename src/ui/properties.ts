@@ -101,6 +101,8 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
   const rows = new Map<string, Row>(), selectedTypes = new Map<string, PropertyType>();
   let destroyed = false, pending = Promise.resolve(), addForm: HTMLElement | undefined, addingManagedProperty = false;
   let pendingGeneration=0,settledGeneration=0,mutationFailure:unknown,mutationFailureOwner:Row|undefined;
+  // A canceled search cannot establish the outcome of an uncertain schema write.
+  const retainedOptionFailures = new Map<Row, unknown>();
   function setPending(operation:Promise<void>):void {
     pending=operation;const generation=++pendingGeneration;
     const settled=()=>{settledGeneration=Math.max(settledGeneration,generation);};void operation.then(settled,settled);
@@ -230,7 +232,12 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
             definitionBaseline = JSON.stringify(accepted);
             return { version: 0, row: presentation.row, value: baseExpressionValue(current(options.getSource(), row).value) };
           });
-          setPending(operation.then(() => {}, problem => {mutationFailure=problem;mutationFailureOwner=row;})); return operation;
+          setPending(operation.then(() => {retainedOptionFailures.delete(row);}, problem => {
+            mutationFailure=problem;mutationFailureOwner=row;
+            const receipt=problem as {source?:unknown;commitUncertain?:unknown};
+            if(receipt?.source==='host'&&receipt.commitUncertain===false)retainedOptionFailures.delete(row);
+            else retainedOptionFailures.set(row,problem);
+          })); return operation;
         } } : {}),
         onError: problem => report(problem, row.error),
       });
@@ -589,15 +596,18 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
   const editObserver = document.defaultView?.MutationObserver ? new document.defaultView.MutationObserver(() => {
     if(destroyed)return;
     // A rich widget explicitly cancelling its failed draft removes its marker.
-    if(mutationFailureOwner&&!hasDraft(mutationFailureOwner)&&pendingGeneration===settledGeneration){mutationFailure=undefined;mutationFailureOwner=undefined;}
+    if(mutationFailureOwner&&!hasDraft(mutationFailureOwner)&&pendingGeneration===settledGeneration&&!retainedOptionFailures.has(mutationFailureOwner)){
+      error(mutationFailureOwner.error);mutationFailure=undefined;mutationFailureOwner=undefined;
+    }
     refresh();
   }) : undefined;
   editObserver?.observe(rowsContainer, { subtree: true, attributes: true, attributeFilter: ['data-base-editing'] });
   refresh();
-  const hasPendingChanges=()=>!destroyed&&(pendingGeneration!==settledGeneration||!!mutationFailure||!!addForm||[...rows.values()].some(hasDraft));
+  const hasPendingChanges=()=>!destroyed&&(pendingGeneration!==settledGeneration||!!mutationFailure||!!retainedOptionFailures.size||!!addForm||[...rows.values()].some(hasDraft));
   const flush=async()=>{
     if(destroyed)return;
     for(;;){const captured=pending;await captured;await Promise.resolve();if(captured===pending)break;}
+    if(retainedOptionFailures.size)throw retainedOptionFailures.values().next().value;
     if(mutationFailure)throw mutationFailure;
     const invalid=[...rows.values()].find(row=>hasDraft(row)&&!row.error.hidden&&!!row.error.textContent?.trim());
     if(invalid)throw new Error(invalid.error.textContent!);
@@ -611,6 +621,6 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
     document.removeEventListener('contextmenu', supersede, true); document.removeEventListener('keydown', keyboardSupersede, true);
     root.removeEventListener('contextmenu', contextMenu); root.removeEventListener('keydown', keyboardMenu);
     if (menuPending) void (options.dismissMenu ?? dismissContextMenu)(document).catch(problem => { try { options.onError?.(problem); } catch { /* The owner is already disposed. */ } });
-    menuPending = false; definitionLoad++; editObserver?.disconnect(); unsubscribers.forEach(unsubscribe => unsubscribe()); for (const row of rows.values()) row.disposeWidget?.(); rows.clear(); selectedTypes.clear(); root.remove();
+    menuPending = false; definitionLoad++; editObserver?.disconnect(); unsubscribers.forEach(unsubscribe => unsubscribe()); for (const row of rows.values()) row.disposeWidget?.(); rows.clear();retainedOptionFailures.clear(); selectedTypes.clear(); root.remove();
   } };
 }
