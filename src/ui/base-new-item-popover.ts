@@ -86,7 +86,7 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
   const closeButton = sidePeek ? document.createElement('button') : undefined;
   if (closeButton) {
     const header = document.createElement('div'); header.className = 'bases-page-peek-header';
-    closeButton.type = 'button'; closeButton.className = 'clickable-icon'; closeButton.setAttribute('aria-label', 'Close preview'); closeButton.append(icon('x', 16, document));
+    closeButton.type = 'button'; closeButton.className = 'clickable-icon'; closeButton.setAttribute('aria-label', 'Close preview'); closeButton.append(icon('close', 16, document));
     header.append(closeButton, open); root.append(header);
   }
   const error = document.createElement('div'); error.className = 'bases-new-item-error'; error.setAttribute('role', 'alert'); error.hidden = true;
