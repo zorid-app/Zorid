@@ -102,7 +102,11 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
   let destroyed = false, pending = Promise.resolve(), addForm: HTMLElement | undefined, addingManagedProperty = false;
   let pendingGeneration=0,settledGeneration=0,mutationFailure:unknown,mutationFailureOwner:Row|undefined;
   // A canceled search cannot establish the outcome of an uncertain schema write.
-  const retainedOptionFailures = new Map<Row, unknown>();
+  const retainedOptionFailures = new Map<Row, Map<string, unknown>>();
+  const clearOptionFailure = (row: Row, label: string) => {
+    const failures=retainedOptionFailures.get(row);failures?.delete(label);
+    if(!failures?.size)retainedOptionFailures.delete(row);
+  };
   function setPending(operation:Promise<void>):void {
     pending=operation;const generation=++pendingGeneration;
     const settled=()=>{settledGeneration=Math.max(settledGeneration,generation);};void operation.then(settled,settled);
@@ -232,11 +236,14 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
             definitionBaseline = JSON.stringify(accepted);
             return { version: 0, row: presentation.row, value: baseExpressionValue(current(options.getSource(), row).value) };
           });
-          setPending(operation.then(() => {retainedOptionFailures.delete(row);}, problem => {
+          setPending(operation.then(() => {clearOptionFailure(row,value);}, problem => {
             mutationFailure=problem;mutationFailureOwner=row;
             const receipt=problem as {source?:unknown;commitUncertain?:unknown};
-            if(receipt?.source==='host'&&receipt.commitUncertain===false)retainedOptionFailures.delete(row);
-            else retainedOptionFailures.set(row,problem);
+            if(receipt?.source==='host'&&receipt.commitUncertain===false)clearOptionFailure(row,value);
+            else {
+              const failures=retainedOptionFailures.get(row)??new Map<string,unknown>();
+              failures.set(value,problem);retainedOptionFailures.set(row,failures);
+            }
           })); return operation;
         } } : {}),
         onError: problem => report(problem, row.error),
@@ -607,7 +614,7 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
   const flush=async()=>{
     if(destroyed)return;
     for(;;){const captured=pending;await captured;await Promise.resolve();if(captured===pending)break;}
-    if(retainedOptionFailures.size)throw retainedOptionFailures.values().next().value;
+    for(const failures of retainedOptionFailures.values())if(failures.size)throw failures.values().next().value;
     if(mutationFailure)throw mutationFailure;
     const invalid=[...rows.values()].find(row=>hasDraft(row)&&!row.error.hidden&&!!row.error.textContent?.trim());
     if(invalid)throw new Error(invalid.error.textContent!);
