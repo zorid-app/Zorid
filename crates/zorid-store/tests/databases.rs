@@ -831,6 +831,261 @@ fn external_type_label_edit_is_projection_mismatch_without_membership_change() {
 }
 
 #[test]
+fn additive_options_preserve_nullable_multiselect_shapes() {
+    for target in 0..2 {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+        let mut store = Store::open(&path).unwrap();
+        let (collection, entries) = nullable_multiselect_fixture(&mut store, false);
+        let before = entries
+            .iter()
+            .map(|entry| {
+                store
+                    .read(&entry.entry_id)
+                    .unwrap()
+                    .unwrap()
+                    .content
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let mut fields = input(&collection);
+        fields[target]["options"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"name":"Green"}));
+        let changed = update(
+            &mut store,
+            &collection,
+            &collection.name,
+            fields.clone(),
+            false,
+        );
+        let next = &changed.collections[0];
+        assert_ne!(next.revision, collection.revision);
+        let created_id = &next.properties[target].options.last().unwrap().id;
+        assert!(!collection.properties[target]
+            .options
+            .iter()
+            .any(|option| &option.id == created_id));
+        let mut actual_fields = input(next);
+        actual_fields[target]["options"]
+            .as_array_mut()
+            .unwrap()
+            .last_mut()
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("id");
+        assert_eq!(actual_fields, fields, "old IDs and defaults remain exact");
+        for (index, original) in entries.iter().enumerate() {
+            let current = changed
+                .entries
+                .iter()
+                .find(|entry| entry.entry_id == original.entry_id)
+                .unwrap();
+            assert_eq!(
+                current.values, original.values,
+                "null, [] and selections stay distinct"
+            );
+            assert_eq!(current.path, original.path);
+            assert_eq!(
+                store
+                    .read(&current.entry_id)
+                    .unwrap()
+                    .unwrap()
+                    .content
+                    .as_ref(),
+                Some(&before[index]),
+                "schema updates cannot rewrite the note body or unrelated frontmatter"
+            );
+        }
+        drop(store);
+        let mut store = Store::open(&path).unwrap();
+        let reopened = get(&mut store, next);
+        assert_eq!(reopened.collections, changed.collections);
+        assert_eq!(reopened.entries, changed.entries);
+        let replay = serde_json::from_value(json!({
+            "op":"update", "operationId":format!("update-{}",collection.revision),
+            "collectionId":collection.id, "expectedRevision":collection.revision,
+            "name":collection.name, "properties":fields, "confirmDestructive":false
+        }))
+        .unwrap();
+        assert_eq!(store.database_request(&replay).unwrap(), changed);
+        let stale = serde_json::from_value(json!({
+            "op":"update", "operationId":"stale-nullable-schema", "collectionId":collection.id,
+            "expectedRevision":collection.revision, "name":"Stale rename", "properties":input(next)
+        }))
+        .unwrap();
+        assert!(store.database_request(&stale).is_err());
+        assert_eq!(get(&mut store, next), changed);
+    }
+}
+
+#[test]
+fn multiselect_option_removal_still_requires_confirmation() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path().join("db")).unwrap();
+    let (collection, entries) = nullable_multiselect_fixture(&mut store, true);
+    let before = get(&mut store, &collection);
+    let files = entries
+        .iter()
+        .map(|entry| store.read(&entry.entry_id).unwrap().unwrap())
+        .collect::<Vec<_>>();
+    let mut fields = input(&collection);
+    fields[0]["options"].as_array_mut().unwrap().remove(0);
+    let command = serde_json::from_value(json!({
+        "op":"update", "operationId":"remove-selected-tag", "collectionId":collection.id,
+        "expectedRevision":collection.revision, "name":collection.name, "properties":fields,
+        "confirmDestructive":false
+    }))
+    .unwrap();
+    assert!(store
+        .database_request(&command)
+        .unwrap_err()
+        .to_string()
+        .contains("1 affected"));
+    assert_eq!(
+        get(&mut store, &collection),
+        before,
+        "rejection rolls back schema and members"
+    );
+    for (index, entry) in entries.iter().enumerate() {
+        assert_eq!(store.read(&entry.entry_id).unwrap().unwrap(), files[index]);
+    }
+    let changed = update(&mut store, &collection, &collection.name, fields, true);
+    assert_eq!(
+        changed.collections[0].properties[0].id,
+        collection.properties[0].id
+    );
+    assert_eq!(
+        changed.collections[0].properties[0].options,
+        collection.properties[0].options[1..]
+    );
+    assert_eq!(
+        changed.collections[0].properties[0].default,
+        collection.properties[0].default
+    );
+    assert_eq!(
+        changed.collections[0].properties[1..],
+        collection.properties[1..]
+    );
+    for (index, original) in entries.iter().enumerate() {
+        let current = changed
+            .entries
+            .iter()
+            .find(|entry| entry.entry_id == original.entry_id)
+            .unwrap();
+        let mut values = original.values.clone();
+        if index == 2 {
+            values.insert(
+                collection.properties[0].id.clone(),
+                json!([collection.properties[0].options[1].id]),
+            );
+        }
+        assert_eq!(
+            current.values, values,
+            "only the selected removed ID is cleared"
+        );
+        assert_eq!(
+            store.read(&current.entry_id).unwrap().unwrap().content,
+            files[index].content
+        );
+    }
+}
+
+#[test]
+fn unrelated_schema_rename_preserves_null_multiselect() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path().join("db")).unwrap();
+    let (collection, entries) = nullable_multiselect_fixture(&mut store, false);
+    let original = &entries[0];
+    assert_eq!(original.values[&collection.properties[0].id], Value::Null);
+    let file = store.read(&original.entry_id).unwrap().unwrap();
+    let changed = update(
+        &mut store,
+        &collection,
+        "Renamed tags",
+        input(&collection),
+        false,
+    );
+    assert_eq!(changed.collections[0].name, "Renamed tags");
+    assert_eq!(changed.collections[0].properties, collection.properties);
+    let current = changed
+        .entries
+        .iter()
+        .find(|entry| entry.entry_id == original.entry_id)
+        .unwrap();
+    assert_eq!(current.values, original.values);
+    assert_eq!(
+        store.read(&current.entry_id).unwrap().unwrap().content,
+        file.content
+    );
+    assert_eq!(
+        store
+            .database_entry_projection(&current.entry_id)
+            .unwrap()
+            .unwrap()
+            .properties["_type"],
+        json!("Renamed tags")
+    );
+}
+
+fn nullable_multiselect_fixture(
+    store: &mut Store,
+    second_tag: bool,
+) -> (DatabaseCollection, Vec<DatabaseEntry>) {
+    let mut tags = vec![json!({"name":"Red"})];
+    if second_tag {
+        tags.push(json!({"name":"Green"}));
+    }
+    let collection = request(
+        store,
+        json!({
+            "op":"create", "operationId":"nullable-schema", "name":"Nullable tags",
+            "properties":[
+                {"name":"Tags", "datatype":"multi-select", "options":tags},
+                {"name":"Choice", "datatype":"select", "options":[{"name":"Blue"}]},
+                {"name":"Memo", "datatype":"text", "default":"Keep default"}
+            ]
+        }),
+    )
+    .collections
+    .remove(0);
+    let selected = collection.properties[0]
+        .options
+        .iter()
+        .map(|option| json!(option.id))
+        .collect::<Vec<_>>();
+    let mut entries = Vec::new();
+    for (index, value) in [Value::Null, json!([]), Value::Array(selected)]
+        .into_iter()
+        .enumerate()
+    {
+        let name = format!("shape-{index}");
+        let entry = request(store, json!({
+            "op":"create_entry", "operationId":format!("create-{name}"), "collectionId":collection.id,
+            "expectedCollectionRevision":collection.revision, "entryId":name, "path":format!("{name}.md"),
+            "body":"# Body\r\n\r\nKeep β exactly.\r\n",
+            "values":{
+                collection.properties[0].id.clone():value,
+                collection.properties[1].id.clone():collection.properties[1].options[0].id,
+                collection.properties[2].id.clone():"Memo unchanged"
+            }
+        })).entries.into_iter().find(|entry| entry.entry_id.as_str() == name).unwrap();
+        let content = publish(store, &entry, &format!("publish-{name}"));
+        assert!(content.ends_with("# Body\r\n\r\nKeep β exactly.\r\n"));
+        entries.push(
+            get(store, &collection)
+                .entries
+                .into_iter()
+                .find(|current| current.entry_id == entry.entry_id)
+                .unwrap(),
+        );
+    }
+    (collection, entries)
+}
+
+#[test]
 fn unrelated_schema_rename_keeps_incompatible_multiselect_scalar_without_confirmation() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = Store::open(dir.path().join("db")).unwrap();

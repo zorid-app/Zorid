@@ -1239,15 +1239,18 @@ fn execute(tx: &Connection, operation: &OperationId, request: &DatabaseRequest) 
                                 .is_some_and(|id| !replacement.options.iter().any(|o| o.id == id))
                         };
                         let cleared = if property.datatype == DatabaseDatatype::MultiSelect {
-                            Value::Array(
-                                value
-                                    .as_array()
-                                    .cloned()
-                                    .unwrap_or_default()
-                                    .into_iter()
-                                    .filter(|v| !removed(v))
-                                    .collect(),
-                            )
+                            // Empty/missing values are not option selections. Preserve
+                            // their null shape; only arrays can lose removed option IDs.
+                            match value.as_array() {
+                                Some(values) => Value::Array(
+                                    values
+                                        .iter()
+                                        .filter(|v| !removed(v))
+                                        .cloned()
+                                        .collect(),
+                                ),
+                                None => value.clone(),
+                            }
                         } else if removed(&value) {
                             Value::Null
                         } else {
