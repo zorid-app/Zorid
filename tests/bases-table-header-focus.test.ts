@@ -13,7 +13,7 @@ function fixture(extra: Partial<BaseTableOptions> = {}) {
   const result: BaseQueryResult = { version: 1, view: { type: 'table', name: 'Library', columnSize: { 'note.rating': 170 } }, rows, groups: [{ key: null, rows }], properties: ['note.rating', 'note.other'], availableProperties: [], groupOptions: [], diagnostics: [], counts: { scanned: 1, matched: 1, afterGroupOrder: 1, afterSearch: 1, returned: 1 } };
   const patches: BaseViewPatch[] = [];
   const table = createBaseTableView(main, { result, openFile() {}, patchView: async patch => { patches.push(patch); }, ...extra });
-  const header = (property = 'note.rating') => [...main.querySelectorAll<HTMLElement>('[role="columnheader"]')].find(cell => cell.title === property)!;
+  const header = (property = 'note.rating') => [...main.querySelectorAll<HTMLElement>('[role="columnheader"]')].find(cell => cell.dataset.property === property)!;
   const separator = (property = 'note.rating') => header(property).querySelector<HTMLElement>('[role="separator"]')!;
   const key = (key: string) => doc.activeElement!.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
   return { dom, doc, main, result, table, patches, header, separator, key, close() { table.destroy(); dom.window.close(); } };

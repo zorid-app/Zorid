@@ -6,7 +6,7 @@
 .zorid-bases-table-row { position: absolute; inset-inline: 0; display: grid; }
 .zorid-bases-table-cell { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 22px; }
 .zorid-bases-table-row:hover { background: var(--background-modifier-hover, #f5f5f5); }
-.zorid-bases-table-cell:focus { outline: 2px solid var(--interactive-accent, #7f5af0); outline-offset: -2px; border-radius: 2px; }
+.zorid-bases-table-cell:focus { outline: 2px solid var(--bases-accent, #2b85d4); outline-offset: -2px; border-radius: 2px; }
 .zorid-bases-table-cell .internal-link { color: var(--text-normal, #222); cursor: var(--cursor-link, pointer); text-decoration-line: none; text-decoration-thickness: var(--link-decoration-thickness, auto); font-weight: var(--link-weight, inherit); }
 .zorid-bases-table-cell .internal-link:hover { color: var(--text-normal, #222); text-decoration-line: var(--link-decoration-hover, underline); }
 .zorid-bases-table-cell.is-error { color: var(--text-error, #c33); }
@@ -19,7 +19,18 @@
 .zorid-bases-table-status:empty { display: none; }
 
 textarea.zorid-bases-table-input { height: 100%; resize: none; }
-.zorid-bases-table-cell.is-selected { background: var(--table-selection, rgba(126, 95, 220, .18)); }
+.zorid-bases-table-cell.is-selected { background: var(--bases-table-selection, rgba(47, 131, 223, .16)); }
+
+.zorid-bases-table-file-cell { display: flex; align-items: center; gap: 6px; position: relative; }
+.zorid-bases-table-file-cell > .svg-icon { flex: 0 0 16px; color: var(--text-muted, #666); opacity: .7; }
+.zorid-bases-table-file-cell .zorid-bases-table-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; flex: 1; cursor: text; }
+.zorid-bases-table-file-cell .zorid-bases-table-title:hover { text-decoration: none; }
+.zorid-bases-table-open { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; gap: 3px; height: 22px; padding: 0 5px; border: 1px solid var(--background-modifier-border, #ddd); border-radius: 4px; box-shadow: none; font: inherit; font-size: 11px; line-height: 1; color: var(--text-muted, #666); background: var(--background-primary, #fff); opacity: 0; pointer-events: none; }
+.zorid-bases-table-open > .svg-icon { width: 12px; height: 12px; }
+.zorid-bases-table-file-cell:hover .zorid-bases-table-open, .zorid-bases-table-file-cell:focus-within .zorid-bases-table-open { opacity: 1; pointer-events: auto; }
+.zorid-bases-table-open:hover { color: var(--text-normal, #222); background: var(--background-modifier-hover, #f5f5f5); }
+.zorid-bases-table-add-property { box-sizing: border-box; align-self: stretch; min-width: 0; padding: 0; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 0; border-bottom: 1px solid color-mix(in srgb, var(--background-modifier-border, #ddd) 65%, transparent); color: var(--text-muted, #666); background: transparent; box-shadow: none; }
+.zorid-bases-table-add-property:hover, .zorid-bases-table-add-property:focus-visible { background: var(--background-modifier-hover, #f5f5f5); color: var(--text-normal, #222); }
 
 .zorid-bases-table-column { position: relative; cursor: var(--cursor, default); user-select: none; }
 .zorid-bases-table-column:hover { background: var(--background-modifier-hover, #f5f5f5); }

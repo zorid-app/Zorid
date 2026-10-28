@@ -14,7 +14,7 @@ function fixture(extra: Partial<BaseTableOptions> = {}) {
   let result: BaseQueryResult = { version: 1, view: { type: 'table', name: 'Library', columnSize: { 'note.rating': 170, 'note.other': 100 } }, rows, groups: [{ key: null, rows }], properties: ['note.rating', 'note.other'], availableProperties: [], groupOptions: [], diagnostics: [], counts: { scanned: 1, matched: 1, afterGroupOrder: 1, afterSearch: 1, returned: 1 } };
   const calls: { patch: BaseViewPatch; resolve(): void; reject(error: Error): void }[] = [];
   const table = createBaseTableView(main, { result, openFile() {}, patchView: patch => new Promise<void>((resolve, reject) => { calls.push({ patch, resolve, reject }); }), ...extra });
-  const key = (key: string, property = 'note.rating') => [...main.querySelectorAll<HTMLElement>('[role="columnheader"]')].find(cell => cell.title === property)!.querySelector('[role="separator"]')!.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+  const key = (key: string, property = 'note.rating') => [...main.querySelectorAll<HTMLElement>('[role="columnheader"]')].find(cell => cell.dataset.property === property)!.querySelector('[role="separator"]')!.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
   const update = (next: BaseQueryResult) => { result = next; table.update(next); };
   const acknowledge = (index: number) => update({ ...result, version: Number(result.version) + 1, view: { ...result.view, ...calls[index].patch } });
   return { dom, main, table, calls, key, update, acknowledge, get result() { return result; }, close() { table.destroy(); dom.window.close(); } };
