@@ -37,6 +37,9 @@ import { textChanges } from '../editor/text-changes.ts';
 import { wikiCompletion } from '../editor/wiki-completion.ts';
 import type { WikiCompletionOptions } from '../editor/wiki-completion.ts';
 import { installEmptyNoteFocus } from '../editor/empty-note-focus.ts';
+import { databaseSlash } from '../editor/database-slash.ts';
+import type { DatabaseSlashPageRequest, DatabaseSlashInlineRequest } from '../editor/database-slash.ts';
+export type { DatabaseSlashPageRequest, DatabaseSlashInlineRequest } from '../editor/database-slash.ts';
 import { markdownFolding, getMarkdownFoldState, restoreMarkdownFoldState, toggleMarkdownFold, foldMarkdown, unfoldMarkdown, foldAllMarkdown, unfoldAllMarkdown, foldMoreMarkdown, foldLessMarkdown } from '../editor/folding.ts';
 import type { MarkdownFoldSnapshot } from '../editor/folding.ts';
 
@@ -102,6 +105,8 @@ export interface EditorOptions {
   hotkeys?: EditorHotkeySource;
   renderEmbed?: (request: EmbedRequest, context?: EmbedRenderContext) => { dom: HTMLElement; destroy(): void };
   renderBase?: InlineBaseRenderer;
+  onCreateDatabase?: (request: DatabaseSlashPageRequest) => void | Promise<void>;
+  onInlineDatabaseInserted?: (request: DatabaseSlashInlineRequest) => void | Promise<void>;
 }
 
 const externalChange = Annotation.define<boolean>();
@@ -167,7 +172,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
       } })] : []),
       ...(options.transfers ? [editorTransfers(options.transfers, captureAuthoring)] : []),
       menus.of(menuExtensions()),
-      ...(options.mode === 'live' ? [liveProperties(), liveCallouts({open: options.open, renderEmbed: options.renderEmbed, renderBase: options.renderBase}),
+      ...(options.mode === 'live' ? [databaseSlash({inline:!!options.renderBase,captureAuthoring,isCurrent,onCreateDatabase:options.onCreateDatabase,onInlineDatabaseInserted:options.onInlineDatabaseInserted,onError:options.onChangeRejected}),liveProperties(), liveCallouts({open: options.open, renderEmbed: options.renderEmbed, renderBase: options.renderBase}),
         liveTables(options.open, owner => [wiki, editorCommandHotkeys(options.hotkeys, owner), nativeUpdates, nativeCaret], renderedCalloutRanges, canAuthor), liveTasks({excludes: renderedCalloutRanges}), liveLists({excludes: renderedCalloutRanges}),
         liveMath({excludes: renderedCalloutRanges}), liveFences({excludes: renderedCalloutRanges, ...(options.renderBase ? {handledLanguages: new Set(['base'])} : {})}),
         ...(options.renderBase ? [liveBases(options.renderBase, {excludes: renderedCalloutRanges})] : []),
