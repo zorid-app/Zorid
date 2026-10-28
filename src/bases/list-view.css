@@ -14,3 +14,24 @@
 .bases-list-container .bases-group-heading { display: flex; align-items: center; gap: 8px; height: 36px; padding: 4px 0 8px; background: transparent; box-shadow: none; border: 0; text-align: start; color: inherit; font: inherit; cursor: pointer; }
 .bases-list-container.show-indentation-guide .bases-list-item-properties.nested::before { content: ''; position: absolute; inset-inline-start: 0.5em; top: 0; bottom: 0; border-inline-start: 1px solid var(--indentation-guide-color, #ddd); }
 .bases-list-container .mod-error { color: var(--text-error, #c44); }
+
+/* Default database rows keep the title and editable values on one quiet line.
+   Explicit markers, separators and nested configurations retain their flow. */
+.bases-list-container { font-size: var(--font-ui-medium, 14px); cursor: default; }
+.bases-list-item { border-radius: 4px; }
+.bases-list-item:hover { background: var(--background-modifier-hover); }
+.bases-list-item:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: -2px; }
+.bases-list-item.is-page-row { min-height: 32px; padding: 5px 8px; line-height: 22px; }
+.bases-list-item.is-page-row > .bases-list-item-properties { display: flex; align-items: center; gap: 16px; min-width: 0; }
+.is-page-row .bases-list-property { min-width: 0; display: inline-flex; align-items: center; gap: 8px; }
+.is-page-row .bases-list-property.is-title { flex: 1; font-weight: 500; }
+.bases-list-page-icon { display: inline-flex; align-items: center; flex: none; color: var(--text-muted); }
+.is-page-row .is-title .bases-list-property-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.is-page-row .is-title .internal-link { color: var(--text-normal); text-decoration: none; }
+.is-page-row .bases-list-item-details { display: flex; align-items: center; justify-content: flex-end; gap: 16px; margin-inline-start: auto; min-width: 0; max-width: 65%; }
+.is-page-row .bases-list-item-details .bases-list-property { flex: 0 1 auto; }
+.is-page-row .bases-list-item-details .bases-list-property-value { min-width: 0; max-width: 100%; }
+.bases-list-new { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 5px 8px; border: 0; border-radius: 4px; background: transparent; box-shadow: none; color: var(--text-muted); font: inherit; line-height: 22px; text-align: start; cursor: pointer; }
+.bases-list-new:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
+.bases-list-new:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: -2px; }
+.bases-list-new:disabled { opacity: .5; cursor: default; }
