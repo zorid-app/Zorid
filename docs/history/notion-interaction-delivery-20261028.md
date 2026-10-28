@@ -1,12 +1,11 @@
-# Notion database interactions: delivery checkpoint, 2026-10-28
+# Installed Notion database interaction delivery — 2026-10-28
 
-**In progress. This is not an installation or completion receipt.** Root is
-continuing actual desktop acceptance. The reviewed source candidate is
-`3b2ce849ee259a92c14177a3675f933bf5be3def` on
-`codex/notion-interaction-match`, based on main `e4c8a6d0`. Root owns serialized
-integration, native validation, packaging and replacement of the installed app.
-This report and its [machine-readable receipt](notion-interaction-delivery-20261028.json)
-record the current evidence; pending fields must be updated from actual results.
+**Installed and closed within the supported desktop scope.** Product `a4696820`
+is integrated into main. The verified local app is installed at
+`/Users/ctk/Applications/Zorid.app`; both the previous bundle and intermediate
+candidate were deleted after installed restart acceptance. No test app remains.
+The [machine-readable receipt](notion-interaction-delivery-20261028.json) records
+exact artifact hashes, checks, source commits and limits. No push, iOS or Tauri work.
 
 The [reference report](../reference/notion-database-interactions-20261027.md)
 separates live Notion observations from static evidence and Zorid implementation.
@@ -90,30 +89,29 @@ preparation.
 During startup verification, generated `.zorid` metadata was accidentally created
 under Downloads. Root narrowly reverted only metadata verified as created by this
 task using its birth/client/store identity, then deleted only the matching
-task-owned cache bucket. Ordinary files were neither read nor changed. Sanitized
+task-owned cache bucket. The app briefly indexed that unintended folder; no ordinary files were edited, moved or deleted. The generated index/authority and task cache were removed, and no private file contents were retained in evidence. Sanitized
 evidence references are `default-folder-side-effect-reverted.json` and
 `downloads-task-cache-cleanup.json`; private filenames are not reproduced here.
 
-## Remaining acceptance and delivery — PENDING
+## Accepted delivery
 
-| Required result | Status |
+| Check | Result |
 | --- | --- |
-| Actual desktop clipboard transport, range conversion and input ownership | **PENDING** |
-| Grid/page option creation and all eight supported datatype interactions | **PENDING** |
-| Exact saved values, null/array shapes and bodies after desktop writes | **PENDING** |
-| Table/List/Board and view settings/creation checks | **PENDING** |
-| Normal desktop restart and persisted state | **PENDING** |
-| Main integration and post-integration checks | **PENDING** |
-| Source-matched package staging and exact archive/native verification | **PENDING** |
-| Install/verify `/Users/ctk/Applications/Zorid.app`, replace previous bundle | **PENDING** |
-| Close owned test app and record final disposition | **PENDING** |
+| Store database semantics | 33/33 |
+| Broad focused frontend candidate | 324/324 |
+| Follow-up title/layout checks | 77/77 |
+| Main initial/follow-up checks | 57/57 and29/29, separate selections |
+| Full TypeScript/native frontend build | PASS |
+| Source-matched host/CLI, release/offline/jobs1 | PASS |
+| Directory package and installed archive/native verification | 356 files PASS |
+| Installed restart, values, datetime precision and body bytes | PASS |
+| Idle Status picker | 80samples/4s, stable input/query, zero Updating |
+| Owned test app shutdown | Normal exit0 |
 
-Root fills these results from current acceptance, then records the exact
-integrated/product commit, installed artifact and remaining limitations. The
-standing installation instruction requires staging and verifying the replacement
-before removing the previous app, while preserving vaults/preferences. No push,
-iOS, Tauri, full-platform, full-suite or exact Notion parity claim is made.
-
+These selections overlap; their counts are not one combined suite. Seventeen
+neighboring fixture failures were previously reproduced on original main before
+this task; no full-suite claim is made. No exact Notion, mobile or full-platform
+parity is claimed.
 
 ## Source desktop acceptance — passed before integration
 
@@ -148,11 +146,46 @@ bounded pass. Board columns measured276px. Explicit view settings remain honored
 An eighty-sample/four-second Status search test retained the exact input and query
 with zero Updating samples (`desktop-views011.json`). Unrecorded view/body changes
 were observed between earlier plans, so those failed assumptions are not parity
-receipts. The final plan receipts and exact body comparison are the accepted
+receipts. The user agreed to leave the test window for the final uninterrupted pass. The final plan receipts and exact body comparison are the accepted
 results. The source app was closed normally, exit0.
 
 The staged directory package verifies356files (`package-verify001.log`). Packaging
 used the previously established staged-project electron-builder route to avoid
 the unchanged pnpm importer/lockfile collector issue; dependency manifests and
-root build files were not modified. Main integration and installed restart remain
-pending in this checkpoint.
+root build files were not modified. This intermediate package was superseded by the title correction and final installed receipt below.
+
+
+## Final installed correction and restart
+
+The installed candidate exposed a presentation mismatch after property reordering:
+List/Board used the first visible property as their title. `3c1c309e` plus root
+wiring `a4696820` prefer visible `file.name` for collection List/Board only. Saved
+query/column order, hidden fields, legacy custom presentation and nested List
+parent suppression remain unchanged. Independent review is clear;77/77 focused
+checks and TS/build004 pass; main29/29+TS pass. Actual native Board title and List
+primary value are Acceptance record while Table still begins Notes, Name; the
+List row measures34px (`title-native001.json`).
+
+The final installed app ran its own bundled host (observed process path and owned
+fixture root), restored all supported values and the exact date/time offset and
+nanosecond spelling. A no-op datetime edit and invalid-number Enter→Escape→Close
+preserved the entire record byte-for-byte. The installed80-sample Status query
+retained its input/query with zero Updating, and ordinary-note Properties stayed
+hidden. The validation toast in that capture is expected from the deliberate
+invalid-number case, not an unresolved failed draft. The app quit normally, exit0.
+
+Installed ASAR SHA256:
+`8a97b7219ff34da870b2c3ee9e6af2989571cc687fa74b112d139f250ba4b56d`.
+Bundled host SHA256:
+`d4f8bb259a4e14b172e1f7b935cd1f0bec00a8df0bed75039ce4d283c7d8aea6`.
+Both previous/intermediate bundles were removed only after final verification;
+real app preferences and existing vaults were not modified by installation.
+Temporary main/Rust lanes are released. No test window or host remains.
+
+Current screenshots:
+[slash menu](../reference/assets/notion-interactions-20261028/slash-final.png),
+[inline creation](../reference/assets/notion-interactions-20261028/inline-created-final.png),
+[page peek](../reference/assets/notion-interactions-20261028/page-peek-final.png),
+[settings](../reference/assets/notion-interactions-20261028/settings-final.png),
+[corrected List](../reference/assets/notion-interactions-20261028/list-title-final.png),
+[installed Board](../reference/assets/notion-interactions-20261028/installed-board-final.png).

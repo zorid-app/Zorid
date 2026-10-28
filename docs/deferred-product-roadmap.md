@@ -2,20 +2,19 @@
 
 ## Execution checkpoint — shared-core coordinator
 
-**Notion database interaction candidate accepted natively — 2026-10-28; install pending.**
-Root `codex/notion-interaction-match` from clean main `e4c8a6d0` owns this approved
-exclusive integrate/test/commit continuation; other coordinator terminal is gone
-and no conflicting writer/build is active. User explicitly approved the narrow
-nullable Multi-select Rust fix. Independent core/frontend reviews clear;
-33/33 store database tests, 324/324 focused frontend checks and TS/native frontend
-build pass. One serialized release host+CLI build passes. Actual normal Electron
-acceptance covers all8types, option creation, typed trusted keyboard clipboard,
-body preservation, slash/Enter creation, property authoring/reorder, view settings,
-List/Board and failed-edit Escape/close. Idle80samples/4s:0Updating, same picker/query.
-356-file staged package verifies; source app closed normally exit0.
-Main integration/checks and installed restart/replacement are next, not yet claimed.
-No push/iOS/Tauri/full-suite/exact-reference-parity claim.
-[Evidence and limits](history/notion-interaction-delivery-20261028.md).
+**Notion database interactions installed — 2026-10-28.** Product `a4696820`
+is integrated on main after scoped independent review. Store33/33, focused
+frontend324/324, title/layout follow-up77/77, main57/57+29/29 separate selections,
+TS/native frontend build and one serialized release host+CLI build pass. Native
+and installed checks cover slash/Enter creation, all8types and option creation,
+property authoring/reorder, guarded edit handoff/invalid Escape-close, trusted
+keyboard clipboard, exact body/datetime preservation and stable select focus.
+Installed80samples/4s:0Updating, same picker/query. Collection List/Board keep
+Name primary independently of Table order; legacy/nested/hidden behavior retained.
+The356-file verified app is installed at `/Users/ctk/Applications/Zorid.app`;
+previous/intermediate bundles deleted after installed smoke, no test app remains.
+Temporary main/Rust lanes released; no push/iOS/Tauri/full-suite/exact-parity claim.
+[Evidence, cleanup and limits](history/notion-interaction-delivery-20261028.md).
 
 **Bases refresh/select flashing fix installed — 2026-10-27.** Product `86466ce8`
 is on main after scoped independent review, 59/59 main checks + TS, frontend build,

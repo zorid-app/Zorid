@@ -1,5 +1,8 @@
 # Notion database interactions: reference and implementation evidence
 
+Current delivery is installed on main: [final acceptance and screenshots](../history/notion-interaction-delivery-20261028.md).
+The intermediate pending-core checkpoints below are historical and superseded.
+
 User direction, 2026-10-27: closely match Notion's database interaction feel for
 Zorid's supported features, including creation, layouts, property editing,
 settings, keyboard navigation and focus after saves. This extends the

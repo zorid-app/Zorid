@@ -1,9 +1,9 @@
 {
   "date": "2026-10-28",
-  "status": "NATIVE_ACCEPTED_INSTALL_PENDING",
-  "completed": false,
+  "status": "INSTALLED",
+  "completed": true,
   "candidate": {
-    "commit": "3b2ce849ee259a92c14177a3675f933bf5be3def",
+    "commit": "a46968207fedeebf258d259a1a20cbb79dace0aa",
     "branch": "codex/notion-interaction-match",
     "base": "e4c8a6d0",
     "owner": "root"
@@ -33,6 +33,15 @@
       "commit": "3b2ce849ee259a92c14177a3675f933bf5be3def",
       "workerCommit": "1f045f36",
       "independentSourceReview": "CLEAR"
+    },
+    {
+      "area": "collection-only primary page titles after property reorder",
+      "commit": "a4696820",
+      "workerCommit": "746cc5d0",
+      "independentSourceReview": "CLEAR",
+      "nativeReceipt": "title-native001.json",
+      "configuredTableOrderPreserved": true,
+      "nestedAndLegacyPresentationPreserved": true
     }
   ],
   "checks": {
@@ -64,6 +73,25 @@
       "duration": "2m30s",
       "log": "native-build001.log",
       "metadata": "native-artifacts.json"
+    },
+    "mainFocused": {
+      "passed": 57,
+      "failed": 0,
+      "log": "main-focused001.log"
+    },
+    "titleFollowup": {
+      "passed": 77,
+      "failed": 0,
+      "log": "title-focused001.log"
+    },
+    "mainTitleFollowup": {
+      "passed": 29,
+      "failed": 0,
+      "log": "main-title-focused001.log"
+    },
+    "mainTypeScript": {
+      "status": "PASS",
+      "log": "main-ts002.log"
     }
   },
   "artifacts": [
@@ -111,12 +139,16 @@
       "local store"
     ],
     "onlyMatchingTaskCacheDeleted": true,
-    "ordinaryFilesReadOrChanged": false,
     "privateFilenamesIncluded": false,
     "evidence": [
       "default-folder-side-effect-reverted.json",
       "downloads-task-cache-cleanup.json"
-    ]
+    ],
+    "applicationBrieflyIndexedUnintendedFolder": true,
+    "ordinaryFilesEditedMovedOrDeleted": false,
+    "generatedMetadataDiscarded": true,
+    "retiredTestProfileDiscarded": true,
+    "privateContentsRetainedInEvidence": false
   },
   "reference": {
     "report": "../reference/notion-database-interactions-20261027.md",
@@ -125,51 +157,13 @@
     "retainedEvidence": "screenshots and documentation references",
     "notionRuntimeCdpCapture": false
   },
-  "pending": {
-    "nativeClipboard": {
-      "status": "PENDING",
-      "result": null
-    },
-    "nativeOptionAndAllTypeInteractions": {
-      "status": "PENDING",
-      "result": null
-    },
-    "nativeSavedValuesShapesAndBodies": {
-      "status": "PENDING",
-      "result": null
-    },
-    "nativeViewsAndSettings": {
-      "status": "PENDING",
-      "result": null
-    },
-    "nativeRestart": {
-      "status": "PENDING",
-      "result": null
-    },
-    "mainIntegrationAndPostChecks": {
-      "status": "PENDING",
-      "result": null
-    },
-    "packageAndVerification": {
-      "status": "PENDING",
-      "result": null
-    },
-    "installationAndReplacement": {
-      "status": "PENDING",
-      "result": null
-    },
-    "testAppCleanup": {
-      "status": "PENDING",
-      "result": null
-    }
-  },
+  "pending": {},
   "installationTarget": "/Users/ctk/Applications/Zorid.app",
   "limits": [
-    "No completion or installed-delivery claim",
     "No full suite or exact Notion parity claim",
     "No iOS/Tauri/full-platform verification",
     "No push",
-    "Native CLI fixture success does not establish desktop interaction success"
+    "Native date controls remain limited to supported existing scalar date/datetime features"
   ],
   "documentationWorker": {
     "actions": "receipt/log/source reads and new documentation only",
@@ -292,10 +286,52 @@
   "package": {
     "status": "PASS",
     "files": 356,
-    "log": "package-verify001.log",
-    "unsignedLocal": true
+    "log": "staged-final-verify001.log",
+    "unsignedLocal": true,
+    "inputManifest": ".worktrees/notion-interaction-match/.release/inputs.json"
   },
   "installed": {
-    "status": "PENDING"
-  }
+    "installed": "/Users/ctk/Applications/Zorid.app",
+    "productCommit": "a4696820",
+    "previous": "/Users/ctk/Applications/.Zorid-previous-notion-20261028.app",
+    "intermediate": "/Users/ctk/Applications/.Zorid-intermediate-notion-20261028.app",
+    "archiveSha256": "8a97b7219ff34da870b2c3ee9e6af2989571cc687fa74b112d139f250ba4b56d",
+    "hostSha256": "d4f8bb259a4e14b172e1f7b935cd1f0bec00a8df0bed75039ce4d283c7d8aea6",
+    "previousDeleted": true,
+    "intermediateDeleted": true,
+    "installedSmoke": "PASS",
+    "testAppExit": 0,
+    "retiredTestProfileDeleted": true,
+    "bundledHostObservation": [
+      {
+        "pid": 55123,
+        "executable": "/Users/ctk/Applications/Zorid.app/Contents/Resources/native/zorid-desktop-host",
+        "ownedFixtureRoot": true
+      }
+    ],
+    "filePreservation": {
+      "fileUnchanged": true,
+      "bodyUnchanged": true
+    },
+    "idle": {
+      "samples": 80,
+      "pickerStable": true,
+      "updatingSamples": 0
+    },
+    "smokeReceipt": "installed-smoke002.json",
+    "expectedValidationNotice": "Enter a valid number."
+  },
+  "integratedProductCommit": "a46968207fedeebf258d259a1a20cbb79dace0aa",
+  "acceptance": {
+    "nativeClipboard": "PASS trusted Copy/Paste + typed TSV + private clipboard restored",
+    "nativeAllTypesAndOptions": "PASS eight supported datatypes",
+    "nativeBodiesAndPrecision": "PASS exact bytes after installed restart and no-op datetime edit",
+    "nativeViewsAndSettings": "PASS table/list/board + primary Name + property creation/reorder",
+    "nativeRestart": "PASS installed app bundled host",
+    "mainIntegrationAndPostChecks": "PASS",
+    "packageAndVerification": "PASS 356 files",
+    "installationAndReplacement": "PASS previous and intermediate bundles deleted",
+    "testAppCleanup": "PASS normal exit0"
+  },
+  "lanesReleased": true
 }

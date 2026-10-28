@@ -2,58 +2,40 @@
 
 ## Full supported Notion database interaction match — 2026-10-27
 
-**In progress; supersedes the presentation-only scope of the first pass.** User
-requests closely matching Notion's supported database UI and complete interaction
-behavior: `/` creation and Enter, Table/List/Kanban, spacing, view settings,
-property add/reorder, Open, selection, every supported datatype, clipboard,
-mouse/hover/tooltips and keyboard/arrows/Enter/Tab/Escape. Explicitly use REA.
-Editing focus/blur and swallowed next clicks are a priority. Preserve ordinary-note
-Properties hiding and the installed refresh-flashing fix. Unsupported Notion
-features are excluded, rather than shown as inert menu entries.
+**Delivered within supported desktop scope — 2026-10-28.** Product `a4696820`
+is integrated on main, independently reviewed, built and installed at
+`/Users/ctk/Applications/Zorid.app`. Prior and intermediate bundles were deleted
+only after installed verification; no test app remains. Standing automatic
+build/install/replacement instruction remains recorded in AGENTS.md.
 
-**2026-10-28 acceptance checkpoint:** composed frontend candidate `253de0fa`,
-262/262 final focused checks and TS/native frontend build pass; frozen predecessor
-322/322 is a separate bounded receipt. Native real-service checks confirm slash/Enter
-creation, durable row/title, add properties, text/number/Status/select editing,
-next-click/Tab/Enter handoff, page body preservation, List33px, Board276px plus
-schema Done label, empty page fields28px and rejected-option Escape/close. Static
-picker idle60 samples/3s retains input identity/query and shows zero Updating;
-ordinary note Properties absent. Full delivery remains open: nullable Multi-select
-core bug blocks additive schema updates. Reviewed narrow core proposal prepared,
-user exception to no-Rust-build limit requested and pending. No unsafe confirm
-bypass, main change or new install. Final native clipboard shortcut input could not
-be exercised by CDP commands; OS keystrokes denied Accessibility permission; unit
-clipboard/range contracts remain separate evidence. Complete core/native/installed
-acceptance before closing this finding. Temporary main lane released pending
-exception; reacquire before integration. No test app remains.
+Delivered interactions include slash database creation/Enter, source creation,
+inline row/title creation, compact Table/List/Board, view settings, property
+creation/reordering/visibility, separate hover Open and side peek, selection,
+tooltips, supported keyboard/arrows/Enter/Tab/Escape and next-click/blur handoff.
+All8supported types have native accepted edits; keyboard Copy/Paste has trusted
+native events, typed TSV conversion, body preservation and private clipboard
+restoration. Ordinary-note Properties remain hidden. Static Status picker
+input/query is stable over installed80samples/4s with zero Updating flashes.
 
-Root owns `codex/notion-interaction-match` from `e4c8a6d0`, reference experiments,
-`session.ts`/`workspace.ts` integration, packaging and native verification. Main
-owner acknowledged the exclusive temporary reviewed/validated integrate/test/commit
-lane; no conflicts, push, iOS or Tauri work. Named isolated workers own widget
-completion, table interaction/geometry, slash creation and shared tooltips.
-Build/install/replacement remains required after completion.
+The user-approved narrow Rust fix preserves nullable Multi-select values on
+additive schema updates; actual removals still require confirmation. No unsafe
+confirm bypass. Canceled number/date validation errors no longer block page close;
+pending/uncertain writes retain ownership. Collection List/Board keep visible
+Name primary after property reorder without changing Table order or legacy/nested
+presentation. Exact note bytes and datetime offset/precision survive installed
+restart and no-op editing.
 
-Reference experiment uses a disposable Notion page, scoped to its browser tab.
-REA is connected but the signed-in browser has no available CDP endpoint;
-native discovery yielded no matching target. App-wide Chrome observation was
-automatically rejected because it could reveal unrelated tabs; do not retry broad
-capture. Tab-scoped browser observations continue; no REA runtime parity claim.
-Reference captures: `/private/tmp/zorid-notion-interactions-20261027`.
-REA static inspection succeeded for the public, page-observed property menu asset
-`TableHeaderPropertyCreationMenu-d9dadff0adfcd8b0.js` (55,304 bytes, 51 modules,
-zero parse failures). Evidence `ev_f77ec172ac12e704c59071c11b3a3a9e4ae35e5f5ce10b10640ce7addb31ba99`;
-bounded semantic graph is partial, no runtime or behavioral equivalence claim.
-The downloaded proprietary artifact stays in temporary evidence, outside source.
+Validation: store33/33; broad focused frontend324/324; follow-up title/layout77/77;
+main57/57 and29/29 separate selections, plus full TS/native frontend build. One
+serialized release host/CLI build passes; installed356-file archive/native contract
+verifies. No full-suite, exact Notion parity, mobile, iOS/Tauri or push claim.
+REA public-asset static evidence and tab-scoped Notion experiments informed the
+independent implementation; recovered proprietary code was not added to source.
 
-Confirmed reference transitions so far: `/database` + Enter inserts a database
-shell and source chooser; Add property focuses a name/type picker; New page
-creates an inline title editor; existing title single-click edits; Tab closes
-title editing and selects the adjacent cell; hover Open is separate. View settings
-use a compact right-side panel. Other behaviors remain to be observed and verified.
-Source audit identifies async outside-pointer save followed by pending admission
-as the cause of swallowed next-cell clicks. A successful-save continuation is
-being implemented without weakening failed-save or stale-identity protections.
+[Final evidence, screenshots and limits](history/notion-interaction-delivery-20261028.md),
+[artifact receipt](history/notion-interaction-delivery-20261028.json).
+Temporary main/Rust lanes released; no remaining work for this delivered batch.
+New observed differences remain incoming findings rather than inferred parity.
 
 
 ## Bases one-second Updating and select-field flashing — 2026-10-27
