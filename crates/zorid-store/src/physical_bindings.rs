@@ -102,22 +102,75 @@ fn validate_baseline(tx: &Connection, value: &PhysicalBinding) -> Result<()> {
     }
     Ok(())
 }
+fn decode_binding(
+    id: &EntryId,
+    row: (String, String, String, String, String, String),
+) -> Result<PhysicalBinding> {
+    let (path, revision, kind, inode, parent, json) = row;
+    let value: PhysicalBinding = serde_json::from_str(&json)?;
+    if value.state.id != *id
+        || value.state.path.as_str() != path
+        || value.state.revision.as_str() != revision
+        || kind_name(value.state.kind) != kind
+        || value.physical.inode != inode
+        || value.physical.parent_inode != parent
+    {
+        return Err(invalid("physical binding columns mismatch"));
+    }
+    Ok(value)
+}
+/// Read the whole saved physical namespace in one statement. Matching baselines
+/// still receive full decoding and validation; no content or corruption checks
+/// are skipped just because this caller only returns binding metadata.
+pub(super) fn bindings(tx: &Connection) -> Result<Vec<PhysicalBinding>> {
+    let mut statement = tx.prepare("SELECT b.entry_id,b.path,b.revision,b.kind,b.inode,b.parent_inode,b.record,p.record,d.record FROM physical_bindings b LEFT JOIN projection_baselines p ON p.entry_id=b.entry_id AND b.kind='file' LEFT JOIN directory_baselines d ON d.entry_id=b.entry_id AND b.kind='directory' ORDER BY b.entry_id")?;
+    let mut rows = statement.query([])?;
+    let mut values = Vec::new();
+    while let Some(row) = rows.next()? {
+        let id = EntryId::new(row.get::<_, String>(0)?)?;
+        let value = decode_binding(
+            &id,
+            (
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+            ),
+        )?;
+        validate_saved(&value)?;
+        match value.state.kind {
+            EntryKind::File => {
+                let raw: Option<String> = row.get(7)?;
+                let base = raw
+                    .map(|raw| projection::decode_baseline(id.as_str(), &raw))
+                    .transpose()?;
+                if base.as_ref().map(|b| &b.state) != Some(&value.state) {
+                    return Err(invalid("physical binding differs from file baseline"));
+                }
+            }
+            EntryKind::Folder => {
+                let raw: Option<String> = row.get(8)?;
+                let base: DirectoryBaseline = serde_json::from_str(
+                    &raw.ok_or_else(|| invalid("physical directory baseline missing"))?,
+                )?;
+                if base.state != value.state || base.identity != value.physical.inode {
+                    return Err(invalid("physical binding differs from directory baseline"));
+                }
+            }
+        }
+        values.push(value);
+    }
+    Ok(values)
+}
 pub(super) fn binding(tx: &Connection, id: &EntryId) -> Result<Option<PhysicalBinding>> {
     let row: Option<(String, String, String, String, String, String)> = tx.query_row(
         "SELECT path,revision,kind,inode,parent_inode,record FROM physical_bindings WHERE entry_id=?1",
         [id.as_str()], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?)),
     ).optional()?;
-    row.map(|(path, revision, kind, inode, parent, json)| {
-        let value: PhysicalBinding = serde_json::from_str(&json)?;
-        if value.state.id != *id
-            || value.state.path.as_str() != path
-            || value.state.revision.as_str() != revision
-            || kind_name(value.state.kind) != kind
-            || value.physical.inode != inode
-            || value.physical.parent_inode != parent
-        {
-            return Err(invalid("physical binding columns mismatch"));
-        }
+    row.map(|row| {
+        let value = decode_binding(id, row)?;
         validate_baseline(tx, &value)?;
         Ok(value)
     })
@@ -927,6 +980,7 @@ mod tests {
                     } else if bytes.starts_with(b"SELECT record FROM directory_baselines WHERE") {
                         Some(1)
                     } else if bytes.starts_with(b"SELECT entry_id FROM physical_bindings ORDER BY")
+                        || bytes.starts_with(b"SELECT b.entry_id,b.path,b.revision,b.kind,b.inode,b.parent_inode,b.record")
                     {
                         Some(2)
                     } else {
@@ -974,6 +1028,163 @@ mod tests {
                 },
                 rusqlite::ffi::SQLITE_OK
             );
+        }
+    }
+
+    #[test]
+    fn binding_inventory_reads_one_ordered_validated_batch_without_point_queries() {
+        let (_dir, mut store, directory) = setup(EntryKind::Folder);
+        put_binding(&store.connection, &directory).unwrap();
+        let first = add_bound_file(&mut store, "aaa-file", "first-inode");
+        let last = add_bound_file(&mut store, "zzz-file", "last-inode");
+        let before = store.connection.total_changes();
+        let trace = InodeReads::new(&store.connection);
+        assert_eq!(store.physical_bindings().unwrap(), vec![first, directory, last]);
+        assert_eq!(trace.counts.get(), [0, 0, 1]);
+        assert_eq!(store.connection.total_changes(), before);
+    }
+
+    #[test]
+    fn binding_inventory_actual_query_plan_streams_without_sorting_baseline_payloads() {
+        struct QueryCapture<'a> {
+            connection: &'a Connection,
+            sql: Box<std::cell::RefCell<Vec<String>>>,
+        }
+        impl Drop for QueryCapture<'_> {
+            fn drop(&mut self) {
+                assert_eq!(unsafe {
+                    rusqlite::ffi::sqlite3_trace_v2(self.connection.handle(), 0, None, std::ptr::null_mut())
+                }, rusqlite::ffi::SQLITE_OK);
+            }
+        }
+        unsafe extern "C" fn capture_inventory(
+            event: u32,
+            context: *mut std::ffi::c_void,
+            _: *mut std::ffi::c_void,
+            sql: *mut std::ffi::c_void,
+        ) -> i32 {
+            if event == rusqlite::ffi::SQLITE_TRACE_STMT && !context.is_null() && !sql.is_null() {
+                let sql = unsafe { std::ffi::CStr::from_ptr(sql.cast()) }.to_string_lossy();
+                let lower = sql.to_ascii_lowercase();
+                if lower.starts_with("select") && lower.contains("from physical_bindings") && lower.contains("projection_baselines") {
+                    let captured = unsafe { &*context.cast::<std::cell::RefCell<Vec<String>>>() };
+                    captured.borrow_mut().push(sql.into_owned());
+                }
+            }
+            0
+        }
+
+        let (_dir, mut store, directory) = setup(EntryKind::Folder);
+        put_binding(&store.connection, &directory).unwrap();
+        add_bound_file(&mut store, "aaa-file", "first-inode");
+        add_bound_file(&mut store, "zzz-file", "last-inode");
+        let capture = QueryCapture {
+            connection: &store.connection,
+            sql: Box::new(std::cell::RefCell::new(Vec::new())),
+        };
+        assert_eq!(unsafe {
+            rusqlite::ffi::sqlite3_trace_v2(
+                store.connection.handle(), rusqlite::ffi::SQLITE_TRACE_STMT,
+                Some(capture_inventory), (&*capture.sql as *const std::cell::RefCell<Vec<String>>).cast_mut().cast(),
+            )
+        }, rusqlite::ffi::SQLITE_OK);
+        assert_eq!(store.physical_bindings().unwrap().len(), 3);
+        assert_eq!(capture.sql.borrow().len(), 1, "capture the executed inventory statement, not a copied query");
+        let sql = capture.sql.borrow()[0].clone();
+        drop(capture);
+
+        // Explain the exact captured statement using this build's bundled SQLite,
+        // with both default estimates and statistics for the current inventory.
+        for with_statistics in [false, true] {
+            if with_statistics {
+                store.connection.execute_batch("ANALYZE").unwrap();
+            }
+            let mut statement = store.connection.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+            let plan = statement.query_map([], |row| row.get::<_, String>(3)).unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>().unwrap();
+            assert!(!plan.is_empty());
+            assert!(plan.iter().all(|step| !step.to_ascii_uppercase().contains("TEMP B-TREE")),
+                "inventory must not sort joined baseline content (statistics={with_statistics}): {plan:?}");
+        }
+    }
+
+    #[test]
+    fn binding_inventory_preserves_point_validation_for_every_bound_file() {
+        for sql in [
+            "UPDATE physical_bindings SET record='invalid-json'",
+            "UPDATE physical_bindings SET path='different'",
+            "UPDATE physical_bindings SET revision='different'",
+            "UPDATE physical_bindings SET kind='directory'",
+            "UPDATE physical_bindings SET inode='different'",
+            "UPDATE physical_bindings SET parent_inode='different'",
+            "UPDATE physical_bindings SET record=json_set(record,'$.physical.inode','different')",
+            "UPDATE physical_bindings SET record=json_set(record,'$.physical.parent_inode','')",
+            "UPDATE physical_bindings SET record=json_set(record,'$.state.deleted',json('true'))",
+            "UPDATE physical_bindings SET record=json_set(record,'$.unknown',1)",
+            "UPDATE projection_baselines SET record='invalid-json'",
+            "DELETE FROM projection_baselines",
+            "UPDATE projection_baselines SET record=json_set(record,'$.state.id','different')",
+            "UPDATE projection_baselines SET record=json_set(record,'$.state.deleted',json('true'))",
+            "UPDATE projection_baselines SET record=json_set(record,'$.state.kind','folder')",
+            "UPDATE projection_baselines SET record=json_set(record,'$.content.content',json('[256]'))",
+            "UPDATE projection_baselines SET record=json_set(record,'$.content.content',json('[-1]'))",
+            "UPDATE projection_baselines SET record=json_set(record,'$.content.content',json('[1.5]'))",
+            "UPDATE projection_baselines SET record=json_set(record,'$.content.kind','unknown')",
+            "UPDATE projection_baselines SET record=json_set(record,'$.content.unknown',1)",
+            "UPDATE projection_baselines SET record=json_set(record,'$.unknown',1)",
+        ] {
+            let (_dir, store, binding) = setup(EntryKind::File);
+            put_binding(&store.connection, &binding).unwrap();
+            store.connection.execute(sql, []).unwrap();
+            let before = store.connection.total_changes();
+            assert!(store.physical_binding(&binding.state.id).is_err(), "point: {sql}");
+            assert!(store.physical_bindings().is_err(), "inventory: {sql}");
+            assert_eq!(store.connection.total_changes(), before);
+        }
+    }
+
+    #[test]
+    fn binding_inventory_preserves_directory_baseline_identity_and_shape_checks() {
+        for sql in [
+            "UPDATE directory_baselines SET record='invalid-json'",
+            "DELETE FROM directory_baselines",
+            "UPDATE directory_baselines SET record=json_set(record,'$.identity','different')",
+            "UPDATE directory_baselines SET record=json_set(record,'$.state.id','different')",
+            "UPDATE directory_baselines SET record=json_set(record,'$.state.path','different')",
+            "UPDATE directory_baselines SET record=json_set(record,'$.state.deleted',json('true'))",
+            "UPDATE directory_baselines SET record=json_set(record,'$.unknown',1)",
+        ] {
+            let (_dir, store, binding) = setup(EntryKind::Folder);
+            put_binding(&store.connection, &binding).unwrap();
+            store.connection.execute(sql, []).unwrap();
+            assert!(store.physical_binding(&binding.state.id).is_err(), "point: {sql}");
+            assert!(store.physical_bindings().is_err(), "inventory: {sql}");
+        }
+    }
+
+    #[test]
+    fn binding_inventory_rejects_unrelated_bound_corruption_but_ignores_unbound_baselines() {
+        let (_dir, mut store, selected) = setup(EntryKind::File);
+        put_binding(&store.connection, &selected).unwrap();
+        let unrelated = add_bound_file(&mut store, "unrelated", "different-inode");
+        store.connection.execute("UPDATE projection_baselines SET record='invalid-json' WHERE entry_id='unrelated'", []).unwrap();
+        assert_eq!(store.physical_binding(&selected.state.id).unwrap(), Some(selected.clone()));
+        assert!(store.physical_bindings().is_err());
+        remove_binding(&store.connection, &unrelated.state.id).unwrap();
+        assert_eq!(store.physical_bindings().unwrap(), vec![selected]);
+    }
+
+    #[test]
+    fn binding_inventory_ignores_other_kind_baselines_and_current_logical_liveness() {
+        for kind in [EntryKind::File, EntryKind::Folder] {
+            let (_dir, store, binding) = setup(kind);
+            put_binding(&store.connection, &binding).unwrap();
+            let other = if kind == EntryKind::File { "directory_baselines" } else { "projection_baselines" };
+            store.connection.execute(&format!("INSERT INTO {other}(entry_id,record) VALUES('entry','invalid-json')"), []).unwrap();
+            for sql in ["UPDATE entries SET visible=0 WHERE id='entry'", "UPDATE entries SET deleted=1 WHERE id='entry'"] {
+                store.connection.execute(sql, []).unwrap();
+                assert_eq!(store.physical_bindings().unwrap(), vec![binding.clone()]);
+            }
         }
     }
 

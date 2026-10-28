@@ -153,6 +153,11 @@ pub(super) fn decode_observation(id: &str, json: &str) -> Result<ExternalObserva
     }
     Ok(value)
 }
+pub(super) fn decode_baseline(id: &str, raw: &str) -> Result<ProjectionBaseline> {
+    let value = serde_json::from_str(raw)?;
+    validate_baseline(&value, id)?;
+    Ok(value)
+}
 pub(super) fn baseline(tx: &Connection, id: &EntryId) -> Result<Option<ProjectionBaseline>> {
     tx.query_row(
         "SELECT record FROM projection_baselines WHERE entry_id=?1",
@@ -160,11 +165,7 @@ pub(super) fn baseline(tx: &Connection, id: &EntryId) -> Result<Option<Projectio
         |r| r.get::<_, String>(0),
     )
     .optional()?
-    .map(|s| {
-        let value = serde_json::from_str(&s)?;
-        validate_baseline(&value, id.as_str())?;
-        Ok(value)
-    })
+    .map(|raw| decode_baseline(id.as_str(), &raw))
     .transpose()
 }
 pub(super) fn put_baseline(tx: &Connection, value: &ProjectionBaseline) -> Result<()> {
@@ -289,6 +290,54 @@ fn check_namespace_handoff(
 /// move or deletion remains queued, even if a descendant file was published.
 
 impl Store {
+    pub const PROJECTION_RECOVERY_MAX_STATES: usize = 64;
+
+    /// Check an ordered, bounded file-state page through its first missing or
+    /// stale baseline. Every visited record uses the complete baseline decoder
+    /// and identity/content validation; this is not a projection authorization.
+    /// Stopping before the first dirty entry preserves recovery's publication
+    /// order when a later baseline is corrupt. Only one encoded/decoded baseline
+    /// is retained at a time, rather than all of a vault's saved file contents.
+    pub fn projection_clean_prefix(&self, states: &[EntryState]) -> Result<usize> {
+        if states.len() > Self::PROJECTION_RECOVERY_MAX_STATES {
+            return Err(StoreError::Contract(ContractError::InvalidMutation {
+                reason: "Projection recovery page exceeds its state limit".into(),
+            }));
+        }
+        if states.is_empty() {
+            return Ok(0);
+        }
+        if states.iter().any(|state| state.kind != EntryKind::File || state.deleted) {
+            return Err(StoreError::Corrupt("projection recovery requires live file states".into()));
+        }
+        let ids = serde_json::to_string(&states.iter().map(|state| state.id.as_str()).collect::<Vec<_>>())?;
+        // json_each is the LEFT JOIN's outer input, so SQLite visits its array
+        // rows before the indexed baseline lookup. Do not sort full baseline
+        // records into a temporary table: one record may contain a large file.
+        // Check the returned ordinal as well; unexpected ordering fails closed.
+        let mut statement = self.connection.prepare(
+            "SELECT requested.key,saved.record FROM json_each(?1) AS requested LEFT JOIN projection_baselines AS saved ON saved.entry_id=requested.value",
+        )?;
+        let mut rows = statement.query([ids])?;
+        for (index, state) in states.iter().enumerate() {
+            let row = rows.next()?.ok_or_else(|| StoreError::Corrupt("projection recovery row missing".into()))?;
+            let ordinal: i64 = row.get(0)?;
+            if ordinal != index as i64 {
+                return Err(StoreError::Corrupt("projection recovery rows are out of order".into()));
+            }
+            let raw: Option<String> = row.get(1)?;
+            let Some(raw) = raw else { return Ok(index); };
+            let value = decode_baseline(state.id.as_str(), &raw)?;
+            if value.state != *state {
+                return Ok(index);
+            }
+        }
+        if rows.next()?.is_some() {
+            return Err(StoreError::Corrupt("projection recovery has extra rows".into()));
+        }
+        Ok(states.len())
+    }
+
     pub fn projection_baseline(&self, id: &EntryId) -> Result<Option<ProjectionBaseline>> {
         baseline(&self.connection, id)
     }
@@ -1474,5 +1523,130 @@ mod typed_content_tests {
                 ))
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod recovery_prefix_tests {
+    use super::*;
+
+    fn fixture(count: usize) -> (tempfile::TempDir, Store, Vec<EntryState>) {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("db")).unwrap();
+        let mut states = Vec::new();
+        for index in 0..count {
+            let id = EntryId::new(format!("file-{index:03}")).unwrap();
+            let content = format!("Saved body {index}\n").into_bytes();
+            store.apply(&MutationRequest {
+                operation_id: OperationId::new(format!("create-{index}")).unwrap(),
+                mutation: Mutation::Create {
+                    id: id.clone(),
+                    path: VaultPath::new(format!("Note {index:03}.md")).unwrap(),
+                    kind: EntryKind::File,
+                    content: Some(content.clone()),
+                },
+            }).unwrap();
+            let state = store.read(&id).unwrap().unwrap().state;
+            let value = ProjectionBaseline { state: state.clone(), content: StoredContent::InlineBytes(content) };
+            store.connection.execute(
+                "INSERT INTO projection_baselines(entry_id,record) VALUES(?1,?2)",
+                params![id.as_str(), serde_json::to_string(&value).unwrap()],
+            ).unwrap();
+            states.push(state);
+        }
+        (directory, store, states)
+    }
+
+    struct BaselineReads<'a> {
+        connection: &'a Connection,
+        count: Box<std::cell::Cell<usize>>,
+    }
+    impl<'a> BaselineReads<'a> {
+        fn new(connection: &'a Connection) -> Self {
+            unsafe extern "C" fn observe(event: u32, context: *mut std::ffi::c_void, _: *mut std::ffi::c_void, sql: *mut std::ffi::c_void) -> i32 {
+                if event == rusqlite::ffi::SQLITE_TRACE_STMT && !context.is_null() && !sql.is_null() {
+                    let sql = unsafe { std::ffi::CStr::from_ptr(sql.cast()) }.to_bytes();
+                    if sql.starts_with(b"SELECT") && sql.windows(b"projection_baselines".len()).any(|part| part == b"projection_baselines") {
+                        let count = unsafe { &*context.cast::<std::cell::Cell<usize>>() };
+                        count.set(count.get() + 1);
+                    }
+                }
+                0
+            }
+            let value = Self { connection, count: Box::new(std::cell::Cell::new(0)) };
+            assert_eq!(unsafe {
+                rusqlite::ffi::sqlite3_trace_v2(connection.handle(), rusqlite::ffi::SQLITE_TRACE_STMT, Some(observe), (&*value.count as *const std::cell::Cell<usize>).cast_mut().cast())
+            }, rusqlite::ffi::SQLITE_OK);
+            value
+        }
+    }
+    impl Drop for BaselineReads<'_> {
+        fn drop(&mut self) {
+            assert_eq!(unsafe {
+                rusqlite::ffi::sqlite3_trace_v2(self.connection.handle(), 0, None, std::ptr::null_mut())
+            }, rusqlite::ffi::SQLITE_OK);
+        }
+    }
+
+    #[test]
+    fn clean_recovery_page_uses_one_actual_sql_read_with_full_baseline_validation() {
+        let (_directory, store, states) = fixture(Store::PROJECTION_RECOVERY_MAX_STATES);
+        let reads = BaselineReads::new(&store.connection);
+        for state in &states {
+            assert_eq!(store.projection_baseline(&state.id).unwrap().unwrap().state, *state);
+        }
+        assert_eq!(reads.count.get(), states.len());
+        reads.count.set(0);
+        assert_eq!(store.projection_clean_prefix(&states).unwrap(), states.len());
+        assert_eq!(reads.count.get(), 1);
+    }
+
+    #[test]
+    fn recovery_prefix_stops_before_later_corruption_and_rechecks_after_dirty_file() {
+        let (_directory, store, states) = fixture(4);
+        let original: String = store.connection.query_row("SELECT record FROM projection_baselines WHERE entry_id=?1", [states[1].id.as_str()], |row| row.get(0)).unwrap();
+        store.connection.execute("DELETE FROM projection_baselines WHERE entry_id=?1", [states[1].id.as_str()]).unwrap();
+        store.connection.execute("UPDATE projection_baselines SET record='invalid-json' WHERE entry_id=?1", [states[2].id.as_str()]).unwrap();
+        assert_eq!(store.projection_clean_prefix(&states).unwrap(), 1);
+        store.connection.execute("INSERT INTO projection_baselines(entry_id,record) VALUES(?1,?2)", params![states[1].id.as_str(), original]).unwrap();
+        assert!(store.projection_clean_prefix(&states).is_err());
+    }
+
+    #[test]
+    fn stale_baseline_returns_the_exact_first_dirty_position() {
+        let (_directory, store, states) = fixture(4);
+        let mut saved = store.projection_baseline(&states[2].id).unwrap().unwrap();
+        saved.state.revision = Revision::new("earlier").unwrap();
+        store.connection.execute("UPDATE projection_baselines SET record=?1 WHERE entry_id=?2", params![serde_json::to_string(&saved).unwrap(), states[2].id.as_str()]).unwrap();
+        assert_eq!(store.projection_clean_prefix(&states).unwrap(), 2);
+        assert_eq!(store.projection_clean_prefix(&states[3..]).unwrap(), 1);
+    }
+
+    #[test]
+    fn recovery_prefix_rejects_corrupt_content_and_baseline_identity_like_point_reads() {
+        for corruption in ["content", "identity", "kind", "deleted", "unknown-field"] {
+            let (_directory, store, states) = fixture(1);
+            let mut raw = serde_json::to_value(store.projection_baseline(&states[0].id).unwrap().unwrap()).unwrap();
+            match corruption {
+                "content" => raw["content"]["content"] = serde_json::json!([256]),
+                "identity" => raw["state"]["id"] = serde_json::json!("another-entry"),
+                "kind" => raw["state"]["kind"] = serde_json::json!("folder"),
+                "deleted" => raw["state"]["deleted"] = serde_json::json!(true),
+                "unknown-field" => raw["unfamiliar"] = serde_json::json!(true),
+                _ => unreachable!(),
+            }
+            store.connection.execute("UPDATE projection_baselines SET record=?1 WHERE entry_id=?2", params![serde_json::to_string(&raw).unwrap(), states[0].id.as_str()]).unwrap();
+            assert!(store.projection_baseline(&states[0].id).is_err(), "{corruption}");
+            assert!(store.projection_clean_prefix(&states).is_err(), "{corruption}");
+        }
+    }
+
+    #[test]
+    fn recovery_page_bound_is_explicit_and_empty_page_performs_no_baseline_read() {
+        let (_directory, store, states) = fixture(1);
+        let reads = BaselineReads::new(&store.connection);
+        assert_eq!(store.projection_clean_prefix(&[]).unwrap(), 0);
+        assert!(store.projection_clean_prefix(&vec![states[0].clone(); Store::PROJECTION_RECOVERY_MAX_STATES + 1]).is_err());
+        assert_eq!(reads.count.get(), 0);
     }
 }

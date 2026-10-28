@@ -432,3 +432,53 @@ fn blocked_first_page_does_not_starve_a_later_entry_projection() {
         "---\n_id: unrelated\n---\nPreserved\n"
     );
 }
+
+#[test]
+fn collection_value_save_preserves_unrelated_family_files_across_recovery_pages() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(dir.path()).unwrap();
+    vault.family_enroll(&zorid_store::FamilyScope {
+        realm_id: zorid_sync_protocol::RealmId::new("recovery-realm").unwrap(),
+        vault_id: zorid_sync_protocol::VaultId::new("recovery-vault").unwrap(),
+    }).unwrap();
+    let mut ordinary = Vec::new();
+    for index in 0..=zorid_store::Store::PROJECTION_RECOVERY_MAX_STATES {
+        let id = EntryId::new(format!("ordinary-{index:03}")).unwrap();
+        let path = format!("Ordinary {index:03}.md");
+        let content = format!("---\nUnrelated: {index}\n---\nExact ordinary body 🐈 {index}\n").into_bytes();
+        let outcome = vault.family_apply(&MutationRequest {
+            operation_id: OperationId::new(format!("ordinary-create-{index}")).unwrap(),
+            mutation: Mutation::Create {
+                id: id.clone(),
+                path: VaultPath::new(&path).unwrap(),
+                kind: EntryKind::File,
+                content: Some(content.clone()),
+            },
+        }, Some(zorid_store::FamilyCreateMode::Text)).unwrap();
+        assert!(matches!(outcome.projection, ProjectionStatus::Projected));
+        let state = vault.read(&id).unwrap().unwrap().state;
+        ordinary.push((id, path, state.revision, content));
+    }
+    let collection = create(&mut vault);
+    let created = entry(&mut vault, &collection, "recovery-member", "Managed.md");
+    let before = &created.snapshot.entries[0];
+    let status = collection.properties.iter().find(|field| field.datatype == zorid_store::DatabaseDatatype::Status).unwrap();
+    let done = status.options.last().unwrap();
+    let saved = request(&mut vault, json!({
+        "op":"set_entry", "operationId":"recovery-value-save", "entryId":before.entry_id,
+        "expectedRevision":before.revision, "expectedCollectionRevision":collection.revision,
+        "values":{(status.id.clone()):done.id}
+    })).unwrap();
+    assert_eq!(saved.projection.pending, 0, "{:?}", saved.projection);
+    assert_eq!(saved.snapshot.entries[0].entry_id, before.entry_id);
+    assert_eq!(saved.snapshot.entries[0].values.get(&status.id), Some(&json!(done.id)));
+    assert!(std::fs::read_to_string(dir.path().join("Managed.md")).unwrap().ends_with("# Keep body\n\nText 🐈\n"));
+    let report = vault.recover().unwrap();
+    assert!(report.blocked.is_empty(), "{:?}", report.blocked);
+    for (id, path, revision, content) in ordinary {
+        let saved = vault.read(&id).unwrap().unwrap();
+        assert_eq!(saved.state.revision, revision);
+        assert_eq!(saved.content.as_deref(), Some(content.as_slice()));
+        assert_eq!(std::fs::read(dir.path().join(path)).unwrap(), content);
+    }
+}

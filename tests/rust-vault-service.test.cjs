@@ -85,6 +85,28 @@ process.stdin.on('data', chunk => {buffer=Buffer.concat([buffer,chunk]); while(b
   result={changes:[{cursor:'1',origin,requires_full_reload:true,entries:[]}],next_cursor:'1',head_cursor:'1',has_more:false};
   if(mode==='family_journal_bad_entries')result.changes[0].requires_full_reload=false;
   if(mode==='family_journal_bad_origin')result.changes[0].origin={kind:'received_update'};
+  if(mode.startsWith('family_journal_external_')){
+   result.changes[0].origin={kind:'external_observation',observation_id:'bb3fd199-c11e-4348-ba95-cb62c9c0dddd'};
+   const origin=result.changes[0].origin;
+   if(mode==='family_journal_external_missing')delete origin.observation_id;
+   if(mode==='family_journal_external_empty')origin.observation_id='';
+   if(mode==='family_journal_external_number')origin.observation_id=7;
+   if(mode==='family_journal_external_null')origin.observation_id=null;
+   if(mode==='family_journal_external_spaces')origin.observation_id='invalid observation';
+   if(mode==='family_journal_external_control')origin.observation_id='invalid'+String.fromCharCode(0)+'observation';
+   if(mode==='family_journal_external_long')origin.observation_id='x'.repeat(129);
+   if(mode==='family_journal_external_extra')origin.extra=true;
+   if(mode==='family_journal_external_wrong_field'){delete origin.observation_id;origin.operation_id='wrong-field';}
+   if(mode==='family_journal_external_unknown')origin.kind='external_reconciliation';
+   if(mode==='family_journal_external_deltas'){
+    const state={id:'stable-entry',revision:'rename-revision',path:'Renamed.md',kind:'file',deleted:false};
+    const presentation={id:state.id,ctime_ms:1,mtime_ms:2,size_bytes:4};
+    const cursor=req.command.cursor;
+    result=cursor==='0'?{changes:[{cursor:'1',origin:{kind:'external_observation',observation_id:'rename-observation'},requires_full_reload:false,entries:[{state,presentation}]}],next_cursor:'1',head_cursor:'2',has_more:true}
+     :cursor==='1'?{changes:[{cursor:'2',origin:{kind:'external_observation',observation_id:'delete-observation'},requires_full_reload:false,entries:[{state:{...state,revision:'delete-revision',deleted:true},presentation:{...presentation,mtime_ms:3}}]}],next_cursor:'2',head_cursor:'2',has_more:false}
+     :{changes:[],next_cursor:'2',head_cursor:'2',has_more:false};
+   }
+  }
  }
  if(mode.startsWith('history_') && req.command.method==='recovery_list')result={versions:[{snapshotId:'2',entryId:req.command.entry_id,path:'Note.md',capturedAtMs:100,byteLength:3}]};
  if(mode.startsWith('history_') && req.command.method==='recovery_read') {
@@ -466,4 +488,31 @@ test('saturated actual leased host queue rejects a draft chunk before any redund
   let iterations=0;const original=new Uint8Array(131072),bytes=new Proxy(original,{get(target,key){if(key===Symbol.iterator){iterations++;return target[Symbol.iterator].bind(target);}return Reflect.get(target,key,target);}});
   const scoped=host.withClientLease({local_store_id:'store',client_id:'client',token:'token'});
   await assert.rejects(scoped.documentDrafts('client',{op:'upload_chunk',job:stdioDraftJob,offset:'0'},bytes),{code:'request_limit'});assert.equal(iterations,0);assert.equal(host.queuedCount,32);assert.equal(host.queuedBytes,0);
+});
+
+
+// The actual R5 external rename persisted local_changes cursor1007 with this
+// documented Rust origin. Rejecting it poisoned every later command on the host.
+test('external observation full reload from the native journal keeps the framed host alive',async t=>{
+  const host=await fixture(t,'family_journal_external_full_reload',{timeoutMs:5000});
+  const page=await host.changesAfter('0',100);
+  assert.deepEqual(page.changes[0],{cursor:'1',origin:{kind:'external_observation',observation_id:'bb3fd199-c11e-4348-ba95-cb62c9c0dddd'},requires_full_reload:true,entries:[]});
+  assert.equal((await host.status()).pending_outbox,'0');assert.equal(host.exited,false);
+  await host.close();assert.equal(host.child.exitCode,0);assert.equal(host.child.signalCode,null);
+});
+
+test('external observation rename and tombstone pages preserve cursor and logical identity without aborting the framed host',async t=>{
+  const host=await fixture(t,'family_journal_external_deltas',{timeoutMs:5000});
+  const renamed=await host.changesAfter('0',100),removed=await host.changesAfter(renamed.next_cursor,100),settled=await host.changesAfter(removed.next_cursor,100);
+  assert.equal(renamed.has_more,true);assert.equal(renamed.changes[0].entries[0].state.path,'Renamed.md');
+  assert.equal(removed.changes[0].entries[0].state.id,renamed.changes[0].entries[0].state.id);assert.equal(removed.changes[0].entries[0].state.deleted,true);
+  assert.equal(removed.next_cursor,'2');assert.equal(removed.has_more,false);assert.deepEqual(settled.changes,[]);
+  assert.equal((await host.status()).pending_outbox,'0');assert.equal(host.exited,false);
+  await host.close();assert.equal(host.child.exitCode,0);assert.equal(host.child.signalCode,null);
+});
+
+for(const shape of ['missing','empty','number','null','spaces','control','long','extra','wrong_field','unknown'])test(`external observation journal rejects malformed or unknown ${shape} origin`,async t=>{
+  const host=await fixture(t,`family_journal_external_${shape}`,{timeoutMs:5000});
+  await assert.rejects(host.changesAfter('0',100),{code:'invalid_response',commitUncertain:true});
+  await assert.rejects(host.status(),{code:'invalid_response',commitUncertain:true});
 });

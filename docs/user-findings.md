@@ -1,5 +1,162 @@
 # User findings queue
 
+## Remove unnecessary rescan/reindex work; notes and Bases both slow — 2026-10-28
+
+
+**Startup/opening batch ACCEPTED; main/install in progress.** Final R6 has600
+normal note switches32.2ms median/~35p95/176.7max versus old9766max;9Baseopens
+max456.8ms versus8889. Restored large editor7.315–9.168s versus13.690–14.872s.
+No navigation rescans/cleanCAS;35.019s idle0rescan/runtimeStep/indexwork. All4real
+external changes+full logical/physical restoration,1001exactbefore/after hashes/
+paths,3normal exits0/nullsignal/cleanup pass. User explicitly prioritizes confirmed
+coherent batch integration/installation now. Broader performance remains OPEN:
+Baseedit last2692ms median/Updating5of5; external-to-current-Search21.5–34.2s.
+Do not call these fixed or use them to hold this accepted batch for more profiling.
+Earlier dated observations below remain historical evidence.
+
+
+Latest user delivery steering: complete reviewed coherent startup/opening/Search/
+bridge batch acceptance, then integrate/install it now; keep Base-edit delay as a
+separate open finding rather than blocking delivery for more qualitative profiling.
+R6 bounded all4external operations +full logical/physical restoration pass; final
+3-run startup/opening/idle/external/forced campaign is active on869c5d20/hosta1c862be.
+External phases25.8–31.8s remain an explicit latency limitation; early recovery
+11.23snote/9.95sBase are not warm-navigation timing. Base-edit2692ms median remains
+open. Installation pending final batch acceptance, not a claim all performance solved.
+
+
+R4 core external adoption/index contents proved correct; stale pinned Search and
+current:false admission caused UI0results. Reviewed Search fix composedd5f7e53a,
+63focused+TS/build pass, R5bounded external4-event verification live84914; root
+holds heavy/UI work. Separate actual Base-edit gate still fails2692ms median/
+3393max/Updating5of5 despite18.7ms rendererframes. Exact-host sample/profile and
+scoped same-Tx metadata-reuse source work recorded in execution checkpoint.
+No main integration or installation until both critical gates and final campaign.
+
+
+R4 successor passes35s idle with zero rescan/runtime_step/document_work/indexops,
+then forced audit; fails genuine external Note0999 edit before create/rename/
+delete. Cause remains unclassified pending primary error/trace. Startup retains
+same live50773 for cleanup/restoration/source proofs, no restart or lane release.
+Do not infer acceptance or an app cause from partial observations. Root holds
+heavy/UI work, main integration and installation.
+
+
+Final R4 campaign overall failed at Search harness pagination (visible Load more
+results was not clicked). Three normal navigation passes/600switch observations
+show zero navigation rescans, but idle/external/forced gates were not reached;
+no full acceptance claim. All1001source paths/hashes,3normal exits0/nullsignal and
+cleanup proofs pass. Reviewed harness fix/full successor pending on same frozen
+product; root holds heavy/UI work and installation until timing owner releases.
+
+
+R3 no-op query-count regression is actual RED(1binding+1revision)→GREEN(zero),
+with5/5 corruption/import/replacement tests, hints8/namespace57/import9/create8/
+database15/large-compound1 green. Root builds sourcebc0737a8 now, then startup
+will measure a short startup/Base proof. Renderer retry correctly resumes the
+same unfinished inventory; no import-status suppression/edit planned. Request-
+local Pump manifest reuse and concurrent retry joining are separate owned source
+follow-ups. Main, full acceptance and installation remain held.
+
+
+Latest lifecycle diagnostic verifies432000-byte activation38ms/no pre-ready rescan,
+but a post-ready5.277s rescan blocks Base5.543s. Startup16.72s/native10.984s remains
+unaccepted. Actual trigger is under bounded reason-telemetry investigation;
+all runtime steps were Observe, not Pump. Normal exit/host cleanup/source hashes
+verified. Native no-op probe implementation is pending; root holds UI/heavy work.
+
+
+Watcher lifecycle fix484bb892 is reviewed/composed as0fa97c83; root136focused/
+adjacent Node checks pass. Native R2 sample confirms earlier hotspots reduced;
+remaining unused CRDT Text-mode probe is26.5% of startup samples. Scoped native
+no-op dataflow follow-up is ACKed, pending source/review/controlled native gates.
+Sample finished/released; final native build, representative campaign and install
+remain pending. No startup fix claim from source or isolated checks.
+
+R2 actual acceptance failed: full attempt startup~25s/native~12s then CDP activation
+deadline; retry verifies correct432000-byte document/37ms activation but still
+startup13.5s/native7.95s and extra2.515s rescan. Bytes/exits remain verified. The
+maintenance owner confirmed broker subscription ordering prematurely closes the
+pre-open watcher; a narrow lifecycle red/fix is underway, retaining real pause-gap
+guards. Startup owns a short exact-host sample; root holds heavy/UI work. Core
+open~8s remains under investigation. No final campaign/install until resolved.
+
+R2 source and focused validation are ready. The serialized source-matched native
+build passed (code6ce25e80, host01282d4b). Startup owns the expanded profiling
+lane; root holds UI/heavy work. All243 combined frontend tests and the native exact-name,
+path-hint, namespace, SQLite-lock and unchanged17MiB compound restart gates pass.
+Actual exact-name work-count regression went red before the fix. Representative
+startup/open/edit, idle no-op counts and real external-change correctness remain
+pending; do not mark complete, integrate as delivered or install yet.
+
+**Active user goal; not complete or installed.** Representative unchanged-vault
+profiling reproduces multi-second ordinary-note and Base opening behind native
+rescan/runtime FIFO work. The first combined release removes redundant clean
+checkpoint writes but does not fix startup or long tails. User explicitly requests
+removing ALL unnecessary rescans/reindexing, preserving actual external-edit,
+rename/delete, fallback/restart discovery, current queries, corruption and recovery.
+Maintenance-trigger and validated generation-cache owners/scopes, measured results,
+resource handoff and incomplete large-test limits are recorded in the latest
+execution checkpoint. Source head `a3159547`/host `73ad0c93` is an intermediate
+candidate, not a completion. Main/installation remain owned by root until validated
+follow-up. Ordinary and Base open latency are both acceptance gates.
+
+## Sibling Base freshness during pending publication — audit finding, 2026-10-28
+
+Read-only combined seam review found a preexisting edge: a generic database
+notification can dominate a coalesced exact-path notification while a logical
+edit is awaiting physical publication. A full reload that observes unchanged
+physical revisions may leave a sibling Base stale; mutation CAS still protects
+writes. No introduced R2 regression or reproduced native failure is established.
+The prepared two-visible-owner predicate/group/restart gate covers ordinary
+successful publication only. Pending-publication/fault injection remains an
+explicit follow-up correctness gap; do not claim this gate proves that case.
+
+## Base edit pause, embedded heading and slash menu — 2026-10-28
+
+**In progress.** User reports a freeze followed by Updating for about half a
+second after editing an entry; requests serious performance optimization. Separate
+screenshot requests removing the embedded Base filename heading (`Untitled.base`)
+while keeping the collection title and controls. Do not conflate this post-edit
+latency with the previously fixed idle one-second flashing.
+
+Root owns measured native save-to-ready baseline and session/workspace/controller
+performance fixes on `codex/bases-edit-performance` from `b0b09005`; named
+`notion_page_peek` owns an isolated embed-heading-only change. Audit owns feedback
+loop inventory and independent review. Main lane acknowledged by coordinator at `b0b09005`;
+no integration until reviewed and validated. Diagnose with a
+red-capable real-entry-edit timing loop before choosing an optimization. Preserve
+schema/member witnesses, durable save acknowledgement, failed drafts, body bytes,
+selection/focus and real update feedback. Standing build/install/replace applies.
+Latest additive request: match Notion’s slash-command layout, opening/closing
+motion and keyboard/mouse behavior for Zorid’s supported commands. Named
+`notion_picker_match` owns isolated `codex/notion-slash-menu` from `b0b09005`;
+independent audit and native comparison remain acceptance gates. Fresh tab-scoped
+Notion reference shows compact 324px popup, 32px rows, 20px icon slots, grouped
+commands and 42px Close menu/Escape footer. Computed styles show a 1ms
+opacity/transform transition and 20ms hover; subframe JS animation is unmeasured.
+
+Measured installed baseline: five real Enter commits in a controlled 1,000-note
+vault produce median 3940ms ready, Updating 5/5, maximum frame interval 17.8ms.
+The renderer continues drawing while awaiting completion. Evidence and runnable
+loop: `tmp/bases-edit-performance-20261028/measure-edit.cjs` and
+`baseline-clean001.log`. Minimization and diagnosis confirmed native scaling; a targeted frontend reload
+experiment was withdrawn without a reliable gain. User explicitly approved the
+scoped Rust fix, focused tests and one serialized release build. Coordinator ACKs
+separate recovery and journal ownership in the execution checkpoint. Native source
+and focused validation are now complete in R2; measured acceptance remains pending.
+
+## Separate startup and ordinary file-open performance — 2026-10-28
+
+User relays an independent session on `.worktrees/startup-file-performance` from
+`b0b09005`. Named ownership: `src/ui/note-durable-state.ts` and tests for redundant
+clean-flush CAS (audit reports100clean flushes→100checkpoint writes), plus startup
+instrumentation/harness initially. No main mutation there. Root acknowledged no
+overlap with Bases/slash work and will integrate reviewed final commits through
+the serialized lane. Own profiles/ports and coordinated timing/build resources;
+Rust recovery remains with the Bases recovery worker. Implementation and verified
+gain belong to that session and are not established by this queue entry.
+
 ## Full supported Notion database interaction match — 2026-10-27
 
 **Delivered within supported desktop scope — 2026-10-28.** Product `a4696820`

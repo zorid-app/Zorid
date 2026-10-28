@@ -20,7 +20,7 @@ function fixture(config:{query?:(spec:SearchSpec,index:number)=>Promise<Document
   const frames:DocumentSearchFrame[]=[],events:string[]=[],opened:any[]=[];let callbacks!:DocumentSearchCallbacks,opens=0,fresh=0,alive=true;
   const unused=async():Promise<never>=>{throw new Error('unexpected');};
   const query=(spec:SearchSpec):DocumentRichQuery=>({queryId:spec.query,prepare:async()=>({state:'ready',cursor:'start' as DocumentCursor}),page:async()=>page(spec),close:async()=>{events.push(`close:${spec.query}`);}});
-  const service:DocumentService={status:unused,initialize:unused,rebuild:unused,begin:unused,pump:unused,publish:unused,discard:unused,open:async()=>{
+  const service:DocumentService={status:async()=>({source,snapshot,coveredSource:source,current:true,rebuildRequired:false,coverageComplete:true}),initialize:unused,rebuild:unused,begin:unused,pump:unused,publish:unused,discard:unused,open:async()=>{
     opens++;events.push('open');await config.open?.();
     return {snapshot,source,coverageComplete:true,pinId:'pin' as DocumentPin['pinId'],metadata:unused,search:unused,backlinks:unused,base:unused,
       close:async()=>{events.push('closePin');await config.closePin?.();},richSearch:async({spec})=>{events.push(`start:${spec.query}`);return config.query?config.query(spec,events.filter(e=>e.startsWith('start:')).length):query(spec);}};

@@ -597,7 +597,7 @@ fn capture_authority(tx: &Connection) -> IndexResult<DocumentManifest> {
     entries.retain(|entry| !entry.state.path.as_str().split('/').any(|part| part.starts_with('.')));
     let presentations = entries
         .iter()
-        .map(|e| presentation::presentation(tx, &e.state))
+        .map(|e| presentation::presentation_for_metadata(tx, e))
         .collect::<Result<Vec<_>>>()?;
     let result = DocumentManifest {
         local_store_id: source.local_store_id().clone(),
@@ -617,6 +617,9 @@ fn capture(tx: &DocumentTransaction<'_>) -> IndexResult<DocumentManifest> {
 }
 fn header(tx: &DocumentTransaction<'_>, snapshot: &IndexSnapshotId) -> IndexResult<Header> {
     let c = control(tx)?;
+    header_with_control(tx, &c, snapshot)
+}
+fn header_with_control(tx: &DocumentTransaction<'_>, c: &Control, snapshot: &IndexSnapshotId) -> IndexResult<Header> {
     if c.epoch != *snapshot.generation_epoch() {
         return Err(IndexError::SnapshotExpired.into());
     }
@@ -628,7 +631,7 @@ fn header(tx: &DocumentTransaction<'_>, snapshot: &IndexSnapshotId) -> IndexResu
         )
         .optional()?;
     let h: Header = decode(&raw.ok_or(DocumentIndexError::RebuildRequired)?)?;
-    validate_header(tx, &c, snapshot, &h)?;
+    validate_header(tx, c, snapshot, &h)?;
     Ok(h)
 }
 fn validate_header(
@@ -647,7 +650,12 @@ fn validate_header(
     h.fence()?;
     Ok(())
 }
+#[cfg(test)]
+thread_local! { static BUILDER_RESTORES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
 fn builder(tx: &DocumentTransaction<'_>, h: &Header) -> IndexResult<GenerationBuilder> {
+    #[cfg(test)]
+    BUILDER_RESTORES.with(|count| count.set(count.get() + 1));
     let manifest = h.manifest.manifest()?;
     let mut b = GenerationBuilder::new(manifest.clone(), h.fence()?)
         .map_err(|_| DocumentIndexError::RebuildRequired)?;
@@ -689,6 +697,57 @@ fn builder(tx: &DocumentTransaction<'_>, h: &Header) -> IndexResult<GenerationBu
     b.begin_pump();
     Ok(b)
 }
+/// An admission is reusable only while the exact disposable cache snapshot is
+/// unchanged. Own SQL writes advance total_changes, other connections advance
+/// data_version, and same-schema DDL replacement advances schema_version.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct GenerationAdmissionStamp {
+    data_version: i64,
+    schema_version: i64,
+    total_changes: u64,
+}
+impl GenerationAdmissionStamp {
+    fn read(tx: &DocumentTransaction<'_>) -> IndexResult<Self> {
+        Ok(Self {
+            data_version: tx.pragma_query_value(None, "data_version", |row| row.get(0))?,
+            schema_version: tx.pragma_query_value(None, "schema_version", |row| row.get(0))?,
+            total_changes: tx.total_changes(),
+        })
+    }
+}
+#[derive(Clone)]
+pub(super) struct DocumentGenerationAdmission {
+    stamp: GenerationAdmissionStamp,
+    generation: std::sync::Arc<Generation>,
+    database_state: std::sync::Arc<DatabaseQueryState>,
+}
+/// Callers have already performed live schema/control/authority validation and
+/// selected its current published head. Only the expensive immutable row restore
+/// is reused; status still observes source authority in its current transaction.
+fn admitted_generation(
+    tx: &DocumentTransaction<'_>,
+    id: &IndexSnapshotId,
+) -> IndexResult<DocumentGenerationAdmission> {
+    // Capture inside the held cache read snapshot, never after commit: a writer
+    // may publish a later generation concurrently with this older observation.
+    let stamp = GenerationAdmissionStamp::read(tx)?;
+    let cached = tx.admitted_generation.borrow().as_ref()
+        .filter(|entry| entry.stamp == stamp && entry.generation.id() == id).cloned();
+    if let Some(cached) = cached { return Ok(cached); }
+    tx.admitted_generation.borrow_mut().take();
+    let h = header(tx, id)?;
+    if !h.published { return Err(DocumentIndexError::RebuildRequired); }
+    let (_, generation) = builder(tx, &h)?.finish()
+        .map_err(|_| DocumentIndexError::RebuildRequired)?.into_parts();
+    let admission = DocumentGenerationAdmission {
+        stamp,
+        generation: std::sync::Arc::new(generation),
+        database_state: std::sync::Arc::new(h.manifest.database_state),
+    };
+    *tx.admitted_generation.borrow_mut() = Some(admission.clone());
+    Ok(admission)
+}
+
 fn reusable_record(
     tx: &DocumentTransaction<'_>,
     previous: Option<&(Header, Manifest)>,
@@ -714,6 +773,10 @@ fn reusable_record(
 }
 
 fn check_stage(tx: &DocumentTransaction<'_>, h: &Header) -> IndexResult<()> {
+    let c = matching_stage_control(tx, h)?;
+    check_current_stage(tx, &c, h)
+}
+fn matching_stage_control(tx: &DocumentTransaction<'_>, h: &Header) -> IndexResult<Control> {
     let c = control(tx)?;
     let raw: Option<String> = tx
         .query_row(
@@ -726,12 +789,23 @@ fn check_stage(tx: &DocumentTransaction<'_>, h: &Header) -> IndexResult<()> {
     if active != *h || active.published {
         return Err(IndexError::StaleIndex.into());
     }
-    check_current_stage(tx, &c, h)
+    Ok(c)
 }
 /// The caller holds this transaction's validated control and actual unpublished
 /// header: either freshly selected here, or reloaded and compared by check_stage.
 /// External/stale header callers must retain check_stage's full reload/equality.
 fn check_current_stage(
+    tx: &DocumentTransaction<'_>,
+    control: &Control,
+    h: &Header,
+) -> IndexResult<()> {
+    check_current_stage_fence(tx, control, h)?;
+    if capture(tx)? != h.manifest {
+        return Err(DocumentIndexError::RebuildRequired);
+    }
+    Ok(())
+}
+fn check_current_stage_fence(
     tx: &DocumentTransaction<'_>,
     control: &Control,
     h: &Header,
@@ -746,10 +820,60 @@ fn check_current_stage(
         &source(tx)?,
         control.head.as_ref().map(Snapshot::id).transpose()?.as_ref(),
     )?;
-    if capture(tx)? != h.manifest {
-        return Err(DocumentIndexError::RebuildRequired);
-    }
     Ok(())
+}
+
+/// Local to one Pump request, not a source cache across commands. Read before
+/// the first authority read: BEGIN DEFERRED has not yet fixed its snapshot.
+/// A writer in that lazy-snapshot window only causes conservative recapture.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct PumpAuthorityStamp {
+    data_version: i64,
+    schema_version: i64,
+    total_changes: u64,
+}
+impl PumpAuthorityStamp {
+    fn read(tx: &DocumentTransaction<'_>) -> IndexResult<Self> {
+        // DocumentTransaction derefs to CACHE; these must use AUTHORITY.
+        Ok(Self {
+            data_version: tx.authority.pragma_query_value(None, "data_version", |row| row.get(0))?,
+            schema_version: tx.authority.pragma_query_value(None, "schema_version", |row| row.get(0))?,
+            total_changes: tx.authority.total_changes(),
+        })
+    }
+}
+struct PendingPumpSource {
+    before: PumpAuthorityStamp,
+}
+impl PendingPumpSource {
+    fn begin(tx: &DocumentTransaction<'_>) -> IndexResult<Self> {
+        Ok(Self { before: PumpAuthorityStamp::read(tx)? })
+    }
+    fn admit(self, tx: &DocumentTransaction<'_>, snapshot: &IndexSnapshotId) -> IndexResult<PumpSourceAdmission> {
+        let current = control(tx)?;
+        let header = header_with_control(tx, &current, snapshot)?;
+        // The header came from this same snapshot; avoid loading it again.
+        check_current_stage(tx, &current, &header)?;
+        Ok(PumpSourceAdmission { before: self.before, header })
+    }
+}
+/// Own the exact fully validated header; no generic stamp can bypass a check
+/// for some other manifest. This value is dropped at the end of this Pump.
+struct PumpSourceAdmission {
+    before: PumpAuthorityStamp,
+    header: Header,
+}
+impl PumpSourceAdmission {
+    fn recheck(&self, tx: &DocumentTransaction<'_>) -> IndexResult<()> {
+        let current = matching_stage_control(tx, &self.header)?;
+        // Establish the fresh authority view and check all publication fences
+        // before deciding whether its manifest still needs full traversal.
+        check_current_stage_fence(tx, &current, &self.header)?;
+        if PumpAuthorityStamp::read(tx)? != self.before && capture(tx)? != self.header.manifest {
+            return Err(DocumentIndexError::RebuildRequired);
+        }
+        Ok(())
+    }
 }
 
 fn index_status(
@@ -766,19 +890,12 @@ fn index_status(
             return Ok(DocumentIndexStatus::Building);
         };
         let id = head.id()?;
-        let h = header(tx, &id)?;
-        if !h.published {
-            return Err(DocumentIndexError::RebuildRequired);
-        }
-        let (_, generation) = builder(tx, &h)?
-            .finish()
-            .map_err(|_| DocumentIndexError::RebuildRequired)?
-            .into_parts();
+        let admission = admitted_generation(tx, &id)?;
         Ok(DocumentIndexStatus::Ready {
             snapshot: id,
-            covered_watermark: h.manifest.watermark,
+            covered_watermark: admission.generation.manifest().source().watermark().as_str().into(),
             observed_source_head: observed_source.watermark().as_str().into(),
-            coverage_complete: generation.coverage_complete(),
+            coverage_complete: admission.generation.coverage_complete(),
         })
     })();
     match result {
@@ -1327,14 +1444,11 @@ impl Store {
         DocumentIndexProgress,
         Option<std::result::Result<T, PreviewCaptureError<E>>>,
     )> {
-        let (h, mut b, previous) = {
+        let (admission, mut b, previous) = {
             let tx = self.document_transaction(TransactionBehavior::Deferred)?;
-            let h = header(&tx, &stage.snapshot)?;
-            if h.published {
-                return Err(IndexError::StaleIndex.into());
-            }
-            check_stage(&tx, &h)?;
-            let b = builder(&tx, &h)?;
+            let admission = PendingPumpSource::begin(&tx)?.admit(&tx, &stage.snapshot)?;
+            let h = &admission.header;
+            let b = builder(&tx, h)?;
             let previous = if let Some(expected) = &h.expected {
                 let id = expected.id()?;
                 if id.versions() == stage.snapshot.versions() {
@@ -1351,8 +1465,9 @@ impl Store {
                 None
             };
             tx.commit()?;
-            (h, b, previous)
+            (admission, b, previous)
         };
+        let h = &admission.header;
         let mut prepared = Vec::new();
         let mut source_bytes = 0usize;
         let mut encoded_bytes = 0usize;
@@ -1498,8 +1613,10 @@ impl Store {
             ready: b.ready(),
         };
         let tx = self.document_transaction(TransactionBehavior::Immediate)?;
-        // The source and derived-head fences are rechecked in this same write Tx.
-        check_stage(&tx, &h)?;
+        // Fresh source, actual stage/control/header and publication fences are
+        // still checked in this write Tx. Only an unchanged authority reuses
+        // this request's already complete manifest validation.
+        admission.recheck(&tx)?;
         let existing:i64=tx.query_row("SELECT coalesce(sum(length(CAST(record AS BLOB))+length(CAST(entry_id AS BLOB))),0) FROM document_index_rows WHERE snapshot_key=?1",[h.snapshot.key()],|r|r.get(0))?;
         let descriptor_bytes = header_bytes(&tx, &h.snapshot.key())?;
         if existing < 0
@@ -1848,23 +1965,15 @@ impl Store {
         let tx = self.document_transaction(TransactionBehavior::Deferred)?;
         let c = control(&tx)?;
         let id = c.head.ok_or(DocumentIndexError::NotReady)?.id()?;
-        let h = header(&tx, &id)?;
-        if !h.published {
-            return Err(DocumentIndexError::RebuildRequired);
-        }
-        let (_, generation) = builder(&tx, &h)?
-            .finish()
-            .map_err(|_| DocumentIndexError::RebuildRequired)?
-            .into_parts();
-        let database_state = h.manifest.database_state.clone();
+        let admission = admitted_generation(&tx, &id)?;
         tx.commit()?;
         self.document_query_pins
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(DocumentQueryPin {
             owner: self.document_query_owner.clone(),
-            generation: std::sync::Arc::new(generation),
+            generation: admission.generation,
             pins: self.document_query_pins.clone(),
-            database_state,
+            database_state: admission.database_state.as_ref().clone(),
         })
     }
     /// Revalidate only the registration of already-admitted immutable metadata.
@@ -1981,6 +2090,297 @@ mod cache_snapshot_tests {
         let stage = store.begin_document_index().unwrap();
         while !store.pump_document_index(&stage).unwrap().ready {}
         store.publish_document_index(&stage).unwrap();
+    }
+
+    #[test]
+    fn unchanged_status_and_snapshots_share_one_validated_generation_admission() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path().join("store.sqlite")).unwrap();
+        store.apply(&create("admission-note")).unwrap();
+        store.initialize_document_index().unwrap();
+        build(&mut store);
+        let before = BUILDER_RESTORES.with(std::cell::Cell::get);
+        for _ in 0..5 {
+            assert!(matches!(store.document_index_status().unwrap(), DocumentIndexStatus::Ready { .. }));
+        }
+        let first = store.open_document_snapshot().unwrap().shared_generation();
+        for _ in 0..5 {
+            assert!(matches!(store.document_index_status().unwrap(), DocumentIndexStatus::Ready { .. }));
+        }
+        let second = store.open_document_snapshot().unwrap().shared_generation();
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+        assert_eq!(BUILDER_RESTORES.with(std::cell::Cell::get) - before, 1,
+            "unchanged observations must not restore and rebuild the published index again");
+    }
+
+    #[test]
+    fn authority_changes_observe_fresh_source_without_restoring_unchanged_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path().join("store.sqlite")).unwrap();
+        store.apply(&create("before-save")).unwrap();
+        store.initialize_document_index().unwrap();
+        build(&mut store);
+        let first = store.open_document_snapshot().unwrap().shared_generation();
+        let before = BUILDER_RESTORES.with(std::cell::Cell::get);
+        store.apply(&create("after-save")).unwrap();
+        let (source, status) = store.document_index_status_with_source().unwrap();
+        let DocumentIndexStatus::Ready { covered_watermark, observed_source_head, .. } = status else { panic!("retained published generation must stay ready"); };
+        assert_eq!(observed_source_head, source.watermark().as_str());
+        assert_ne!(covered_watermark, observed_source_head);
+        let second = store.open_document_snapshot().unwrap().shared_generation();
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+        assert_eq!(BUILDER_RESTORES.with(std::cell::Cell::get), before);
+        build(&mut store);
+        let next = store.open_document_snapshot().unwrap().shared_generation();
+        assert!(!std::sync::Arc::ptr_eq(&first, &next));
+        assert_eq!(next.manifest().source(), &source);
+    }
+
+    #[test]
+    fn admitted_generation_rejects_same_connection_row_corruption() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path().join("store.sqlite")).unwrap();
+        store.apply(&create("own-corruption")).unwrap();
+        store.initialize_document_index().unwrap();
+        build(&mut store);
+        assert!(matches!(store.document_index_status().unwrap(), DocumentIndexStatus::Ready { .. }));
+        store.document_cache.connection.execute("UPDATE document_index_rows SET record='{}'", []).unwrap();
+        assert!(matches!(store.document_index_status().unwrap(), DocumentIndexStatus::RebuildRequired));
+        assert!(matches!(store.open_document_snapshot(), Err(DocumentIndexError::RebuildRequired)));
+    }
+
+    #[test]
+    fn admitted_generation_rejects_external_connection_row_corruption() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path().join("store.sqlite")).unwrap();
+        let cache = dir.path().canonicalize().unwrap().join("cache.sqlite");
+        store.enable_document_cache(&cache).unwrap();
+        store.apply(&create("external-corruption")).unwrap();
+        store.initialize_document_index().unwrap();
+        build(&mut store);
+        assert!(matches!(store.document_index_status().unwrap(), DocumentIndexStatus::Ready { .. }));
+        let writer = Connection::open(&cache).unwrap();
+        writer.execute("UPDATE document_index_rows SET record='{}'", []).unwrap();
+        assert!(matches!(store.document_index_status().unwrap(), DocumentIndexStatus::RebuildRequired));
+        assert!(matches!(store.open_document_snapshot(), Err(DocumentIndexError::RebuildRequired)));
+    }
+
+    #[test]
+    fn admission_stamp_stays_with_held_snapshot_before_concurrent_corruption() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path().join("store.sqlite")).unwrap();
+        let cache = dir.path().canonicalize().unwrap().join("cache.sqlite");
+        store.enable_document_cache(&cache).unwrap();
+        store.apply(&create("held-snapshot")).unwrap();
+        store.initialize_document_index().unwrap();
+        build(&mut store);
+        let tx = store.document_transaction(TransactionBehavior::Deferred).unwrap();
+        let observed = source(&tx).unwrap();
+        let writer = Connection::open(&cache).unwrap();
+        writer.execute("UPDATE document_index_rows SET record='{}'", []).unwrap();
+        // The held old cache snapshot remains valid. It must never be stamped
+        // with the external writer's newer SQLite state after this commit.
+        assert!(matches!(index_status(&tx, &observed).unwrap(), DocumentIndexStatus::Ready { .. }));
+        tx.commit().unwrap();
+        assert!(matches!(store.document_index_status().unwrap(), DocumentIndexStatus::RebuildRequired));
+    }
+
+    #[test]
+    fn admitted_generation_rejects_same_connection_empty_recreated_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path().join("store.sqlite")).unwrap();
+        store.apply(&create("recreated-rows")).unwrap();
+        store.initialize_document_index().unwrap();
+        build(&mut store);
+        assert!(matches!(store.document_index_status().unwrap(), DocumentIndexStatus::Ready { .. }));
+        let changes = store.document_cache.connection.total_changes();
+        store.document_cache.connection.execute_batch("DROP TABLE document_index_rows").unwrap();
+        store.document_cache.connection.execute_batch(SCHEMA.iter().find(|(name,_)| *name=="document_index_rows").unwrap().1).unwrap();
+        assert_eq!(store.document_cache.connection.total_changes(), changes);
+        assert!(matches!(store.document_index_status().unwrap(), DocumentIndexStatus::RebuildRequired));
+    }
+
+    // Trace actual authority metadata traversal across a mutable public Pump
+    // call. The raw handle stays owned by the borrowed Store throughout action;
+    // the guard unregisters before returning, including on unwind.
+    fn trace_bulk_reads<T>(store: &mut Store, action: impl FnOnce(&mut Store) -> T) -> (T, usize) {
+        struct Guard {
+            handle: *mut rusqlite::ffi::sqlite3,
+            count: Box<std::cell::Cell<usize>>,
+        }
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                unsafe { rusqlite::ffi::sqlite3_trace_v2(self.handle, 0, None, std::ptr::null_mut()); }
+            }
+        }
+        unsafe extern "C" fn observe(event: u32, context: *mut std::ffi::c_void,
+            _statement: *mut std::ffi::c_void, sql: *mut std::ffi::c_void) -> i32 {
+            if event == rusqlite::ffi::SQLITE_TRACE_STMT && !context.is_null() && !sql.is_null() {
+                let bytes = unsafe { std::ffi::CStr::from_ptr(sql.cast()) }.to_bytes();
+                if bytes.starts_with(b"SELECT\n    length(content),") {
+                    let count = unsafe { &*context.cast::<std::cell::Cell<usize>>() };
+                    count.set(count.get().saturating_add(1));
+                }
+            }
+            0
+        }
+        let guard = Guard { handle: unsafe { store.connection.handle() }, count: Box::new(std::cell::Cell::new(0)) };
+        assert_eq!(unsafe { rusqlite::ffi::sqlite3_trace_v2(guard.handle,
+            rusqlite::ffi::SQLITE_TRACE_STMT, Some(observe),
+            (&*guard.count as *const std::cell::Cell<usize>).cast_mut().cast()) }, rusqlite::ffi::SQLITE_OK);
+        let result = action(store);
+        let reads = guard.count.get();
+        drop(guard);
+        (result, reads)
+    }
+
+    #[test]
+    fn unchanged_pump_validates_authority_manifest_once_per_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path().join("store.sqlite")).unwrap();
+        for index in 0..33 { store.apply(&create(&format!("pump-{index:02}"))).unwrap(); }
+        store.initialize_document_index().unwrap();
+        let stage = store.begin_document_index().unwrap();
+        let (first, first_reads) = trace_bulk_reads(&mut store, |store| store.pump_document_index(&stage));
+        let first = first.unwrap();
+        assert_eq!((first.prepared_documents, first.total_documents, first.ready), (32, 33, false));
+        let (second, second_reads) = trace_bulk_reads(&mut store, |store| store.pump_document_index(&stage));
+        assert!(second.unwrap().ready);
+        assert_eq!((first_reads, second_reads), (1, 1),
+            "unchanged Pump must reuse its first exact manifest validation after parsing");
+        store.publish_document_index(&stage).unwrap();
+        let pin = store.open_document_snapshot().unwrap();
+        assert_eq!(pin.generation().records().count(), 33);
+    }
+
+    fn pump_source_fixture() -> (tempfile::TempDir, Store, DocumentIndexStage) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().canonicalize().unwrap().join("store.sqlite");
+        let mut store = Store::open(path).unwrap();
+        store.apply(&create("source-proof")).unwrap();
+        store.initialize_document_index().unwrap();
+        let stage = store.begin_document_index().unwrap();
+        (dir, store, stage)
+    }
+    fn admit_pump_source(store: &Store, stage: &DocumentIndexStage) -> PumpSourceAdmission {
+        let tx = store.document_transaction(TransactionBehavior::Deferred).unwrap();
+        let admission = PendingPumpSource::begin(&tx).unwrap().admit(&tx, stage.snapshot()).unwrap();
+        tx.commit().unwrap();
+        admission
+    }
+    fn recheck_pump_source(store: &Store, admission: &PumpSourceAdmission) -> IndexResult<()> {
+        let tx = store.document_transaction(TransactionBehavior::Immediate)?;
+        let result = admission.recheck(&tx);
+        tx.commit()?;
+        result
+    }
+
+    #[test]
+    fn pump_source_own_metadata_write_without_journal_recaptures_and_rejects() {
+        let (_dir, mut store, stage) = pump_source_fixture();
+        let admission = admit_pump_source(&store, &stage);
+        let before = source_authority(&store.connection).unwrap();
+        store.connection.execute("UPDATE entry_presentation SET mtime_ms=mtime_ms+1", []).unwrap();
+        assert_eq!(source_authority(&store.connection).unwrap(), before);
+        let (result, reads) = trace_bulk_reads(&mut store, |store| recheck_pump_source(store, &admission));
+        assert!(matches!(result, Err(DocumentIndexError::RebuildRequired)));
+        assert_eq!(reads, 1);
+    }
+
+    #[test]
+    fn pump_source_external_metadata_write_between_transactions_recaptures_and_rejects() {
+        let (dir, mut store, stage) = pump_source_fixture();
+        let admission = admit_pump_source(&store, &stage);
+        let before = source_authority(&store.connection).unwrap();
+        let writer = Connection::open(dir.path().join("store.sqlite")).unwrap();
+        writer.execute("UPDATE entry_presentation SET mtime_ms=mtime_ms+1", []).unwrap();
+        assert_eq!(source_authority(&store.connection).unwrap(), before);
+        let (result, reads) = trace_bulk_reads(&mut store, |store| recheck_pump_source(store, &admission));
+        assert!(matches!(result, Err(DocumentIndexError::RebuildRequired)));
+        assert_eq!(reads, 1);
+    }
+
+    #[test]
+    fn pump_source_external_commit_during_initial_snapshot_never_labels_old_manifest_new() {
+        let (dir, mut store, stage) = pump_source_fixture();
+        let tx = store.document_transaction(TransactionBehavior::Deferred).unwrap();
+        let admission = PendingPumpSource::begin(&tx).unwrap().admit(&tx, stage.snapshot()).unwrap();
+        let writer = Connection::open(dir.path().join("store.sqlite")).unwrap();
+        writer.execute("UPDATE entry_presentation SET mtime_ms=mtime_ms+1", []).unwrap();
+        tx.commit().unwrap();
+        let (result, reads) = trace_bulk_reads(&mut store, |store| recheck_pump_source(store, &admission));
+        assert!(matches!(result, Err(DocumentIndexError::RebuildRequired)));
+        assert_eq!(reads, 1);
+    }
+
+    #[test]
+    fn pump_source_external_commit_after_start_stamp_before_metadata_reads_recaptures() {
+        let (dir, mut store, stage) = pump_source_fixture();
+        let tx = store.document_transaction(TransactionBehavior::Deferred).unwrap();
+        let pending = PendingPumpSource::begin(&tx).unwrap();
+        // This is a genuine authority commit but has no document source effect.
+        // It arrives before the first header/control/manifest authority read.
+        let writer = Connection::open(dir.path().join("store.sqlite")).unwrap();
+        writer.execute("INSERT INTO checkpoint_revisions(client_id,checkpoint_key,revision,deleted,state_bytes) VALUES('pump-race','retained','new-revision',1,0)", []).unwrap();
+        let admission = pending.admit(&tx, stage.snapshot()).unwrap();
+        tx.commit().unwrap();
+        let (result, reads) = trace_bulk_reads(&mut store, |store| recheck_pump_source(store, &admission));
+        result.unwrap();
+        assert_eq!(reads, 1, "the starting stamp must not be retagged after authority reads");
+    }
+
+    #[test]
+    fn pump_source_same_shape_authority_ddl_forces_recapture_without_row_change() {
+        let (_dir, mut store, stage) = pump_source_fixture();
+        let admission = admit_pump_source(&store, &stage);
+        let schema: String = store.connection.query_row("SELECT sql FROM sqlite_master WHERE name='family_external_namespace'", [], |row| row.get(0)).unwrap();
+        let changes = store.connection.total_changes();
+        store.connection.execute_batch("DROP TABLE family_external_namespace").unwrap();
+        store.connection.execute_batch(&schema).unwrap();
+        assert_eq!(store.connection.total_changes(), changes);
+        let (result, reads) = trace_bulk_reads(&mut store, |store| recheck_pump_source(store, &admission));
+        result.unwrap();
+        assert_eq!(reads, 1);
+    }
+
+    #[test]
+    fn pump_source_real_source_mutation_keeps_fresh_publication_fence() {
+        let (_dir, mut store, stage) = pump_source_fixture();
+        let admission = admit_pump_source(&store, &stage);
+        store.apply(&create("newer-source")).unwrap();
+        let (result, reads) = trace_bulk_reads(&mut store, |store| recheck_pump_source(store, &admission));
+        assert!(matches!(result, Err(DocumentIndexError::Contract(IndexError::StaleSource))));
+        assert_eq!(reads, 0, "the fresh scalar fence must reject before traversal");
+    }
+
+    #[test]
+    fn pump_source_cache_only_publication_keeps_fresh_stage_fence() {
+        let (_dir, mut store, stage) = pump_source_fixture();
+        let admission = admit_pump_source(&store, &stage);
+        let before = source_authority(&store.connection).unwrap();
+        assert!(store.pump_document_index(&stage).unwrap().ready);
+        store.publish_document_index(&stage).unwrap();
+        assert_eq!(source_authority(&store.connection).unwrap(), before);
+        let (result, reads) = trace_bulk_reads(&mut store, |store| recheck_pump_source(store, &admission));
+        assert!(matches!(result, Err(DocumentIndexError::Contract(IndexError::StaleIndex))));
+        assert_eq!(reads, 0);
+    }
+
+    #[test]
+    fn pump_source_competing_publication_keeps_original_header_but_rejects_head() {
+        let (_dir, mut store, stage) = pump_source_fixture();
+        let admission = admit_pump_source(&store, &stage);
+        let before = source_authority(&store.connection).unwrap();
+        let competing = store.begin_document_index().unwrap();
+        assert!(store.pump_document_index(&competing).unwrap().ready);
+        store.publish_document_index(&competing).unwrap();
+        assert_eq!(source_authority(&store.connection).unwrap(), before);
+        let tx = store.document_transaction(TransactionBehavior::Deferred).unwrap();
+        assert_eq!(header(&tx, stage.snapshot()).unwrap(), admission.header);
+        tx.commit().unwrap();
+        let (result, reads) = trace_bulk_reads(&mut store, |store| recheck_pump_source(store, &admission));
+        assert!(matches!(result, Err(DocumentIndexError::Contract(IndexError::StaleIndex))));
+        assert_eq!(reads, 0);
     }
 
     #[test]
@@ -2381,8 +2781,8 @@ mod cache_snapshot_tests {
         let actual = capture_authority(&tx).unwrap();
         assert_eq!(
             trace.counts.get(),
-            (1, 8),
-            "one bulk scan; only the unchanged presentation metadata reads remain"
+            (1, 0),
+            "one checked metadata scan; presentation must reuse that same snapshot metadata"
         );
         drop(trace);
         // Independent original point reader over the same transaction, including
@@ -2418,6 +2818,64 @@ mod cache_snapshot_tests {
         assert_eq!(actual.entries.len(), 4);
         actual.manifest().unwrap();
         tx.commit().unwrap();
+    }
+
+    #[test]
+    fn capture_reusing_metadata_still_rejects_corrupt_authority_and_presentation() {
+        for corruption in [
+            "DELETE FROM entry_presentation WHERE entry_id='note'",
+            "UPDATE entry_presentation SET size_bytes=size_bytes+1 WHERE entry_id='note'",
+            "UPDATE entry_presentation SET ctime_ms=-1 WHERE entry_id='note'",
+            "UPDATE entry_presentation SET mtime_ms=9007199254740992 WHERE entry_id='note'",
+            "UPDATE entries SET state='{' WHERE id='note'",
+            "UPDATE entries SET path='different.md' WHERE id='note'",
+            "UPDATE entries SET content_digest=NULL WHERE id='note'",
+            "UPDATE entries SET content_digest='not a digest' WHERE id='note'",
+            "UPDATE entries SET content=NULL,content_ref='not a reference' WHERE id='note'",
+            "UPDATE entry_presentation SET size_bytes=1 WHERE entry_id='folder'",
+            "UPDATE entries SET content=x'61' WHERE id='folder'",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut store = Store::open(dir.path().join("store.sqlite")).unwrap();
+            store.apply(&create("note")).unwrap();
+            let mut folder = create("folder");
+            if let Mutation::Create { kind, content, .. } = &mut folder.mutation {
+                *kind = EntryKind::Folder;
+                *content = None;
+            }
+            store.apply(&folder).unwrap();
+            let affected_id = if corruption.contains("'folder'") {
+                "folder"
+            } else {
+                "note"
+            };
+            let original = store
+                .read_metadata(&EntryId::new(affected_id).unwrap())
+                .unwrap()
+                .unwrap();
+            store
+                .connection
+                .pragma_update(None, "ignore_check_constraints", true)
+                .unwrap();
+            store.connection.execute(corruption, []).unwrap();
+            let tx = store.connection.unchecked_transaction().unwrap();
+            assert!(
+                matches!(
+                    capture_authority(&tx),
+                    Err(DocumentIndexError::Authority(
+                        StoreError::Corrupt(_) | StoreError::Json(_)
+                    ))
+                ),
+                "{corruption}"
+            );
+            assert!(
+                matches!(
+                    presentation::presentation(&tx, &original.state),
+                    Err(StoreError::Corrupt(_) | StoreError::Json(_))
+                ),
+                "original point-reader must also reject {corruption}"
+            );
+        }
     }
 
     #[test]

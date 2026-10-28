@@ -92,6 +92,216 @@ fn publish(store: &mut Store, entry: &DatabaseEntry, operation: &str) -> String 
 }
 
 #[test]
+fn logical_value_edit_invalidates_one_existing_file_without_faking_publication() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path).unwrap();
+    let collection = create(&mut store, "Books");
+    let original = new_entry(&mut store, &collection, "one");
+    let other = new_entry(&mut store, &collection, "two");
+    let text = publish(&mut store, &original, "publish-one");
+    publish(&mut store, &other, "publish-two");
+    let current = get(&mut store, &collection)
+        .entries
+        .into_iter()
+        .find(|entry| entry.entry_id == original.entry_id)
+        .unwrap();
+    let physical = store
+        .read_path(&VaultPath::new("one.md").unwrap())
+        .unwrap()
+        .unwrap();
+    let baseline = store.list_snapshot().unwrap();
+    let database_revision = store.database_query_state().unwrap().revision;
+    let command = serde_json::from_value(json!({
+        "op":"set_entry", "operationId":"targeted-value", "entryId":current.entry_id,
+        "expectedRevision":current.revision, "expectedCollectionRevision":collection.revision,
+        "values":{collection.properties[0].id.clone():4}
+    }))
+    .unwrap();
+    let changed = store.database_request(&command).unwrap();
+    let member = changed
+        .entries
+        .iter()
+        .find(|entry| entry.entry_id == original.entry_id)
+        .unwrap();
+    assert_eq!(member.values[&collection.properties[0].id], json!(4));
+    assert!(member.pending_projection);
+    assert_ne!(member.revision, current.revision);
+    assert_eq!(member.file_revision, current.file_revision);
+    assert_ne!(
+        store.database_query_state().unwrap().revision,
+        database_revision
+    );
+    let page = store.changes_after(&baseline.cursor, 10).unwrap();
+    assert_eq!(page.changes.len(), 1);
+    let event = &page.changes[0];
+    assert!(!event.requires_full_reload);
+    assert_eq!(event.entries.len(), 1);
+    assert_eq!(event.entries[0].state, physical.state);
+    assert_eq!(event.entries[0].presentation, physical.presentation);
+    assert_eq!(
+        event.origin,
+        zorid_store::ChangeOrigin::LocalCommand {
+            operation_id: op("targeted-value")
+        }
+    );
+    assert_eq!(
+        store
+            .read_path(&VaultPath::new("one.md").unwrap())
+            .unwrap()
+            .unwrap(),
+        physical
+    );
+    assert_eq!(physical.content.as_deref(), Some(text.as_bytes()));
+    let mut peer = Store::open(&path).unwrap();
+    assert_eq!(peer.changes_after(&baseline.cursor, 10).unwrap(), page);
+    assert_eq!(get(&mut peer, &collection), changed);
+    assert_eq!(store.database_request(&command).unwrap(), changed);
+    assert_eq!(
+        store.changes_after(&baseline.cursor, 10).unwrap(),
+        page,
+        "exact operation replay cannot append another invalidation"
+    );
+    let stale = serde_json::from_value(json!({
+        "op":"set_entry", "operationId":"stale-targeted-value", "entryId":current.entry_id,
+        "expectedRevision":current.revision, "expectedCollectionRevision":collection.revision,
+        "values":{collection.properties[0].id.clone():9}
+    }))
+    .unwrap();
+    assert!(store.database_request(&stale).is_err());
+    assert_eq!(store.changes_after(&baseline.cursor, 10).unwrap(), page);
+}
+
+#[test]
+fn structural_collection_commands_keep_full_reload_invalidation() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path().join("db")).unwrap();
+    let baseline = store.list_snapshot().unwrap();
+    let collection = create(&mut store, "Books");
+    assert!(store
+        .changes_after(&baseline.cursor, 100)
+        .unwrap()
+        .changes
+        .iter()
+        .any(|event| event.requires_full_reload));
+    let baseline = store.list_snapshot().unwrap();
+    new_entry(&mut store, &collection, "one");
+    assert!(store
+        .changes_after(&baseline.cursor, 100)
+        .unwrap()
+        .changes
+        .iter()
+        .any(|event| event.requires_full_reload));
+    let baseline = store.list_snapshot().unwrap();
+    let changed = update(
+        &mut store,
+        &collection,
+        "Library",
+        input(&collection),
+        false,
+    );
+    assert!(store
+        .changes_after(&baseline.cursor, 100)
+        .unwrap()
+        .changes
+        .iter()
+        .any(|event| event.requires_full_reload));
+    let current = &changed.collections[0];
+    let baseline = store.list_snapshot().unwrap();
+    let deleted = request(
+        &mut store,
+        json!({"op":"delete","operationId":"delete-scoped-collection","collectionId":current.id,"expectedRevision":current.revision}),
+    );
+    assert!(store
+        .changes_after(&baseline.cursor, 100)
+        .unwrap()
+        .changes
+        .iter()
+        .any(|event| event.requires_full_reload));
+    let baseline = store.list_snapshot().unwrap();
+    request(
+        &mut store,
+        json!({"op":"restore","operationId":"restore-scoped-collection","collectionId":current.id,"expectedRevision":deleted.collections[0].revision}),
+    );
+    assert!(store
+        .changes_after(&baseline.cursor, 100)
+        .unwrap()
+        .changes
+        .iter()
+        .any(|event| event.requires_full_reload));
+}
+
+#[test]
+fn logical_value_edit_of_retained_hidden_file_keeps_full_reload_fallback() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path).unwrap();
+    let collection = create(&mut store, "Books");
+    let entry = new_entry(&mut store, &collection, "one");
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute(
+        "UPDATE entries SET visible=0 WHERE id=?1",
+        [entry.entry_id.as_str()],
+    )
+    .unwrap();
+    let baseline = store.list_snapshot().unwrap();
+    let changed = request(
+        &mut store,
+        json!({
+            "op":"set_entry", "operationId":"retained-hidden-value", "entryId":entry.entry_id,
+            "expectedRevision":entry.revision, "expectedCollectionRevision":collection.revision,
+            "values":{collection.properties[0].id.clone():7}
+        }),
+    );
+    assert_eq!(
+        changed.entries[0].values[&collection.properties[0].id],
+        json!(7)
+    );
+    let page = store.changes_after(&baseline.cursor, 10).unwrap();
+    assert_eq!(page.changes.len(), 1);
+    assert!(page.changes[0].requires_full_reload);
+    assert!(page.changes[0].entries.is_empty());
+    assert!(store.list_snapshot().unwrap().entries.is_empty());
+}
+
+#[test]
+fn logical_value_journal_failure_rolls_back_values_revision_and_retry_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path).unwrap();
+    let collection = create(&mut store, "Books");
+    let entry = new_entry(&mut store, &collection, "one");
+    let before = get(&mut store, &collection);
+    let baseline = store.list_snapshot().unwrap();
+    let database_revision = store.database_query_state().unwrap().revision;
+    let command = serde_json::from_value(json!({
+        "op":"set_entry", "operationId":"journal-retry", "entryId":entry.entry_id,
+        "expectedRevision":entry.revision, "expectedCollectionRevision":collection.revision,
+        "values":{collection.properties[0].id.clone():7}
+    }))
+    .unwrap();
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch("CREATE TRIGGER reject_logical_invalidation BEFORE INSERT ON local_changes BEGIN SELECT RAISE(ABORT,'injected journal failure'); END;").unwrap();
+    assert!(store.database_request(&command).is_err());
+    assert_eq!(get(&mut store, &collection), before);
+    assert_eq!(store.list_snapshot().unwrap(), baseline);
+    assert_eq!(
+        store.database_query_state().unwrap().revision,
+        database_revision
+    );
+    db.execute_batch("DROP TRIGGER reject_logical_invalidation")
+        .unwrap();
+    let changed = store.database_request(&command).unwrap();
+    assert_eq!(
+        changed.entries[0].values[&collection.properties[0].id],
+        json!(7)
+    );
+    let page = store.changes_after(&baseline.cursor, 10).unwrap();
+    assert_eq!(page.changes.len(), 1);
+    assert!(!page.changes[0].requires_full_reload);
+}
+
+#[test]
 fn local_schema_and_entries_are_durable_without_enrollment_or_global_registry() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("vault.sqlite");

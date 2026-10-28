@@ -468,29 +468,39 @@ impl NativeVault {
                 Err(e) => report.blocked.push((a.target.state.path, e.to_string())),
             }
         }
-        for state in self
+        let files: Vec<_> = self
             .store
             .list()?
             .into_iter()
             .filter(|s| s.kind == EntryKind::File)
-        {
-            if report.blocked.iter().any(|(path, _)| *path == state.path)
-                || report.projected.contains(&state.id)
+            .collect();
+        let mut offset = 0;
+        while offset < files.len() {
+            if report.blocked.iter().any(|(path, _)| *path == files[offset].path)
+                || report.projected.contains(&files[offset].id)
             {
+                offset += 1;
                 continue;
             }
-            if self
-                .store
-                .projection_baseline(&state.id)?
-                .as_ref()
-                .is_some_and(|b| b.state == state)
-            {
+            let end = (offset + zorid_store::Store::PROJECTION_RECOVERY_MAX_STATES).min(files.len());
+            // Entries already handled by recovery retain their original skip
+            // behavior, including not reading an unrelated corrupt baseline.
+            let eligible_end = (offset..end)
+                .find(|&index| {
+                    report.blocked.iter().any(|(path, _)| *path == files[index].path)
+                        || report.projected.contains(&files[index].id)
+                })
+                .unwrap_or(end);
+            offset += self.store.projection_clean_prefix(&files[offset..eligible_end])?;
+            if offset == eligible_end {
                 continue;
             }
+            let state = &files[offset];
             match self.project(&state.id) {
-                Ok(()) => report.projected.push(state.id),
-                Err(e) => report.blocked.push((state.path, e.to_string())),
+                Ok(()) => report.projected.push(state.id.clone()),
+                Err(e) => report.blocked.push((state.path.clone(), e.to_string())),
             }
+            offset += 1;
         }
         self.paths.verify()?;
         Ok(report)

@@ -184,13 +184,13 @@ function pollingOwners(){
   let scanDispatch,scanReply;
   host.capabilities=['documents','document_runtime'];host.root='/unused-runtime-owner-poll';
   host.request=async(command,bytes,reference,beforeDispatch)=>{
-    if(command.method==='rescan'){
+    if(command.method==='rescan'||command.method==='reconcile'){
       if(scanDispatch)await scanDispatch;
       beforeDispatch?.();
       if(reference)throw failure('client_operation_unsupported'); // Actual native authorization policy.
       requests.push({command,reference});
       if(scanReply)await scanReply;
-      return {result:{complete:true,reconciliation:{scanId:'scan',complete:true}}};
+      return command.method==='rescan'?{result:{complete:true,reconciliation:{scanId:'scan',complete:true}}}:{result:{imported:[],projected:[],blocked:[]}};
     }
     beforeDispatch?.();assert.equal(command.method,'changes_after');
     const state=states.get(reference?.client_id);assert.ok(state);assert.deepEqual(reference,state.lease);assert.equal(state.revoked,false);
@@ -231,12 +231,13 @@ test('periodic maintenance rescan uses trusted authority while journal polling r
   const events=[];f.service.listeners.add(event=>events.push(event));
   const reply=gate();f.holdScanReply(reply.promise);
   const first=f.service.poll();await settled();const second=f.service.poll();await settled();
-  assert.equal(f.requests.length,1,'one serialized maintenance pass despite concurrent poll ticks');
-  assert.equal(f.requests[0].command.method,'rescan');assert.equal(f.requests[0].reference,undefined);
+  assert.equal(f.requests.length,2,'one journal read and one serialized maintenance pass despite concurrent poll ticks');
+  assert.equal(f.requests[0].command.method,'changes_after');assert.equal(f.requests[0].reference.client_id,clientId);
+  assert.equal(f.requests[1].command.method,'rescan');assert.equal(f.requests[1].reference,undefined);
   reply.resolve();await Promise.all([first,second]);
   assert.equal(f.service.reconciliation.complete,true);
-  assert.deepEqual(f.requests.map(row=>row.command.method),['rescan','changes_after']);
-  assert.equal(f.requests[1].reference.client_id,clientId);
+  assert.deepEqual(f.requests.map(row=>row.command.method),['changes_after','rescan','changes_after']);
+  assert.equal(f.requests[2].reference.client_id,clientId);
   assert.equal(events.some(event=>event.code==='client_operation_unsupported'),false);
 });
 
@@ -244,11 +245,12 @@ for(const boundary of ['queued','inflight'])test(`maintenance rescan rejects a r
   const f=pollingOwners(),owner=f.add(clientId);f.service.cursor='6';f.service.needsScan=true;
   const wait=gate();if(boundary==='queued')f.holdScanDispatch(wait.promise);else f.holdScanReply(wait.promise);
   const events=[];f.service.listeners.add(event=>events.push(event));
-  const pending=f.service.poll();await settled();owner.revokeGuard();wait.resolve();await pending;
-  assert.equal(f.requests.length,boundary==='queued'?0:1);
+  const pending=f.service.poll();await settled();assert.equal(f.service.cursor,'7','the journal read is admitted before maintenance');owner.revokeGuard();wait.resolve();await pending;
+  assert.equal(f.requests.length,boundary==='queued'?1:2);
+  assert.equal(f.requests[0].command.method,'changes_after');
   assert.equal(f.service.reconciliation,null,'stale result must not publish availability');
   assert.equal(events.some(event=>event.type==='reconciliation'),false);
-  assert.equal(f.service.cursor,'6','stale owner must not continue the journal');
+  assert.equal(f.service.cursor,'7','retired maintenance must not continue beyond the already admitted journal');
 });
 
 test('idle poll revokes a stale selected owner and continues the durable cursor through the other admitted lease',async()=>{
@@ -271,4 +273,34 @@ test('idle polling stops when the last guarded owner is revoked and notifies ret
   assert.equal(retired,1);assert.equal(f.revocations.get(clientId),1);
   await f.service.poll();await owner.handle.revoke();
   assert.equal(f.requests.length,0);assert.equal(retired,1);assert.equal(f.revocations.get(clientId),1);assert.equal(f.polling,false);assert.equal(f.service.timer,undefined);
+});
+
+
+test('known family watcher hints use trusted authority while journal reads retain the selected lease',async()=>{
+  const f=pollingOwners(),owner=f.add(clientId);f.service.familyMode=true;f.service.cursor='6';
+  f.service.entries.set('known',{state:{id:'known',path:'Known.md',kind:'file',deleted:false}});f.service.hints.add('Known.md');
+  await assert.rejects(owner.guarded.reconcile(['Known.md']),{code:'client_operation_unsupported'});
+  await f.service.poll();
+  assert.deepEqual(f.requests.map(row=>row.command.method),['changes_after','reconcile','changes_after']);
+  assert.equal(f.requests[0].reference.client_id,clientId);assert.equal(f.requests[2].reference.client_id,clientId);
+  assert.equal(f.requests[1].reference,undefined);assert.deepEqual(f.requests[1].command.paths,['Known.md']);
+});
+
+for(const boundary of ['queued','inflight'])test(`known family observation rejects a retired owner at its ${boundary} boundary`,async()=>{
+  const f=pollingOwners(),owner=f.add(clientId);f.service.familyMode=true;f.service.cursor='6';
+  f.service.entries.set('known',{state:{id:'known',path:'Known.md',kind:'file',deleted:false}});f.service.hints.add('Known.md');
+  const wait=gate();if(boundary==='queued')f.holdScanDispatch(wait.promise);else f.holdScanReply(wait.promise);
+  const pending=f.service.poll();await settled();owner.revokeGuard();wait.resolve();await pending;
+  assert.deepEqual(f.requests.map(row=>row.command.method),boundary==='queued'?['changes_after']:['changes_after','reconcile']);
+  assert.equal(f.service.cursor,'7');assert.equal(f.service.needsScan,true,'uncertain hint maintenance retains a discovery obligation');
+});
+
+test('confirmed journal notification survives retired maintenance until another active owner polls',async()=>{
+  const f=pollingOwners(),first=f.add(clientId);f.service.cursor='6';f.service.needsScan=true;let wakes=0;f.service.documentScheduler.wake=()=>{wakes++;};
+  const wait=gate();f.holdScanReply(wait.promise);const pending=f.service.poll();await settled();
+  assert.equal(f.service.cursor,'7');assert.equal(wakes,0);first.revokeGuard();wait.resolve();await pending;
+  assert.equal(wakes,0,'retired owner cannot deliver the index wake');assert.equal(f.service.pendingIndexSource,true);
+  const secondId='10000000-0000-4000-8000-000000000003';f.add(secondId);await f.service.poll();
+  assert.equal(wakes,1);assert.equal(f.service.pendingIndexSource,false);assert.equal(f.requests.at(-1).reference.client_id,secondId);
+  await f.service.poll();assert.equal(wakes,1,'the transferred notification is delivered once');
 });

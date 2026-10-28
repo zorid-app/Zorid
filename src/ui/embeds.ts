@@ -384,6 +384,9 @@ export class MarkdownEmbeds {
       const hash=request.target.indexOf('#');let viewName=hash<0?'':request.target.slice(hash+1);
       if(request.kind==='markdown')try{viewName=decodeURIComponent(viewName);}catch{/* Preserve malformed literal fragments for an explicit missing-view error. */}
       state.node.classList.add('bases-embed','interactive-child');
+      // The shared Base session supplies its collection title. Keep the generic
+      // note-embed filename line out of this database surface.
+      open.remove();
       let binding:BaseEmbedBinding|undefined;
       try{
         state.baseIdentity=this.options.bases.identity(path);

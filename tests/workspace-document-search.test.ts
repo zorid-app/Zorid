@@ -342,6 +342,16 @@ test('Workspace rich failure never invokes legacy evaluator',async t=>{
   assert.doesNotMatch(ui.root.querySelector('.document-search-status')!.textContent!,/SQL raw secret/);assert.equal(f.queries.length,0);
 });
 
+test('Workspace rich bounded catch-up with an older snapshot never admits it as current',async t=>{
+  const ui=await setup(t),f=richFixture(),held=heldDocumentFreshness();
+  Object.assign(f.service,{maintenance:held.maintenance,status:async()=>({source:{...source,watermark:'11'},snapshot,coveredSource:source,current:false,rebuildRequired:false,coverageComplete:true})});
+  ui.setService(f.service);await ui.search('external-marker');
+  await freshnessUntil(()=>held.requests.length===1);const request=held.requests[0];held.release(request);held.finish(request);
+  await until(()=>!!ui.root.querySelector('.document-search-status')?.textContent?.includes('still updating'),'bounded old generation was incorrectly admitted');
+  assert.equal(f.pins.length,0);assert.equal(f.starts,0);assert.equal(ui.root.querySelector('.document-search-total')?.textContent,'');
+  assert.doesNotMatch(ui.root.querySelector('.document-search-status')!.textContent!,/No matching files/);
+});
+
 function prepareRichNavigation(ui:Awaited<ReturnType<typeof setup>>,options:{path?:string;dirty?:boolean;revision?:string}={}){
   const {workspace,adapter,internal}=ui,path=options.path??'Note.md';const saved=workspace.vault.entries.get('Note.md')!;
   workspace.vault.entries.set(path,{...saved,path,entryId:'note',revision:options.revision??'revision-note'});

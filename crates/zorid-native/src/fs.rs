@@ -26,11 +26,179 @@ fn open_dir_at(parent: &File, name: &str) -> Result<File> {
     )?
     .into())
 }
+// macOS supplies the stored leaf spelling directly. This is a fresh lookup,
+// never a timestamp-based cache: FAT and network volumes may have coarse or
+// unchanged directory timestamps after a case-only rename.
+#[cfg(target_os = "macos")]
+mod canonical_leaf {
+    use super::*;
+    use std::{
+        ffi::{c_char, c_int, c_ulong, c_void, CString},
+        os::fd::AsRawFd,
+    };
+    const NAME: u32 = 1;
+    const DEVICE: u32 = 2;
+    const RETURNED: u32 = 0x8000_0000;
+    #[repr(C)]
+    struct AttrList {
+        count: u16,
+        reserved: u16,
+        common: u32,
+        volume: u32,
+        directory: u32,
+        file: u32,
+        fork: u32,
+    }
+    impl AttrList {
+        fn new(common: u32, volume: u32) -> Self {
+            Self {
+                count: 5,
+                reserved: 0,
+                common,
+                volume,
+                directory: 0,
+                file: 0,
+                fork: 0,
+            }
+        }
+    }
+    unsafe extern "C" {
+        fn fgetattrlist(
+            fd: c_int,
+            attributes: *mut c_void,
+            buffer: *mut c_void,
+            size: usize,
+            options: u32,
+        ) -> c_int;
+        fn getattrlistat(
+            fd: c_int,
+            path: *const c_char,
+            attributes: *mut c_void,
+            buffer: *mut c_void,
+            size: usize,
+            options: c_ulong,
+        ) -> c_int;
+    }
+    // ATTR_VOL_ATTRIBUTES contains validattr then nativeattr, each five u32s.
+    // Require native support: XNU can otherwise synthesize NAME from vnode cache.
+    pub(super) fn native_name_supported(words: &[u32]) -> bool {
+        words.len() == 11 && words[0] == 44 && words[1] & NAME != 0 && words[6] & NAME != 0
+    }
+    pub(super) fn parse_name(bytes: &[u8], parent_device: u64) -> Option<&[u8]> {
+        fn word(bytes: &[u8], at: usize) -> Option<u32> {
+            Some(u32::from_ne_bytes(
+                bytes.get(at..at.checked_add(4)?)?.try_into().ok()?,
+            ))
+        }
+        let length = usize::try_from(word(bytes, 0)?).ok()?;
+        if !(37..=bytes.len()).contains(&length)
+            || word(bytes, 4)? != (NAME | DEVICE | RETURNED)
+            || [8, 12, 16, 20]
+                .into_iter()
+                .any(|at| word(bytes, at) != Some(0))
+            || u64::from(word(bytes, 32)?) != parent_device
+        {
+            return None;
+        }
+        // attrreference offset is signed and relative to its own address.
+        let offset = i32::from_ne_bytes(bytes.get(24..28)?.try_into().ok()?);
+        let start = 24usize.checked_add(usize::try_from(offset).ok()?)?;
+        let size = usize::try_from(word(bytes, 28)?).ok()?;
+        let end = start.checked_add(size)?;
+        if start < 36 || size < 2 || end > length {
+            return None;
+        }
+        let raw = bytes.get(start..end)?;
+        if raw.last() != Some(&0) || raw[..raw.len() - 1].contains(&0) {
+            return None;
+        }
+        let name = &raw[..raw.len() - 1];
+        if name.contains(&b'/') || matches!(name, b"." | b"..") {
+            return None;
+        }
+        Some(name)
+    }
+    pub(super) fn supported(parent: &File) -> bool {
+        let mut attributes = AttrList::new(0, 0xc000_0000); // VOL_INFO | VOL_ATTRIBUTES
+        let mut volume = [0u32; 11];
+        // SAFETY: fixed ABI layouts from sys/attr.h; buffers are initialized,
+        // writable, and correctly sized. Only the existing directory FD is used.
+        if unsafe {
+            fgetattrlist(
+                parent.as_raw_fd(),
+                (&mut attributes as *mut AttrList).cast(),
+                volume.as_mut_ptr().cast(),
+                std::mem::size_of_val(&volume),
+                0,
+            )
+        } != 0
+            || !native_name_supported(&volume)
+        {
+            return false;
+        }
+        true
+    }
+    pub(super) fn matches(parent: &File, name: &str) -> bool {
+        let Ok(path) = CString::new(name) else {
+            return false;
+        };
+        if name.is_empty() || name.contains('/') || matches!(name, "." | "..") {
+            return false;
+        }
+        let Ok(metadata) = parent.metadata() else {
+            return false;
+        };
+        if !metadata.is_dir() || metadata.nlink() == 0 {
+            return false;
+        }
+        if !supported(parent) {
+            return false;
+        }
+        let mut attributes = AttrList::new(NAME | DEVICE | RETURNED, 0);
+        let mut output = [0u8; 2048];
+        // FSOPT_NOFOLLOW preserves symlink treatment and never opens/closes a
+        // target descriptor (especially SQLite-owned DB/SHM/WAL descriptors).
+        if unsafe {
+            getattrlistat(
+                parent.as_raw_fd(),
+                path.as_ptr(),
+                (&mut attributes as *mut AttrList).cast(),
+                output.as_mut_ptr().cast(),
+                output.len(),
+                1,
+            )
+        } != 0
+        {
+            return false;
+        }
+        parse_name(&output, metadata.dev()) == Some(name.as_bytes())
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static EXACT_ENUMERATED_ENTRIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static EXACT_FORCE_ENUMERATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 /// Reject a spelling which aliases another entry on a case/normalization folding
 /// filesystem. NOFOLLOW separately rejects symlinks, including dangling ones.
 pub(crate) fn exact(parent: &File, name: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        #[cfg(test)]
+        let fast_path = !EXACT_FORCE_ENUMERATION.with(std::cell::Cell::get);
+        #[cfg(not(test))]
+        let fast_path = true;
+        if fast_path && canonical_leaf::matches(parent, name) {
+            return Ok(());
+        }
+    }
+    // Unsupported native NAME, a different target filesystem, malformed output,
+    // an error, or a nonmatching name all retain the original complete check.
     let mut found = false;
     for entry in Dir::read_from(parent)? {
+        #[cfg(test)]
+        EXACT_ENUMERATED_ENTRIES.with(|work| work.set(work.get() + 1));
         if entry?.file_name().to_bytes() == name.as_bytes() {
             found = true;
         }
@@ -389,4 +557,171 @@ pub(crate) fn stage_directory(parent: &File, name: &str) -> Result<String> {
     dir.sync_all()?;
     parent.sync_all()?;
     identity(&dir)
+}
+
+#[cfg(test)]
+mod exact_name_tests {
+    use super::*;
+    fn work() -> usize {
+        EXACT_ENUMERATED_ENTRIES.with(std::cell::Cell::get)
+    }
+    fn check_alias(parent: &File, directory: &Path, name: &str) {
+        use std::os::unix::ffi::OsStrExt;
+        let exists = std::fs::symlink_metadata(directory.join(name)).is_ok();
+        let listed = std::fs::read_dir(directory)
+            .unwrap()
+            .any(|entry| entry.unwrap().file_name().as_bytes() == name.as_bytes());
+        let result = exact(parent, name);
+        if exists && !listed {
+            assert!(matches!(result, Err(Error::UnsafePath(_))));
+        } else {
+            result.unwrap();
+        }
+    }
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn exact_names_locked_pass_enumerates_stable_directory_once() {
+        let root = tempfile::tempdir().unwrap();
+        for i in 0..1000 {
+            std::fs::write(root.path().join(format!("Note {i:04}.md")), b"note").unwrap();
+        }
+        let parent = File::open(root.path()).unwrap();
+        // This product optimization requires native NAME support. Other volumes
+        // deliberately retain the original enumeration path, tested separately.
+        if !canonical_leaf::supported(&parent) {
+            return;
+        }
+        assert!(canonical_leaf::matches(&parent, "Note 0000.md"));
+        EXACT_ENUMERATED_ENTRIES.with(|work| work.set(0));
+        for _ in 0..2 {
+            for i in 0..1000 {
+                exact(&parent, &format!("Note {i:04}.md")).unwrap();
+            }
+        }
+        let work = work();
+        assert!(
+            work <= 1002,
+            "stable directory enumerated repeatedly: {work} entries"
+        );
+    }
+    #[test]
+    fn exact_names_fallback_preserves_complete_enumeration() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("A.md"), b"a").unwrap();
+        let parent = File::open(root.path()).unwrap();
+        EXACT_FORCE_ENUMERATION.with(|slot| slot.set(true));
+        let before = work();
+        exact(&parent, "A.md").unwrap();
+        exact(&parent, "A.md").unwrap();
+        check_alias(&parent, root.path(), "a.md");
+        EXACT_FORCE_ENUMERATION.with(|slot| slot.set(false));
+        assert!(work() - before >= 2);
+    }
+    #[test]
+    fn exact_names_fresh_lookup_preserves_create_delete_and_case_rename() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("Original.md"), b"note").unwrap();
+        let parent = File::open(root.path()).unwrap();
+        exact(&parent, "Original.md").unwrap();
+        std::fs::write(root.path().join("Created.md"), b"new").unwrap();
+        exact(&parent, "Created.md").unwrap();
+        std::fs::remove_file(root.path().join("Created.md")).unwrap();
+        assert!(regular(&parent, "Created.md").unwrap().is_none());
+        std::fs::rename(
+            root.path().join("Original.md"),
+            root.path().join("original.md"),
+        )
+        .unwrap();
+        check_alias(&parent, root.path(), "Original.md");
+        exact(&parent, "original.md").unwrap();
+    }
+    #[test]
+    fn exact_names_preserve_unicode_alias_and_nofollow_checks() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("é.md"), b"unicode").unwrap();
+        let parent = File::open(root.path()).unwrap();
+        check_alias(&parent, root.path(), "é.md");
+        check_alias(&parent, root.path(), "e\u{301}.md");
+        std::os::unix::fs::symlink("é.md", root.path().join("linked.md")).unwrap();
+        exact(&parent, "linked.md").unwrap();
+        assert!(regular(&parent, "linked.md").is_err());
+        std::fs::hard_link(root.path().join("é.md"), root.path().join("hard.md")).unwrap();
+        assert!(regular(&parent, "hard.md").is_err());
+    }
+    #[test]
+    fn exact_names_parent_replacement_uses_actual_descriptor() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("parent")).unwrap();
+        std::fs::write(root.path().join("parent/Before.md"), b"old").unwrap();
+        let old = File::open(root.path().join("parent")).unwrap();
+        exact(&old, "Before.md").unwrap();
+        std::fs::rename(root.path().join("parent"), root.path().join("old-parent")).unwrap();
+        std::fs::create_dir(root.path().join("parent")).unwrap();
+        std::fs::write(root.path().join("parent/After.md"), b"new").unwrap();
+        let current = File::open(root.path().join("parent")).unwrap();
+        exact(&current, "After.md").unwrap();
+        assert!(regular(&current, "Before.md").unwrap().is_none());
+        assert!(regular(&old, "After.md").unwrap().is_none());
+    }
+    #[test]
+    fn exact_names_sqlite_identity_does_not_open_or_close_database_descriptors() {
+        let root = tempfile::tempdir().unwrap();
+        let database = root.path().join("vault.sqlite");
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE retained(value); BEGIN IMMEDIATE; INSERT INTO retained VALUES(1);",
+            )
+            .unwrap();
+        let parent = File::open(root.path()).unwrap();
+        for _ in 0..10 {
+            regular_identity(&parent, "vault.sqlite").unwrap().unwrap();
+        }
+        let competing = rusqlite::Connection::open(database).unwrap();
+        competing.busy_timeout(Duration::ZERO).unwrap();
+        assert!(competing.execute_batch("BEGIN IMMEDIATE").is_err());
+        connection.execute_batch("ROLLBACK").unwrap();
+    }
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn exact_names_native_reply_rejects_unsupported_malformed_and_foreign_mount() {
+        let mut volume = [0u32; 11];
+        volume[0] = 44;
+        volume[1] = 1;
+        assert!(!canonical_leaf::native_name_supported(&volume));
+        volume[6] = 1;
+        assert!(canonical_leaf::native_name_supported(&volume));
+        volume[0] = 40;
+        assert!(!canonical_leaf::native_name_supported(&volume));
+        let mut reply = [0u8; 40];
+        fn put(reply: &mut [u8], at: usize, value: u32) {
+            reply[at..at + 4].copy_from_slice(&value.to_ne_bytes());
+        }
+        put(&mut reply, 0, 40);
+        put(&mut reply, 4, 0x8000_0003);
+        put(&mut reply, 24, 12);
+        put(&mut reply, 28, 2);
+        put(&mut reply, 32, 42);
+        reply[36] = b'a';
+        assert_eq!(
+            canonical_leaf::parse_name(&reply, 42),
+            Some(b"a".as_slice())
+        );
+        assert_eq!(canonical_leaf::parse_name(&reply, 43), None);
+        for (at, value) in [
+            (0, 4096),
+            (4, 1),
+            (24, u32::MAX),
+            (24, 0),
+            (28, 0),
+            (28, u32::MAX),
+        ] {
+            let mut bad = reply;
+            put(&mut bad, at, value);
+            assert_eq!(canonical_leaf::parse_name(&bad, 42), None);
+        }
+        let mut bad = reply;
+        bad[37] = b'x';
+        assert_eq!(canonical_leaf::parse_name(&bad, 42), None);
+    }
 }

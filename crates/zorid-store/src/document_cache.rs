@@ -11,6 +11,9 @@ const SCOPE_SQL: &str = "CREATE TABLE document_cache_scope (singleton INTEGER PR
 
 pub(crate) struct DocumentCache {
     pub(super) connection: Connection,
+    // One derived immutable admission, never authoritative source state. A cache
+    // connection replacement drops it together with its SQLite version stamps.
+    pub(super) admitted_generation: std::cell::RefCell<Option<crate::document_index::DocumentGenerationAdmission>>,
 }
 
 impl DocumentCache {
@@ -18,7 +21,7 @@ impl DocumentCache {
         let connection = open_checked(":memory:", OpenMode::Create, |_| {
             Ok::<_, rusqlite::Error>(())
         })?;
-        Ok(Self { connection })
+        Ok(Self { connection, admitted_generation: Default::default() })
     }
 
     pub(crate) fn open(path: &Path, local: &OperationId) -> IndexResult<Self> {
@@ -30,7 +33,7 @@ impl DocumentCache {
             initialize_scope(&tx, local)?;
         }
         tx.commit()?;
-        Ok(Self { connection })
+        Ok(Self { connection, admitted_generation: Default::default() })
     }
 }
 
@@ -111,21 +114,22 @@ pub(crate) fn validate(connection: &Connection, local: &OperationId) -> IndexRes
 pub(crate) struct DocumentTransaction<'a> {
     pub(crate) authority: Transaction<'a>,
     cache: Transaction<'a>,
+    pub(super) admitted_generation: &'a std::cell::RefCell<Option<crate::document_index::DocumentGenerationAdmission>>,
 }
 impl<'a> DocumentTransaction<'a> {
     pub(crate) fn new(
         authority: &'a Connection,
-        cache: &'a DocumentCache,
+        cache_owner: &'a DocumentCache,
         behavior: TransactionBehavior,
     ) -> IndexResult<Self> {
-        let cache = Transaction::new_unchecked(&cache.connection, behavior)?;
+        let cache = Transaction::new_unchecked(&cache_owner.connection, behavior)?;
         // BEGIN DEFERRED is lazy: establish the cache snapshot before any
         // authority read. A coherent cache may lag observed source, never lead it.
         cache.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
             r.get::<_, i64>(0)
         })?;
         let authority = Transaction::new_unchecked(authority, behavior)?;
-        Ok(Self { authority, cache })
+        Ok(Self { authority, cache, admitted_generation: &cache_owner.admitted_generation })
     }
     pub(crate) fn commit(self) -> IndexResult<()> {
         self.cache.commit()?;

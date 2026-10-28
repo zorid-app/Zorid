@@ -2,6 +2,417 @@
 
 ## Execution checkpoint — shared-core coordinator
 
+
+**Current accepted startup/opening batch; integration/install in progress — 2026-10-28.**
+Root retains the exclusive main integrate/test/commit/install lane. Final R6 source
+869c5d20, nativea1c862be, frontendc47430f5/Electron44.9.1 passed the complete
+representative campaign:600switches median32.2/p95~35/max176.7ms (beforemax9766),
+9Baseopens max456.8ms (before8889), restoredlarge editor9.168/7.315/7.498s
+(before14.872/13.690). Three complete greetings, zero navigation rescans/cleanCAS;
+195runtime steps allObserve.35.019s idle has47journalreads but0rescan/runtimeStep/
+indexwork and unchanged source1014. Forcedaudit6.054s was a real requested scan;
+click overlap120.2ms. All4real external operations and full logical/physical restore
+pass, source1019/gen17;1001hashes/path exactsamebefore corpus,cleanupErrors[],
+3normal exits0/nullsignal/all6PIDs absent. FullreportSHA
+c7ed2de820400b9ddf154a03b2a047f2337828f6f9e107741f38ec9c31a01bfa;
+root copies final-r6-report.json/final-r6-summary.json under task evidence.
+
+Latest user priority: integrate/install this coherent confirmed STARTUP/OPENING
+batch now. Base post-edit delay remains separately OPEN (last unprofiled R4
+median2692ms/max3393/Updating5of5); external adoption-to-current-Search visibility
+21.5–34.2s remains OPEN, no attribution/speed claim. Do not mark the broader
+performance goal complete or delay this accepted batch for more qualitative work.
+
+Exact reviewed final profiler/ledger from977ea5c1 imported:22bd1563/30136372;
+own findings/roadmap preserved. Package staged/verified356files; ASARfeebce14,
+embedded nativea1c862be, arm64 runtime44.9.1. Fullsource/package proof in
+r6-package-receipt.json. No extra benchmark after byte-identical install is needed;
+actual installed isolated-profile note/Base/save/restart and normal closure remain.
+Old installed fallback is intact. Authorized disposable prior main staging bundle
+349MiB was removed ONLY after new package verification; same-volume atomic move
+will avoid another bundle copy, with old installed backup retained through smoke.
+
+Prior dated checkpoints below are historical and superseded by this current state.
+
+
+
+**Current R6 final campaign; confirmed-batch delivery priority — 2026-10-28.**
+Latest user steering explicitly prioritizes reviewed bridge/metadata/Search/startup
+fix delivery after preservation+full startup/opening acceptance; do NOT hold it
+for further qualitative Base profiling. Integrate/install coherent accepted batch
+under standing authorization while retaining Base-edit latency honestly open.
+The broader performance goal is not established complete by that batch alone.
+
+R6 source869c5d20/cratesa05376fb/desktop efe78686/src644ea3c7, hosta1c862be/
+CLIc4029d98, frontendc47430f5/Electron44.9.1 frozen in r6-release-products.json.
+Bridge89a9648e composed5a1cb462: accept only documented exact-key external_observation
+with validated observation_id, unknown/malformed still fatal. Actual retained
+cursor1007 matched Rust variant and explained R5 host abort. Own14framed tests
+pass0skip; prior R5 failed cleanup stays strict (SIGKILL/logical6errors retained).
+Metadata638b8bf3→f798b5c1 composed7c982aa6→869c5d20: actual RED(1bulk,8point)
+versus(1,0), GREEN55index unit/6presentation unit/22index integration/9presentation
+integration/15native database allpass0ignored; fullTS/frontend/release build pass,
+release1m32. Both exact source reviews closed clear. No further product fix queued.
+
+R6 bounded recovery + edit/create/rename/delete PASS, stable IDs/revision/Search/
+current/fallback and complete logical+physical restoration,1001hashes/paths true,
+cleanupErrors[], app20301 normal0/nullsignal945ms and host20318gone. Initial recovery
+from failed R5 was incomplete/namespace1,10.794s+5.143s retries; early11.23s note/
+9.95sBase are recovery observations, not warm normal. Final healthy complete,
+hints0/source1014/gen12. External phases25.8–31.8s are real remaining latency,
+not a speed claim. Report after-external-origin-r6/report.json.
+Startup retains already-held heavy/UI/runtime lane for FINAL3launch/600navigation/
+35s idle +external+forced audit on restored fixture, same869/a1c. Root holds
+until normal cleanup/source proof release; no main mutation/install yet.
+
+Owned disk cleanup: retired only verified obsolete R1/R2/R3 frozen native iteration
+outputs and completed R4 executable duplicates (r6-owned-obsolete-executable-*),
+then this thread's unused prior completed Notion task target tmp/local-database-target
+(2257files855531128logical bytes, Cargo tag/provenance/no-open-file/old-mtime checked;
+r6-retired-target-*receipts). Current target/shared package dependencies, installed
+app, frozen old baseline and R4/R6 products retained. Headroom~1.4GiB for packaging.
+
+
+
+**Current R5 Search bounded lane + open Base-edit gate — 2026-10-28.** R4
+external failure was stale UI pin, not core adoption/index content: retained gen2/
+source1003 has exact marker/new revision/digest/5499bytes. Old rich query began
+before gen2 publication and no new query ran until restoration; current:false was
+incorrectly treated fresh. Named native_enrollment_review authored7bb45a7c from
+e696; independently reviewed clear and composedd5f7e53a. Own63/63focused tests,
+fullTS/native frontend build pass. Root R5receipt records d5f7e53a/src644ea3c7/
+distc47430f5 with reused native46abbbe8; cratesc45f1fb8/desktop3d6c7dd2 unchanged.
+Startup owns bounded external edit/create/rename/delete pass, livehandle84914;
+root holds heavy/UI/runtime fixed until cleanup/proof release. Full campaign and
+install remain held. Search-only Workspace ownership excludes durable recovery.
+
+Root actual Base save gate on R4 still FAILS: five Rating edits median2692ms,
+max3393ms, Updating5/5, maxrendererframe18.7ms. Owned app60058/host60113 normally
+closed0 after a separate10s qualitative sample. Receipt r4-edit.json; profile
+r4-edit-host-sample.txt/r4-edit-profile-summary.json:4262active run_stdio samples,
+2216documentRuntime/1483NativePump; exact function-offset sums633authority capture,
+426builder,1044enrollment and300recover (nested groups overlap; not wall time).
+Native/source workers identified repeated global recovery/status and duplicate
+frontend full-reload/schema/query routes; no speculative production changes.
+Memory-only request trace helper prepared, not yet installed/executed.
+
+Index_redundancy has new named source/test scope presentation.rs +document_index.rs
+fromd5: same-Tx bulk checked metadata should avoid redundant two point metadata
+reads perentry (352samples nested inside510presentation/633capture). Keep public
+point-reader and all identity/timestamp/size/folder/corruption checks. Required
+actual4entry trace RED(1bulk,8point)→GREEN(1,0)+malformed guards. No cross-request
+cache/retag/schema redesign; no Cargo until root serialized release. No live
+Store overlap. Main remainsb0b09005 clean; original Base edit task not complete.
+
+
+
+**R4 successor external-edit failure; same live cleanup owner — 2026-10-28.**
+Normal navigation and strict35s idle pass with0rescan/runtime_step/document_work/
+indexops; forced audit completed. Overall campaign FAILED at genuine external
+Note0999 edit before create/rename/delete. Primary error/trace pending: adoption,
+indexing and oracle causes not yet distinguished. Startup retains SAME live
+handle50773 for independent restoration and source/path/normal-exit proofs;
+no restart/release, and no install/acceptance claim. Root holds heavy/UI work and
+runtime source fixed until explicit owned-process cleanup release. No speculative
+product fix is made from this incomplete evidence.
+
+
+
+**R4 final campaign failed at harness pagination; lane remains held — 2026-10-28.**
+Exact candidatee696d420/host46abbbe8/Electron44.9.1 completed all3navigation
+passes/600switch observations with zero navigation rescans. Overall failed before
+idle/external/forced phases: Search preflight waited60s at the legitimate visible
+Load more results control without clicking. This is a harness omission, not proof
+of completed search or core stall. Failed after-final-r4 report is retained; all
+1001source/path proofs and3normal exits0/nullsignal,cleanupErrors[] pass.
+Harness-only correction9a805db8 independently reviewed clear: click only the
+visible/enabled exact Load more results for the current non-busy query, preserving
+60s deadline/current-source/path/ID/snippet/zero-result guards; no direct Pump or
+product change. All6previous owned PIDs absent. Full3-run after-final-r4-successor
+is running on the same frozen product; final profiler blob follows successful
+campaign, no product rebuild. Startup retains timing lane;
+root holds heavy/UI work until explicit release. Main/install/goal completion held.
+
+
+
+**Current R4 combined validation/build lane — 2026-10-28.** R3 short proof
+PASS: complete greeting/finished scan1001observed/0imported/0issues; zero rescans
+through startup/navigation/Base,432000-byte activation35ms, ordinary switches
+45/81/29/81ms and Bases271/181/174ms. Startup12.106s/native.open8.187s remains
+explicit; one bounded run does not prove final tails. Normal0/nullsignal, host30677
+gone, all1001source paths/hashes exact. Root receipt copies report with SHA3f0595f7.
+
+Startup released timing. Root composed992d6e95→c997aece→d02637f3 as
+f6d6bc51→b83d0c8f→e860dd3f, and235b1e17 asdac11eb1. Actual RED Pump bulk
+metadata/presentation counts(2,2) versus(1,1); GREEN54document-index unit +22
+integration pass, including independent_connections_reject_stale_source_and_derived_head_publications.
+CJS141focused/adjoining tests pass; both batches independently reviewed clear.
+Hashed receipt:r4-index-cjs-validation-receipt.json. Exact reviewed profiler and
+startup ledger from238e655e imported ase696d420: blobs81ff813a/c81c6389; existing
+findings/roadmap retained. Root owns sole native/frontend/release pipeline
+session47781: native database route, full TS/frontend build, then jobs1 host/CLI.
+No new app launches until root freezes products/releases final profiling lane.
+Main remainsb0b09005 and installation held for full representative +native UI gates.
+
+
+
+**Current R3 short profiling lane — 2026-10-28.** Jobs1 host+CLI build passed
+56.66s from candidatebc0737a8/crates516e3dc6. Frozen hostfece2888/CLIf8287f51,
+full runtime/source hashes:r3-release-products.json in
+`tmp/bases-edit-performance-20261028`; build logr3-release-build001.log.
+Startup now owns the short startup/Base proof lane; root holds heavy/UI work and
+runtime source fixed until release. Index test-first992d6e95 is queued for the
+next serialized red run after that release. No native/build process remains. Actual controlled
+red was1binding+1revision query versus0; green5/5 no-op/corruption/replacement
+checks pass. Existing gates pass: hints8, namespace57, imports9, creates8,
+database15, large-compound1 (67.35s unchanged17MiB fixture/oracle). A filename
+filterdatabases_tests matched0 and is explicitly excluded; corrected module
+filterdatabases::tests passed15. Full hashed receipt:r3-validation-receipt.json.
+The heavy lane remains paused for this short profiling proof. Index request-local manifest
+source develops independently; do not hold native improvement measurement for it.
+No new app launches/main changes/package/install before coordinated release.
+
+
+
+**Retry semantics clarified — 2026-10-28.** Maintenance audit confirms retry
+resumes the same persistent inventory/scanId. Outer5s clock includes discovery
+with its own fresh clock; late discovery can leave legitimate admission pending.
+No import-status edit or retry suppression planned. Native speedup is measured
+first. Existing CJS maintenance owner may add per-service in-flight joining for
+concurrent retryReconciliation, with success/failure reset tests; preserve owner,
+blocked needsRetry and confirmed-journal obligations. Unconditional retry index
+wake remains under source review; no speculative wake-policy change approved.
+
+
+
+**R3 native controlled red/green — 2026-10-28.** Root owns sole Rust lane;
+startup released telemetry host18322 (normal0/all1001hashes exact). Late scan is
+explicit renderer import-status one-second autoRetry after greeting complete=false,
+not a dirty watcher: needsScan=false, healthy active watcher, zero hints/audit not
+due; retry reconciliation5.21s blocks Base5.49s. maintenance_triggers has named
+import-status.ts/focused-test investigation scope, but scheduling remains unchanged
+until the native improvement is measured; necessary unfinished import must progress.
+
+Test-firstc9a3c707 composed3984f13a preserves all prior eight path-hint tests.
+Actual exact no-op assertion RED: one text_bindings and one text_revisions query
+versus expected zero (0pass/1fail, not compile failure; log r3-native-noop-red001).
+Independently reviewed product158f52b2 composeda7f9da1f; approved exact no-op
+contract documented in native plan. Root clarified its causal-read comment;
+GREEN5/5 module passes (59.54scompile/.72stest; log
+`tmp/bases-edit-performance-20261028/r3-native-noop-green001.log`). Root now runs
+sequential affected native gates (Cargo session53193), then the source-matched
+release build. No overlapping Cargo/app processes authorized. All work
+remains isolated; main/install unchanged. Optional sequential SQL experiment was
+stopped without repeatable gain; only task-owned196MB copy removed, original kept.
+
+
+
+**Additional request-local index proof scope — 2026-10-28.** Root ACKs
+index_redundancy owning document_index.rs, helper-only document_cache.rs and
+focused tests to remove one duplicate fullmanifest validation per Pump. Initial
+read snapshot and final write transaction may share only a request-local exact
+validated manifest when data_version/total_changes/schema_version proof and
+fresh stage/control/header+source/publication fences establish unchanged authority.
+Any own/external/DDL mutation must recapture/compare; raw corruption must reject
+and journal changes remain StaleSource. No new persistent cache or public API.
+Source-only implementation/independent review proceed isolated; root retains sole
+Cargo/build lane. Controlled actual-bundled-SQLite race tests must establish stamp
+ordering against both snapshots (never tag an old snapshot with a newer stamp).
+This is pending implementation/validation, not a performance or integrity claim.
+
+
+
+**Lifecycle diagnostic outcome — 2026-10-28.** On combined CJS0fa97c83/native
+01282d4b, correct432000-byte activation38ms and no startup rescan before editor
+ready. Acceptance still fails: startup16.72s/native10.984s and a post-ready
+rescan5.277s blocks Base5.543s. All runtime steps were Observe, not Pump. Normal
+exit0, host10648gone, all1001hashes exact. Startup retains bounded telemetry lane:
+maintenance/profiler add pure scan-reason instrumentation, then one two-note run
+to identify the actual trigger before any scheduling-policy change. Root holds
+heavy/UI work; native implementation owner has explicit approved contract and
+regression criteria. Their docs-only checkpointbe13d411 remains isolated.
+
+
+
+**Latest whole-greeting sample / current lane — 2026-10-28.** Host01282d4b
+normal exit0/all1001hashes exact: greeting7.085s;3988active-initialization samples,
+external reconciliation96.9%, recover3.1%; no missing late recovery phase.
+Physical bindings27.9%, Text-mode16.1%, SQLite pager pread~68% in this whole
+sample (different sample scope from earlier percentages). Coverage query probe
+cold~500ms/warm~3ms does not establish a missing index. Native source is not yet
+changed: startup_audit is assessing the delayed-unused-probe contract in its
+ACKed external_observe_stream scope. Root supplied exact no-op work-count,
+no-authoring, byte/identity and causal-corruption regression criteria.
+
+Startup now owns a short CJS startup-proof lane on0fa97c83 with unchanged native
+host01282d4b; root holds UI/heavy work until release. Full representative campaign
+stays held until the native source/test/review and controlled Rust/build gates.
+Main/installation remain unchanged and completion is not claimed.
+
+
+
+**Post-R2 sample and watcher correction — 2026-10-28.** Startup released its exact
+host sample (01282d4b): handshake10.423s/rescan4.604s, all1001files unchanged.
+Earlier fixes are active: fs::exact5.1% of rescan samples (old77.6%), physical
+bindings5.5% of startup samples (old55.5%). New startup hotspot26.5% is the unused
+family_text_state→text_sync::revision mode probe before the exact no-op return.
+Startup retains named external_observe_stream ownership for a narrow dataflow
+proposal, ACKed by root: move only the fully byte/identity-verified no-op before
+that unused probe; actual capture/import/retention/read/edit corruption guards
+must remain. Implementation/review/controlled native checks are pending.
+
+Reviewed watcher lifecycle484bb892 is composed isolated as0fa97c83. Root independent
+review is clear; focused53 and adjacent83 Node tests pass (distinct files,
+136total; owner130selection overlaps and must not be added). Actual broker-before-
+owner bootstrap watch is retained; explicit close/fatal, real pause gaps,
+continuous two-owner watch and existing retry/root-rebind obligations survive.
+This CJS-only patch needs no Rust/frontend rebuild. Source trees for native R2
+remain unchanged; main and installation remain held. Root owns the next heavy
+validation/build lane, startup sample finished with no remaining owned process.
+
+
+
+**R2 acceptance failed; implementation continues — 2026-10-28.** Startup reports
+full attempt workspace~25s/native.open~12s then activation-oracle CDP deadline;
+source bytes and normal exits verified, failed report retained. Bounded retry
+observed correct432000-byte CodeMirror document and37ms activation, but startup
+13.5s/native7.95s plus extra rescan2.515s. No acceptance/completion/install claim.
+Maintenance owner found WindowBroker.bind subscribes before runtime ownership:
+syncPolling→stopPolling closes the pre-open watcher even if its timer never
+started, marking needsScan. That owner is preparing a narrow red/fix while
+preserving actual pause/resume gap guards. Root holds UI/heavy work for the
+startup owner's short host01282d4b qualitative greeting/rescan samplePID93264;
+profiling ownership remains with startup until explicit release. Core open~8s
+and the startup watcher lifecycle must be resolved before the final campaign.
+
+
+
+**R2 combined validation/build checkpoint — 2026-10-28.** Root retains exclusive
+main integration and the serialized native build lane; main remains clean at
+`b0b09005`. Candidate code `6ce25e80` (crates tree `6361053f`) now composes reviewed
+index admission reuse, maintenance watcher/wake coalescing, fully validated binding
+inventory, path-hint regression coverage and fresh descriptor-relative macOS exact
+leaf-name checks. The rejected timestamp-cache implementation was never composed.
+The startup worker's short sampling lane has ended; its workers hold Cargo.
+
+Controlled exact-name regression: old implementation enumerated 2,004,000 entries
+and failed the work bound; final code passes all seven exact-name checks, including
+fallback, case/Unicode aliases, parent replacement, NOFOLLOW and SQLite lock safety.
+Combined native release checks pass: path hints8, SQLite locks2, namespace57,
+import9, creation8, large compound restart1 (71.41s, unchanged17MiB oracle).
+The earlier debug large-file attempts remain explicitly unfinished, not passes.
+Store index controlled red/green passes14unit+22integration; binding inventory
+passes5new+3point guards+4integration. Root's exact traced inventory query-plan
+guard passes before/after ANALYZE, proving no temporary payload sorter on this
+bundled SQLite. Combined frontend243/243, full TypeScript and native frontend build
+pass. These counts overlap earlier checks; do not add them as unique coverage.
+
+The jobs1 release host/CLI build passed in1m41s from code6ce25e80. Frozen
+host SHA01282d4b and CLIf8308756 are recorded with full source/product hashes in
+`tmp/bases-edit-performance-20261028/r2-release-products.json`. Startup now owns
+the exclusive representative profiling lane; root holds UI and heavy work: same Electron44.9.1 and representative fixture, plus35s idle, real
+external edit/create/rename/delete and forced retry audit. Its tracker `023bd3c9`
+and harness `f8f5806b` remain on its performance branch, pending final harness
+review; no package dependency on that harness. No new performance improvement,
+main integration, package/install or completion is claimed before that campaign.
+
+
+**Historical R1 finding and initial follow-up scopes — 2026-10-28.**
+Current ownership, authorization, implementation and validation are superseded
+by the R2 checkpoint above; the measurements below remain evidence. The first
+combined candidate is NOT complete or installed. Main remains `b0b09005` under
+root’s acknowledged exclusive integration lane. Isolated code head `a3159547`
+includes reviewed slash/embed, recovery/journal and startup changes; its native
+release host is `73ad0c93`, CLI `f71f1e4f`, crates tree `ace9a381`. Source/candidate
+Electron44.9.1 is explicitly installed/verified in the isolated worktree; shared
+root dependencies remain44.8 and were not relabeled or modified.
+
+Representative same-Electron44.9.1 campaign (1000generated~5KBnotes,432KBfirstnote,
+100visited checkpoints, Base1000rows): all5normal launches exit0,1001exactsource
+hashes unchanged. Before400switches p50~47.8ms/p95~93.6/max9766; after600
+p50~31.5/p95~49.4/max11336. Startupbefore13.69–14.87s vsafter13.98–22.85s:
+NO startup or multi-second-tail fix. CAS626eachbefore vsafter0/1/0. Remaining
+rescan5.83–10.59s blocks sharedFIFO; native.open9.64–16.91s. Base tail improvement
+is not established. Do not claim the performance goal achieved or install as done.
+
+New named scopes ACKed after this measurement, isolated from `a3159547`:
+`maintenance_triggers` owns desktop `core-vault-fixture-service.cjs`,
+`document-runtime.cjs` and focused tests for actual-change wakes, filtered watcher
+and blocked/error/overflow fallback; `index_redundancy` owns Store
+`document_cache.rs`, `document_index.rs` and focused tests for ONE fully validated
+immutable-generation cache guarded by cache-connection data_version/total_changes/
+schema-header tags captured before the held read snapshot, plus fresh authority
+observation. Never weaken corruption/row/source checks or blindly disable scans.
+The startup session retains its four native caller files for further read-only
+no-op Text investigation until a concrete separately acknowledged implementation.
+Root recovery/journal workers have no active edits; physical-binding batching is
+only a read-only fallback proposal, not authorized implementation.
+
+The representative profiling lane ended. Startup currently owns a short(~30s)
+qualitative exact-host startup+unchanged-rescan sample; root holds UI/heavy work
+until its explicit release. Then root retains serialized compile/test/integration/
+package/install ownership. The unchanged large compound17MiB test is scheduled
+in release mode on the owned cache: debug stage/read-pin attempt unfinished7:05,
+compound debug attempt unfinished1:56, both explicitly stopped (no pass claim),
+proven stopped fixtures removed. Completed checks: recovery5/5, Store37/37+7/7,
+native preservation1/1, enrollment3/3, namespace28/28(overlaps3), creation8/8,
+import9/9, database15/15(overlaps1); zero-match filters excluded. Combined frontend
+196/196 and full TS/native frontend build pass. First release build passed6min.
+Owned debug cache and verified obsolete app/stage/failed-fixture artifacts were
+removed for disk space; release cache, frozen baseline/new products and final
+fixtures remain. No Tauri/iOS/push. Continue the explicit all-unnecessary-work goal.
+
+**Active Bases performance and slash-menu follow-up — 2026-10-28.** Root owns
+`codex/bases-edit-performance` from `b0b09005`, isolated diagnosis, native
+verification and final package/install. Coordinator ACKs the exclusive temporary
+main integrate/test/commit lane; no main mutation before reviewed validation.
+User explicitly approved the scoped Rust fix, focused tests and one serialized
+release build on 2026-10-28; this supersedes the prior frontend-only build limit
+for this task. Root owns the exclusive `--jobs 1` Rust test/release slot.
+
+Native named ownership ACK: `notion_table_interactions` owns Store `projection.rs`
+(with internal tests), native `native.rs` and `databases_tests.rs` for bounded
+fully validated recovery baseline reads; `notion_schema_menu` owns Store
+`presentation.rs`, `databases.rs`, `family_materialization.rs` and Store integration
+`tests/databases.rs`, `tests/family.rs` for proven single-file journal invalidation.
+No schema/lib/root-build changes. All other operations retain full reload and
+existing witnesses, transaction/watermark, publication, CAS and retry guards.
+Native implementation/review/measurement remain pending; no gain claim yet.
+
+Heading-only `95caf8a0` and slash `3844a20a`, successors through `f57cf8a5` pass
+independent review. Native Electron44.9.1 menu checks cover measured geometry,
+filter/arrows/Enter, top-level block conversion, one undo, single Escape despite
+pending wiki completion, pointer task insertion, focus, ordinary Properties
+hiding and embedded filename removal. No installed-delivery claim yet. A
+mechanically correct targeted frontend reload experiment was withdrawn after
+measurements failed to establish benefit. No Tauri/iOS/push.
+
+Separate startup session owns isolated `.worktrees/startup-file-performance`
+from `b0b09005`: named `src/ui/note-durable-state.ts` + tests for redundant clean
+flush CAS, startup instrumentation/harness initially. Root ACKs no overlap;
+startup leaves Rust recovery to the worker above and no concurrent main mutation.
+Its reviewed commits enter through the current integration owner. Ordered
+`d18d02d9 → ae075e2b → 8c1fabb5` are composed isolated as
+`cfee8a83 → a9c81045 → cb640165`; final combined checks remain pending.
+The proposed Store `family_store.rs` shortcut was declined because it weakened
+corruption checking. Instead the startup worker authored independently reviewed
+`775e67e6`, composed as `a3159547`, in native `content_stream.rs`,
+`external_create.rs`, `external_observe_stream.rs`, `external_namespace.rs`.
+A lock-scoped enrollment proof checks scalar/physical authority per file and
+retains full corruption admission/end validation and unscoped checks. Three new
+native proof tests and selected namespace/import/database tests pass; large-stream
+restart tests are running. Store recovery5/5 and database/family44/44 pass.
+No release/installed/performance gain claim yet. The coordinator terminal exited
+after its ownership ACK; the acknowledged exclusive lane remains with root until
+release, also confirmed by the user’s latest integration request. Bounded
+profiling uses own profiles/ports outside root’s measured timing window; heavy
+builds remain coordinated. Startup released its timing lane; root serializes all
+Rust checks and will run combined TS/frontend validation, then the one jobs1
+release build. Startup has the exclusive immediate next timing slot after that
+build for same-Electron44.9.1 before/after passes using old/new dist and host on
+identical100-visited-note fixtures/profiles. Root holds other UI/heavy work during
+that pass, then owns final Bases edit/installed smoke and package replacement. [Current findings](user-findings.md).
+
 **Notion database interactions installed — 2026-10-28.** Product `a4696820`
 is integrated on main after scoped independent review. Store33/33, focused
 frontend324/324, title/layout follow-up77/77, main57/57+29/29 separate selections,

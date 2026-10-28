@@ -550,6 +550,15 @@ export class Workspace {
       const head=await checkpoints.load(key);if(!head?.encodedState)continue;
       const raw=JSON.parse(head.encodedState),entryId=key.slice('note/v1/'.length);
       if(raw.version!==1||raw.base?.entryId!==entryId)throw new Error('Unsupported durable note recovery checkpoint; retained');
+      // Clean history has no draft or operation to recover. Leave it on disk
+      // until that note is actually opened, rather than reading every old body
+      // and keeping an unused buffer on the startup path. Only skip states that
+      // satisfy the same basic validation as DurableNoteState.load; malformed
+      // checkpoints still take the existing retained-recovery error path.
+      if(typeof raw.writer==='string'&&Number.isSafeInteger(raw.generation)&&raw.generation>=0
+        &&typeof raw.draft==='string'&&raw.conflict===false&&!raw.operation
+        &&typeof raw.base.content==='string'&&typeof raw.base.revision==='string'&&typeof raw.base.path==='string'
+        &&raw.draft===raw.base.content)continue;
       const current=await vault.readDurableTextById(entryId);
       if(!current){if(raw.operation||raw.draft!==raw.base.content)throw new Error('Recovered note entry is missing; draft retained');continue;}
       let buffer:NoteBuffer;
@@ -2101,7 +2110,7 @@ export class Workspace {
         this.richDocumentSearch=mount;
         const current=()=>this.richDocumentSearch===mount&&this.vault===vault&&this.treeTab==='search'&&!this.documentSearchSuspended&&!this.platformReleased&&!this.closing;
         const controller=mountDocumentSearch(this.sidebarContent,{service,scopeId:scope,spec:{...this.richSearchSpec,query:this.query},isCurrent:current,
-          acquireFresh:async(isCurrent,rebuild,signal)=>{const value=await catchUpDocumentIndex(service,{isCurrent,rebuild,signal});if(value.rebuildRequired)throw new DocumentSemanticsError('rebuild_required');return !!value.snapshot;},
+          acquireFresh:async(isCurrent,rebuild,signal)=>{const value=await catchUpDocumentIndex(service,{isCurrent,rebuild,signal});if(value.rebuildRequired)throw new DocumentSemanticsError('rebuild_required');return value.current&&!!value.snapshot;},
           beforeOpen:async()=>{for(const owner of this.richDocumentSearchOwners)if(owner.vault===vault&&owner.controller!==mount.controller&&owner.controller.service===service){await owner.controller.close();this.richDocumentSearchOwners.delete(owner);}},
           onSpec:spec=>{if(current()){this.richSearchSpec=spec;this.query=spec.query;}},
           onOpen:(entry,location,modifiers,isCurrent)=>this.openRichDocumentSearchEntry(entry,location,modifiers.primary,isCurrent),

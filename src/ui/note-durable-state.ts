@@ -29,6 +29,7 @@ function canonicalDraft(submitted:string,canonical:string,current:string):string
 export class DurableNoteState {
   private state?:State;
   private revision:string|null=null;
+  private confirmedState?:string|null;
   private uncertain?:CheckpointChange;
   private tail:Promise<unknown>=Promise.resolve();
   private key='';
@@ -117,10 +118,14 @@ export class DurableNoteState {
     if(op.planningRejected!==undefined&&(!['revision_conflict','source_capture_expired','conditional_source_changed'].includes(op.planningRejected)||op.ref))throw failure('invalid saved conditional planning rejection');
   }
   private async persist(state=this.state):Promise<void>{
-    if(this.uncertain){const result=await this.writes.checkpoints.compareAndSwap(this.uncertain);this.revision=result.revision;this.uncertain=undefined;}
+    if(this.uncertain){const result=await this.writes.checkpoints.compareAndSwap(this.uncertain);this.revision=result.revision;this.confirmedState=this.uncertain.encodedState;this.uncertain=undefined;}
     const encodedState=JSON.stringify(state);boundedUtf8(encodedState,32*1024*1024,'checkpoint_too_large');
+    // Unchanged drafts can reuse a confirmed checkpoint, but retained operations
+    // must recheck ownership before authorizing any intent continuation.
+    // An uncertain request above still settles under its original identity.
+    if(!state?.operation&&encodedState===this.confirmedState)return;
     this.uncertain={key:this.key,expectedRevision:this.revision,nextRevision:crypto.randomUUID(),encodedState};
-    const result=await this.writes.checkpoints.compareAndSwap(this.uncertain);this.revision=result.revision;this.uncertain=undefined;
+    const result=await this.writes.checkpoints.compareAndSwap(this.uncertain);this.revision=result.revision;this.confirmedState=encodedState;this.uncertain=undefined;
   }
   load(path:string,expectedEntryId?:string,validate:()=>void=()=>{}):Promise<void>{return this.queue(async()=>{
     validate();
@@ -130,7 +135,7 @@ export class DurableNoteState {
     // A rename is retried by its caller, never admitted under an old path key.
     if(!observed||observed.path!==path||expectedEntryId!==undefined&&observed.entryId!==expectedEntryId)throw failure('selected note changed before admission');
     this.key=`note/v1/${observed.entryId}`;
-    const head=await this.writes.checkpoints.load(this.key);validate();this.revision=head?.revision??null;
+    const head=await this.writes.checkpoints.load(this.key);validate();this.revision=head?.revision??null;this.confirmedState=head?.encodedState;
     this.state={version:1,writer:crypto.randomUUID(),generation:0,base:observed,draft:observed.content,conflict:false};
     if(head?.encodedState!==null&&head?.encodedState!==undefined){
       const raw=JSON.parse(head.encodedState) as State;

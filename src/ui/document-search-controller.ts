@@ -1,5 +1,6 @@
 import { documentErrorCode, DocumentSemanticsError } from '../core/document-semantics.ts';
-import type { DocumentCursor, DocumentEntry, DocumentPin, DocumentRichQuery, DocumentService } from '../core/document-semantics.ts';
+import type { DocumentCursor, DocumentEntry, DocumentPin, DocumentRichQuery, DocumentService, DocumentSnapshotId, DocumentSourceId } from '../core/document-semantics.ts';
+import type { DocumentRuntimeUpdate } from '../core/document-runtime.ts';
 import type { DocumentRichSearchPage, SearchLocation, SearchSpec } from '../core/document-search-types.ts';
 import { createDocumentSearchView } from './document-search.ts';
 import type { DocumentSearchCallbacks, DocumentSearchFrame, DocumentSearchGroup, DocumentSearchIdentity, DocumentSearchView } from './document-search.ts';
@@ -30,6 +31,10 @@ export interface DocumentSearchController {
   release():void;
 }
 const sameSpec=(a:SearchSpec,b:SearchSpec)=>a.query===b.query&&a.caseSensitive===b.caseSensitive&&a.sort===b.sort&&a.context===b.context&&a.explain===b.explain;
+const sameSource=(a:DocumentSourceId,b:DocumentSourceId)=>a.localStoreId===b.localStoreId&&a.watermark===b.watermark;
+const sameSnapshot=(a:DocumentSnapshotId,b:DocumentSnapshotId)=>a.localStoreId===b.localStoreId&&a.generationEpoch===b.generationEpoch&&a.generation===b.generation
+  &&a.versions.schema===b.versions.schema&&a.versions.extraction===b.versions.extraction&&a.versions.resolver===b.versions.resolver&&a.versions.query===b.versions.query;
+const snapshotFence=(value:DocumentSnapshotId|null)=>value===null?null:[value.localStoreId,value.generationEpoch,value.generation,value.versions.schema,value.versions.extraction,value.versions.resolver,value.versions.query];
 const invalid=():never=>{throw new DocumentSemanticsError('invalid_document_response');};
 const locationPayload=(location:SearchLocation):string=>{
   const value=location.locator,base=[location.role,location.occurrences,value.origin];
@@ -55,6 +60,7 @@ export function mountDocumentSearch(parent:HTMLElement,options:DocumentSearchCon
   let scheduled=false,serial:Promise<void>=Promise.resolve(),ready:Promise<void>=Promise.resolve();
   let closing:Promise<void>|undefined;
   let freshness:AbortController|undefined;
+  let runtimeStop:(()=>void)|undefined,runtimeRegistration:Promise<void>|undefined,runtimeFence:string|undefined,lastAutomaticHead:string|undefined;
   const cancelFreshness=()=>{freshness?.abort();freshness=undefined;};
   const live=()=>!disposed&&!released&&options.isCurrent();
   const identity=():DocumentSearchIdentity=>({scopeId:options.scopeId,requestId:String(request)});
@@ -101,6 +107,30 @@ export function mountDocumentSearch(parent:HTMLElement,options:DocumentSearchCon
     if(timer!==undefined)clearTimeout(timer);
     timer=setTimeout(()=>{timer=undefined;enqueue();},options.debounceMs??120);
   }
+  function runtimeChanged(value:DocumentRuntimeUpdate|null):void {
+    if(!live())return;
+    // Progress and demand acknowledgments do not change the source or immutable
+    // published generation. Only a new fence retires an in-flight search.
+    const key=JSON.stringify(value===null?null:[value.lifetime,value.source?[value.source.localStoreId,value.source.watermark]:null,snapshotFence(value.published)]);
+    const previous=runtimeFence;runtimeFence=key;
+    if(!spec.query.length)return;
+    const differs=pin&&(value===null||value.source!==null&&!sameSource(value.source,pin.source)||value.published!==null&&!sameSnapshot(value.published,pin.snapshot));
+    if(previous===undefined?differs:previous!==key)invalidate();
+  }
+  function observeRuntime():void {
+    if(!live()||!options.service.maintenance||runtimeStop||runtimeRegistration)return;
+    let delivered=false;
+    const registering=Promise.resolve().then(()=>options.service.maintenance!.observeAndSubscribe(value=>{delivered=true;runtimeChanged(value);}));
+    const pending=registering.then(registration=>{
+      if(!live()){registration.unsubscribe();return;}
+      runtimeStop=registration.unsubscribe;
+      // Receiver-first registration may deliver a newer callback while its
+      // captured initial observation is still crossing the bridge.
+      if(!delivered)runtimeChanged(registration.snapshot);
+    }).catch(error=>{if(live()){cancelFreshness();sourceEpoch++;failure(error);}}).finally(()=>{if(runtimeRegistration===pending)runtimeRegistration=undefined;});
+    runtimeRegistration=pending;
+  }
+  function stopRuntime():void {const stop=runtimeStop;runtimeStop=undefined;stop?.();}
   function append(page:DocumentRichSearchPage):void {
     const previous={groups,result,lastPage,truncated,retainedBytes,snippetCount,nextChunk};
     groups=[...groups];
@@ -153,6 +183,7 @@ export function mountDocumentSearch(parent:HTMLElement,options:DocumentSearchCon
   let nextChunk=0;
   async function drive():Promise<void> {
     if(!live())return;const stamp=request,epoch=sourceEpoch,requested={...spec};
+    observeRuntime();
     const current=()=>live()&&request===stamp&&sourceEpoch===epoch;
     if(!requested.query.length){await closeQuery();if(current()){phase='idle';paint();}return;}
     phase='loading';paint();
@@ -193,10 +224,23 @@ export function mountDocumentSearch(parent:HTMLElement,options:DocumentSearchCon
       const input=cursor,owned=query;const page=await owned.page(input);if(!current())return;
       if(page.cursor!==null&&(page.cursor===input||seenCursors.has(page.cursor)))invalid();
       append(page.result.value);cursor=page.cursor;if(cursor){seenCursors.add(cursor);if(seenCursors.size>8)seenCursors.delete(seenCursors.values().next().value!);}
-      phase='results';stale=false;paint();
       if(page.result.value.files.length||cursor===null)break;
     }
-    if(current()){phase='results';message=truncated?'Display limit reached. Refine the query to see other results.':undefined;paint();}
+    if(!current()||!pin)return;
+    // A pin is immutable. Query completion does not prove it covers the current
+    // source, even when the core has already published a newer ready index.
+    const observed=await options.service.status();if(!current())return;
+    if(observed.source.localStoreId!==pin.source.localStoreId)invalid();
+    if(observed.rebuildRequired)throw new DocumentSemanticsError('rebuild_required');
+    const lagged=!observed.current||!sameSource(observed.source,pin.source)||!observed.snapshot||!sameSnapshot(observed.snapshot,pin.snapshot);
+    phase='results';stale=lagged;needsRefresh=lagged;
+    message=lagged?'Recent saved changes are still being indexed.':truncated?'Display limit reached. Refine the query to see other results.':undefined;paint();
+    if(lagged&&observed.current&&observed.snapshot){
+      const head=JSON.stringify([[observed.source.localStoreId,observed.source.watermark],snapshotFence(observed.snapshot)]);
+      // Cover publication racing the initial observer registration. A provider
+      // which keeps returning an old pin gets one retry for this exact head.
+      if(lastAutomaticHead!==head){lastAutomaticHead=head;invalidate();}
+    }
   }
   function enqueue():void {
     if(!live()||scheduled)return;scheduled=true;
@@ -207,13 +251,14 @@ export function mountDocumentSearch(parent:HTMLElement,options:DocumentSearchCon
       const stamp=request,epoch=sourceEpoch;try{await drive();}catch(error){if(stamp===request&&epoch===sourceEpoch)failure(error);}
     });
   }
-  paint();if(spec.query.length)enqueue();
+  paint();observeRuntime();if(spec.query.length)enqueue();
   return {service:options.service,get ready(){return ready;},setSpec,invalidateSource:invalidate,focusQuery:()=>view.focusQuery(),
     close(){
-      disposed=true;cancelFreshness();request++;if(timer!==undefined){clearTimeout(timer);timer=undefined;}view.destroy();
+      disposed=true;cancelFreshness();stopRuntime();request++;if(timer!==undefined){clearTimeout(timer);timer=undefined;}view.destroy();
       if(released)return Promise.resolve();if(closing)return closing;
-      closing=serial.catch(()=>{}).then(()=>released?undefined:closePin()).finally(()=>{closing=undefined;});return closing;
+      const observing=runtimeRegistration;
+      closing=serial.catch(()=>{}).then(async()=>{await observing;if(!released)await closePin();}).finally(()=>{closing=undefined;});return closing;
     },
-    release(){released=true;disposed=true;cancelFreshness();request++;if(timer!==undefined)clearTimeout(timer);pin=undefined;query=undefined;view.destroy();},
+    release(){released=true;disposed=true;cancelFreshness();stopRuntime();request++;if(timer!==undefined)clearTimeout(timer);pin=undefined;query=undefined;view.destroy();},
   };
 }

@@ -141,6 +141,19 @@ impl NativeVault {
         mode: FamilyCreateMode,
         origin: &OperationId,
     ) -> Result<CommitResult> {
+        self.observe_new_family_stream_with_scan(path, parent, expected, mode, origin, None)
+    }
+
+    pub(super) fn observe_new_family_stream_with_scan(
+        &mut self,
+        path: &VaultPath,
+        parent: &File,
+        expected: &crate::fs_stream::StreamSnapshot,
+        mode: FamilyCreateMode,
+        origin: &OperationId,
+        scan: Option<&external_namespace::EnrolledScan<'_>>,
+    ) -> Result<CommitResult> {
+        if let Some(scan) = scan { scan.check(self)?; }
         self.paths.verify_parent(path, parent)?;
         self.namespace_clear(path)?;
         if self.store.physical_owner_at(path)?.is_some()
@@ -176,7 +189,7 @@ impl NativeVault {
                 observation
             }
             None => {
-                let content = self.capture_observed_file(
+                let content = self.capture_observed_file_with_scan(
                     path,
                     parent,
                     path.file_name(),
@@ -185,6 +198,7 @@ impl NativeVault {
                     Some(&proof),
                     expected,
                     mode == FamilyCreateMode::Text,
+                    scan,
                 )?;
                 self.verify_observed_content(path, parent, &physical, &content)?;
                 self.retain_observed_content(path, None, &content, Some(&proof))?

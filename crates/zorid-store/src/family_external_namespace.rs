@@ -212,16 +212,7 @@ fn read(
     Ok((value, receipt))
 }
 fn bindings(tx: &Connection) -> Result<Vec<PhysicalBinding>> {
-    let ids = tx
-        .prepare("SELECT entry_id FROM physical_bindings ORDER BY entry_id")?
-        .query_map([], |r| r.get::<_, String>(0))?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    ids.into_iter()
-        .map(|id| {
-            physical_bindings::binding(tx, &EntryId::new(id)?)?
-                .ok_or_else(|| invalid("listed physical binding missing"))
-        })
-        .collect()
+    physical_bindings::bindings(tx)
 }
 fn baseline(tx: &Connection, b: &PhysicalBinding) -> Result<external::PhysicalNamespaceBaseline> {
     physical_bindings::check_binding(tx, &b.state.id, Some(b))?;

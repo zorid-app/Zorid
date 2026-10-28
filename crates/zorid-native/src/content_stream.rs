@@ -174,7 +174,27 @@ impl NativeVault {
         expected: &StreamSnapshot,
         prefer_inline: bool,
     ) -> Result<StoredContent> {
-        let enrolled = self.store.family_is_enrolled()?;
+        self.capture_observed_file_with_scan(path, parent, name, origin, baseline, physical, expected, prefer_inline, None)
+    }
+
+    /// Reuse only the enrollment admission held by this exclusive discovery pass.
+    /// The capture/source and Store mutation checks below remain independent.
+    pub(super) fn capture_observed_file_with_scan(
+        &mut self,
+        path: &VaultPath,
+        parent: &File,
+        name: &str,
+        origin: &OperationId,
+        baseline: Option<&zorid_store::ProjectionBaseline>,
+        physical: Option<&ObservationPhysical>,
+        expected: &StreamSnapshot,
+        prefer_inline: bool,
+        scan: Option<&external_namespace::EnrolledScan<'_>>,
+    ) -> Result<StoredContent> {
+        let enrolled = match scan {
+            Some(scan) => { scan.check(self)?; true }
+            None => self.store.family_is_enrolled()?,
+        };
         let inline_limit = if enrolled {
             self.options
                 .max_file_bytes

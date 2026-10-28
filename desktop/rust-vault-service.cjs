@@ -82,6 +82,9 @@ function changePage(command, result) {
       if (change.requires_full_reload !== true || change.entries.length) return false;
     } else {
       if (origin.kind === 'local_command') { if (!identity(origin.operation_id)) return false; }
+      else if (origin.kind === 'external_observation') {
+        if (!exactKeys(origin, ['kind', 'observation_id']) || !identity(origin.observation_id)) return false;
+      }
       else if (origin.kind !== 'received_update' || ![origin.realm_id, origin.vault_id, origin.update_id].every(value => typeof value === 'string' && value.length > 0)) return false;
     }
   }

@@ -145,6 +145,30 @@ pub(crate) fn migrate(tx: &Connection) -> Result<()> {
     Ok(())
 }
 pub(crate) fn presentation(tx: &Connection, state: &EntryState) -> Result<EntryPresentation> {
+    let value = presentation_row(tx, state)?;
+    let actual = entry_content::read_metadata_row(tx, &state.id)?
+        .ok_or_else(|| StoreError::Corrupt("presentation entry missing".into()))?
+        .content
+        .map_or(0, |value| value.len());
+    check_size(value, state, actual)
+}
+
+/// The caller must have fully read and validated this metadata in the same held
+/// transaction, without intervening writes. Presentation facts are still fresh
+/// reads; only the duplicate entry metadata lookup is omitted.
+pub(super) fn presentation_for_metadata(
+    tx: &Connection,
+    entry: &StoredEntryMetadata,
+) -> Result<EntryPresentation> {
+    let value = presentation_row(tx, &entry.state)?;
+    check_size(
+        value,
+        &entry.state,
+        entry.content.as_ref().map_or(0, ContentMetadata::len),
+    )
+}
+
+fn presentation_row(tx: &Connection, state: &EntryState) -> Result<EntryPresentation> {
     let row = tx
         .query_row(
             "SELECT ctime_ms,mtime_ms,size_bytes FROM entry_presentation WHERE entry_id=?1",
@@ -163,21 +187,25 @@ pub(crate) fn presentation(tx: &Connection, state: &EntryState) -> Result<EntryP
     let ctime_ms = stored_number(ctime_ms)?;
     let mtime_ms = stored_number(mtime_ms)?;
     let size_bytes = stored_number(size_bytes)?;
-    let actual = entry_content::read_metadata_row(tx, &state.id)?
-        .ok_or_else(|| StoreError::Corrupt("presentation entry missing".into()))?
-        .content
-        .map_or(0, |value| value.len());
-    if size_bytes != actual || (state.kind == EntryKind::Folder && size_bytes != 0) {
-        return Err(StoreError::Corrupt(
-            "presentation size differs from committed bytes".into(),
-        ));
-    }
     Ok(EntryPresentation {
         id: state.id.clone(),
         ctime_ms,
         mtime_ms,
         size_bytes,
     })
+}
+
+fn check_size(
+    value: EntryPresentation,
+    state: &EntryState,
+    actual: u64,
+) -> Result<EntryPresentation> {
+    if value.size_bytes != actual || (state.kind == EntryKind::Folder && value.size_bytes != 0) {
+        return Err(StoreError::Corrupt(
+            "presentation size differs from committed bytes".into(),
+        ));
+    }
+    Ok(value)
 }
 pub(crate) fn record_local(tx: &Connection, result: &CommitResult, now: u64) -> Result<()> {
     record_changes(
@@ -220,6 +248,50 @@ pub(crate) fn record_changes(
     append(tx, origin, false, entries)?;
     Ok(())
 }
+/// A logical collection value changes before its readable file is published.
+/// Invalidate that existing file without pretending its bytes/revision or display
+/// timestamps have changed. The cursor is still part of the mutation transaction.
+pub(crate) fn record_existing_file_invalidation(
+    tx: &Connection,
+    operation_id: &OperationId,
+    id: &EntryId,
+) -> Result<()> {
+    let visible: Option<bool> = tx
+        .query_row(
+            "SELECT visible FROM entries WHERE id=?1",
+            [id.as_str()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let entry = entry_content::read_metadata_row(tx, id)?;
+    let Some(entry) = entry.filter(|entry| {
+        visible == Some(true) && !entry.state.deleted && entry.state.kind == EntryKind::File
+    }) else {
+        // Preserve the previous complete invalidation when retained metadata is
+        // not a visible file. Never expose a hidden row through a scoped event.
+        return record_family_reload(
+            tx,
+            ProjectionOrigin::LocalCommand {
+                operation_id: operation_id.clone(),
+            },
+            &[],
+            now_ms()?,
+        );
+    };
+    let presented = PresentedState {
+        presentation: presentation(tx, &entry.state)?,
+        state: entry.state,
+    };
+    append(
+        tx,
+        ChangeOrigin::LocalCommand {
+            operation_id: operation_id.clone(),
+        },
+        false,
+        vec![presented],
+    )
+}
+
 /// A visibility transition cannot be represented as a fake tombstone. Update
 /// presentation metadata and append one explicit full-reload event atomically.
 pub(crate) fn record_family_reload(

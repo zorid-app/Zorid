@@ -1117,14 +1117,28 @@ pub(super) fn apply_indexed_local_text(
         tx.execute("INSERT INTO family_materializations VALUES(?1,?2) ON CONFLICT(entry_id) DO UPDATE SET record=excluded.record",
             params![after.id.as_str(), encoded])?;
     }
-    presentation::record_family_reload(
-        tx,
-        ProjectionOrigin::LocalCommand {
-            operation_id: request.operation_id.clone(),
-        },
-        changes,
-        presentation::now_ms()?,
-    )
+    if matches!(request.mutation, Mutation::Write { .. }) && changes.len() == 1 {
+        // All retained Text, location, history, visibility and complete-delta
+        // checks above have succeeded. Only this existing file changed; creates
+        // and ancestor/folder updates still require the full listing fallback.
+        presentation::record_changes(
+            tx,
+            presentation::ChangeOrigin::LocalCommand {
+                operation_id: request.operation_id.clone(),
+            },
+            changes,
+            presentation::now_ms()?,
+        )
+    } else {
+        presentation::record_family_reload(
+            tx,
+            ProjectionOrigin::LocalCommand {
+                operation_id: request.operation_id.clone(),
+            },
+            changes,
+            presentation::now_ms()?,
+        )
+    }
 }
 
 fn check_indexed_normal(record: &FamilyMaterialization, state: &EntryState) -> Result<()> {

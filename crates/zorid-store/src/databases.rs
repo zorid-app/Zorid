@@ -1122,14 +1122,18 @@ impl Store {
                 "collection revision counter exhausted".into(),
             ));
         }
-        presentation::record_family_reload(
-            &tx,
-            ProjectionOrigin::LocalCommand {
-                operation_id: operation.clone(),
-            },
-            &[],
-            presentation::now_ms()?,
-        )?;
+        if let DatabaseRequest::SetEntry { entry_id, .. } = request {
+            presentation::record_existing_file_invalidation(&tx, operation, entry_id)?;
+        } else {
+            presentation::record_family_reload(
+                &tx,
+                ProjectionOrigin::LocalCommand {
+                    operation_id: operation.clone(),
+                },
+                &[],
+                presentation::now_ms()?,
+            )?;
+        }
         let response = snapshot(&tx, Some(&collection_id))?;
         tx.execute(
             "INSERT INTO local_database_operations(operation_id,request,response) VALUES(?1,?2,?3)",

@@ -1,5 +1,6 @@
 'use strict';
 const { watch } = require('node:fs');
+const fs = require('node:fs/promises');
 const { RustVaultService } = require('./rust-vault-service.cjs');
 const { DocumentRuntimeScheduler } = require('./document-runtime.cjs');
 const { normalizePath } = require('./vault-service.cjs');
@@ -15,6 +16,40 @@ function metadata(state, presentation) {
     ...(presentation.ctime_ms ? { ctime: presentation.ctime_ms } : {}) };
 }
 function visible(path) { return !path.split('/').some(part => part.startsWith('.')); }
+const HEALTHY_WATCH_AUDIT_MS = 5 * 60 * 1000;
+const MAX_KNOWN_HINTS_PER_POLL = 16;
+async function physicalWatchRoot(root){
+  const path=await fs.realpath(root),stat=await fs.stat(path,{bigint:true});
+  if(!stat.isDirectory())throw error('invalid_watch_root');
+  return {path,identity:`${stat.dev}:${stat.ino}`};
+}
+function watchState() { return { hints:new Set(), needsScan:false, healthy:false, watcher:null, active:false, started:false, token:null }; }
+function recordWatchHint(state, file) {
+  if (!state.active) return;
+  const relative = file?.toString().replaceAll('\\', '/');
+  if (relative === '.zorid' || relative?.startsWith('.zorid/')) return;
+  try {
+    if (relative && state.hints.size < 1024) state.hints.add(normalizePath(relative));
+    else state.needsScan = true;
+  } catch { state.needsScan = true; }
+}
+function startWatcher(root, state, factory) {
+  if (state.watcher) return;
+  if(state.started)state.needsScan=true;
+  state.started=true;state.active=true;const token={};state.token=token;
+  try {
+    state.watcher = factory(root, {recursive:true}, (_event, file) => {if(state.token===token)recordWatchHint(state,file);});
+    state.healthy = true;
+    const current=state.watcher;
+    current.on('error', () => { if (state.active&&state.watcher===current) { state.healthy=false; state.needsScan=true; } });
+    current.on('close', () => { if (state.active&&state.watcher===current) { state.watcher=null; state.healthy=false; state.needsScan=true; } });
+  } catch { state.healthy=false; state.needsScan=true; }
+}
+function stopWatcher(state) {
+  state.active=false; state.healthy=false;state.token=null;
+  const watcher=state.watcher;state.watcher=null;watcher?.close();
+}
+
 function validText(value) {
   if (typeof value !== 'string' || value.length > 16 * 1024 * 1024) return false;
   for (let index = 0; index < value.length; index++) {
@@ -38,14 +73,33 @@ class CoreVaultFixtureService {
     const { pollMs = 750, rescanMs = 30000, documentRuntime = false } = options;
     if(typeof documentRuntime!=='boolean')throw error('invalid_runtime_option');
     if (!Number.isSafeInteger(pollMs) || pollMs < 100 || pollMs > 60000 || !Number.isSafeInteger(rescanMs) || rescanMs < 1000 || rescanMs > 3600000) throw error('invalid_poll_interval');
-    const host = await RustVaultService.open(root, options);
+    // Observe public-file changes throughout native startup, before the initial
+    // reconciliation completes. Buffered hints close the admission blind gap.
+    const pendingWatch=watchState(),watchFactory=options.watchFactory??watch,readWatchRoot=options.watchRootIdentity??physicalWatchRoot;
+    if(typeof watchFactory!=='function'||typeof readWatchRoot!=='function')throw error('invalid_watch_factory');
+    let watchedRoot;
+    if(options.familyMode===true){
+      try{watchedRoot=await readWatchRoot(root);startWatcher(watchedRoot.path,pendingWatch,watchFactory);}
+      catch{pendingWatch.needsScan=true;}
+    }
+    let host;
     try {
+      host=await RustVaultService.open(root, options);
+      if(options.familyMode===true){
+        try{
+          const admittedRoot=await readWatchRoot(host.root);
+          if(!watchedRoot||watchedRoot.path!==admittedRoot.path||watchedRoot.identity!==admittedRoot.identity){
+            stopWatcher(pendingWatch);pendingWatch.needsScan=true;
+            startWatcher(admittedRoot.path,pendingWatch,watchFactory);
+          }
+        }catch{stopWatcher(pendingWatch);pendingWatch.needsScan=true;}
+      }
       if (documentRuntime) requireDocumentRuntime(host);
       for (const capability of ['read_path', 'list_snapshot', 'changes_after', 'rescan', 'prepare_intent', 'commit_intent', 'query_intent', 'list_intents', 'acknowledge_intent']) {
         if (!host.capabilities.includes(capability)) throw error('unsupported_host_capability');
       }
       const familyMode = options.familyMode === true;
-      const service = new CoreVaultFixtureService(host, { pollMs, rescanMs, familyMode, documentRuntime });
+      const service = new CoreVaultFixtureService(host, { pollMs, rescanMs, familyMode, documentRuntime, pendingWatch, watchFactory });
       if (familyMode) {
         if(options.initializeLocal){
           if(!host.capabilities.includes('local_family_status')||!host.capabilities.includes('reconciliation_status')||!host.reconciliation)throw error('unsupported_host_capability');
@@ -60,31 +114,34 @@ class CoreVaultFixtureService {
       }
       service.adopt(await host.listSnapshot());
       return service;
-    } catch (reason) { await host.close(); throw reason; }
+    } catch (reason) { stopWatcher(pendingWatch); await host?.close(); throw reason; }
   }
-  constructor(host, { pollMs, rescanMs, familyMode = false, documentRuntime = false }) {
+  constructor(host, { pollMs, rescanMs, familyMode = false, documentRuntime = false, pendingWatch=watchState(), watchFactory=watch, now=Date.now }) {
     if (documentRuntime) requireDocumentRuntime(host);
     this.documentRuntimeEnabled=documentRuntime;
     this.documentRuntimeOwners=new Set();
-    this.documentScheduler=null;
+    this.documentScheduler=null;this.pendingIndexSource=false;this.hasStartedPolling=false;this.reconciliationRetry=null;
     this.host = host;
     this.familyMode = familyMode;
     this.root = host.root;
     this.pollMs = pollMs;
     this.rescanMs = rescanMs;
-    this.lastScan = Date.now();
+    this.now=now;this.watchFactory=watchFactory;this.watchState=pendingWatch;
+    this.lastScan = this.now();
     this.entries = new Map();
     this.cursor = '0';
     this.pageLimit = 100;
     this.listeners = new Set();
-    this.hints = new Set();
-    this.needsScan = false;
+    this.hints = this.watchState.hints;
     this.closed = false;
     this.reconciliation=host.reconciliation?structuredClone(host.reconciliation):null;
     if(documentRuntime&&host.exit&&typeof host.exit.then==='function')void host.exit.then(()=>{
       this.runtimeFailed=true;this.stopPolling();void this.documentScheduler?.close();
     });
   }
+  get watcher(){return this.watchState.watcher;}
+  get needsScan(){return this.watchState.needsScan;}
+  set needsScan(value){this.watchState.needsScan=value;}
   live() { if (this.closed) throw error('vault_closed'); }
   adopt(snapshot) {
     this.entries = new Map(snapshot.entries.map(value => [value.state.id, value]));
@@ -143,29 +200,26 @@ class CoreVaultFixtureService {
   }
   syncPolling() {
     const needed=!this.closed&&!this.runtimeFailed&&(this.documentRuntimeEnabled?!!this.runtimeOwner():this.listeners.size>0);
-    if(needed)this.startPolling();else this.stopPolling();
+    if(needed){this.hasStartedPolling=true;this.startPolling();}
+    // Broker listeners arrive before the first renderer runtime admission. Keep
+    // the already-bound startup watcher continuous during that interval: no
+    // polling timer or native maintenance is admitted until an owner exists.
+    // After an actual polling lifetime, pause/removal still closes the watcher
+    // and preserves its genuine missed-observation obligation.
+    else if(this.hasStartedPolling||this.closed||this.runtimeFailed)this.stopPolling();
   }
   startPolling() {
     if(this.timer)return;
-    try {
-      if (!this.familyMode) this.watcher = watch(this.root, { recursive: true }, (_event, file) => {
-        if (this.closed) return;
-        const relative = file?.toString().replaceAll('\\', '/');
-        if (relative === '.zorid' || relative?.startsWith('.zorid/')) return;
-        try {
-          if (relative && this.hints.size < 1024) this.hints.add(normalizePath(relative));
-          else this.needsScan = true;
-        } catch { this.needsScan = true; }
-      });
-      this.watcher?.on('error', () => { this.needsScan = true; });
-    } catch { this.needsScan = true; }
+    startWatcher(this.root,this.watchState,this.watchFactory);
     this.timer = setInterval(() => { void this.poll(); }, this.pollMs);
     this.timer.unref();
     void this.poll();
   }
   stopPolling() {
     clearInterval(this.timer);this.timer=null;
-    this.watcher?.close();this.watcher=null;
+    // A later admission must reconcile the interval with no active watcher.
+    if(this.watchState.active)this.needsScan=true;
+    stopWatcher(this.watchState);
   }
   subscribe(listener) {
     this.live();
@@ -185,7 +239,7 @@ class CoreVaultFixtureService {
     return Object.freeze({
       observe:handle.observe,control:handle.control,ackControl:handle.ackControl,ackOutcome:handle.ackOutcome,subscribe:handle.subscribe,
       pause:async()=>{owner.paused=true;this.syncPolling();await Promise.all([handle.pause(),this.polling]);},
-      resume:()=>{owner.paused=false;handle.resume();this.needsScan=true;this.syncPolling();},
+      resume:()=>{owner.paused=false;handle.resume();if(!this.watchState.active||!this.watchState.healthy||!this.watcher)this.needsScan=true;this.syncPolling();},
       prepareRelease:handle.prepareRelease,
       release:()=>{handle.release();remove();},
       revoke:async()=>{remove();await handle.revoke();},
@@ -207,6 +261,12 @@ class CoreVaultFixtureService {
     return this.ensureDocumentScheduler().releaseDraftClient(reference);
   }
   documentRuntimeSourceHint() { this.documentScheduler?.sourceHint(); }
+  flushIndexSourceNotification(maintenanceGuard,retry=false){
+    if(!this.pendingIndexSource&&!retry)return false;
+    maintenanceGuard?.();
+    if(this.closed||this.runtimeFailed||!this.documentScheduler)return false;
+    this.documentScheduler.wake();this.pendingIndexSource=false;return true;
+  }
   databaseChanged() { this.live();this.notify({type:'change'}); }
   async poll() {
     if (this.closed) return;
@@ -219,9 +279,20 @@ class CoreVaultFixtureService {
       owner.assertActive();
     }:null;
     const before=this.cursor;
-    this.polling = this.pollNow(host,maintenanceGuard).then(()=>{if(this.cursor!==before)this.documentRuntimeSourceHint();}).catch(reason => {
+    this.polling = this.pollNow(host,maintenanceGuard).then(result=>{
+      if(this.cursor!==before||result?.reloaded)this.pendingIndexSource=true;
+      const indexNotified=this.flushIndexSourceNotification(maintenanceGuard,result?.scanned&&this.documentScheduler?.needsRetry?.());
+      return {indexNotified};
+    }).catch(reason => {
       if(this.host.fatal||this.host.exited){this.runtimeFailed=true;this.stopPolling();void this.documentScheduler?.close();}
+      // Accepted journal progress remains an indexing obligation even when later
+      // filesystem maintenance fails. A retired owner cannot deliver it; retain
+      // it for the next admitted poll instead of consuming the cursor silently.
+      if(this.cursor!==before)this.pendingIndexSource=true;
+      let indexNotified=false;
+      try{indexNotified=this.flushIndexSourceNotification(maintenanceGuard);}catch{/* Retain for an active owner. */}
       if (!this.closed) this.notify({ type: 'error', message: 'Native vault reconciliation needs attention.', code: reason?.code ?? 'reconciliation_failed' });
+      return {indexNotified};
     }).finally(() => { this.polling = null; });
     return this.polling;
   }
@@ -238,7 +309,6 @@ class CoreVaultFixtureService {
         // Do not interpret arbitrary storage corruption as permission to skip.
         const snapshot = await host.listSnapshot();
         this.adopt(snapshot);
-        this.documentRuntimeSourceHint();
         this.notify({ type: 'change' });
         return null;
       }
@@ -259,8 +329,7 @@ class CoreVaultFixtureService {
         ?(await this.host.request({method:'rescan'},undefined,undefined,maintenanceGuard)).result
         :await host.rescan();
       maintenanceGuard?.();
-      this.lastScan=Date.now();
-      this.documentScheduler?.wake();
+      this.lastScan=this.now();
       this.updateReconciliation(scan.reconciliation);
       if(!scan.complete)this.notify({type:'error',code:'scan_incomplete',message:'Native vault scan is incomplete; existing files are retained.'});
       return scan;
@@ -274,51 +343,92 @@ class CoreVaultFixtureService {
   recoveryRead(entryId,snapshotId) {this.live();return this.host.recoveryRead(entryId,snapshotId);}
   async retryReconciliation() {
     this.live();
-    await this.scanNow();
-    await this.poll();
-    return this.reconciliation?structuredClone(this.reconciliation):null;
+    // Multiple viewers may retry the same incomplete import. Share only the
+    // currently accepted explicit retry; a later request is a fresh file check.
+    if(this.reconciliationRetry)return this.reconciliationRetry;
+    const retry=(async()=>{
+      await this.scanNow();
+      const polled=await this.poll();
+      if(!polled?.indexNotified)
+        this.flushIndexSourceNotification(null,this.documentScheduler?.needsRetry?.());
+      return this.reconciliation?structuredClone(this.reconciliation):null;
+    })();
+    this.reconciliationRetry=retry;
+    try{return await retry;}
+    finally{if(this.reconciliationRetry===retry)this.reconciliationRetry=null;}
   }
   async pollNow(host=this.host,maintenanceGuard=null) {
-    const hints = [...this.hints]; this.hints.clear();
-    if (this.needsScan || (this.familyMode && hints.length) || Date.now() - this.lastScan >= this.rescanMs) {
-      this.needsScan = false;
-      await this.scanNow(host,maintenanceGuard);
-    } else if (!this.familyMode && hints.length) {
-      const report = await host.reconcile(hints);
-      if (report.blocked.length) this.notify({ type: 'error', code: 'reconciliation_blocked', message: 'Native vault reconciliation retained conflicting data.' });
-      // A new folder or an absent hint needs bounded traversal to discover its
-      // descendants. A lookup/scan failure is never synthesized into a deletion.
-      this.needsScan = true;
-    }
-    // Bound each poll; a busy vault continues from this cursor on the next tick.
-    for (let pageCount = 0; pageCount < 8 && !this.closed; pageCount++) {
-      const page = await this.changePage(host);
-      if (!page) return;
-      for (const change of page.changes) {
-        let full = change.requires_full_reload;
-        const paths = new Set();
-        if (full) {
-          this.adopt(await host.listSnapshot());
-          this.documentRuntimeSourceHint();
-          this.notify({ type: 'change' });
-          return;
+    let scanned=false,pagesRemaining=8,journalComplete=true;
+    const readChanges=async()=>{
+      // One shared page budget across pre/post-maintenance journal reads.
+      while(pagesRemaining>0&&!this.closed){
+        pagesRemaining--;
+        const page=await this.changePage(host);
+        if(!page)return true;
+        for(const change of page.changes){
+          let full=change.requires_full_reload;
+          const paths=new Set();
+          if(full){this.adopt(await host.listSnapshot());this.notify({type:'change'});return true;}
+          for(const value of change.entries){
+            const before=this.entries.get(value.state.id);
+            if(before&&before.state.path!==value.state.path)full=true;
+            if(value.state.kind==='folder')full=true;
+            if(value.state.deleted)this.entries.delete(value.state.id);
+            else this.entries.set(value.state.id,value);
+            if(visible(value.state.path))paths.add(value.state.path);
+            if(before&&visible(before.state.path))paths.add(before.state.path);
+          }
+          this.cursor=change.cursor;
+          if(full)this.notify({type:'rename',origin:change.origin,cursor:change.cursor});
+          else for(const path of paths)this.notify({type:'change',path,origin:change.origin,cursor:change.cursor});
         }
-        for (const value of change.entries) {
-          const before = this.entries.get(value.state.id);
-          if (before && before.state.path !== value.state.path) full = true;
-          if (value.state.kind === 'folder') full = true;
-          if (value.state.deleted) this.entries.delete(value.state.id);
-          else this.entries.set(value.state.id, value);
-          if (visible(value.state.path)) paths.add(value.state.path);
-          if (before && visible(before.state.path)) paths.add(before.state.path);
-        }
-        this.cursor = change.cursor;
-        if (full) this.notify({ type: 'rename', origin: change.origin, cursor: change.cursor });
-        else for (const path of paths) this.notify({ type: 'change', path, origin: change.origin, cursor: change.cursor });
+        this.cursor=page.next_cursor;journalComplete=!page.has_more;
+        if(journalComplete)break;
       }
-      this.cursor = page.next_cursor;
-      if (!page.has_more) break;
+      return false;
+    };
+    // Consume committed local commands before watcher echoes: a just-created or
+    // renamed file can then take the exact native known-file observation path.
+    if(await readChanges())return {scanned,reloaded:true};
+    if(!journalComplete)return {scanned,reloaded:false};
+    if(!this.watchState.watcher&&this.now()-this.lastScan>=this.rescanMs)
+      startWatcher(this.root,this.watchState,this.watchFactory);
+    const hints=[...this.hints];
+    // Watch hints provide prompt discovery; a less frequent complete audit still
+    // repairs silent watcher loss. Failed/unsupported watchers and partial scans
+    // retain the original thirty-second fallback (or configured interval).
+    const auditMs=this.familyMode&&this.watchState.healthy&&this.reconciliation?.complete===true
+      ?Math.max(this.rescanMs,HEALTHY_WATCH_AUDIT_MS):this.rescanMs;
+    const due=this.now()-this.lastScan>=auditMs;
+    const known=new Set(hints.length?[...this.entries.values()].filter(row=>row.state.kind==='file'&&!row.state.deleted).map(row=>row.state.path):[]);
+    const knownFiles=hints.length&&hints.every(path=>known.has(path));
+    if(this.needsScan||due||this.familyMode&&hints.length&&!knownFiles){
+      this.hints.clear();this.needsScan=false;
+      await this.scanNow(host,maintenanceGuard);scanned=true;
+    }else if(hints.length){
+      const selected=this.familyMode?hints.slice(0,MAX_KNOWN_HINTS_PER_POLL):hints;
+      for(const path of selected)this.hints.delete(path);
+      let report;
+      try{
+        maintenanceGuard?.();
+        // The trusted owner retains its dispatch guard, without incorrectly
+        // routing filesystem maintenance through a renderer client lease.
+        report=maintenanceGuard
+          ?(await this.host.request({method:'reconcile',paths:selected},undefined,undefined,maintenanceGuard)).result
+          :await host.reconcile(selected);
+        maintenanceGuard?.();
+      }catch(reason){this.needsScan=true;throw reason;}
+      if(report.blocked.length){
+        this.notify({type:'error',code:'reconciliation_blocked',message:'Native vault reconciliation retained conflicting data.'});
+        // Missing/replaced files can be one side of a namespace change. Native
+        // known-file observation preserves those proofs; full discovery resolves.
+        this.needsScan=false;await this.scanNow(host,maintenanceGuard);scanned=true;
+      }else if(!this.familyMode)this.needsScan=true;
+      if(await readChanges())return {scanned,reloaded:true};
+      return {scanned,reloaded:false};
     }
+    if(scanned&&await readChanges())return {scanned,reloaded:true};
+    return {scanned,reloaded:false};
   }
   /** Read-only plan. Retain this exact immutable value until prepare returns a
    * token; retrying prepare with it preserves identity after an unknown ACK.

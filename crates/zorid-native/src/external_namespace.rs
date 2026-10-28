@@ -4,6 +4,38 @@ use super::*;
 use std::collections::BTreeSet;
 use zorid_store::{ExternalNamespaceAction, ExternalNamespaceMember};
 
+/// Membership admission for one exclusive reconciliation pass. The borrowed
+/// lock prevents this witness outliving the lock; scalar identity checks prevent
+/// borrowing it for another vault. Validated Store writers may advance graph
+/// revisions during the pass, but never change its enrollment scope.
+/// Construction performs the unchanged full enrollment/corruption validation.
+pub(super) struct EnrolledScan<'lock> {
+    _lock: &'lock File,
+    identity: AuthorityIdentity,
+    root: String,
+}
+impl<'lock> EnrolledScan<'lock> {
+    fn admit(vault: &NativeVault, lock: &'lock File) -> Result<Self> {
+        if !vault.store.family_is_enrolled()? {
+            return Err(Error::Unsupported("external family reconciliation requires enrollment"));
+        }
+        Ok(Self { _lock: lock, identity: vault.store.identity()?, root: fs::identity(&vault.paths.root)? })
+    }
+    pub(super) fn check(&self, vault: &NativeVault) -> Result<()> {
+        if fs::identity(&vault.paths.root)? != self.root || vault.store.identity()? != self.identity {
+            return Err(Error::Busy("external scan enrollment changed"));
+        }
+        Ok(())
+    }
+    fn finish(&self, vault: &NativeVault) -> Result<()> {
+        self.check(vault)?;
+        if !vault.store.family_is_enrolled()? {
+            return Err(Error::Busy("external scan enrollment changed"));
+        }
+        Ok(())
+    }
+}
+
 impl NativeVault {
     /// Accept only fresh same-path projections of the COMPLETE bound namespace.
     /// Extra untracked physical files remain ordinary imports. One changed or
@@ -99,11 +131,7 @@ impl NativeVault {
     ) -> Result<ExternalReconcileReport> {
         let _guard = self.paths.lock(self.options.lock_timeout)?;
         self.paths.verify()?;
-        if !self.store.family_is_enrolled()? {
-            return Err(Error::Unsupported(
-                "external family reconciliation requires enrollment",
-            ));
-        }
+        let enrolled = EnrolledScan::admit(self, &_guard)?;
         let namespace_origin = OperationId::new("native_external_namespace")?;
         let observe_origin = OperationId::new("native_external_observe")?;
         let create_origin = OperationId::new("native_external_create")?;
@@ -324,7 +352,7 @@ impl NativeVault {
                                     // Capture under the actual destination and historical
                                     // binding. Namespace import retains it only after moving
                                     // the baseline, so an ordinary observer can consume it.
-                                    Some(self.capture_observed_file(
+                                    Some(self.capture_observed_file_with_scan(
                                         &path,
                                         &parent,
                                         &name,
@@ -335,6 +363,7 @@ impl NativeVault {
                                         baseline.as_ref().is_some_and(|baseline| {
                                             baseline.content.inline_bytes().is_some()
                                         }),
+                                        Some(&enrolled),
                                     )?)
                                 } else {
                                     None
@@ -506,7 +535,7 @@ impl NativeVault {
                         let expected = scan
                             .file_snapshot(self, &path)?
                             .ok_or(Error::Busy("file snapshot missing"))?;
-                        self.observe_streamed_file(&path, &parent, &expected, &observe_origin)
+                        self.observe_streamed_file_with_scan(&path, &parent, &expected, &observe_origin, Some(&enrolled))
                     } else {
                         Ok(None)
                     };
@@ -551,12 +580,13 @@ impl NativeVault {
                         expected.has_nul,
                         mode,
                     )?;
-                    self.observe_new_family_stream(
+                    self.observe_new_family_stream_with_scan(
                         &path,
                         &parent,
                         &expected,
                         selected,
                         &create_origin,
+                        Some(&enrolled),
                     )
                     .map(Some)
                 }
@@ -573,8 +603,90 @@ impl NativeVault {
         }
         scan.record_processed(self, &processed.into_iter().collect::<Vec<_>>())?;
         self.paths.verify()?;
+        enrolled.finish(self)?;
         report.complete =
             scan.run.complete && report.issues.is_empty() && scan.pending_paths().is_empty();
         Ok(report)
+    }
+}
+
+#[cfg(test)]
+mod enrolled_scan_tests {
+    use super::*;
+
+    fn enrolled(root: &std::path::Path) -> NativeVault {
+        let mut vault = NativeVault::open(root).unwrap();
+        vault.family_enroll(&FamilyScope {
+            realm_id: zorid_sync_protocol::RealmId::new("scan-realm").unwrap(),
+            vault_id: zorid_sync_protocol::VaultId::new("scan-vault").unwrap(),
+        }).unwrap();
+        vault
+    }
+
+    #[test]
+    fn enrolled_scan_retains_membership_across_validated_graph_writes() {
+        let root = tempfile::tempdir().unwrap();
+        let mut vault = enrolled(root.path());
+        let lock = vault.paths.lock(vault.options.lock_timeout).unwrap();
+        let scan = EnrolledScan::admit(&vault, &lock).unwrap();
+        for (name, bytes) in [("a.md", b"first".as_slice()), ("b.bin", &[0, 255, 4])] {
+            std::fs::write(root.path().join(name), bytes).unwrap();
+            let path = VaultPath::new(name).unwrap();
+            let (parent, leaf) = vault.paths.parent(&path).unwrap();
+            let expected = content_stream::file_snapshot(&parent, &leaf).unwrap().unwrap();
+            let mode = if name.ends_with(".md") { FamilyCreateMode::Text } else { FamilyCreateMode::Binary };
+            vault.observe_new_family_stream_with_scan(
+                &path, &parent, &expected, mode,
+                &OperationId::new("scan_test_create").unwrap(), Some(&scan),
+            ).unwrap();
+            scan.check(&vault).unwrap();
+            let entry = vault.store.read_path(&path).unwrap().unwrap();
+            assert_eq!(entry.content.as_deref(), Some(bytes));
+        }
+        scan.finish(&vault).unwrap();
+        assert_eq!(vault.store.list().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn enrolled_scan_rejects_another_physical_vault_with_same_logical_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let other_root = tempfile::tempdir().unwrap();
+        let vault = enrolled(root.path());
+        let other = enrolled(other_root.path());
+        let sql = rusqlite::Connection::open(other_root.path().join(".zorid/vault.sqlite")).unwrap();
+        sql.execute("UPDATE authority_identity SET local_store_id=?1", [vault.store.identity().unwrap().local_store_id.as_str()]).unwrap();
+        assert_eq!(vault.store.identity().unwrap(), other.store.identity().unwrap());
+        let lock = vault.paths.lock(vault.options.lock_timeout).unwrap();
+        let scan = EnrolledScan::admit(&vault, &lock).unwrap();
+        assert!(matches!(scan.check(&other), Err(Error::Busy(_))));
+    }
+
+    #[test]
+    fn enrolled_scan_full_boundaries_reject_graph_corruption() {
+        let root = tempfile::tempdir().unwrap();
+        let mut vault = enrolled(root.path());
+        std::fs::write(root.path().join("retained.md"), b"retained").unwrap();
+        assert!(vault.reconcile_external(ScanOptions::default(), ExternalFileMode::Auto).unwrap().complete);
+        let lock = vault.paths.lock(vault.options.lock_timeout).unwrap();
+        let scan = EnrolledScan::admit(&vault, &lock).unwrap();
+        let sql = rusqlite::Connection::open(root.path().join(".zorid/vault.sqlite")).unwrap();
+        let authored: i64 = sql.query_row("SELECT count(*) FROM authored_envelopes", [], |row| row.get(0)).unwrap();
+        sql.execute("DELETE FROM family_materializations", []).unwrap();
+        // Per-file membership is scalar, rather than an implicit whole-graph
+        // status read. The unchanged full corruption oracle still guards both
+        // ends of a scan; Store writers retain their own source validation.
+        scan.check(&vault).unwrap();
+        assert!(matches!(scan.finish(&vault), Err(Error::Store(zorid_store::StoreError::Corrupt(_)))));
+        assert!(matches!(EnrolledScan::admit(&vault, &lock), Err(Error::Store(zorid_store::StoreError::Corrupt(_)))));
+        let path = VaultPath::new("retained.md").unwrap();
+        let (parent, name) = vault.paths.parent(&path).unwrap();
+        let expected = content_stream::file_snapshot(&parent, &name).unwrap().unwrap();
+        // The ordinary capture entrypoint still performs the same full check.
+        assert!(matches!(vault.capture_observed_file(
+            &path, &parent, &name, &OperationId::new("unscoped_test").unwrap(),
+            None, None, &expected, true,
+        ), Err(Error::Store(zorid_store::StoreError::Corrupt(_)))));
+        assert_eq!(sql.query_row("SELECT count(*) FROM authored_envelopes", [], |row| row.get::<_, i64>(0)).unwrap(), authored);
+        assert_eq!(std::fs::read(root.path().join("retained.md")).unwrap(), b"retained");
     }
 }

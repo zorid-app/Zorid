@@ -179,6 +179,7 @@ class DocumentRuntimeScheduler{
   adopt(value,owner){if(!privateSnapshot(value))throw fail('invalid_document_response');if(value){const visit=v=>{if(!v||typeof v!=='object')return;if(Object.hasOwn(v,'localStoreId')&&v.localStoreId!==owner.localStoreId)throw fail('client_scope_mismatch');for(const child of Object.values(v))visit(child);};visit(value);}this.current=value;this.needsSnapshot=false;if(this.composite&&this.work?.close_ready&&value&&value.update.phase!=='releasing'){this.workNeedsSnapshot=true;this.workWanted=true;}else if(this.composite&&(value?.inFlight||value?.execution==='yield'))this.workWanted=true;}
   nudge(){for(const owner of [...this.owners,...this.draftOwners])if(!owner.released)for(const slot of owner.listeners)try{slot.listener();}catch{/* Observation delivery never undoes work. */}}
   remove(owner){if(owner.released)return;owner.released=true;this.owners.delete(owner);for(const slot of owner.listeners)try{slot.onRetire();}catch{}owner.listeners.clear();if(!this.owners.size){if(!this.composite||!this.workWanted)this.unschedule();else this.schedule();}else{this.needsSnapshot=true;this.schedule();}}
+  needsRetry(){return !this.closed&&(this.blocked||this.current?.update.error!=null);}
   wake(){if(this.closed)return;this.wakePending=true;if(this.composite)this.workWanted=true;this.blocked=false;this.schedule();}
   sourceHint(){if(this.closed)return;this.hintPending=true;if(this.composite)this.workWanted=true;this.schedule();}
   unschedule(){if(this.scheduled!==null){this.cancel(this.scheduled);this.scheduled=null;}}

@@ -92,6 +92,6 @@ test('first binding rejects replacement, move and revision advancement while pre
 
 test('simultaneous first admissions may share only the same verified recovered actor binding',async t=>{
   let second:Promise<unknown>|undefined;
-  const f=await setup(t,{beforeBinding:({workspace})=>{second=(workspace as any).bufferFor('Note.md');}});
+  const f=await setup(t,{dirty:true,beforeBinding:({workspace})=>{second=(workspace as any).bufferFor('Note.md');}});
   assert.ok(second);assert.equal(await second,f.workspace.buffers.get('Note.md'));assert.ok(f.internal.bufferEntries.get(f.workspace.buffers.get('Note.md')));assert.equal(f.plans.length,0);
 });
