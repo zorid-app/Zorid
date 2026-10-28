@@ -1,0 +1,178 @@
+{
+  "date": "2026-10-28",
+  "status": "IN_PROGRESS",
+  "completed": false,
+  "candidate": {
+    "commit": "3b2ce849ee259a92c14177a3675f933bf5be3def",
+    "branch": "codex/notion-interaction-match",
+    "base": "e4c8a6d0",
+    "owner": "root"
+  },
+  "evidenceRoot": "/Users/ctk/Projects/Zorid/tmp/notion-acceptance-20261028",
+  "changes": [
+    {
+      "area": "nullable Multi-select schema update",
+      "commit": "67bce4861fa3635e70a4ef7a8deb211bcc6ff6ad",
+      "workerCommit": "f2b2572a",
+      "userApproved": true,
+      "independentSourceReview": "CLEAR"
+    },
+    {
+      "area": "collection clipboard helper",
+      "commit": "bb59446a2dd24cb4d264f58f7c86c3bf69cbd32c",
+      "workerCommit": "a7553680",
+      "independentSourceReview": "CLEAR"
+    },
+    {
+      "area": "collection-only clipboard wiring",
+      "commit": "e4a2c7e7fc854295f46834e4b17f209555e0ae9e",
+      "legacyUntypedChanged": false
+    },
+    {
+      "area": "owned parser-error cancel cleanup",
+      "commit": "3b2ce849ee259a92c14177a3675f933bf5be3def",
+      "workerCommit": "1f045f36",
+      "independentSourceReview": "CLEAR"
+    }
+  ],
+  "checks": {
+    "storeDatabases": {
+      "status": "PASS",
+      "passed": 33,
+      "failed": 0,
+      "ignored": 0,
+      "log": "store-databases001.log"
+    },
+    "focusedFrontend": {
+      "status": "PASS",
+      "passed": 324,
+      "failed": 0,
+      "skipped": 0,
+      "log": "final-focused001.log"
+    },
+    "typescriptNativeFrontend": {
+      "status": "PASS",
+      "command": "tsc --noEmit && vite build --mode native",
+      "log": "frontend-build003.log",
+      "additionalTypecheckLog": "validation-cancel-ts001.log"
+    },
+    "nativeBuild": {
+      "status": "PASS",
+      "sourceCommit": "67bce4861fa3635e70a4ef7a8deb211bcc6ff6ad",
+      "coreTree": "1a67c631324dc4af809c1a1627a197c3205849a2",
+      "command": "cargo build --release --locked --offline --jobs 1 --target-dir /Users/ctk/Projects/Zorid/tmp/local-database-target -p zorid-desktop-host -p zorid-cli",
+      "duration": "2m30s",
+      "log": "native-build001.log",
+      "metadata": "native-artifacts.json"
+    }
+  },
+  "artifacts": [
+    {
+      "path": "products/zorid-desktop-host",
+      "bytes": 27853168,
+      "sha256": "d4f8bb259a4e14b172e1f7b935cd1f0bec00a8df0bed75039ce4d283c7d8aea6"
+    },
+    {
+      "path": "products/zorid",
+      "bytes": 25419856,
+      "sha256": "faec50e23689dd01d895413b797cb64a2a269ac4615c5b820ea7992fd2802cf4"
+    }
+  ],
+  "nativeCliRegression": {
+    "status": "PASS_BOUNDED_SEPARATE_FIXTURE",
+    "oldExit": 2,
+    "oldError": "Confirm removal of values in 1 affected collection entries",
+    "sameCommandAcceptedByRebuiltCli": true,
+    "unrelatedMultiselectRemainsNull": true,
+    "bodyPreserved": "established by coordinator; not independently rerun by documentation worker",
+    "projectionPending": 0,
+    "projectionIssues": 0,
+    "evidence": [
+      "nullable-append-command.json",
+      "nullable-native-red.json",
+      "nullable-native-green.json"
+    ]
+  },
+  "fixturePreparation": {
+    "status": "PASS",
+    "productFix": false,
+    "reason": "Family enrollment requires a new empty vault with no pending commands. Initialize through the normal desktop host before CLI populates it.",
+    "evidence": [
+      "startup-fixture-diagnosis.json",
+      "family-startup-green.json"
+    ]
+  },
+  "accidentalMetadataCleanup": {
+    "status": "REVERTED_SCOPED_TASK_METADATA",
+    "location": "Downloads/.zorid",
+    "identityChecks": [
+      "birth",
+      "task client",
+      "local store"
+    ],
+    "onlyMatchingTaskCacheDeleted": true,
+    "ordinaryFilesReadOrChanged": false,
+    "privateFilenamesIncluded": false,
+    "evidence": [
+      "default-folder-side-effect-reverted.json",
+      "downloads-task-cache-cleanup.json"
+    ]
+  },
+  "reference": {
+    "report": "../reference/notion-database-interactions-20261027.md",
+    "recoveredBundleInRepository": false,
+    "oldVolatileTemporaryEvidence": "GONE",
+    "retainedEvidence": "screenshots and documentation references",
+    "notionRuntimeCdpCapture": false
+  },
+  "pending": {
+    "nativeClipboard": {
+      "status": "PENDING",
+      "result": null
+    },
+    "nativeOptionAndAllTypeInteractions": {
+      "status": "PENDING",
+      "result": null
+    },
+    "nativeSavedValuesShapesAndBodies": {
+      "status": "PENDING",
+      "result": null
+    },
+    "nativeViewsAndSettings": {
+      "status": "PENDING",
+      "result": null
+    },
+    "nativeRestart": {
+      "status": "PENDING",
+      "result": null
+    },
+    "mainIntegrationAndPostChecks": {
+      "status": "PENDING",
+      "result": null
+    },
+    "packageAndVerification": {
+      "status": "PENDING",
+      "result": null
+    },
+    "installationAndReplacement": {
+      "status": "PENDING",
+      "result": null
+    },
+    "testAppCleanup": {
+      "status": "PENDING",
+      "result": null
+    }
+  },
+  "installationTarget": "/Users/ctk/Applications/Zorid.app",
+  "limits": [
+    "No completion or installed-delivery claim",
+    "No full suite or exact Notion parity claim",
+    "No iOS/Tauri/full-platform verification",
+    "No push",
+    "Native CLI fixture success does not establish desktop interaction success"
+  ],
+  "documentationWorker": {
+    "actions": "receipt/log/source reads and new documentation only",
+    "testsBuildsGuiRun": false
+  }
+}
