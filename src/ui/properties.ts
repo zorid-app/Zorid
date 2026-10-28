@@ -19,6 +19,10 @@ export interface PropertiesOptions {
   getDefinitions?: () => Readonly<Record<string, BasePropertyDefinition>>;
   /** Managed membership/identities cannot be edited as ordinary YAML keys. */
   isManaged?: () => boolean;
+  /** Workspace notes show this panel only for authoritative collection members. */
+  managedOnly?: boolean;
+  /** Keep an outer host's spacing in sync with the panel's presentation. */
+  onVisibilityChange?: (visible: boolean) => void;
   collectionName?: () => string | undefined;
   onPropertyDefinitionChange?: (property: string, definition: BasePropertyDefinition) => Promise<void> | void;
   /** Optional Rust-filtered targets. A filtered relation is never evaluated locally. */
@@ -349,6 +353,11 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
   function refresh(): void {
     definitions = options.getDefinitions?.() ?? {};
     if (destroyed) return;
+    // A membership refresh must never strand an existing edit or failed save.
+    // Unknown/nonmember notes stay quiet; readable YAML is not membership proof.
+    const retained = pendingGeneration !== settledGeneration || !!mutationFailure || !!addForm || [...rows.values()].some(hasDraft);
+    root.hidden = !!options.managedOnly && !options.isManaged?.() && !retained;
+    options.onVisibilityChange?.(!root.hidden);
     heading.textContent=options.collectionName?.()?`${options.collectionName!()} properties`:'Properties';
     let properties: Property[];
     try { properties = readProperties(options.getSource()); error(globalError); addButton.disabled = false; }

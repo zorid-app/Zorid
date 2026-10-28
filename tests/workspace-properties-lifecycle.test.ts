@@ -23,6 +23,13 @@ function draft(root:ParentNode,kind:'scalar'|'list'|'add'){
   if(kind==='add')root.querySelector<HTMLButtonElement>('.metadata-add-button')!.click();
   const input=root.querySelector<HTMLInputElement|HTMLTextAreaElement>(kind==='scalar'?'[data-property-key="status"] .metadata-property-value input':kind==='list'?'[data-property-key="items"] textarea':'[aria-label="New property name"]')!;assert.ok(input);input.value='Unsubmitted draft';input.dispatchEvent(new window.Event('input',{bubbles:true}));return input;
 }
+test('ordinary workspace notes reserve no Properties panel even with frontmatter',async t=>{
+  const f=await setup(t),host=f.workspace.activePane.element.querySelector<HTMLElement>('.properties-host')!;
+  assert.equal(host.hidden,true);assert.equal(host.querySelector<HTMLElement>('.metadata-container')!.hidden,true);
+  assert.equal(await f.adapter.read('Note.md'),source);
+  await f.workspace.openNote('Other.md');
+  assert.equal(f.workspace.activePane.element.querySelector<HTMLElement>('.properties-host')!.hidden,true);
+});
 for(const kind of ['scalar','list','add'] as const){
   test(`ordinary ${kind} property draft blocks global flush without losing DOM`,async t=>{const f=await setup(t),pane=f.workspace.activePane,input=draft(pane.element,kind),editor=pane.editor;await assert.rejects(f.workspace.flush(),/Finish editing/);assert.equal(pane.editor,editor);assert.equal(input.isConnected,true);assert.equal(input.value,'Unsubmitted draft');assert.equal(await f.adapter.read('Note.md'),source);});
   test(`ordinary ${kind} property draft blocks Ctrl+W and participates in beforeUnload`,async t=>{const f=await setup(t),pane=f.workspace.activePane,input=draft(pane.element,kind),editor=pane.editor;

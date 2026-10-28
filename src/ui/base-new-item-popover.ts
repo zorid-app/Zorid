@@ -20,7 +20,7 @@ export interface BaseNewItemPopoverOptions {
   readonly onError: (error: unknown) => void;
   readonly onClose?: () => void;
   readonly editorOptions?: Partial<Omit<EditorOptions, 'value' | 'onChange' | 'validateChange' | 'canMutate' | 'isCurrent'>>;
-  readonly properties?: Pick<PropertiesOptions, 'onPropertyDefinitionChange' | 'getRelationTargets' | 'getDisplayValue' | 'getDefinitions' | 'isManaged' | 'collectionName'>;
+  readonly properties?: Pick<PropertiesOptions, 'onPropertyDefinitionChange' | 'getRelationTargets' | 'getDisplayValue' | 'getDefinitions' | 'isManaged' | 'collectionName' | 'managedOnly'>;
   /** True means the host committed typed values and refreshed the same buffer. */
   readonly changeProperties?: (next:string,buffer:NoteBuffer)=>Promise<boolean>;
   /** The workspace owns subscriptions and the buffer's lifetime. */
@@ -105,6 +105,7 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
     root.style.left = `${left}px`; root.style.top = `${top}px`;
   }
   const properties = renderProperties(propertiesHost, { ...options.properties, ...(options.properties?.onPropertyDefinitionChange ? { onPropertyDefinitionChange: (property: string, definition: Parameters<NonNullable<PropertiesOptions['onPropertyDefinitionChange']>>[1]) => track(Promise.resolve().then(() => options.properties!.onPropertyDefinitionChange!(property, definition))) } : {}), vault: options.vault, path,
+    onVisibilityChange: visible => { if (options.properties?.managedOnly) { propertiesHost.hidden = !visible; root.classList.toggle('has-properties', visible); } },
     getSource: () => buffer.text, isCurrent: () => { try { validate(); return true; } catch { return false; } },
     onChange: next => track((async () => { validate(); if(await options.changeProperties?.(next,buffer)){validate();bodySnapshot=buffer.text;editor?.setValue(buffer.text);refresh();return;} buffer.update(next, { validateWrite: validate }); bodySnapshot = next; editor?.setValue(next); refresh(); await buffer.flush(); })()),
     openLink: (target, witness) => { const event = new (win?.MouseEvent ?? MouseEvent)('click'); void Promise.resolve(options.openFile(target, event, witness)).catch(report); },
@@ -124,7 +125,7 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
     // Workspace adoption is allowed only for this same stable entry.
     if (buffer.path !== path && entryId && options.vault.entries.get(buffer.path)?.entryId === entryId) { const previous = titleBaseline; path = buffer.path; titleBaseline = noteName(path); if (titleText().trim() === previous && !titleProblem) { title.textContent = titleBaseline; titleDraft = titleBaseline; } }
     properties.refresh();
-    try { const count = readProperties(buffer.text).length; propertiesHost.hidden = count === 0; propertiesRoot.dataset.propertyCount = String(count); root.classList.toggle('has-properties', count > 0); } catch { propertiesHost.hidden = false; }
+    try { const count = readProperties(buffer.text).length; propertiesRoot.dataset.propertyCount = String(count); if (!options.properties?.managedOnly) { propertiesHost.hidden = count === 0; root.classList.toggle('has-properties', count > 0); } } catch { if (!options.properties?.managedOnly) propertiesHost.hidden = false; }
     if (!options.deferSourceUpdate?.()) {
     if (!editor) { preview.textContent = bodyPreview(buffer.text); preview.classList.toggle('is-empty', !preview.textContent); }
     else if (buffer.text !== bodySnapshot && !editorHost.contains(document.activeElement)) { bodySnapshot = buffer.text; editor.setValue(bodySnapshot); }

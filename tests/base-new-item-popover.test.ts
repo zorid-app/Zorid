@@ -30,6 +30,21 @@ test('New focuses and selects DIV title of already saved note without mounting b
   assert.equal(s.handle.element.style.width, '452px'); assert.equal(s.handle.element.querySelector('.metadata-properties-heading')!.getAttribute('aria-expanded'), 'false'); assert.match(s.handle.element.textContent!, /Literal \{\{date\}\}/); assert.equal(s.handle.hasPendingChanges(), false); await s.cleanup();
 });
 
+test('workspace New hides ordinary YAML properties and reveals a late confirmed collection membership',async()=>{
+  let managed=false;
+  const source='---\n_id: trusted-note\n_type: Books\nrating: 4\n---\nExact body';
+  const s=await setup(source,{properties:{managedOnly:true,isManaged:()=>managed,getDefinitions:()=>managed?{rating:{type:'number'}}:{}}});
+  try{
+    const host=s.handle.element.querySelector<HTMLElement>('.bases-new-item-properties')!;
+    assert.equal(host.hidden,true);assert.equal(s.handle.element.classList.contains('has-properties'),false);
+    s.handle.refresh();assert.equal(host.hidden,true,'YAML count must not re-show an ordinary panel');
+    managed=true;s.handle.refresh();assert.equal(host.hidden,false);assert.equal(s.handle.element.classList.contains('has-properties'),true);
+    assert.equal(host.querySelector<HTMLElement>('[data-property-key="_id"]')!.hidden,true);
+    assert.equal(host.querySelector<HTMLElement>('[data-property-key="rating"] .metadata-property-value')!.dataset.propertyType,'number');
+    managed=false;s.handle.refresh();assert.equal(host.hidden,true);assert.equal(s.buffer.text,source);assert.equal(await s.adapter.read('Untitled.md'),source);
+  }finally{await s.cleanup();}
+});
+
 test('title rename uses shared buffer and ordinary namespace service; copied full template remains exact', async () => {
   const source = '---\nstatus: Todo\n---\n# Copied template\nLiteral {{date}}'; const s = await setup(source); s.setTitle('My note'); await s.handle.flush();
   assert.equal(s.handle.path, 'My note.md'); assert.equal(s.buffer.path, 'My note.md'); assert.equal(await s.vault.read('My note.md'), source); assert.equal(s.vault.entries.has('Untitled.md'), false); await s.handle.close(); assert.equal(s.closed, 1); await s.cleanup();
