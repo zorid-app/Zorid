@@ -252,7 +252,7 @@ startup-index-pump-admission; exact independent review closed no must-fix, actua
 Cargo RED/GREEN pending); preserve independent-connection source/head gate.
 Maintenance235b1e17 (above484bb892) independently reviewed,135focused pass,
 explicitretry inflight sharing plus0healthy no-source index wake; real journal
-and blocked repair each1wake. It does not share generic poll/retry scanNow calls: 
+and blocked repair each1wake. It does not share generic poll/retry scanNow calls:
 those may carry different late hints/owner guards, so no identical-obligation
 proof is asserted. Renderer retry policy unchanged; partial retries resume same
 persistent inventory and remain required. Main owns next serialized validation.
@@ -407,3 +407,27 @@ Main integration and installation are requested under the standing authorization
 The latest reviewed profiler includes pagination fix `9a805db8`; import its latest
 blob along with this ledger. Package, installation and installed-app evidence must
 be appended before the thread goal is marked complete.
+
+
+### Main delivery and staged smoke checkpoint — 2026-10-28
+
+Confirmed startup/opening batch integrated on main at `6ff5bc4d`. The verified
+package uses Electron 44.9.1, ASAR `feebce14b112813c66e636efab0955bde2fc5de0b9437d63f20c88dd52a47b06`
+and embedded host `a1c862be131b9dec4fa5be0cec8f02fe4f0f770ee99d083779680e5830e14d2a`.
+Self-contained staged smoke passed in the disposable `profile-installed-final`
+profile with no host/dev/run-as-node overrides: 11 slash/focus/Properties/embed
+checks, ordinary-note and Base save, restart persistence, exact durable note bytes
+and preserved entry body. Both owned launches exited normally with code 0; all
+owned staged executable/host PIDs are absent. Evidence:
+`tmp/bases-edit-performance-20261028/staged-smoke-receipt.json`.
+The initial restart oracle incorrectly expected raw Markdown in rendered DOM;
+the corrected rendered-text observation retained exact durable-byte checks.
+
+Installation is **pending**, not accepted: the existing default-profile app
+rejected normal Quit with `User canceled (-128)`. Main PID 71549 and its helpers
+remain. The startup coordinator is requesting normal user closure once; this
+thread will not duplicate that question or force/discard the real session.
+Both installed fallback and verified staged bundles remain untouched. After
+normal closure, the remaining gates are atomic replacement, actual installed
+isolated-profile smoke and old-bundle deletion after acceptance. Broader Base
+post-edit latency and external-to-Search latency remain open as recorded above.

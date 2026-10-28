@@ -3,6 +3,16 @@
 ## Execution checkpoint — shared-core coordinator
 
 
+**Main integrated; staged smoke passed; installation awaits normal user-app closure — 2026-10-28.**
+Main `6ff5bc4d` contains the confirmed batch. Staged Electron44.9.1/embedded a1c862be
+passed isolated note/Base/save/restart plus 11 slash/focus/Properties/embed checks;
+both owned launches exited normally, all staged app/host PIDs gone. Receipt:
+`tmp/bases-edit-performance-20261028/staged-smoke-receipt.json`. The protected
+installed default-profile main71549 rejected normal Quit with `User canceled(-128)`.
+Startup coordinator will ask for normal closure once; no duplicate question or
+force-discard. Both bundles remain intact. Atomic replacement and actual installed
+smoke remain required; installation is not claimed. Runtime source is unchanged.
+
 **Current accepted startup/opening batch; integration/install in progress — 2026-10-28.**
 Root retains the exclusive main integrate/test/commit/install lane. Final R6 source
 869c5d20, nativea1c862be, frontendc47430f5/Electron44.9.1 passed the complete
