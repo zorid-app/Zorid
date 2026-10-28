@@ -28,6 +28,8 @@ export interface BaseToolbarState {
   /** Effective configuration for this view; root remains the persisted witness. */
   settings?: Readonly<Record<string,BaseValue>>;
   search?: string;
+  /** Presentation only; source identity remains in the saved view. */
+  sourceLabel?: string;
   propertyType?(property: string): string | undefined;
   filterProperty?(property: string): BaseFilterPropertyDescriptor | undefined;
   functionNames?: readonly string[];
@@ -63,6 +65,7 @@ export interface BaseToolbarOptions {
   onNew?(): Promise<void>;
   onExport?(format: BaseToolbarExportFormat, copy: boolean): Promise<void>;
   onPropertySettings?(property: string): void;
+  onEditProperties?(): void;
   /** Read-only suggestions; their metadata status never changes filter meaning. */
   filterOperands?(): BaseFilterOperandsSnapshot;
   onDraftChange(): void;
@@ -81,7 +84,7 @@ export interface BaseToolbar {
   destroy(): void;
 }
 type FilterNode = BaseFilterNode;
-type PanelName = 'Views' | 'View options' | 'Add view' | 'Results' | 'Property' | 'Formula' | 'New item settings' | 'Filter' | 'Sort' | 'Properties' | 'Group';
+type PanelName = 'View settings' | 'Views' | 'View options' | 'Add view' | 'Results' | 'Property' | 'Formula' | 'New item settings' | 'Filter' | 'Sort' | 'Properties' | 'Group';
 interface Panel { rebase?(state: BaseToolbarState, expectedName?: string): boolean; refreshFilterAdvice?(state:BaseToolbarState):void; flush?(): void; name: PanelName; node: HTMLElement; trigger: HTMLElement; dirty: boolean; innerDraft?: boolean; saving: boolean; failure?: object; acceptsSaveAcknowledgement?: () => boolean; close(restore?: boolean): void }
 /** Only a retained, exact accepted configuration may offer a persistence retry. */
 export class BaseToolbarSaveError extends Error {
@@ -183,7 +186,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? children.length - 1 : (index + step + children.length) % children.length;
     children[next]?.focus();
   });
-  function open(name: PanelName, trigger: HTMLElement, targetIndex?: number, formulaName?: string) {
+  function open(name: PanelName, trigger: HTMLElement, targetIndex?: number, formulaName?: string, returnTo?: PanelName) {
     if (!state || destroyed || state.readOnly && !['Views', 'Results'].includes(name)) return;
     if (state.browseOnly && ['Properties','Property','Formula','Group'].includes(name)) return;
     try { options.preflight(); if (hasDraft()) throw new Error('Apply or cancel the current toolbar changes first.'); } catch (error) { report(error); return; }
@@ -196,10 +199,11 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     let expectedSnapshot: ReturnType<typeof configurationSnapshot> | undefined;
     const selectedIndex = targetIndex ?? opening.selectedIndex;
     let configuredView = opening.views[selectedIndex] ?? result.view;
-    const node = doc.createElement('section'); node.className = 'bases-toolbar-popover'; node.dataset.panel = name; node.classList.toggle('is-immediate',!!options.immediate); node.setAttribute('role', 'dialog'); node.setAttribute('aria-label', name);
+    const node = doc.createElement('section'); node.className = 'bases-toolbar-popover'; node.dataset.panel = name; node.classList.toggle('is-immediate',!!options.immediate); node.setAttribute('role', 'dialog'); node.setAttribute('aria-label', name); if(name==='View settings'||returnTo)node.dataset.settingsFlow='true';
     const heading = doc.createElement('h3'); heading.textContent = name === 'View options' ? 'View settings' : name === 'Add view' ? 'Add a view' : name === 'Sort' ? 'Sort by' : name === 'Group' ? 'Group by' : name; if (['Views','Results','Properties','Filter'].includes(name)) heading.hidden = true;
-    if (name === 'View options' || name === 'Add view' || name === 'Formula' || name === 'Property' || name === 'New item settings') {
-      const back = button(doc, '', () => { if (name === 'Add view' && !own.saving) { own.close(false); open('Views',trigger); return; } if (hasDraft()) { if (options.immediate) panel?.flush?.(); else report(new Error('Apply or cancel the current changes first.')); return; } panel?.close(false); open(name === 'Formula' || name === 'Property' ? 'Properties' : 'Views',trigger); }, 'Back'); back.className = 'bases-toolbar-menu-next'; back.append(icon('chevron-left',16,doc)); heading.prepend(back);
+    if(returnTo){heading.hidden=false;heading.textContent=name==='View options'?'Layout':name==='Properties'?'Property visibility':name;}
+    if (returnTo || name === 'View options' || name === 'Add view' || name === 'Formula' || name === 'Property' || name === 'New item settings') {
+      const back = button(doc, '', () => { if(returnTo){navigatePanel(returnTo,returnTo==='View options'?'View settings':undefined);return;} if (name === 'Add view' && !own.saving) { own.close(false); open('Views',trigger); return; } if (hasDraft()) { if (options.immediate) panel?.flush?.(); else report(new Error('Apply or cancel the current changes first.')); return; } panel?.close(false); open(name === 'Formula' || name === 'Property' ? 'Properties' : 'Views',trigger); }, 'Back'); back.className = 'bases-toolbar-menu-next'; back.append(icon('chevron-left',16,doc)); back.dataset.panelAction='back'; heading.prepend(back);
     }
     const form = doc.createElement('form'), fields = doc.createElement('div'), footer = doc.createElement('div'), error = doc.createElement('div');
     fields.className = 'bases-toolbar-fields'; footer.className = 'bases-toolbar-footer'; error.className = 'bases-toolbar-error'; error.setAttribute('role', 'alert');
@@ -208,6 +212,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     let autoTimer: ReturnType<typeof setTimeout> | undefined;
     let generation = 0;
     let afterSave: (() => void) | undefined;
+    let afterClean: (() => void) | undefined;
     let refreshPanel: ((result:BaseQueryResult,retainDraft:boolean)=>void) | undefined;
     let enhanceControls: (()=>void) | undefined;
     const focusVisible = (root:HTMLElement,label:string,fallback?:HTMLElement) => {
@@ -257,7 +262,9 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       if (auto && own.dirty && !retryPersistence) { submit(true); return; }
       if (!hasDraft()) own.close(false);
     } };
-    const keydown = (event: KeyboardEvent) => { const target = event.target as Element; if (event.defaultPrevented || target.closest?.('.bases-filter-operand')?.querySelector('[role=combobox][aria-expanded=true]') || target.closest?.('.bases-toolbar-combobox-popover,.bases-manual-group-new,.bases-formula-editor') || target.closest?.('[role=combobox]') && (event.key !== 'Escape' || target.closest('[role=combobox]')?.getAttribute('aria-expanded') === 'true')) return; if (['ArrowDown','ArrowUp','Home','End'].includes(event.key) && !event.isComposing && (event.target instanceof doc.defaultView!.HTMLButtonElement || event.target === node)) { const buttons = Array.from(node.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')).filter(item => !item.closest('[hidden]')); if (buttons.length) { const index = buttons.indexOf(doc.activeElement as HTMLButtonElement); const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowUp' ? -1 : 1) + buttons.length) % buttons.length; buttons[next].focus(); event.preventDefault(); event.stopPropagation(); } } if (event.key === 'Escape' && !event.isComposing && !own.saving && node.contains(event.target as Node)) { event.preventDefault(); event.stopPropagation(); if (auto && own.dirty && !retryPersistence) submit(true); else own.close(); } };
+    const keydown = (event: KeyboardEvent) => { const target = event.target as Element;
+      if(event.isComposing||!node.contains(target))return;
+      if(target.closest?.('[data-settings-menu]')&&['Enter',' '].includes(event.key)&&target.getAttribute('role')==='menuitem'){event.preventDefault();(target as HTMLButtonElement).click();return;} if (event.defaultPrevented || target.closest?.('.bases-filter-operand')?.querySelector('[role=combobox][aria-expanded=true]') || target.closest?.('.bases-toolbar-combobox-popover,.bases-manual-group-new,.bases-formula-editor') || target.closest?.('[role=combobox]') && (event.key !== 'Escape' || target.closest('[role=combobox]')?.getAttribute('aria-expanded') === 'true')) return; if (['ArrowDown','ArrowUp','Home','End'].includes(event.key) && !event.isComposing && (event.target instanceof doc.defaultView!.HTMLButtonElement || event.target === node)) { const menu=target.closest?.('[data-settings-menu]'); const buttons = Array.from((menu??node).querySelectorAll<HTMLButtonElement>(menu?'[role=menuitem]:not(:disabled)':'button:not(:disabled)')).filter(item => !item.closest('[hidden]')); if (buttons.length) { const index = menu ? Math.max(0,buttons.findIndex(item=>item.classList.contains('is-active'))) : buttons.indexOf(doc.activeElement as HTMLButtonElement); const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowUp' ? -1 : 1) + buttons.length) % buttons.length; buttons[next].focus(); event.preventDefault(); event.stopPropagation(); } } if (event.key === 'Escape' && !event.isComposing && !own.saving && node.contains(event.target as Node)) { event.preventDefault(); event.stopPropagation(); if (auto && own.dirty && !retryPersistence) submit(true); else own.close(); } };
     doc.addEventListener('pointerdown', outside, true); doc.addEventListener('keydown', keydown, true); win?.addEventListener('resize', place); win?.addEventListener('scroll', place, true);
     const observer = win && 'ResizeObserver' in win ? new win.ResizeObserver(place) : undefined; observer?.observe(container); observer?.observe(node);
     const changed = () => {
@@ -266,7 +273,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       // A failed accepted write must be retried before another semantic action.
       if (retryPersistence) return;
       own.failure = undefined; error.textContent = ''; apply.textContent = name === 'Add view' ? 'Create view' : 'Apply'; options.onDraftChange(); place();
-      if (auto && !((name === 'View options' && doc.activeElement?.getAttribute('aria-label') === 'View name') || (name === 'Formula' && doc.activeElement?.getAttribute('aria-label') === 'Formula name'))) { if (autoTimer) clearTimeout(autoTimer); autoTimer = setTimeout(() => { autoTimer = undefined; submit(false); }, 250); }
+      if (auto && !(((name === 'View options'||name==='View settings') && doc.activeElement?.getAttribute('aria-label') === 'View name') || (name === 'Formula' && doc.activeElement?.getAttribute('aria-label') === 'Formula name'))) { if (autoTimer) clearTimeout(autoTimer); autoTimer = setTimeout(() => { autoTimer = undefined; submit(false); }, 250); }
     };
     const properties = [...new Set([...(Array.isArray(result.view.order) ? result.view.order.filter((value): value is string => typeof value === 'string').map(normalizeBaseProperty) : []), ...result.properties, ...result.availableProperties])];
     const propertyOptions = properties.map(property => [property, opening.label(property)] as const);
@@ -302,7 +309,48 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         });
       }); item.className = 'bases-toolbar-menu-item'; item.disabled = !enabled; fields.append(item); return item;
     };
-    if (name === 'Views') {
+    function transition(action:()=>void) {
+      if(destroyed||panel!==own)return;
+      if(hasDraft()){
+        if(auto&&!own.innerDraft&&!retryPersistence){afterClean=action;submit(false);}
+        else error.textContent='Apply or cancel the current changes first.';
+        return;
+      }
+      action();
+    }
+    function navigatePanel(next:PanelName,parent:PanelName|undefined='View settings') {
+      transition(()=>{own.close(false);open(next,trigger,selectedIndex,undefined,parent);});
+    }
+    if(name==='View settings'||returnTo){
+      const close=button(doc,'',()=>{if(auto&&own.dirty&&!retryPersistence)submit(true);else own.close();},'Close settings');
+      close.className='bases-toolbar-menu-next';close.dataset.panelAction='close';close.append(icon('close',16,doc));heading.append(close);
+    }
+    if(name==='View settings'){
+      const nameRow=doc.createElement('div');nameRow.className='bases-settings-name';nameRow.append(icon(layoutIcon(configuredView.type),18,doc));
+      const input=doc.createElement('input');input.setAttribute('aria-label','View name');input.placeholder='View name';input.value=configuredView.name;input.disabled=!opening.allowRename;
+      nameRow.append(input);fields.append(nameRow);input.addEventListener('input',changed);
+      input.addEventListener('blur',()=>{if(auto&&own.dirty)submit(false);});input.addEventListener('keydown',event=>{if(!event.isComposing&&event.key==='Enter'){event.preventDefault();input.blur();}});
+      readPatch=()=>{const name=validateViewName(opening.views,input.value,selectedIndex);return name===configuredView.name?{}:{name};};
+      if(options.commands?.updateView)readOperation=()=>{const patch=readPatch();expectedPatch={view:patch};return()=>options.commands!.updateView!(version,selectedIndex,patch);};
+      const menu=doc.createElement('div');menu.dataset.settingsMenu='true';menu.setAttribute('role','menu');menu.setAttribute('aria-label','View settings commands');fields.append(menu);
+      const row=(label:string,glyph:string,value:string,action:()=>void)=>{
+        const item=button(doc,'',action,label);item.className='bases-settings-row';item.dataset.setting=label.toLowerCase().replace(/ /g,'-');item.setAttribute('role','menuitem');item.tabIndex=menu.querySelector('[role=menuitem]')?-1:0;
+        const text=doc.createElement('span');text.className='bases-settings-row-label';text.textContent=label;
+        const detail=doc.createElement('span');detail.className='bases-settings-row-value';detail.textContent=value;item.append(icon(glyph,16,doc),text,detail,icon('chevron-right',14,doc));
+        const active=()=>{for(const sibling of menu.querySelectorAll<HTMLElement>('[role=menuitem]')){sibling.classList.toggle('is-active',sibling===item);sibling.tabIndex=sibling===item?0:-1;}};
+        item.addEventListener('mouseenter',active);item.addEventListener('focus',active);menu.append(item);return item;
+      };
+      row('Layout',layoutIcon(configuredView.type),BASE_LAYOUTS.find(([key])=>key===configuredView.type)?.[1]??configuredView.type,()=>navigatePanel('View options'));
+      if(!opening.browseOnly)row('Property visibility','eye',String(result.properties.length),()=>navigatePanel('Properties'));
+      row('Filter','list-filter','',()=>navigatePanel('Filter'));row('Sort','arrow-up-down','',()=>navigatePanel('Sort'));
+      if(!opening.browseOnly)row('Group','group','',()=>navigatePanel('Group'));
+      const divider=doc.createElement('div');divider.className='bases-settings-section-label';divider.textContent='Data source settings';menu.append(divider);
+      const source=doc.createElement('div');source.className='bases-settings-row is-readonly';source.dataset.setting='source';
+      const sourceTitle=doc.createElement('span');sourceTitle.className='bases-settings-row-label';sourceTitle.textContent='Source';const sourceValue=doc.createElement('span');sourceValue.className='bases-settings-row-value';sourceValue.textContent=opening.sourceLabel??(opening.browseOnly?'Notes in your vault':'Collection');source.append(icon('link',16,doc),sourceTitle,sourceValue);menu.append(source);
+      if(!opening.browseOnly&&options.onEditProperties)row('Edit properties','list','',()=>transition(()=>{own.close(false);options.onEditProperties!();}));
+      row('More view actions','more','',()=>{navigatePanel('View options');panel?.node.querySelector<HTMLButtonElement>('[aria-label="View actions"]')?.click();});
+      refreshPanel=()=>{sourceValue.textContent=opening.sourceLabel??(opening.browseOnly?'Notes in your vault':'Collection');};
+    } else if (name === 'Views') {
       footer.hidden = true;
       const search = doc.createElement('input'); search.type = 'search'; search.placeholder = 'Search…'; search.setAttribute('aria-label', 'Find a view'); fields.append(search);
       const list = doc.createElement('div'); list.className = 'bases-views-list'; fields.append(list);
@@ -411,11 +459,17 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       const layout = select(doc, 'Layout', BASE_LAYOUTS.map(([key, label]) => [key, label] as const), configuredView.type);
       const layoutLabel = doc.createElement('label'); layoutLabel.textContent = 'Layout'; layoutLabel.append(layout); fields.append(layoutLabel); layout.addEventListener('change', changed);
       const nameInput = doc.createElement('input'); nameInput.setAttribute('aria-label', 'View name'); nameInput.value = configuredView.name;
-      if (opening.allowRename) { const nameLabel = doc.createElement('label'); nameLabel.textContent = options.immediate ? '' : 'Name'; nameLabel.append(nameInput); fields.prepend(nameLabel); nameInput.addEventListener('input', changed); }
+      if (opening.allowRename&&returnTo!=='View settings') { const nameLabel = doc.createElement('label'); nameLabel.textContent = options.immediate ? '' : 'Name'; nameLabel.append(nameInput); fields.prepend(nameLabel); nameInput.addEventListener('input', changed); }
       nameInput.addEventListener('blur', () => { if (auto && own.dirty) submit(false); });
       nameInput.addEventListener('keydown', event => { if (!event.isComposing && event.key === 'Enter') { event.preventDefault(); nameInput.blur(); } });
+      if(returnTo==='View settings'){
+        layoutLabel.hidden=true;
+        const grid=doc.createElement('div');grid.className='bases-layout-picker';grid.setAttribute('role','group');grid.setAttribute('aria-label','Layout');
+        for(const [type,label,glyph] of BASE_LAYOUTS){const tile=button(doc,'',()=>{layout.value=type;layout.dispatchEvent(new win!.Event('change',{bubbles:true}));for(const item of grid.querySelectorAll('[data-layout]'))item.setAttribute('aria-pressed',String((item as HTMLElement).dataset.layout===type));},label);tile.dataset.layout=type;tile.setAttribute('aria-pressed',String(configuredView.type===type));tile.append(icon(glyph,22,doc),doc.createTextNode(label));grid.append(tile);}fields.append(grid);
+      }
       const layoutFields = doc.createElement('div'); layoutFields.className = 'bases-layout-settings'; fields.append(layoutFields);
       let layoutPatch = createLayoutSettings(doc, layoutFields, configuredView, propertyOptions, changed);
+      if(returnTo==='View settings'){const limit=button(doc,`Load limit · ${typeof configuredView.limit==='number'?configuredView.limit:'All results'}`,()=>navigatePanel('Results','View options'),'Load limit');limit.className='bases-settings-row';fields.append(limit);}
       layout.addEventListener('change', () => { layoutFields.replaceChildren(); layoutPatch = createLayoutSettings(doc, layoutFields, {...configuredView, type:layout.value}, propertyOptions, changed); });
       readPatch = () => {
         if (selectedIndex !== opening.selectedIndex && !options.commands?.updateView) throw new Error('Open this view before changing its settings.');
@@ -445,7 +499,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         for (const item of Array.from(fields.querySelectorAll(':scope > .bases-toolbar-menu-item'))) actions.append(item);
         fields.append(actions);
         const more = button(doc, '', () => { actions.hidden = !actions.hidden; more.setAttribute('aria-expanded', String(!actions.hidden)); place(); }, 'View actions');
-        more.className = 'bases-toolbar-menu-next'; more.append(icon('ellipsis-vertical',16,doc)); heading.append(more); const close = button(doc,'',() => { if (own.dirty) submit(true); else own.close(); },'Close menu'); close.className = 'bases-toolbar-menu-next'; close.append(icon('close',16,doc)); heading.append(close);
+        more.className = 'bases-toolbar-menu-next'; more.append(icon('ellipsis-vertical',16,doc)); if(returnTo)heading.insertBefore(more,heading.querySelector('[data-panel-action=close]'));else heading.append(more); if(!returnTo){const close = button(doc,'',() => { if (own.dirty) submit(true); else own.close(); },'Close menu'); close.className = 'bases-toolbar-menu-next'; close.append(icon('close',16,doc)); heading.append(close);}
       }
     } else if (name === 'Properties') {
       const displayNames = new Map<string, string>();
@@ -804,6 +858,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     }
     let closeWhenSettled = false;
     const submit = (close: boolean) => {
+      if(close)afterClean=undefined;
       closeWhenSettled ||= close;
       if (autoTimer) { clearTimeout(autoTimer); autoTimer = undefined; }
       if (own.saving || destroyed || panel !== own) return;
@@ -823,7 +878,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       const retrying = !!retryPersistence && !!retainedAttempt;
       const attempt: AcceptedAttempt = retrying ? retainedAttempt! : {
         generation,configuration:expectedSnapshot??(expectedPatch?applyConfigurationPatch(configuration,expectedPatch,selectedIndex):configuration),
-        viewName:name==='View options'?form.querySelector<HTMLInputElement>('[aria-label="View name"]')?.value.trim()||configuredView.name:configuredView.name,
+        viewName:name==='View options'||name==='View settings'?form.querySelector<HTMLInputElement>('[aria-label="View name"]')?.value.trim()||configuredView.name:configuredView.name,
         inputs:inputStates(),acknowledge:afterSave,
       };
       const submittedGeneration = attempt.generation, expectedConfiguration = attempt.configuration, expectedViewName = attempt.viewName;
@@ -855,6 +910,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         }
         error.textContent = ''; footer.hidden = true; attempt.acknowledge?.(); options.onDraftChange();
         if (own.dirty) submit(closeWhenSettled);
+        else if(afterClean){const next=afterClean;afterClean=undefined;next();}
         else if (closeWhenSettled) own.close();
       }, failure => {
         if (destroyed || panel !== own) return; own.saving = false; own.dirty = true;
@@ -926,8 +982,10 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       actions.append(node);
     }
     if (options.onSearch) { const node = button(doc, '', () => { if (!searchRow.hidden) { closeSearch(); return; } searchRow.hidden = false; searchInput.value = state?.search ?? ''; node.classList.add('is-active'); searchInput.focus(); searchInput.select(); }, 'Search'); node.className = 'bases-toolbar-action'; node.title = 'Search'; node.append(icon('search',16,doc)); node.classList.toggle('is-active',!searchRow.hidden); actions.append(node); }
-    if (!next.readOnly) { const node = button(doc, '', () => open('View options',node), 'View options'); node.className = 'bases-toolbar-action bases-toolbar-settings'; node.title = 'View settings'; node.append(icon('sliders-horizontal',16,doc)); actions.append(node); }
-    if (!next.readOnly && options.onNew) { const node = button(doc, '', () => { try { options.preflight('new'); if (hasDraft()) throw new Error('Finish the current changes first.'); node.disabled = true; void options.onNew!().catch(report).finally(() => { if (!destroyed) node.disabled = false; }); } catch (error) { report(error); } }, 'New'); node.className = 'bases-toolbar-action bases-toolbar-new'; node.append(icon('plus',16,doc),doc.createTextNode('New')); actions.append(node); }
+    if (!next.readOnly) { const node = button(doc, '', () => open('View settings',node), 'Settings'); node.className = 'bases-toolbar-action bases-toolbar-settings'; node.title = 'Settings'; node.dataset.toolbarAction='settings'; node.setAttribute('aria-haspopup','dialog'); node.append(icon('sliders-horizontal',16,doc)); actions.append(node); }
+    if (!next.readOnly && options.onNew) { const node = button(doc, '', () => { try { options.preflight('new'); if (hasDraft()) throw new Error('Finish the current changes first.'); node.disabled = true; void options.onNew!().catch(report).finally(() => { if (!destroyed) node.disabled = false; }); } catch (error) { report(error); } }, 'New'); node.className = 'bases-toolbar-action bases-toolbar-new'; node.append(icon('plus',16,doc),doc.createTextNode('New')); actions.append(node);
+      if(options.commands?.updateRoot){node.classList.add('has-options');const more=button(doc,'',()=>open('New item settings',more),'New item options');more.className='bases-toolbar-action bases-toolbar-new-options';more.title='New item options';more.setAttribute('aria-haspopup','dialog');more.append(icon('down',14,doc));actions.append(more);}
+    }
     if (focusedLabel) Array.from(actions.querySelectorAll<HTMLButtonElement>('button')).find(node => node.getAttribute('aria-label') === focusedLabel)?.focus({ preventScroll: true });
   }
   return { update, refreshFilterAdvice(next) {

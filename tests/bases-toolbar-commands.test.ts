@@ -66,7 +66,7 @@ test('immediate mode serializes edits, rebases its own result and keeps the focu
  function refresh(){const next=result();toolbar.update({result:next,views:document.views,selectedIndex:0,readOnly:false,allowRename:true,label:p=>p});}refresh();
  const get=<T extends HTMLElement>(label:string)=>doc.querySelector<T>(`[aria-label="${label}"]`)!;
  try{
-  get<HTMLButtonElement>('View options').click();const layout=get<HTMLSelectElement>('Layout');layout.focus();layout.value='cards';layout.dispatchEvent(new dom.window.Event('change',{bubbles:true}));await new Promise(resolve=>setTimeout(resolve,280));assert.equal(calls.length,1);assert.equal(doc.querySelector('.bases-toolbar-footer')?.hasAttribute('hidden'),true);
+  get<HTMLButtonElement>('Views').click();get<HTMLButtonElement>('Configure view Library').click();const layout=get<HTMLSelectElement>('Layout');layout.focus();layout.value='cards';layout.dispatchEvent(new dom.window.Event('change',{bubbles:true}));await new Promise(resolve=>setTimeout(resolve,280));assert.equal(calls.length,1);assert.equal(doc.querySelector('.bases-toolbar-footer')?.hasAttribute('hidden'),true);
   const name=get<HTMLInputElement>('View name');name.value='Books';name.dispatchEvent(new dom.window.Event('input',{bubbles:true}));blocked=false;release!();await tick();await tick();assert.equal(calls.length,2);assert.equal(calls[1].version,2);assert.equal(document.views[0].name,'Books');assert.equal(doc.querySelector('[role="dialog"]')?.isConnected,true);assert.equal(name.isConnected,true);assert.equal(toolbar.hasDraft(),false);
   name.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));assert.equal(doc.querySelector('[role="dialog"]'),null);
  }finally{toolbar.destroy();dom.window.close();}
@@ -180,7 +180,7 @@ test('Add view exposes every layout setting and commits its initial draft in one
  const cases=[
   {type:'table',defaults:{'Row height':''},edits:[['Row height','tall','change']],patch:{rowHeight:'tall'}},
   {type:'cards',defaults:{'Card size':'200','Image property':'','Image fit':'','Image aspect ratio':'1'},edits:[['Card size','320','input'],['Image property','note.score','change'],['Image fit','contain','change'],['Image aspect ratio','1.5','input']],patch:{cardSize:320,image:'note.score',imageFit:'contain',imageAspectRatio:1.5}},
-  {type:'kanban',defaults:{'Column width':'280','Image property':'','Image fit':'','Image aspect ratio':'0.5'},edits:[['Column width','360','input'],['Image aspect ratio','0.75','input']],patch:{columnWidth:360,imageAspectRatio:.75}},
+  {type:'kanban',defaults:{'Column width':'276','Image property':'','Image fit':'','Image aspect ratio':'0.5'},edits:[['Column width','360','input'],['Image aspect ratio','0.75','input']],patch:{columnWidth:360,imageAspectRatio:.75}},
   {type:'list',defaults:{'Markers':'bullet','Property separator':', '},edits:[['Markers','number','change'],['Property separator',' • ','input']],patch:{markers:'number',separator:' • ',indentProperties:true}},
  ] as const;
  for(const scenario of cases){
@@ -316,7 +316,7 @@ test('Add view with a repeated label selects its new stable identity for explici
   const layout=doc.querySelector<HTMLSelectElement>('[aria-label="Layout"]')!;layout.value='cards';layout.dispatchEvent(new dom.window.Event('change',{bubbles:true}));
   name.focus();name.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));await tick();
   assert.equal(document.views.length,2);const createdId=document.views[1].id;assert.notEqual(createdId,'aaaaaaaaaaaa');
-  assert.equal(doc.querySelector('[role=dialog]'),null);doc.querySelector<HTMLButtonElement>('[aria-label="View options"]')!.click();
+  assert.equal(doc.querySelector('[role=dialog]'),null);doc.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!.click();doc.querySelector<HTMLButtonElement>('[data-setting=layout]')!.click();
   assert.equal(doc.querySelector<HTMLSelectElement>('[aria-label="Layout"]')?.value,'cards','explicit settings belongs to the newly added view');
   const size=doc.querySelector<HTMLInputElement>('[aria-label="Card size"]')!;assert.ok(size);size.focus();size.value='440';size.dispatchEvent(new dom.window.Event('input',{bubbles:true}));await new Promise(resolve=>setTimeout(resolve,280));
   assert.deepEqual(updates,[{index:1,id:createdId}]);assert.equal(document.views[1].cardSize,440);assert.equal(document.views[0].rowHeight,'medium');assert.equal(document.views[0].cardSize,undefined);assert.deepEqual(errors,[]);
@@ -338,7 +338,7 @@ test('visible named tabs switch through guarded host commands and retain the cur
 
 test('view tabs and direct add-view affordance preserve an unfinished toolbar draft',async()=>{
  const f=fixture();try{
-  f.click('View options');f.input('View name','Unfinished name');const input=f.get<HTMLInputElement>('View name');
+  f.click('Settings');f.input('View name','Unfinished name');const input=f.get<HTMLInputElement>('View name');
   f.doc.querySelector<HTMLButtonElement>('[role=tab][aria-selected=false]')!.click();f.click('Add a view');await tick();
   assert.deepEqual(f.calls,[]);assert.equal(input.isConnected,true);assert.equal(input.value,'Unfinished name');assert.equal(f.toolbar.hasDraft(),true);
   assert.equal(f.errors.length,2);f.click('Cancel');f.click('Add a view');assert.equal(f.doc.querySelector('[role=dialog]')?.getAttribute('aria-label'),'Add view');
@@ -347,8 +347,8 @@ test('view tabs and direct add-view affordance preserve an unfinished toolbar dr
 
 test('explicit settings opens with commands available and readonly hides mutation affordances',()=>{
  const f=fixture();try{
-  f.click('View options');assert.equal(f.get<HTMLInputElement>('View name').value,'Library');f.click('Cancel');
-  f.toolbar.update({...f.state,readOnly:true});assert.equal(f.doc.querySelector('[aria-label="View options"]'),null);
+  f.click('Settings');assert.equal(f.get<HTMLInputElement>('View name').value,'Library');f.click('Cancel');
+  f.toolbar.update({...f.state,readOnly:true});assert.equal(f.doc.querySelector('[aria-label="Settings"]'),null);
   assert.equal(f.get<HTMLButtonElement>('Add a view').hidden,true);assert.equal(f.doc.querySelectorAll('[role=tab]').length,2);
  }finally{f.cleanup();}
 });

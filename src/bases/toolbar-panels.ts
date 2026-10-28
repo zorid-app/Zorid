@@ -1,8 +1,8 @@
 import { normalizeBaseProperty } from './query.ts';
 import type { BaseValue, BaseViewConfig, BaseViewPatch } from './document.ts';
 
-/** Shipped 1.14.4 registration settings; these keys are shared with each renderer. */
-export const BASE_LAYOUTS = [['table', 'Table', 'table'], ['cards', 'Cards', 'layout-grid'], ['list', 'List', 'list'], ['kanban', 'Kanban', 'columns-3']] as const;
+/** Persisted layout keys stay stable while their labels follow the database UI. */
+export const BASE_LAYOUTS = [['table', 'Table', 'table'], ['cards', 'Gallery', 'layout-grid'], ['list', 'List', 'list'], ['kanban', 'Board', 'columns-3']] as const;
 export function layoutIcon(type: string): string { return BASE_LAYOUTS.find(([key]) => key === type)?.[2] ?? 'file-question'; }
 export function uniqueViewName(views: readonly BaseViewConfig[], proposed = 'View'): string {
   const used = new Set(views.map(view => view.name));
@@ -34,7 +34,7 @@ export function createLayoutSettings(doc: Document, parent: HTMLElement, view: B
   if (view.type === 'table') dropdown('rowHeight', 'Row height', [['', 'Short'], ['medium', 'Medium'], ['tall', 'Tall'], ['extra', 'Extra tall']]);
   if (view.type === 'cards' || view.type === 'kanban') {
     if (view.type === 'cards') slider('cardSize', 'Card size', 50, 800, 10, 200);
-    else slider('columnWidth', 'Column width', 200, 500, 10, 280);
+    else slider('columnWidth', 'Column width', 200, 500, 1, 276);
     dropdown('image', 'Image property', [['', 'None'], ...properties.filter(([key]) => key === 'file.file' || !key.startsWith('file.'))]);
     dropdown('imageFit', 'Image fit', [['', 'Cover'], ['contain', 'Contain']]);
     slider('imageAspectRatio', 'Image aspect ratio', .25, 2.5, .05, view.type === 'cards' ? 1 : .5);
