@@ -530,8 +530,8 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
       await commit(next, false, restoreFailureFocus, intent);
     } catch (failure) { error(failure); }
   }
-  function begin(event: MouseEvent | KeyboardEvent) {
-    if (!editable || !current() || pending || editing || options.canBegin?.() === false) return;
+  function begin(event: MouseEvent | KeyboardEvent, seed?: string) {
+    if (!editable || !current() || pending || editing || options.readOnly?.(acceptedPresentation) || options.canBegin?.() === false) return;
     if ((event.target as HTMLElement).closest('a,button,input,[role="link"]')) return;
     event.preventDefault(); event.stopPropagation(); editing = true; draftChanged = false; mark('draft');
     // Chip labels are editable text; untouched persisted values retain their
@@ -541,9 +541,9 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     input.type = basePropertyValueDiagnostic(value, definition) || (type === 'datetime' && value.type === 'string' && /(?:Z|[+-]\d{2}:\d{2})$/.test(value.value)) ? 'text' : type === 'date' ? 'date' : type === 'datetime' ? 'datetime-local' : 'text';
     if (type === 'date' || type === 'datetime') input.max = type === 'date' ? '9999-12-31' : '9999-12-31T23:59:59';
     if (type === 'number') input.inputMode = 'decimal';
-    input.value = multiple || optionPicker ? '' : inputText(value, definition);
-    if (type === 'date' || type === 'datetime') configureBaseDateInput(input, inputText(value, definition), type === 'datetime');
-    selected = optionPicker ? -1 : 0;
+    input.value = seed ?? (multiple || optionPicker ? '' : inputText(value, definition));
+    if (type === 'date' || type === 'datetime') configureBaseDateInput(input, seed ?? inputText(value, definition), type === 'datetime');
+    selected = optionPicker && seed === undefined ? -1 : 0;
     input.addEventListener('focus', () => { blurDuringComposition = false; compositionEpoch++; });
     input.addEventListener('compositionstart', () => { composing = true; blurDuringComposition = false; compositionEpoch++; });
     input.addEventListener('compositionend', () => {
@@ -588,10 +588,26 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
       // disables this scalar input and blocks another cell's activation.
       if (options.onEditorComplete) document.addEventListener('pointerdown', outside, true);
     }
-    input.focus(); if (!multiple) input.select();
+    input.focus();
+    if (seed !== undefined) input.setSelectionRange?.(seed.length, seed.length);
+    else if (!multiple) input.select();
   }
   const activate = (event: MouseEvent) => { if (!event.defaultPrevented && event.button === 0) begin(event); };
-  const key = (event: KeyboardEvent) => { if (event.key === 'Escape' && !pending && type === 'checkbox' && element.hasAttribute('data-base-editing')) { event.preventDefault(); draw(); return; } if (!event.defaultPrevented && !event.isComposing && event.target === element && ['Enter', 'F2'].includes(event.key)) begin(event); };
+  const key = (event: KeyboardEvent) => {
+    if (event.key === 'Escape' && !pending && type === 'checkbox' && element.hasAttribute('data-base-editing')) { event.preventDefault(); draw(); return; }
+    if (event.defaultPrevented || event.isComposing || composing || event.target !== element || event.ctrlKey || event.metaKey || event.altKey || event.getModifierState('AltGraph')) return;
+    if (['Enter', 'F2'].includes(event.key)) { begin(event); return; }
+    const retainedCheckbox = type === 'checkbox' && element.dataset.baseEditing === 'draft';
+    if (!editable || !current() || pending || editing || options.readOnly?.(acceptedPresentation) || (!retainedCheckbox && options.canBegin?.() === false)) return;
+    if (type === 'checkbox') {
+      if (event.key === ' ') { event.preventDefault(); event.stopPropagation(); if (!event.repeat) element.querySelector<HTMLInputElement>('.metadata-input-checkbox:not(:disabled)')?.click(); }
+      return;
+    }
+    // Range selection and native inputs own their key events before this
+    // boundary. Only a printable selected-cell key starts a replacement/query
+    // draft, and the initial key is never itself a persistence operation.
+    if (Array.from(event.key).length === 1 && !/[\u0000-\u001f\u007f]/.test(event.key)) begin(event, event.key);
+  };
   element.addEventListener('click', activate); element.addEventListener('dblclick', activate); element.addEventListener('keydown', key); draw();
   return () => { disposed = true; delete element.dataset.baseWidgetVersion; delete element.dataset.basePropertyEditable; element.removeAttribute('aria-disabled'); removeFocusObserver?.(); removeFocusObserver = undefined; disposeRich?.(); disposeRich = undefined; closePopup(); timers.forEach(clearTimeout); timers.clear(); mark(); element.removeEventListener('click', activate); element.removeEventListener('dblclick', activate); element.removeEventListener('keydown', key); };
 }
