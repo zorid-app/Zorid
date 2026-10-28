@@ -1,3 +1,4 @@
+import {openBaseToolbarPanel} from './helpers/base-toolbar.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
@@ -67,7 +68,7 @@ test('named Kanban preserves exact failed configuration retry and leaves sibling
   const session = createBaseSession(host, { vault: f.vault, basePath: 'Work.base', viewName: 'Target', buffers: f.host, validate() {}, openFile() {} });
   try {
     await session.ready; adapter.fail = true;
-    host.querySelector<HTMLButtonElement>('button[aria-label="Group"]')!.click();
+    openBaseToolbarPanel(dom.window.document,'Group');
     const checkbox = dom.window.document.querySelector<HTMLInputElement>('input[aria-label="Show group Todo"]')!;
     assert.ok(checkbox); checkbox.click();
     for(let i=0;i<100&&!dom.window.document.querySelector('form')?.textContent?.includes('Retry save');i++)await new Promise(resolve=>setTimeout(resolve,5));

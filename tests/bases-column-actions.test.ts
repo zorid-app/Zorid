@@ -1,3 +1,4 @@
+import {openBaseToolbarPanel} from './helpers/base-toolbar.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
@@ -87,7 +88,7 @@ test('session Edit columns persists visibility and keeps formula config editable
     const note = await f.vault.read('One.md');
     const card = element.querySelector('.bases-kanban-card');
     assert.equal(card?.getAttribute('draggable'), 'false');
-    element.querySelector<HTMLButtonElement>('button[aria-label="Group"]')!.click();
+    openBaseToolbarPanel(dom.window.document,'Group');
     dom.window.document.querySelector<HTMLButtonElement>('button[aria-label="Hide all groups"]')!.click();
     for(let i=0;i<100&&session.hasPendingChanges();i++)await new Promise(resolve=>setTimeout(resolve,5));
     await session.flush();

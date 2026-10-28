@@ -1,3 +1,4 @@
+import {openBaseToolbarPanel} from './helpers/base-toolbar.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
@@ -76,7 +77,7 @@ test('invalid shared property settings leave results visible and values read-onl
 test('Add formula creates its visible column in the same saved configuration before editing', async () => {
   const f = await fixture({ 'Work.base': base, 'One.md': '---\nstatus: Todo\n---\nBody' });
   try {
-    f.host.querySelector<HTMLButtonElement>('[aria-label="Properties"]')!.click();
+    openBaseToolbarPanel(f.dom.window.document,'Properties');
     f.dom.window.document.querySelector<HTMLButtonElement>('[aria-label="Add formula"]')!.click();
     for (let i = 0; i < 50 && !f.dom.window.document.querySelector('[aria-label="Formula expression"]'); i++) await tick();
     const configured = BaseDocument.parse(await f.vault.read('Work.base'));

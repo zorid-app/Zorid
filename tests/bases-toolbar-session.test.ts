@@ -1,3 +1,4 @@
+import {openBaseToolbarPanel} from './helpers/base-toolbar.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {JSDOM} from 'jsdom';
@@ -29,7 +30,7 @@ async function fixture(options:{readOnly?:boolean;viewName?:string;source?:strin
  await session.ready;assert.equal(session.state.error,null);
  const dialog=()=>doc.querySelector<HTMLElement>('[role="dialog"]');
  const control=<T extends HTMLElement>(label:string,scope:ParentNode=doc)=>{const node=scope.querySelector<T>(`[aria-label="${label}"]`);assert.ok(node,`control ${label}`);return node;};
- const click=(label:string,scope:ParentNode=doc)=>control<HTMLButtonElement>(label,scope).click();
+ const click=(label:string,scope:ParentNode=doc)=>{if(label==='Group'||label==='Properties'||label==='Results'){openBaseToolbarPanel(doc,label);return;}control<HTMLButtonElement>(label,scope).click();};
  const change=(label:string,value:string,event='change')=>{const node=control<HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement>(label);node.value=value;node.dispatchEvent(new dom.window.Event(event,{bubbles:true}));};
  const key=(node:Element,value:string)=>node.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:value,bubbles:true,cancelable:true}));
  const submit=()=>{const form=dialog()?.querySelector('form');assert.ok(form,'open form');form.dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));};
@@ -116,7 +117,7 @@ test('an active property input blocks opening configuration panels and changing 
 
 test('readonly sessions retain view switching while exposing no toolbar mutation controls',async()=>{
  const f=await fixture({readOnly:true});try{
-  for(const label of ['Filter','Sort','Properties','Group','View options'])assert.equal(f.host.querySelector(`button[aria-label="${label}"]`),null,label);
+  for(const label of ['Filter','Sort','Properties','Group','Settings','View options'])assert.equal(f.host.querySelector(`button[aria-label="${label}"]`),null,label);
   f.change('Base view','1');await until(()=>f.session.state.result?.view.type==='cards','readonly view switch');
   assert.equal(f.buffers.size,0);assert.equal(f.adapter.writes.length,0);await f.unchangedNotes();
  }finally{await f.cleanup();}

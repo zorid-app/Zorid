@@ -1,3 +1,4 @@
+import {openBaseToolbarPanel} from './helpers/base-toolbar.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {JSDOM} from 'jsdom';
@@ -30,14 +31,14 @@ async function fixture(initiallyHeld=false){
   const vault=new Vault(adapter);await vault.initialize();const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),doc=dom.window.document,host=doc.querySelector('main')!,buffers=new Map<string,NoteBuffer>();
   const session=createBaseSession(host,{vault,basePath:'Work.base',validate(){},openFile(){},buffers:{validate(){},getBuffer:async path=>{let buffer=buffers.get(path);if(!buffer){buffer=new NoteBuffer(vault,path);buffers.set(path,buffer);}await buffer.load();return buffer;}}});
   const panel=()=>doc.querySelector<HTMLElement>('.bases-toolbar-popover[data-panel="Properties"]')!;
-  const open=()=>{host.querySelector<HTMLButtonElement>('[aria-label="Properties"]')!.click();return panel();};
+  const open=()=>{openBaseToolbarPanel(doc,'Properties');return panel();};
   const closePanel=()=>{const search=panel()?.querySelector<HTMLInputElement>('input[type="search"]');search?.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));};
   return {session,host,doc,open,panel,closePanel,pause,release:()=>release(),requests:()=>requests,async close(){release();await session.ready;closePanel();await session.close();for(const buffer of buffers.values())await buffer.dispose();dom.window.close();}};
 }
 
 test('an open Properties menu receives human labels after its initial delayed schema load',async()=>{
   const f=await fixture(true);try{
-    await until(()=>!!f.host.querySelector('[aria-label="Properties"]'));
+    await until(()=>!!f.host.querySelector('[data-toolbar-action="settings"]'));
     const panel=f.open(),search=panel.querySelector<HTMLInputElement>('input[type="search"]')!;assert.ok(panel.textContent?.includes(property));
     search.value='Rating';search.dispatchEvent(new f.doc.defaultView!.Event('input',{bubbles:true}));
     f.release();await f.session.ready;await until(()=>f.panel()?.querySelector<HTMLInputElement>(`input[data-property="note.${property}"]`)?.parentElement?.textContent==='Rating');
@@ -52,6 +53,6 @@ test('same-source reload keeps friendly names while another source cannot reuse 
     f.release();await refresh;f.closePanel();f.pause();const nextCount=f.requests();await f.session.selectView(1);await until(()=>f.requests()>nextCount);
     const panel=f.open();assert.equal(panel.textContent?.includes('Rating'),false,'other collection cannot borrow the old name for the same property ID');
     f.release();await until(()=>panel.querySelector<HTMLInputElement>(`input[data-property="note.${property}"]`)?.parentElement?.textContent==='Budget');assert.equal(panel.textContent?.includes('Rating'),false);
-    f.closePanel();await f.session.selectView(2);assert.equal(f.host.querySelector('[aria-label="Properties"]'),null);
+    f.closePanel();await f.session.selectView(2);openBaseToolbarPanel(f.doc,'Properties');assert.equal(f.panel(),null);assert.equal(f.doc.querySelector('[data-setting="property-visibility"]'),null);assert.equal(f.doc.querySelector('[data-setting="group"]'),null);f.doc.querySelector<HTMLButtonElement>('[data-panel-action="close"]')!.click();
   }finally{await f.close();}
 });
