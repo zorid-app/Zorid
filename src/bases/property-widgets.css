@@ -61,3 +61,5 @@
 .zorid-bases-table-cell.bases-metadata-value[data-property-type="number"] .metadata-input { text-align:end; }
 .zorid-bases-table-cell.bases-metadata-value[data-property-type="checkbox"] { justify-content:center; }
 @media (forced-colors:active) { .bases-metadata-value .metadata-input-checkbox { appearance:auto; -webkit-appearance:auto; } .bases-metadata-value .metadata-input-checkbox::after { display:none; } }
+.metadata-property > .metadata-property-value.bases-metadata-value { min-height:28px; display:flex; align-items:center; box-sizing:border-box; border-radius:4px; }
+.metadata-property > .metadata-property-value.bases-metadata-value:empty::before { content:'Empty'; color:var(--text-faint); font-size:14px; pointer-events:none; }
