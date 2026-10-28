@@ -171,7 +171,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     });
     for (const extra of children.slice(next.views.length)) extra.remove();
     addView.hidden = next.readOnly || !options.commands?.addView;
-    viewButton.replaceChildren(icon('chevron-down',14,doc));
+    viewButton.replaceChildren(icon('down',14,doc));
   }
   tabs.addEventListener('keydown',event => {
     if (event.isComposing || !['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return;
@@ -501,6 +501,16 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       const updateAddProperty = () => { addProperty.hidden = !search.value.trim() || properties.some(property => property === normalizeBaseProperty(`note.${search.value.trim()}`)); addProperty.textContent = `Add property “${search.value.trim()}”`; };
       fields.append(addProperty,button(doc,'Hide all',() => { order = []; changed(); render(); }));
       search.addEventListener('input',() => { render(); updateAddProperty(); }); updateAddProperty(); render(); readPatch = () => ({ order });
+      let presentedLabels=JSON.stringify(properties.map(property=>[property,opening.label(property),opening.propertyType?.(property)]));
+      refreshPanel=(_next,retainDraft)=>{
+        const nextLabels=JSON.stringify(properties.map(property=>[property,opening.label(property),opening.propertyType?.(property)]));
+        if(retainDraft||nextLabels===presentedLabels)return;
+        const focused=doc.activeElement as HTMLElement|null,row=focused?.closest('.bases-toolbar-property-row');
+        const property=row?.querySelector<HTMLInputElement>('input[data-property]')?.dataset.property;
+        const slot=row&&focused?Array.from(row.querySelectorAll('input,button')).indexOf(focused):-1;
+        presentedLabels=nextLabels;render();updateAddProperty();
+        if(property){const replacement=Array.from(list.querySelectorAll<HTMLInputElement>('input[data-property]')).find(input=>input.dataset.property===property)?.closest('.bases-toolbar-property-row');replacement?.querySelectorAll<HTMLElement>('input,button')[slot]?.focus({preventScroll:true});}
+      };
       readOperation = () => { const view = validateToolbarPatch(result, {order}); if (!displayNames.size) { expectedPatch = {view}; return () => options.save(version, view); } if (!options.saveConfiguration) throw new Error('Combined property configuration is unavailable.'); const root = propertyDisplayPatch(opening.settings??opening.root, displayNames); expectedPatch = {view,root}; return () => options.saveConfiguration!(version, {view,root}); };
     } else if (name === 'Sort') {
       let sortDrag: {item:BaseValue;source:HTMLElement;token:string;version:BaseQueryResult['version']} | undefined;

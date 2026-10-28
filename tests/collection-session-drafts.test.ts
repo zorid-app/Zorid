@@ -167,7 +167,8 @@ test('initial deleted query failure offers a working guarded Change source actio
 
 
 for(const inherited of [{kind:'collection',id:collection.id},{kind:'untyped'}] as const){
- test(`Add view inherits the current ${inherited.kind} source without a source chooser`,async()=>{
+ test(`Add view inherits the current ${inherited.kind} source without a source chooser`,async t=>{
+  const observerErrors=t.mock.method(console,'error',()=>{});
   const base=JSON.stringify({views:[{id:'aaaaaaaaaaaa',type:'table',name:'Original',source:inherited}]});
   const f=await creationSession({base,witnessedBuffers:true,mutation:async()=>{throw new Error('view creation must not mutate collection entries');}});
   try{
@@ -179,7 +180,7 @@ for(const inherited of [{kind:'collection',id:collection.id},{kind:'untyped'}] a
    const saved=BaseDocument.parse(await f.vault.read('Work.base'));
    assert.deepEqual(saved.views[0],BaseDocument.parse(base).views[0]);assert.deepEqual(saved.views[1].source,inherited);assert.equal(saved.views[1].type,'list');assert.equal(saved.views[1].name,'Another view');
    assert.notEqual(saved.views[1].id,'aaaaaaaaaaaa');assert.equal(f.session.state.result?.view.id,saved.views[1].id);
-   assert.equal(f.host.querySelector('.collection-source-chooser'),null);assert.equal(doc.querySelector('[role=dialog]'),null);assert.deepEqual(f.errors,[]);assert.deepEqual(f.requests,[]);
+   assert.equal(f.host.querySelector('.collection-source-chooser'),null);assert.equal(doc.querySelector('[role=dialog]'),null);assert.deepEqual(f.errors,[]);assert.deepEqual(f.requests,[]);assert.equal(observerErrors.mock.callCount(),0,'view creation must publish a coherent source/selection without observer failures');
   }finally{f.dom.window.document.querySelector<HTMLButtonElement>('[aria-label=Cancel]')?.click();await f.close();}
  });
 }

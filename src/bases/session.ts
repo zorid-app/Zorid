@@ -303,7 +303,12 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     }
     return property.startsWith('file.')?property.replace(/^file\./,'file '):property.replace(/^(?:note|formula)\./,'');
   };
-  const getPropertyLabel=(property:string)=>collection?.properties.find(field=>field.id===basePropertyName(property))?.name??propertyLabel(propertyLabels,property);
+  // Presentation survives same-source reloads; this cache never supplies schema,
+  // membership or write authority while the actual collection is unavailable.
+  let collectionLabelSource:string|undefined;
+  let collectionPropertyLabels=new Map<string,string>();
+  const getPropertyLabel=(property:string)=>collection?.properties.find(field=>field.id===basePropertyName(property))?.name
+    ??(collectionLabelSource===loadedCollectionId?collectionPropertyLabels.get(basePropertyName(property)):undefined)??propertyLabel(propertyLabels,property);
   let definitions: BasePropertyDefinitions = { properties: {}, diagnostics: [] };
   let creation: BaseCreationOperation | undefined;
   let summaryPanel: HTMLElement | undefined;
@@ -322,10 +327,12 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     const source = currentViewSource(), epoch = ++collectionLoad, context=sourceContext();
     loadedSourceContext=context;loadedConfigurationRead=controller.configurationRead;deletedSourceContext=undefined;deletedConfigurationRead=undefined;
     if (source.kind === 'untyped') {
+      collectionLabelSource=undefined;collectionPropertyLabels.clear();
       loadedCollectionId = undefined; collection = undefined; collectionEntries.clear();
       definitions = { properties: {}, diagnostics: [] }; definitionsLoading = false; definitionsError = undefined; definitionsRevision++;unavailableCard.hidden=true;options.onState?.(controller.state);
       return;
     }
+    if(collectionLabelSource!==source.id){collectionLabelSource=source.id;collectionPropertyLabels.clear();}
     loadedCollectionId = source.id; collection=undefined;definitions={properties:{},diagnostics:[]};definitionsLoading = true;unavailableCard.hidden=true;options.onState?.(controller.state);
     try {
       if (!databaseService) throw new Error('Collections are unavailable in this vault.');
@@ -334,6 +341,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       collection = response.collections.find(item=>item.id===source.id);
       collectionEntries = new Map(response.entries.map(item=>[item.entryId,item]));
       if (!collection) throw new Error('The selected collection is unavailable.');
+      collectionPropertyLabels=new Map(collection.properties.map(field=>[field.id,field.name]));
       if(collection.deleted){
         const read=loadedConfigurationRead;
         const saved=options.inlineSource?(await options.inlineSource.read()).source:await options.vault.read(options.basePath);
@@ -865,7 +873,11 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     toolbar.hidden=false;sourceBar.hidden=false;
     const result = state.result;
     selectedIndex = controller.selectedViewIndex;
-    const document = BaseDocument.parse(state.source);propertyLabels=baseViewSetting(document,selectedIndex,'properties');
+    const document = BaseDocument.parse(state.source);
+    // Adding a view advances the query selection before the new saved source
+    // is published. Keep the current UI until that matching source arrives.
+    if(state.updating&&!document.views[selectedIndex])return;
+    propertyLabels=baseViewSetting(document,selectedIndex,'properties');
     const source=baseViewSource(document.views[selectedIndex]??result.view);
     if(source.kind==='collection'&&(loadedCollectionId!==source.id||loadedSourceContext!==sourceContext()||loadedConfigurationRead!==controller.configurationRead)){void loadDefinitions();}
     else if(source.kind==='untyped'&&loadedCollectionId!==undefined){void loadDefinitions();}
