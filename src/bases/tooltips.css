@@ -1,0 +1,21 @@
+.bases-tooltip {
+  position: fixed;
+  z-index: var(--layer-tooltip, 2000);
+  box-sizing: border-box;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  max-width: min(320px, calc(100vw - 16px));
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--background-tooltip, #2f2f2f);
+  color: var(--text-on-accent, #fff);
+  box-shadow: var(--shadow-s, 0 2px 8px #0003);
+  font-family: var(--font-interface, system-ui, sans-serif);
+  font-size: 12px;
+  line-height: 1.4;
+  pointer-events: none;
+  user-select: none;
+}
+.bases-tooltip-label { min-width: 0; overflow-wrap: anywhere; }
+.bases-tooltip-shortcut { flex: none; opacity: .65; white-space: nowrap; font-size: 11px; }
