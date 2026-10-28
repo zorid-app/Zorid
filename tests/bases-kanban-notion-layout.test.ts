@@ -62,3 +62,31 @@ test('retained New page control creates against its current snapshot and is iner
   current.click(); await Promise.resolve(); await Promise.resolve(); handle.destroy(); current.click();
   assert.deepEqual(versions, [1, 2]);
 });
+
+test('initial and horizontally mounted columns fill the expanded viewport after installing their spacer', () => {
+  const { dom, root } = setup(), initial = fixture();
+  // A native shrink-to-content column initially contains only its 40px footer.
+  // Installing the virtual row spacer expands its body to the bounded viewport.
+  Object.defineProperty(dom.window.HTMLElement.prototype, 'clientHeight', {
+    configurable: true,
+    get(this: HTMLElement) {
+      if (!this.classList.contains('bases-kanban-column-body')) return 0;
+      const space = this.querySelector<HTMLElement>('.bases-kanban-column-space');
+      return Math.min(400, (space ? parseFloat(space.style.height) : 0) + 40);
+    },
+  });
+  const rows = Array.from({ length: 100 }, (_, index) => ({ path: `Task-${index}.md`, values: { 'file.name': value(`Task ${index}`) } }));
+  const groups = Array.from({ length: 100 }, (_, index) => ({ key: value(`Column ${index}`), rows }));
+  const handle = createBaseKanbanView(root, { result: { ...initial, rows, groups }, openFile() {}, createItem: async () => {} });
+  const assertFilled = () => {
+    for (const column of root.querySelectorAll<HTMLElement>('.bases-kanban-column')) {
+      assert.ok(column.querySelector('[data-path="Task-8.md"]'), 'the last row intersecting the expanded 400px viewport must mount immediately');
+      assert.ok(column.querySelectorAll('.bases-kanban-card').length < rows.length, 'virtualization remains bounded');
+    }
+  };
+  assertFilled();
+  const board = root.querySelector<HTMLElement>('.bases-kanban-view')!;
+  board.scrollLeft = 10000; board.dispatchEvent(new dom.window.Event('scroll'));
+  assertFilled();
+  handle.destroy();
+});

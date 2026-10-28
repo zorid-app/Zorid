@@ -328,10 +328,12 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
     releaseRows(body, pinned);
     const rows = displayedRows(group);
     const footer = body.querySelector<HTMLElement>(':scope > .bases-kanban-column-footer');
-    const height = body.clientHeight || Math.max(100, (root.clientHeight || 600) - headerHeight);
     const space = pinned?.parentElement ?? doc.createElement('div'); space.className = 'bases-kanban-column-space'; space.style.height = `${rows.length * rowHeight}px`;
     if (pinned) { for (const child of [...space.children]) if (child !== pinned) child.remove(); }
     else body.replaceChildren(space, ...(footer ? [footer] : []));
+    // Shrink-to-content columns expand only once their row spacer is attached.
+    // Measure that final body, rather than the footer-only initial height.
+    const height = body.clientHeight || Math.max(100, (root.clientHeight || 600) - headerHeight);
     body.scrollTop = Math.min(requestedTop, Math.max(0, rows.length * rowHeight + (footer ? footerHeight : 0) - height));
     saveScroll(group.key, body.scrollTop);
     const start = Math.max(0, Math.floor(body.scrollTop / rowHeight) - 2);
