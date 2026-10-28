@@ -164,3 +164,38 @@ test('initial deleted query failure offers a working guarded Change source actio
   f.host.querySelector<HTMLButtonElement>('[aria-label="Change view source"]')!.click();[...f.host.querySelectorAll('button')].find(button=>button.textContent?.startsWith('Notes in your vault'))!.click();
   await until(()=>BaseDocument.parse(f.session.state.source).views[0]?.source?.kind==='untyped'&&!f.session.state.error);assert.deepEqual(BaseDocument.parse(await f.vault.read('Work.base')).views[0].source,{kind:'untyped'});await f.close();
 });
+
+
+for(const inherited of [{kind:'collection',id:collection.id},{kind:'untyped'}] as const){
+ test(`Add view inherits the current ${inherited.kind} source without a source chooser`,async()=>{
+  const base=JSON.stringify({views:[{id:'aaaaaaaaaaaa',type:'table',name:'Original',source:inherited}]});
+  const f=await creationSession({base,witnessedBuffers:true,mutation:async()=>{throw new Error('view creation must not mutate collection entries');}});
+  try{
+   f.host.querySelector<HTMLButtonElement>('[aria-label="Add a view"]')!.click();
+   const doc=f.dom.window.document,name=doc.querySelector<HTMLInputElement>('[aria-label="View name"]')!;name.value='Another view';name.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));
+   const layout=doc.querySelector<HTMLSelectElement>('[aria-label="Layout"]')!;layout.value='list';layout.dispatchEvent(new f.dom.window.Event('change',{bubbles:true}));
+   doc.querySelector<HTMLButtonElement>('button[type=submit]')!.click();
+   await until(()=>f.errors.length>0||BaseDocument.parse(f.session.state.source).views.length===2&&!f.session.hasPendingChanges());assert.deepEqual(f.errors,[]);
+   const saved=BaseDocument.parse(await f.vault.read('Work.base'));
+   assert.deepEqual(saved.views[0],BaseDocument.parse(base).views[0]);assert.deepEqual(saved.views[1].source,inherited);assert.equal(saved.views[1].type,'list');assert.equal(saved.views[1].name,'Another view');
+   assert.notEqual(saved.views[1].id,'aaaaaaaaaaaa');assert.equal(f.session.state.result?.view.id,saved.views[1].id);
+   assert.equal(f.host.querySelector('.collection-source-chooser'),null);assert.equal(doc.querySelector('[role=dialog]'),null);assert.deepEqual(f.errors,[]);assert.deepEqual(f.requests,[]);
+  }finally{f.dom.window.document.querySelector<HTMLButtonElement>('[aria-label=Cancel]')?.click();await f.close();}
+ });
+}
+
+for(const changedSource of [false,true]){
+ test(`Add view rejects its stale draft after an external ${changedSource?'source':'configuration'} change`,async()=>{
+  const original=JSON.stringify({views:[{id:'aaaaaaaaaaaa',type:'table',name:'Original',source:{kind:'collection',id:collection.id}}]});
+  const f=await creationSession({base:original,witnessedBuffers:true,mutation:async()=>{throw new Error('must not mutate entries');}});
+  try{
+   f.host.querySelector<HTMLButtonElement>('[aria-label="Add a view"]')!.click();const doc=f.dom.window.document;
+   const name=doc.querySelector<HTMLInputElement>('[aria-label="View name"]')!;name.value='Stale view';name.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));
+   const external=BaseDocument.parse(original);external.updateView(0,changedSource?{source:{kind:'untyped'}}:{name:'Externally changed'});const externalText=external.toString();
+   await f.vault.modify('Work.base',externalText);await f.session.refresh();assert.equal(name.isConnected,true);assert.equal(name.value,'Stale view');
+   doc.querySelector<HTMLButtonElement>('button[type=submit]')!.click();await until(()=>f.errors.length>0);
+   assert.match(String(f.errors.at(-1)),/stale|changed/i);assert.equal(await f.vault.read('Work.base'),externalText);assert.equal(BaseDocument.parse(f.session.state.source).views.length,1);
+   assert.equal(name.isConnected,true);assert.equal(name.value,'Stale view');assert.equal(f.host.querySelector('.collection-source-chooser'),null);assert.equal(f.session.hasPendingChanges(),true);assert.deepEqual(f.requests,[]);
+  }finally{f.dom.window.document.querySelector<HTMLButtonElement>('[aria-label=Cancel]')?.click();await f.close();}
+ });
+}

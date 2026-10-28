@@ -446,10 +446,10 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         return controller.updateConfiguration(numericVersion(version), { root: { formulas: baseViewSetting(document,controller.selectedViewIndex,'formulas') }, view: { order } });
       }),
       renameFormula: (version, from, to) => saveConfigurationCommand(() => controller.renameFormula(numericVersion(version), from, to)),
-      addView: async (_version, type, name, patch?: BaseViewPatch) => { const expectedSource=controller.state.source;await chooseSource(async source=> {
-        if(controller.state.source!==expectedSource)throw new Error('This Base changed. Reopen Add view.');
-        await saveConfigurationCommand(() => controller.addView(controller.state.version, type, name, {...patch,source}));
-      }); },
+      addView: (version, type, name, patch?: BaseViewPatch) => {
+        const source = currentViewSource();
+        return saveConfigurationCommand(() => controller.addView(numericVersion(version), type, name, {...patch,source}));
+      },
       duplicateView: (version, index, name) => saveConfigurationCommand(() => controller.duplicateView(numericVersion(version), index, name)),
       removeView: (version, index) => saveConfigurationCommand(() => controller.removeView(numericVersion(version), index)),
       moveView: (version, from, to) => saveConfigurationCommand(() => controller.moveView(numericVersion(version), from, to)),
