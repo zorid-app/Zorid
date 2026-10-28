@@ -79,6 +79,9 @@ type Item = { row: BaseQueryRow; groupIndex: number; rowIndex: number; group?: n
 type TableMenuEntry = { label: string; action?: () => void; disabled?: boolean; checked?: boolean; submenu?: readonly TableMenuEntry[] };
 type CellPoint = { group: number; row: number; column: number };
 type CellRange = { group: number; top: number; bottom: number; start: number; end: number };
+function printableEditKey(event: KeyboardEvent): boolean {
+  return !event.isComposing && !event.ctrlKey && !event.metaKey && !event.altKey && Array.from(event.key).length === 1 && !(event.key === ' ' && event.shiftKey);
+}
 function cellBounds(a: CellPoint, b = a): CellRange {
   return { group: a.group, top: Math.min(a.row, b.row), bottom: Math.max(a.row, b.row), start: Math.min(a.column, b.column), end: Math.max(a.column, b.column) };
 }
@@ -523,11 +526,12 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     if (intent.reason === 'tab') moveAfterTab(point, intent.direction);
     else { range = undefined; anchor = undefined; focusCell(item.row.path, owner.property, point); paintRange(); }
   }
-  function startRename(cell: HTMLElement, row: BaseQueryRow, property: string, witness?: BaseTableFileWitness) {
+  function startRename(cell: HTMLElement, row: BaseQueryRow, property: string, witness?: BaseTableFileWitness, seed?: string) {
     if (!options.renameFile || !witness || !/\.md$/i.test(row.path) || destroyed || editing || range || propertyAdmissionBlocked()) return;
     const token = revision, version = result.version, initialName = row.path.split('/').at(-1)!.replace(/\.md$/i, '');
-    const input = doc.createElement('input'); input.className = 'zorid-bases-table-input'; input.type = 'text'; input.value = initialName; input.setAttribute('aria-label', 'Name');
-    cell.focus(); editing = cell; cell.dataset.baseEditing = 'draft'; options.onEditStateChange?.(true); cell.replaceChildren(input); input.focus(); input.select();
+    const input = doc.createElement('input'); input.className = 'zorid-bases-table-input'; input.type = 'text'; input.value = seed ?? initialName; input.setAttribute('aria-label', 'Name');
+    cell.focus(); editing = cell; cell.dataset.baseEditing = 'draft'; options.onEditStateChange?.(true); cell.replaceChildren(input); input.focus();
+    if (seed === undefined) input.select(); else input.setSelectionRange(seed.length, seed.length);
     let saving = false, completion: 'enter' | 'tab' | 'blur' = 'blur', direction: 1 | -1 = 1;
     const finish = (restore: boolean) => {
       if (destroyed || token !== revision || editing !== cell) return;
@@ -774,6 +778,9 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
           else { range = undefined; anchor = undefined; }
           focusCell(next.path, result.properties[column], nextPoint); paintRange();
         }
+      } else if ((property === 'file.name' || property === 'file.file') && printableEditKey(event) && !range && !hasActiveEdits()) {
+        startRename(cell, row, property, fileWitness, event.key);
+        if (editing === cell) { event.preventDefault(); event.stopPropagation(); }
       }
     });
     cell.addEventListener('contextmenu', event => {
@@ -1090,9 +1097,10 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
   function onWindowBlur() { focusEpoch++; blockedActivation = undefined; }
   function protectRangeKey(event: KeyboardEvent) {
     const cell = event.target as HTMLElement | null;
+    const startsEdit = ['Enter', 'F2'].includes(event.key) || printableEditKey(event);
     if (!event.isComposing && (['Enter', 'Tab', 'Escape'].includes(event.key) && cell?.closest('[data-base-editing]') || ['Enter', 'F2'].includes(event.key) && !hasActiveEdits())) blockedActivation = undefined;
-    if (!event.isComposing && propertyAdmissionBlocked() && cell?.getAttribute('role') === 'gridcell' && body.contains(cell) && ['Enter', 'F2', 'Delete', 'Backspace'].includes(event.key)) { event.preventDefault(); event.stopImmediatePropagation(); return; }
-    if (!event.isComposing && range && cell?.getAttribute('role') === 'gridcell' && body.contains(cell) && ['Enter', 'F2'].includes(event.key)) { event.preventDefault(); event.stopImmediatePropagation(); }
+    if (!event.isComposing && (propertyAdmissionBlocked() || hasActiveEdits()) && cell?.getAttribute('role') === 'gridcell' && body.contains(cell) && (startsEdit || ['Delete', 'Backspace'].includes(event.key))) { event.preventDefault(); event.stopImmediatePropagation(); return; }
+    if (!event.isComposing && range && cell?.getAttribute('role') === 'gridcell' && body.contains(cell) && startsEdit) { event.preventDefault(); event.stopImmediatePropagation(); }
   }
   function onPointerDown(event: PointerEvent) {
     if (destroyed || hasActiveEdits() || event.defaultPrevented || event.button !== 0 || event.pointerType === 'touch') return;
