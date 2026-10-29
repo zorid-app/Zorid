@@ -146,6 +146,8 @@ mod tests {
         std::fs::write(root.path().join("Note.md"), b"current\r\n").unwrap();
         std::fs::write(root.path().join("Other.md"), b"other secret").unwrap();
         let mut host = EmbeddedHost::open_local_with_data_root(root.path(), data.path()).unwrap();
+        // Explicit legacy fixture seeding preserves history-read pagination coverage.
+        host.vault.snapshot_local_recovery(now_ms()).unwrap();
         let entry = host
             .vault
             .read_path(&zorid_core::VaultPath::new("Note.md").unwrap())

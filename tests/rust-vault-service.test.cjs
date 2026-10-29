@@ -21,12 +21,23 @@ function send(header, body = Buffer.alloc(0)) {
 }
 const reconciliation=mode.startsWith('reconciliation_')?{scanId:'scan',complete:false,scanComplete:false,finished:true,observed:12,imported:0,namespaceApplied:0,issueCount:1,issuesTruncated:false,issues:[{path:null,code:'scan_limit'}]}:null;
 if(mode==='reconciliation_bad_path')reconciliation.issues[0].path='/private/secret';
-send({version:1,request_id:'0',ok:true,result:{reconciliation,transport:'zorid-native-stdio',max_header:1048576,max_body:16777216,capabilities:reconciliation?['reconciliation_status']:mode.startsWith('stat_')&&mode!=='stat_legacy'?['stat_path']:[]}});
+send({version:1,request_id:'0',ok:true,result:{reconciliation,transport:'zorid-native-stdio',max_header:1048576,max_body:16777216,capabilities:reconciliation?['reconciliation_status']:mode.startsWith('history_')?['local_recovery_maintenance']:mode.startsWith('stat_')&&mode!=='stat_legacy'?['stat_path']:[]}});
 let buffer=Buffer.alloc(0),counts={};
 process.stdin.on('data', chunk => {buffer=Buffer.concat([buffer,chunk]); while(buffer.length>=8){
  const h=buffer.readUInt32BE(0),b=buffer.readUInt32BE(4); if(buffer.length<8+h+b)return;
  const req=JSON.parse(buffer.subarray(8,8+h)), body=Buffer.from(buffer.subarray(8+h,8+h+b)); buffer=buffer.subarray(8+h+b);
  counts[req.command.method]=(counts[req.command.method]||0)+1;if(req.lease&&req.command.method==='stat_path')counts.leasedStat=(counts.leasedStat||0)+1;
+ if(mode.startsWith('history_')&&req.command.method==='local_recovery_maintenance'){
+  if(mode==='history_reject'){send({version:1,request_id:req.request_id,ok:false,error:{code:'local_recovery_unavailable',commit_uncertain:false}});continue;}
+  const result={available:true,ran:true,pending:false,failed_notes:0,retry_after_ms:300000};let bytes=Buffer.alloc(0);
+  if(mode==='history_extra')result.path='/private/secret';
+  if(mode==='history_bad_count')result.failed_notes=2;
+  if(mode==='history_bad_wait')result.retry_after_ms=0;
+  if(mode==='history_bad_boolean')result.pending='false';
+  if(mode==='history_bad_disabled')result.available=false;
+  if(mode==='history_body')bytes=Buffer.from('unexpected');
+  send({version:1,request_id:req.request_id,ok:true,result},bytes);continue;
+ }
  if(mode==='exit'){process.exit(1);return;}
  if(mode==='stall')continue;
  if(mode==='oversized'){process.stdout.write(Buffer.alloc(8,255));continue;}
@@ -523,4 +534,21 @@ test('cooperative reconciliation work is bounded typed progress, never an unknow
   assert.equal(reconciliationStatus({...status,work:{phase:'blocked',pending:false,workUnits:0}}),true);
   assert.equal(reconciliationStatus({...status,complete:true,scanComplete:true,finished:true,work:{phase:'complete',pending:false,workUnits:1}}),true);
   for(const work of [{phase:'complete',pending:false,workUnits:1},{phase:'publication',pending:false,workUnits:1},{phase:'blocked',pending:true,workUnits:1},{phase:'discovery',pending:true,workUnits:257},{phase:'discovery',pending:true,workUnits:-1},{phase:'discovery',pending:true,workUnits:1.5},{phase:'unknown',pending:true,workUnits:1},{phase:'discovery',pending:true,workUnits:1,internal:'private'}])assert.equal(reconciliationStatus({...status,work}),false);
+});
+
+
+test('private history transport accepts only its strict bounded DTO without extending leased capabilities',async t=>{
+ const host=await fixture(t,'history_good');host.activityClock=()=>1000;host.lastActivityAt=0;
+ assert.deepEqual(await host.localRecoveryMaintenance(()=>{},250),{available:true,ran:true,pending:false,failed_notes:0,retry_after_ms:300000});
+ const leased=host.withClientLease({local_store_id:'store',client_id:'client',token:'token'});
+ assert.equal(leased.localRecoveryMaintenance,undefined);assert.equal(leased.capabilities.includes('local_recovery_maintenance'),false);
+});
+for(const mode of ['history_extra','history_bad_count','history_bad_wait','history_bad_boolean','history_bad_disabled','history_body'])test(`private history transport rejects malformed reply: ${mode}`,async t=>{
+ const host=await fixture(t,mode);host.activityClock=()=>1000;host.lastActivityAt=0;
+ await assert.rejects(host.localRecoveryMaintenance(()=>{},250),error=>error.code==='invalid_response');
+});
+test('a well-formed secondary history rejection keeps transport and ordinary reads healthy',async t=>{
+ const host=await fixture(t,'history_reject');host.activityClock=()=>1000;host.lastActivityAt=0;
+ await assert.rejects(host.localRecoveryMaintenance(()=>{},250),error=>error.code==='local_recovery_unavailable'&&error.commitUncertain===false);
+ assert.equal(host.fatal,null);const ordinary=await host.status();assert.equal(ordinary.pending_outbox,'0');
 });

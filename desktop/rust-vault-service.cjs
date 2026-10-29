@@ -158,6 +158,13 @@ function successful(command, result, bytes, expectedBytes) {
     case 'capture_saved_source': return validSavedSourceReply(command, result, bytes);
     case 'release_saved_source': return exactKeys(result, ['released']) && result.released === true;
     case 'recovery_list': case 'recovery_read': return validRecoveryReply(command,result,bytes);
+    case 'local_recovery_maintenance': return exactKeys(result,['available','ran','pending','failed_notes','retry_after_ms'])
+      &&[result.available,result.ran,result.pending].every(value=>typeof value==='boolean')
+      &&Number.isInteger(result.failed_notes)&&result.failed_notes>=0&&result.failed_notes<=1
+      &&Number.isInteger(result.retry_after_ms)&&result.retry_after_ms>=1&&result.retry_after_ms<=300000
+      &&(result.available||!result.ran&&!result.pending&&result.failed_notes===0)
+      &&(result.ran||result.failed_notes===0);
+
     case 'documents': return isRuntimeOp(command.request?.command?.op)?validRuntimeReply(command,result,bytes):validDocumentReply(command,result,bytes);
     case 'document_drafts':return validDraftReply(command,result,bytes);
     case 'document_work':return validWorkReply(command,result,bytes);
@@ -275,6 +282,7 @@ class RustVaultService {
     this.tail = Promise.resolve();
     this.queuedBytes = 0;
     this.queuedCount = 0;
+    this.activityClock=()=>performance.now();this.activityEpoch=0;this.lastActivityAt=this.activityClock();this.activityListeners=new Set();
     this.closing = false;
     this.fatal = null;
     this.prefix = Buffer.alloc(8);
@@ -393,6 +401,8 @@ class RustVaultService {
       if (header.length > (draft||work?MAX_DRAFT_CONTROL:MAX_HEADER) || this.queuedCount >= MAX_REQUESTS || this.queuedBytes + cost > MAX_QUEUED_BYTES) throw failure('request_limit');
       body = Buffer.from(bytes);
       this.queuedBytes += cost; this.queuedCount++;
+      const history=command?.method==='local_recovery_maintenance';
+      if(!history)this.markActivity();
       const operation = this.tail.then(async () => {
         await this.ready;
         if (this.fatal || this.exited) throw this.fatal ?? failure('host_exited');
@@ -408,9 +418,38 @@ class RustVaultService {
         this.child.stdin.write(body);
         return response;
       });
-      this.tail = operation.catch(() => {}).finally(() => { this.queuedBytes -= cost; this.queuedCount--; });
+      this.tail = operation.catch(() => {}).finally(() => { this.queuedBytes -= cost; this.queuedCount--;if(!history)this.markActivity(); });
       return operation;
     } catch (error) { return Promise.reject(error?.code ? error : failure('invalid_request')); }
+  }
+
+  // Private main-process scheduling signals; never copied into leased contexts.
+  markActivity(){
+    this.activityEpoch=(this.activityEpoch??0)+1;this.lastActivityAt=this.activityClock?.()??performance.now();
+    for(const listener of this.activityListeners??[])try{listener();}catch{/* Scheduling cannot alter an RPC receipt. */}
+  }
+  subscribeActivity(listener){
+    if(typeof listener!=='function')throw failure('invalid_request');
+    const listeners=this.activityListeners??=new Set();listeners.add(listener);return()=>listeners.delete(listener);
+  }
+  localRecoveryIdleDelay(quietMs){
+    if(!Number.isSafeInteger(quietMs)||quietMs<1||quietMs>1000)throw failure('invalid_request');
+    if(this.closing||this.fatal||this.exited||this.queuedCount!==0)return null;
+    return Math.max(0,quietMs-((this.activityClock?.()??performance.now())-(this.lastActivityAt??0)));
+  }
+  localRecoveryMaintenance(beforeDispatch,quietMs=250){
+    if(!this.capabilities?.includes('local_recovery_maintenance'))return Promise.reject(failure('unsupported_host_capability'));
+    if(typeof beforeDispatch!=='function')return Promise.reject(failure('invalid_request'));
+    try{
+      if(this.localRecoveryIdleDelay(quietMs)!==0)throw failure('local_recovery_deferred');
+      beforeDispatch();const epoch=this.activityEpoch;
+      const operation=this.request({method:'local_recovery_maintenance'},undefined,undefined,()=>{
+        if(this.activityEpoch!==epoch||this.queuedCount!==1||(this.activityClock?.()??performance.now())-(this.lastActivityAt??0)<quietMs)throw failure('local_recovery_deferred');
+        beforeDispatch();
+      });
+      const settled=this.tail;
+      return operation.then(async reply=>{await settled;return reply.result;},async error=>{await settled;throw error;});
+    }catch(error){return Promise.reject(error);}
   }
 
   fixtureFamilyEnroll() { return this.request({ method: 'fixture_family_enroll' }).then(reply => reply.result.family); }
@@ -437,7 +476,7 @@ class RustVaultService {
   releaseClient(reference) { return this.request({ method: 'release_client', reference }).then(reply => reply.result); }
   withClientLease(reference, beforeRequest = () => {}) {
     const captured = Object.freeze({ local_store_id: reference.local_store_id, client_id: reference.client_id, token: reference.token });
-    const context = { capabilities: this.capabilities, request: (command, bytes) => { beforeRequest(command); return this.request(command, bytes, captured, () => beforeRequest(command)); } };
+    const context = { capabilities: this.capabilities?Object.freeze(this.capabilities.filter(value=>value!=='local_recovery_maintenance')):undefined, request: (command, bytes) => { beforeRequest(command); return this.request(command, bytes, captured, () => beforeRequest(command)); } };
     const methods = ['documentDrafts', 'documentRuntime', 'changesAfter', 'rescan', 'reconcile', 'databaseCommand', 'workblockCommand', 'documentCommand', 'binaryCommand', 'fileCommand', 'createText', 'identity', 'readMetadata', 'readPath', 'readPresentedById', 'readEntryById', 'listSnapshot', 'listEntries', 'captureSavedSource', 'releaseSavedSource', 'prepareIntent', 'commitIntent', 'queryIntent', 'listIntents', 'acknowledgeIntent',
       'checkpointLoad', 'checkpointCompareAndSwap', 'checkpointList', 'checkpointChanges'];
     return Object.freeze({ capabilities: context.capabilities, ...Object.fromEntries(methods.map(name => [name, (...args) => RustVaultService.prototype[name].apply(context, args)])) });
@@ -537,7 +576,7 @@ class RustVaultService {
 
   close() {
     if (this.closePromise) return this.closePromise;
-    this.closing = true;
+    this.closing = true;this.markActivity();
     this.closePromise = (async () => {
       await this.tail;
       if (!this.exited) {

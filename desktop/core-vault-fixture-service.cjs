@@ -117,7 +117,7 @@ class CoreVaultFixtureService {
       return service;
     } catch (reason) { stopWatcher(pendingWatch); await host?.close(); throw reason; }
   }
-  constructor(host, { pollMs, rescanMs, familyMode = false, documentRuntime = false, pendingWatch=watchState(), watchFactory=watch, now=Date.now }) {
+  constructor(host, { pollMs, rescanMs, familyMode = false, documentRuntime = false, pendingWatch=watchState(), watchFactory=watch, now=Date.now, historySetTimeout=setTimeout, historyClearTimeout=clearTimeout }) {
     if (documentRuntime) requireDocumentRuntime(host);
     this.documentRuntimeEnabled=documentRuntime;
     this.documentRuntimeOwners=new Set();
@@ -135,6 +135,12 @@ class CoreVaultFixtureService {
     this.listeners = new Set();
     this.hints = this.watchState.hints;
     this.closed = false;
+    this.historyHost=host;this.historyOwner=null;this.historyEpoch=0;this.historyTimer=null;this.historyToken=null;this.historyRun=null;
+    this.historyNextDue=this.now();this.historyLastError=null;this.historyLastStatus=null;this.historyQuietMs=Math.min(250,Math.floor(pollMs/2));
+    this.historySetTimeout=historySetTimeout;this.historyClearTimeout=historyClearTimeout;
+    this.historyAvailable=host.capabilities?.includes('local_recovery_maintenance')&&typeof host.localRecoveryMaintenance==='function'&&typeof host.localRecoveryIdleDelay==='function'&&typeof host.subscribeActivity==='function';
+    this.historyUnsubscribe=this.historyAvailable?host.subscribeActivity(()=>{this.cancelLocalRecoveryTimer();this.scheduleLocalRecovery();}):null;
+
     this.reconciliation=host.reconciliation?structuredClone(host.reconciliation):null;
     if(documentRuntime&&host.exit&&typeof host.exit.then==='function')void host.exit.then(()=>{
       this.runtimeFailed=true;this.stopPolling();void this.documentScheduler?.close();
@@ -208,6 +214,48 @@ class CoreVaultFixtureService {
     // After an actual polling lifetime, pause/removal still closes the watcher
     // and preserves its genuine missed-observation obligation.
     else if(this.hasStartedPolling||this.closed||this.runtimeFailed)this.stopPolling();
+    this.syncLocalRecovery();
+  }
+  cancelLocalRecoveryTimer(){
+    if(this.historyTimer!==null)this.historyClearTimeout(this.historyTimer);
+    this.historyTimer=null;this.historyToken=null;
+  }
+  syncLocalRecovery(){
+    const owner=this.historyAvailable&&this.documentRuntimeEnabled&&!this.closed&&!this.runtimeFailed&&this.host===this.historyHost?this.runtimeOwner():null;
+    if(owner!==this.historyOwner){this.historyEpoch++;this.historyOwner=owner;this.cancelLocalRecoveryTimer();}
+    this.scheduleLocalRecovery();
+  }
+  localRecoveryGuard(host,owner,epoch){
+    if(this.closed||this.runtimeFailed||this.host!==host||this.historyHost!==host||this.historyOwner!==owner||this.historyEpoch!==epoch||owner.paused||!this.documentRuntimeOwners.has(owner))throw error('local_recovery_owner_changed');
+    owner.assertActive();
+  }
+  scheduleLocalRecovery(){
+    if(!this.historyAvailable||this.historyTimer!==null||this.historyRun||!this.historyOwner)return;
+    const host=this.historyHost,owner=this.historyOwner,epoch=this.historyEpoch;
+    try{this.localRecoveryGuard(host,owner,epoch);}catch{return;}
+    const quiet=host.localRecoveryIdleDelay(this.historyQuietMs);if(quiet===null)return;
+    const delay=Math.max(0,this.historyNextDue-this.now(),quiet),token={};this.historyToken=token;
+    this.historyTimer=this.historySetTimeout(()=>{
+      if(this.historyToken!==token)return;this.historyTimer=null;this.historyToken=null;
+      try{this.localRecoveryGuard(host,owner,epoch);}catch{return;}
+      const run=(async()=>{
+        try{
+          const status=await host.localRecoveryMaintenance(()=>this.localRecoveryGuard(host,owner,epoch),this.historyQuietMs);
+          this.localRecoveryGuard(host,owner,epoch);
+          this.historyLastStatus=Object.freeze({...status});
+          if(status.ran)this.historyLastError=status.failed_notes?'local_recovery_note_skipped':null;
+          else if(!status.available)this.historyLastError='local_recovery_unavailable';
+          this.historyNextDue=this.now()+status.retry_after_ms;
+          if(!status.available)this.historyAvailable=false;
+        }catch(reason){
+          if(!['local_recovery_deferred','local_recovery_owner_changed','client_ownership_lost','grant_retired','client_not_admitted','durable_scope_changed'].includes(reason?.code)){
+            this.historyLastError=reason?.code??'local_recovery_unavailable';this.historyNextDue=this.now()+300000;
+          }
+        }
+      })();
+      this.historyRun=run;void run.finally(()=>{if(this.historyRun===run)this.historyRun=null;this.scheduleLocalRecovery();});
+    },delay);
+    this.historyTimer?.unref?.();
   }
   startPolling() {
     this.continuationFailed=false;
@@ -222,7 +270,7 @@ class CoreVaultFixtureService {
     clearImmediate(this.continuation);this.continuation=null;
     // A later admission must reconcile the interval with no active watcher.
     if(this.watchState.active)this.needsScan=true;
-    stopWatcher(this.watchState);
+    stopWatcher(this.watchState);this.syncLocalRecovery();
   }
   scheduleContinuation() {
     if(this.continuation||this.continuationFailed||!this.timer||this.closed||this.runtimeFailed||this.reconciliation?.work?.pending!==true)return;
@@ -247,11 +295,11 @@ class CoreVaultFixtureService {
     if(!this.documentRuntimeOwners.has(owner))throw error('client_ownership_lost');
     return Object.freeze({
       observe:handle.observe,control:handle.control,ackControl:handle.ackControl,ackOutcome:handle.ackOutcome,subscribe:handle.subscribe,
-      pause:async()=>{owner.paused=true;this.syncPolling();await Promise.all([handle.pause(),this.polling]);},
+      pause:async()=>{owner.paused=true;this.syncPolling();await Promise.all([handle.pause(),this.polling,this.historyRun]);},
       resume:()=>{owner.paused=false;handle.resume();if(!this.watchState.active||!this.watchState.healthy||!this.watcher)this.needsScan=true;this.syncPolling();},
-      prepareRelease:handle.prepareRelease,
+      prepareRelease:async()=>{owner.paused=true;this.syncPolling();await Promise.all([handle.prepareRelease(),this.historyRun]);},
       release:()=>{handle.release();remove();},
-      revoke:async()=>{remove();await handle.revoke();},
+      revoke:async()=>{remove();await Promise.all([handle.revoke(),this.historyRun]);},
     });
   }
   ensureDocumentScheduler(){
@@ -558,8 +606,8 @@ class CoreVaultFixtureService {
     if (this.closing) return this.closing;
     this.closed = true;
     this.stopPolling();
-    this.listeners.clear();
-    this.closing = (async () => { await this.documentScheduler?.close();this.documentRuntimeOwners.clear();if (this.polling) await this.polling; await this.host.close(); })();
+    this.listeners.clear();this.historyUnsubscribe?.();this.historyUnsubscribe=null;
+    this.closing = (async () => { await this.documentScheduler?.close();this.documentRuntimeOwners.clear();if (this.polling) await this.polling;if(this.historyRun)await this.historyRun; await this.host.close(); })();
     return this.closing;
   }
 }
