@@ -97,8 +97,8 @@ test('a clean Base can retire its derived owners through an empty recovery capsu
  }finally{f.restoreForCleanup();await f.close();}
 });
 
-test('a new unsubmitted numeric draft cannot masquerade as a clean recovery capsule',async()=>{
- const f=await fixture();try{const input=f.edit(score,'9');f.retire();assert.equal(f.session.canRecoverAdmission!(),false);assert.throws(()=>f.session.prepareAdmissionRecovery!(),/Unsubmitted/);assert.equal(input.value,'9');assert.equal(f.session.hasPendingChanges(),true);assert.deepEqual(f.claimHistory,[]);
+test('a new unsubmitted numeric draft transfers raw custody without authorizing a captured command',async()=>{
+ const f=await fixture();try{const input=f.edit(score,'9.');f.retire();assert.equal(f.session.canRecoverAdmission!(),true);const recovery=f.session.prepareAdmissionRecovery!();assert.equal(recovery.rawDrafts?.length,1);await recovery.settle();assert.equal(input.value,'9.');assert.equal(f.session.hasPendingChanges(),false);assert.deepEqual(f.claimHistory,[]);assert.equal(f.requests.filter(request=>request.op==='set_entry').length,0);
  }finally{f.restoreForCleanup();await f.close();}
 });
 

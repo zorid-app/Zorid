@@ -78,7 +78,15 @@ export interface BaseTableOptions {
   readonly getSummary?: (property: string, groupIndex: number | null) => { value: BaseExpressionValue; label?: string } | undefined;
   readonly onEditStateChange?: (active: boolean) => void;
 }
-export interface BaseTableView { editFileTitle(path: string, entryId: string): boolean; completePropertyEdit(element: HTMLElement, presentation: BasePropertyPresentation, intent: BasePropertyEditorCompletionIntent): void; openSummaryPicker(property: string, anchor: HTMLElement, groupIndex?: number | null): void; update(result: BaseQueryResult): void; refreshLayout(): void; hasActiveEdits(): boolean; hasQueuedConfiguration(): boolean; dismissCleanPanels(): void; destroy(): void }
+/** Raw editor state is RAM custody only, never a captured rename/edit command. */
+export interface BaseTableRawDraft {
+  readonly kind:'title'|'property';
+  readonly target:{readonly entryId:string;readonly path:string;readonly revision:string;readonly property:string};
+  readonly baseline:string;
+  readonly state:{value:string;checked:boolean;focus:boolean;selectionStart:number|null;selectionEnd:number|null;selectionDirection:'forward'|'backward'|'none'|null};
+  readonly ready:Promise<void>;
+}
+export interface BaseTableView { canCaptureRawDraft():boolean; captureRawDraft():BaseTableRawDraft|undefined; restoreRawDraft(draft:BaseTableRawDraft):'restored'|'pending'|'conflict'; rawPropertyElement(entryId:string,path:string,property:string):HTMLElement|undefined; editFileTitle(path: string, entryId: string): boolean; completePropertyEdit(element: HTMLElement, presentation: BasePropertyPresentation, intent: BasePropertyEditorCompletionIntent): void; openSummaryPicker(property: string, anchor: HTMLElement, groupIndex?: number | null): void; update(result: BaseQueryResult): void; refreshLayout(): void; hasActiveEdits(): boolean; hasQueuedConfiguration(): boolean; dismissCleanPanels(): void; destroy(): void }
 type Item = { row: BaseQueryRow; groupIndex: number; rowIndex: number; group?: never; summary?: never } | { group: number; row?: never; summary?: never } | { summary: number | null; row?: never; group?: never };
 type TableMenuEntry = { label: string; action?: () => void; disabled?: boolean; checked?: boolean; submenu?: readonly TableMenuEntry[] };
 type CellPoint = { group: number; row: number; column: number };
@@ -166,6 +174,41 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
   let suppressClick = false;
   let editing: HTMLElement | undefined;
   let stopRename: (() => void) | undefined;
+  let rawEditor:{canCapture():boolean;capture():BaseTableRawDraft|undefined;restore(draft:BaseTableRawDraft):void}|undefined;
+  function rawControl(input:HTMLInputElement|HTMLTextAreaElement,cell:HTMLElement,row:BaseQueryRow,property:string,kind:BaseTableRawDraft['kind'],baseline:string,available:()=>boolean):{frozen:()=>boolean;blocked:()=>boolean;interact:()=>void;editor:NonNullable<typeof rawEditor>}{
+    let frozen=false,restoredPassive=false,composing=false,captured:BaseTableRawDraft|undefined,complete:(()=>void)|undefined;
+    const snapshot=()=>({value:input.value,checked:'checked'in input&&input.checked,focus:doc.activeElement===input,selectionStart:input.selectionStart,selectionEnd:input.selectionEnd,selectionDirection:input.selectionDirection});
+    const finishComposition=()=>{if(!captured)return;const focus=captured.state.focus;Object.assign(captured.state,snapshot(),{focus});input.readOnly=true;complete?.();complete=undefined;};
+    input.addEventListener('input',()=>{if(!frozen)restoredPassive=false;});
+    input.addEventListener('pointerdown',()=>{if(!frozen)restoredPassive=false;});
+    input.addEventListener('compositionstart',()=>{if(!frozen){restoredPassive=false;composing=true;}});
+    input.addEventListener('compositionend',()=>{composing=false;if(captured)setTimeout(finishComposition,0);});
+    const editor={canCapture:()=>!destroyed&&editing===cell&&available()&&!!row.entryId&&!!row.revision,
+      capture:()=>{if(captured)return captured;if(!editor.canCapture())return;frozen=true;let resolve!:()=>void;const ready=new Promise<void>(yes=>{resolve=yes;});complete=resolve;
+        captured={kind,target:{entryId:row.entryId!,path:row.path,revision:row.revision!,property},baseline,state:snapshot(),ready};if(!composing){input.readOnly=true;resolve();complete=undefined;}return captured;},
+      restore:(draft:BaseTableRawDraft)=>{restoredPassive=true;input.value=draft.state.value;if('checked'in input)input.checked=draft.state.checked;
+        if(draft.state.focus)input.focus({preventScroll:true});if(input.type!=='checkbox'&&draft.state.selectionStart!==null&&draft.state.selectionEnd!==null)input.setSelectionRange(draft.state.selectionStart,draft.state.selectionEnd,draft.state.selectionDirection??undefined);}};
+    rawEditor=editor;return{frozen:()=>frozen,blocked:()=>frozen||restoredPassive,interact:()=>{if(!frozen)restoredPassive=false;},editor};
+  }
+  function rawPropertyElement(entryId:string,path:string,property:string):HTMLElement|undefined {
+    if(destroyed||hasActiveEdits()||!result.properties.includes(property))return;
+    const group=result.groups.findIndex(group=>group.rows.some(row=>row.entryId===entryId&&row.path===path));if(group<0)return;
+    if(collapsed.delete(groupIdentity(result.groups[group])))rebuildItems();
+    const item=items.find(item=>item.row?.entryId===entryId&&item.row.path===path);if(!item?.row)return;
+    const point={group:item.groupIndex,row:item.rowIndex,column:result.properties.indexOf(property)};range=undefined;anchor=undefined;focusCell(path,property,point);
+    return [...body.querySelectorAll<HTMLElement>('[role="gridcell"][data-path]')].find(cell=>cell.dataset.group===String(point.group)&&cell.dataset.row===String(point.row)&&cell.dataset.property===property);
+  }
+  function restoreRawDraft(draft:BaseTableRawDraft):'restored'|'pending'|'conflict' {
+    if(destroyed||hasActiveEdits())return'pending';
+    const row=result.rows.find(row=>row.entryId===draft.target.entryId&&row.path===draft.target.path);
+    if(!row||!row.revision||!result.properties.includes(draft.target.property))return'conflict';
+    const baseline=draft.kind==='title'?row.path.split('/').at(-1)!.replace(/\.md$/i,''):JSON.stringify(options.getEditableValue?.(row,draft.target.property)??row.values[draft.target.property]??BASE_NULL);
+    if(baseline!==draft.baseline)return'conflict';
+    const cell=rawPropertyElement(row.entryId!,row.path,draft.target.property);if(!cell)return'pending';
+    if(draft.kind==='title')startRename(cell,row,draft.target.property,{entryId:row.entryId!,revision:row.revision});
+    else startEdit(cell,row,draft.target.property,options.getEditableValue?.(row,draft.target.property)??row.values[draft.target.property]??BASE_NULL);
+    if(!rawEditor||editing!==cell)return'conflict';rawEditor.restore(draft);return'restored';
+  }
   type CellOwner = { entryId?: string; path: string; property: string; scope: number; group: number; version: BaseQueryResult['version'] };
   const cellOwners = new WeakMap<HTMLElement, CellOwner>();
   const editFocusEpochs = new WeakMap<HTMLElement, number>();
@@ -553,10 +596,11 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     const input = doc.createElement('input'); input.className = 'zorid-bases-table-input'; input.type = 'text'; input.value = seed ?? initialName; input.setAttribute('aria-label', 'Name');
     cell.focus(); editing = cell; cell.dataset.baseEditing = 'draft'; options.onEditStateChange?.(true); cell.replaceChildren(input); input.focus();
     if (seed === undefined) input.select(); else input.setSelectionRange(seed.length, seed.length);
-    let saving = false, completion: 'enter' | 'tab' | 'blur' = 'blur', direction: 1 | -1 = 1;
+    let saving = false, submitted=false, completion: 'enter' | 'tab' | 'blur' = 'blur', direction: 1 | -1 = 1;
+    const control=rawControl(input,cell,row,property,'title',initialName,()=>!saving&&!submitted);
     const finish = (restore: boolean) => {
       if (destroyed || token !== revision || editing !== cell) return;
-      stopRename?.(); editing = undefined; cell.removeAttribute('data-base-editing'); cell.removeAttribute('aria-busy');
+      stopRename?.(); rawEditor=undefined; editing = undefined; cell.removeAttribute('data-base-editing'); cell.removeAttribute('aria-busy');
       // Restore only this cell. Replacing the destination during pointerdown
       // would discard the browser's still-pending click after an unchanged edit.
       const point = pointOf(cell); cell.replaceWith(renderCell(row, property, point.column, point));
@@ -569,11 +613,11 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
       }
     };
     const save = async () => {
-      if (saving || destroyed || token !== revision || editing !== cell) return;
+      if (control.blocked() || saving || destroyed || token !== revision || editing !== cell) return;
       const name = input.value.trim();
       if (!name || /[\\/:\u0000-\u001f]/.test(name) || name === '.' || name === '..') { blockedActivation = undefined; input.setAttribute('aria-invalid', 'true'); report(new Error('Enter a name without path separators.')); return; }
       if (name === initialName) { finish(completion !== 'blur'); return; }
-      saving = true; input.disabled = true; cell.setAttribute('aria-busy', 'true');
+      submitted=true; saving = true; input.disabled = true; cell.setAttribute('aria-busy', 'true');
       try {
         await options.renameFile!({ version, path: row.path, name, witness });
         if (destroyed || token !== revision || editing !== cell) return;
@@ -585,6 +629,8 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
       }
     };
     input.addEventListener('keydown', event => {
+      if(control.frozen()){event.preventDefault();event.stopPropagation();return;}
+      control.interact();
       if (event.isComposing) return;
       event.stopPropagation();
       if (event.key === 'Escape' && !saving) { event.preventDefault(); blockedActivation = undefined; completion = 'enter'; finish(true); }
@@ -642,11 +688,12 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     // Compare the control baseline, so untouched CRLF values survive textarea normalization.
     const originalText = input.value;
     cell.replaceChildren(input); input.focus(); if (value.type !== 'boolean') input.select();
-    let saving = false, restoreAfterSave = true;
-    const cancel = (restoreFocus = true) => { if (editing !== cell) return; editing = undefined; cell.removeAttribute('data-base-editing'); options.onEditStateChange?.(false); renderRows(); if (restoreFocus) focusCell(row.path, property); };
+    let saving = false, submitted=false, restoreAfterSave = true;
+    const control=rawControl(input,cell,row,property,'property',JSON.stringify(value),()=>!saving&&!submitted);
+    const cancel = (restoreFocus = true) => { if (control.frozen() || editing !== cell) return; rawEditor=undefined; editing = undefined; cell.removeAttribute('data-base-editing'); options.onEditStateChange?.(false); renderRows(); if (restoreFocus) focusCell(row.path, property); };
     async function save(restoreFocus = true) {
       if (!restoreFocus) restoreAfterSave = false;
-      if (saving || destroyed || revision !== token || editing !== cell) return;
+      if (control.blocked() || saving || destroyed || revision !== token || editing !== cell) return;
       if (value.type !== 'boolean' && input.value === originalText) { cancel(restoreFocus); return; }
       let next: BaseExpressionValue;
       if (value.type === 'boolean') next = { type: 'boolean', value: (input as HTMLInputElement).checked };
@@ -659,7 +706,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
         next = { type: 'number', value: n };
       } else next = { type: 'string', value: input.value };
       try { if (value.type !== 'boolean' && options.parsePropertyInput) next = options.parsePropertyInput(input.value, property, row); next = options.validatePropertyValue?.(next, property, row) ?? next; } catch (error) { input.setAttribute('aria-invalid', 'true'); report(error); return; }
-      saving = true; input.disabled = true; cell.setAttribute('aria-busy', 'true');
+      submitted=true; saving = true; input.disabled = true; cell.setAttribute('aria-busy', 'true');
       try {
         if (options.editProperty) await options.editProperty({ version, path: row.path, property, value: next });
         else await options.editProperties?.([{ version, path: row.path, property, value: next }]);
@@ -672,6 +719,8 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     }
     input.addEventListener('keydown', rawEvent => {
       const event = rawEvent as KeyboardEvent;
+      if(control.frozen()){event.preventDefault();event.stopPropagation();return;}
+      control.interact();
       if (event.isComposing || (multiline && event.key === 'Enter' && event.shiftKey)) return;
       if (event.key === 'Escape' && !saving) { event.preventDefault(); event.stopPropagation(); cancel(); }
       else if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); void save(); }
@@ -1287,7 +1336,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     scheduleResizeCommands();
   }
   update(result);
-  return { editFileTitle, completePropertyEdit, openSummaryPicker(property, anchor, groupIndex = null) {
+  return { canCaptureRawDraft:()=>rawEditor?.canCapture()===true,captureRawDraft:()=>rawEditor?.capture(),restoreRawDraft,rawPropertyElement,editFileTitle, completePropertyEdit, openSummaryPicker(property, anchor, groupIndex = null) {
     if (destroyed || !root.isConnected || !result.properties.includes(property)) return;
     const origin = summaryOrigins.get(anchor);
     if (!origin || origin.property !== property || origin.scope !== configurationScope || origin.overall !== (groupIndex === null)) return;

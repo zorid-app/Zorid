@@ -17,6 +17,7 @@ import { mountBaseTooltips } from './tooltips.ts';
 import type { BaseFilterOperandsSnapshot, BaseFilterPropertyDescriptor, BaseToolbarState } from './toolbar.ts';
 import { createBaseViewActions } from './view-actions.ts';
 import { createBaseTableView } from './table-view.ts';
+import type { BaseTableRawDraft } from './table-view.ts';
 import { baseEditAdmissionReceipt } from './edit-admission-diagnostics.ts';
 import { createBaseCardsView } from './cards-view.ts';
 import type { BaseCardsViewOptions } from './cards-view.ts';
@@ -34,8 +35,8 @@ import type { BaseCreationOperation } from './creation.ts';
 import { baseEditablePropertyValue, baseImageSourceValue, baseEditValue, baseGroupWriteValue } from './view-actions.ts';
 import type { BaseValue, BaseViewPatch } from './document.ts';
 import type { BasePresentationOptions, BasePropertyPresentation } from './presentation-common.ts';
-import { createBasePropertyRenderer, basePropertyEditRecovery } from './property-widgets.ts';
-import type { BasePropertyWidgetEdit, BasePropertyWidgetAcknowledgement, BasePropertyEditorCompletionIntent, BasePropertyEditRecovery } from './property-widgets.ts';
+import { createBasePropertyRenderer, basePropertyEditRecovery,canCaptureBasePropertyRawDraft,captureBasePropertyRawDraft,restoreBasePropertyRawDraft } from './property-widgets.ts';
+import type { BasePropertyWidgetEdit, BasePropertyWidgetAcknowledgement, BasePropertyEditorCompletionIntent, BasePropertyEditRecovery, BasePropertyRawDraft } from './property-widgets.ts';
 import { baseValuesEqual, baseExpressionValue } from './expression.ts';
 import { icon } from '../ui/icons.ts';
 import { enhanceBaseSummaryEditor } from './toolbar-formula-editor.ts';
@@ -231,7 +232,14 @@ export interface BaseSessionOptions {
   readonly holdRecoverDatabaseEntry?: (request: DatabaseRequest & {op:'set_entry'}) => () => void;
   readonly claimRecoverDatabaseEntry?: (request: DatabaseRequest & {op:'set_entry'}) => () => void;
 }
-export interface BaseAdmissionRecovery {settle():Promise<void>}
+export interface BaseSessionDraftOrigin {
+  readonly entryId:string;readonly path:string;readonly revision:string;readonly source:string;readonly viewId?:string;readonly viewIndex:number;
+  readonly collectionId?:string;readonly schemaFingerprint?:string;
+}
+/** Raw controls are presentation custody, never authoring commands or old pin authority. */
+export type BaseSessionRawDraft={readonly origin:BaseSessionDraftOrigin;readonly kind:'property';readonly raw:BasePropertyRawDraft}|{readonly origin:BaseSessionDraftOrigin;readonly kind:'table';readonly raw:BaseTableRawDraft};
+export interface BaseAdmissionDraftRestore {readonly restored:readonly BaseSessionRawDraft[];readonly pending:readonly BaseSessionRawDraft[];readonly conflicts:readonly {readonly draft:BaseSessionRawDraft;readonly reason:string}[]}
+export interface BaseAdmissionRecovery {readonly rawDrafts?:readonly BaseSessionRawDraft[];settle():Promise<void>}
 export interface BaseSession {
   readonly ready: Promise<void>;
   readonly state: BaseControllerState;
@@ -246,6 +254,7 @@ export interface BaseSession {
   hasPendingChanges(): boolean;
   canRecoverAdmission?(): boolean;
   prepareAdmissionRecovery?(): BaseAdmissionRecovery;
+  restoreAdmissionDrafts?(drafts:readonly BaseSessionRawDraft[]):Promise<BaseAdmissionDraftRestore>;
   /** Lifecycle-owned portals may be outside the session's DOM root. */
   owns?(node: Node): boolean;
   /** Retains UI/controller on failure; callers must not silently discard this rejection. */
@@ -258,6 +267,10 @@ interface MountedView {
   hasQueuedConfiguration?(): boolean;
   dismissCleanPanels?(): void;
   openSummaryPicker?(property: string, anchor: HTMLElement, groupIndex?: number | null): void;
+  canCaptureRawDraft?():boolean;
+  captureRawDraft?():BaseTableRawDraft|undefined;
+  restoreRawDraft?(draft:BaseTableRawDraft):'restored'|'pending'|'conflict';
+  rawPropertyElement?(entryId:string,path:string,property:string):HTMLElement|undefined;
   completePropertyEdit?(element: HTMLElement, presentation: BasePropertyPresentation, intent: BasePropertyEditorCompletionIntent): void;
 }
 
@@ -623,34 +636,48 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     if(!saved||saved.deleted||saved.pendingProjection||!saved.fileRevision||saved.collectionId!==attempt.collectionId||!collection||collection.deleted
       ||Object.entries(attempt.request.values).some(([field,value])=>JSON.stringify(saved.values[field])!==JSON.stringify(value)))throw new Error('The submitted collection edit is not confirmed. Its original draft is retained.');
   }
-  function recoverableCollectionAttempts():CollectionAttempt[]|undefined {
+  function rawDraftOrigin():BaseSessionDraftOrigin|undefined {
+    const read=controller.configurationRead;if(!read)return;
+    const actor=options.vault.entries.get(read.path);if(actor?.entryId!==read.entryId)return;
+    return{entryId:read.entryId,path:read.path,revision:read.revision,source:read.source,viewId:read.viewId,viewIndex:read.viewIndex,
+      ...(collection?{collectionId:collection.id,schemaFingerprint:JSON.stringify(collection.properties)}:{})};
+  }
+  function recoverableCollectionAttempts():{edits:CollectionAttempt[];rawElements:HTMLElement[];table:boolean}|undefined {
     try{alive();}catch{return;}
     if(disposed||closing&&!interruptFinish||pendingCollectionRestore||pendingCollectionCreate||optionCreations.size||configurationLifecycle||controller.hasPendingViewReferences
       ||mounted?.hasQueuedConfiguration?.()||toolbarUI.hasDraft()||settings.hasDraft()||summaryDraft||summaryHasRawDraft?.()
       ||chooser?.hasPendingChanges()||collectionEditor?.hasPendingChanges()||unfinishedNoteCreation()
       ||[...changedBuffers].some(buffer=>buffer.dirty||!!buffer.error))return;
-    const elements=[...content.querySelectorAll<HTMLElement>('[data-base-editing]')];
-    if(content.querySelector('.zorid-bases-table-input')||pending.size>elements.length)return;
-    if(!elements.length)return activeDraft()?undefined:[];
-    if(!options.canRecoverDatabaseEntry||!options.claimRecoverDatabaseEntry||!options.holdRecoverDatabaseEntry)return;
-    const selected:CollectionAttempt[]=[];
+    const elements=[...content.querySelectorAll<HTMLElement>('[data-base-editing]')],table=!!content.querySelector('.zorid-bases-table-input');
+    if(table&&!mounted?.canCaptureRawDraft?.())return;
+    if(!elements.length)return activeDraft()?undefined:{edits:[],rawElements:[],table:false};
+    const selected:CollectionAttempt[]=[],rawElements:HTMLElement[]=[];
     for(const element of elements){
-      const widget=basePropertyEditRecovery(element);if(!widget)return;
+      if(table&&element.querySelector('.zorid-bases-table-input'))continue;
+      const widget=basePropertyEditRecovery(element);
+      if(!widget){if(!canCaptureBasePropertyRawDraft(element))return;rawElements.push(element);continue;}
+      if(!options.canRecoverDatabaseEntry||!options.claimRecoverDatabaseEntry||!options.holdRecoverDatabaseEntry)return;
       const attempt=[...collectionAttempts.values()].find(attempt=>attempt.widget===widget&&collectionMutations.get(attempt.signature)===attempt.request);
       if(!attempt?.release||!options.canRecoverDatabaseEntry(attempt.request))return;
       selected.push(attempt);
     }
-    return selected;
+    if(pending.size>selected.length||((rawElements.length||table)&&!rawDraftOrigin()))return;
+    return{edits:selected,rawElements,table};
   }
   function prepareAdmissionRecovery():BaseAdmissionRecovery {
     if(admissionRecovery)return admissionRecovery.capsule;
-    const edits=recoverableCollectionAttempts();if(!edits)throw new Error('Unsubmitted Base changes must be retained before reconnecting.');
+    const selected=recoverableCollectionAttempts();if(!selected)throw new Error('Unsubmitted Base changes must be retained before reconnecting.');
+    const {edits,rawElements,table}=selected,origin=rawDraftOrigin(),rawDrafts:BaseSessionRawDraft[]=[];
     const releases:(()=>void)[]=[];
-    try{for(const edit of edits)releases.push(options.claimRecoverDatabaseEntry!(edit.request));}catch(error){for(const release of releases)release();throw error;}
-    const recovery:{capsule:BaseAdmissionRecovery;edits:CollectionAttempt[];settled:boolean;settling?:Promise<void>}={edits,settled:false,capsule:{settle(){
+    try{
+      for(const edit of edits)releases.push(options.claimRecoverDatabaseEntry!(edit.request));
+      for(const element of rawElements){const raw=captureBasePropertyRawDraft(element);if(!raw||!origin)throw new Error('The raw property changed while reconnecting; it is retained.');rawDrafts.push({kind:'property',origin,raw});}
+      if(table){const raw=mounted?.captureRawDraft?.();if(!raw||!origin)throw new Error('The raw title changed while reconnecting; it is retained.');rawDrafts.push({kind:'table',origin,raw});}
+    }catch(error){for(const release of releases)release();throw error;}
+    const recovery:{capsule:BaseAdmissionRecovery;edits:CollectionAttempt[];settled:boolean;settling?:Promise<void>}={edits,settled:false,capsule:{rawDrafts,settle(){
       if(recovery.settled)return Promise.resolve();if(recovery.settling)return recovery.settling;
       const settling=(async()=>{
-        alive();await Promise.allSettled([...pending]);await Promise.resolve();alive();
+        alive();await Promise.all(rawDrafts.map(draft=>draft.raw.ready));alive();await Promise.allSettled([...pending]);await Promise.resolve();alive();
         for(const attempt of edits){
           const widget=attempt.widget!;
           if(widget.isCurrent()){
@@ -668,6 +695,29 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     }}};
     admissionRecovery=recovery;collectionLoad++;if(collectionRefreshTimer!==undefined){clearTimeout(collectionRefreshTimer);collectionRefreshTimer=undefined;}
     controller.dispose();interruptFinish?.();retireDerived();return recovery.capsule;
+  }
+  const restoredRawDrafts=new WeakSet<BaseSessionRawDraft>();
+  async function restoreAdmissionDrafts(drafts:readonly BaseSessionRawDraft[]):Promise<BaseAdmissionDraftRestore> {
+    alive();const restored:BaseSessionRawDraft[]=[],waiting:BaseSessionRawDraft[]=[],conflicts:{draft:BaseSessionRawDraft;reason:string}[]=[];
+    for(const draft of drafts){
+      await draft.raw.ready;alive();
+      if(restoredRawDrafts.has(draft)){restored.push(draft);continue;}
+      const fresh=rawDraftOrigin(),state=controller.state,origin=draft.origin;
+      if(!fresh||!state.result||state.error||state.updating||definitionsLoading||definitionsError||mountedResult!==state.result){waiting.push(draft);continue;}
+      if(origin.entryId!==fresh.entryId||origin.path!==fresh.path||origin.source!==fresh.source||origin.viewId!==fresh.viewId||origin.viewIndex!==fresh.viewIndex||origin.collectionId!==fresh.collectionId||origin.schemaFingerprint!==fresh.schemaFingerprint){conflicts.push({draft,reason:'The Base source, selected view, or collection schema changed. Your raw input is retained.'});continue;}
+      const target=draft.raw.target,actor=options.vault.entries.get(target.path),row=state.result.rows.find(row=>row.entryId===target.entryId&&row.path===target.path);
+      if(!row){if(sharedBasePreview(state.result)){waiting.push(draft);continue;}conflicts.push({draft,reason:'The edited note is no longer in this saved view. Your raw input is retained.'});continue;}
+      if(!target.entryId||actor?.entryId!==target.entryId||actor.revision!==row.revision){conflicts.push({draft,reason:'The edited note identity changed. Your raw input is retained.'});continue;}
+      if(draft.kind==='table'){
+        const result=mounted?.restoreRawDraft?.(draft.raw)??'pending';if(result==='restored'){restoredRawDrafts.add(draft);restored.push(draft);}else if(result==='pending')waiting.push(draft);else conflicts.push({draft,reason:'The edited title or property baseline changed. Your raw input is retained.'});
+      }else{
+        const targeted=mounted?.rawPropertyElement?.(target.entryId,target.path,target.property);
+        const elements=targeted?[targeted]:[...content.querySelectorAll<HTMLElement>('[data-base-widget-version]')];
+        if(!elements.length){waiting.push(draft);continue;}
+        if(elements.some(element=>restoreBasePropertyRawDraft(element,draft.raw))){restoredRawDrafts.add(draft);restored.push(draft);}else conflicts.push({draft,reason:'The edited property value or schema changed. Your raw input is retained.'});
+      }
+    }
+    return{restored,pending:waiting,conflicts};
   }
   const editCollectionProperty=(edit:Parameters<typeof actions.editProperty>[0])=>editCollectionProperties([edit]);
   async function createCollectionOption(property:string,label:string,presentation:BasePropertyPresentation):Promise<void>{
@@ -1340,7 +1390,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     const previousRecovery=admissionRecovery;let interrupt!:()=>void;
     const retirement=new Promise<void>(resolve=>{interrupt=resolve;});interruptFinish=interrupt;
     try {
-      await Promise.race([settle(()=>{if(admissionRecovery!==previousRecovery)throw interrupted();}),retirement.then(()=>{throw interrupted();})]);
+      if(!admissionRecovery?.settled)await Promise.race([settle(()=>{if(admissionRecovery!==previousRecovery)throw interrupted();}),retirement.then(()=>{throw interrupted();})]);
       if(admissionRecovery!==previousRecovery)throw interrupted();
       if(interruptFinish===interrupt)interruptFinish=undefined;
       if (mounted?.hasQueuedConfiguration?.()) throw new Error('Wait for the queued column width changes before leaving this base');
@@ -1382,9 +1432,10 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     setCurrentFile: (path, expectedEntryId) => { action(); return controller.setCurrentFilePath(path, expectedEntryId); },
     get selectedViewIdentity(){return controller.selectedViewIdentity;},
     rebindViewName: (from, to, viewId) => { alive(); return controller.rebindViewName(from, to,viewId); },
-    hasPendingChanges: () => !disposed && (!!pending.size || !!mounted?.hasQueuedConfiguration?.() || controller.hasPendingViewReferences || unfinishedNoteCreation() || !!pendingCollectionCreate || activeDraft() || [...changedBuffers].some(buffer => buffer.dirty || !!buffer.error)),
+    hasPendingChanges: () => !disposed && !admissionRecovery?.settled && (!!pending.size || !!mounted?.hasQueuedConfiguration?.() || controller.hasPendingViewReferences || unfinishedNoteCreation() || !!pendingCollectionCreate || activeDraft() || [...changedBuffers].some(buffer => buffer.dirty || !!buffer.error)),
     canRecoverAdmission:()=>admissionRecovery?!disposed:!!recoverableCollectionAttempts(),
     prepareAdmissionRecovery,
+    restoreAdmissionDrafts,
     owns: node => { try { alive(); return !closing && root.isConnected && toolbarUI.owns(node); } catch { return false; } },
     flush: options => finish(false, options?.dismissCleanPanels),
     close: () => finish(true),
