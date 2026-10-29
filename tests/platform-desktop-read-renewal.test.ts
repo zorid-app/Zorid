@@ -157,6 +157,21 @@ test('a successful late old read is discarded and repeated on the checked fresh 
   assert.deepEqual(await read,row);assert.equal(f.recoveries,1);
 });
 
+test('a successful old read after retirement waits for deferred owner preparation before renewing',async t=>{
+  const f=await fixture(t),gate=f.holdRead(),owner=held();let notices=0,settled=false;
+  f.platform.recovery!.subscribe(async()=>{notices++;await owner.promise;await f.platform.recovery!.recover();});
+  const read=f.platform.adapter.durableWrites!.readTextById(row.entryId).finally(()=>{settled=true;});
+  f.receivers[0].retire();gate.resolve({...row,content:'Invalid old result after retirement'});
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(notices,1);assert.equal(settled,false);assert.equal(f.recoveries,0);
+  owner.resolve();assert.deepEqual(await read,row);assert.equal(f.recoveries,1);
+});
+
+test('an observer-only retirement cannot admit an old successful namespace reply',async t=>{
+  const f=await fixture(t),gate=f.holdRead();f.platform.recovery!.subscribe(()=>{});
+  const read=f.platform.adapter.read('One.md'),rejected=assert.rejects(read,{code:'desktop_recovery_stale_reply'});
+  f.receivers[0].retire();gate.resolve('Invalid stale namespace bytes');await rejected;assert.equal(f.recoveries,0);
+});
+
 test('a late old namespace result cannot cross explicit release',async t=>{
   const f=await fixture(t),gate=f.holdRead(),read=f.platform.adapter.read('One.md'),rejected=assert.rejects(read,{code:'client_not_admitted'});
   await f.platform.release!();await rejected;gate.reject(Error('Late underlying IO rejection remains observed'));await new Promise(resolve=>setImmediate(resolve));

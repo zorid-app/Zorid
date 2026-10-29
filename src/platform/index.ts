@@ -151,7 +151,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
         readActive();const epoch=durableEpoch,forwarded=!!recovered;
         try{
           const value=await awaitRead(action(budget));readActive();
-          if(epoch===durableEpoch)return value;
+          if(epoch===durableEpoch&&!recoveryNeeded)return value;
           if(attempt===0&&(recovering||recovered)){retry(unavailable('desktop_recovery_stale_reply','The read admission changed.'));if(recovering)await awaitRead(recovering);continue;}
           throw unavailable('desktop_recovery_stale_reply','The read admission changed while this result was pending.');
         }catch(error){
