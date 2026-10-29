@@ -84,8 +84,15 @@ evidence is explicitly `not-observed`, never replaced by a fixture journal.
 Every owned PID and ordinary quit/exit is recorded. TERM/KILL fallback or an
 unverifiable process proof invalidates acceptance. Only paths under the two
 unique clone bundles may be signaled. Clones are removed after all owned PIDs
-are absent; `--keep-clones` retains them for diagnosis. Profiles, fixtures, logs,
-per-launch receipts and the campaign report remain. A run exits zero only when
+are absent; `--keep-clones` retains them for diagnosis.
+The terminal main snapshot is written on the actual app `quit` event exit code0,
+after native close. Individual cancelled `will-quit` attempts remain diagnostic;
+neither an early attempt nor PID absence is a normal-exit acknowledgment.
+The renderer debugger comes from the current child's stderr browser WebSocket
+nonce. That browser authenticates the page target ID before attachment; an old
+profile's `DevToolsActivePort` or a recycled HTTP port cannot select another app.
+Profiles, fixtures, logs, per-launch receipts and the campaign report remain.
+A run exits zero only when
 artifacts/cleanup are valid and all candidate note targets are met; inspect
 individual outcomes and the separate baseline results, not exit status alone.
 

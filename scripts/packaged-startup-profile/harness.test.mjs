@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {EventEmitter} from 'node:events';
 import {installMainObserver} from './main-observer.mjs';
-import {appPins,hash,launchEnvironment,ownedOutput} from './support.mjs';
+import {appPins,currentBrowserEndpoint,hash,launchEnvironment,ownedOutput} from './support.mjs';
 import {BaseDocument} from '../../src/bases/document.ts';
 import {baseFixtureSource} from './oracle.mjs';
 
@@ -14,6 +14,15 @@ test('the exact packaged benchmark Base fixture passes the actual production Bas
   const document=BaseDocument.parse(baseFixtureSource());
   assert.equal(document.views.length,1);assert.equal(document.views[0].id,'profilebase1');
   assert.equal(document.views[0].type,'table');assert.equal(document.views[0].source.kind,'untyped');
+});
+
+test('reopen debugger endpoint comes only from the current child renderer nonce, never a stale profile port',()=>{
+  const staleProfile='53950\n/devtools/browser/old-browser\n';
+  assert.throws(()=>currentBrowserEndpoint(staleProfile),/Current launch/);
+  assert.throws(()=>currentBrowserEndpoint('Debugger listening on ws://127.0.0.1:53000/main-inspector\n'),/renderer/);
+  const current='Debugger listening on ws://127.0.0.1:54000/current-main\nDevTools listening on ws://127.0.0.1:54108/devtools/browser/current-browser\n';
+  assert.deepEqual(currentBrowserEndpoint(current),{port:54108,url:'ws://127.0.0.1:54108/devtools/browser/current-browser'});
+  assert.throws(()=>currentBrowserEndpoint('DevTools listening on ws://other-host:54108/devtools/browser/foreign\n'),/Current launch/);
 });
 
 test('launch environment removes development/native overrides and never accepts an output under real profiles',()=>{

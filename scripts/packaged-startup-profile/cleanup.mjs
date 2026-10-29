@@ -28,6 +28,7 @@ export async function stopOwned(owned,launch,{apps,shutdownMs,io={}}){
     try{if(owned.main&&alive())await attempt('app-quit',()=>owned.main.evaluate('globalThis.__zoridPackagedQuit();true'));}
     finally{
       await attempt('renderer-inspector-close',()=>owned.renderer?.close());
+      await attempt('browser-inspector-close',()=>owned.browser?.close());
       await attempt('main-inspector-close',()=>owned.main?.close());
       await attempt('normal-exit-wait',()=>waitExit(shutdownMs));
       if(alive()){forced=true;await attempt('owned-child-TERM',()=>owned.child.kill('SIGTERM'));await attempt('TERM-exit-wait',()=>waitExit(2000));}
@@ -50,7 +51,7 @@ export async function stopOwned(owned,launch,{apps,shutdownMs,io={}}){
   launch.mainFinal=await attempt('main-final-evidence',readMain);
   const known=launch.mainFinal?.nativePids??[],exits=launch.mainFinal?.nativeExits??[];
   const nativeNormal=known.length?known.every(pid=>exits.some(row=>row.pid===pid&&row.code===0&&row.signal===null)):null;
-  launch.cleanup={normal:!forced&&!alive()&&owned.child.exitCode===0&&owned.child.signalCode===null&&launch.mainFinal?.normalQuitObserved===true&&nativeNormal!==false,
+  launch.cleanup={normal:!forced&&!alive()&&owned.child.exitCode===0&&owned.child.signalCode===null&&launch.mainFinal?.normalQuitObserved===true&&launch.mainFinal?.quitExitCode===0&&nativeNormal!==false,
     gone:remaining!==null&&remaining.length===0&&!alive(),forced,remaining:remaining??[{unverifiable:true}],nativeNormal,nativeExits:exits};
   const writeLogs=io.writeLogs??(async()=>{await fs.writeFile(path.join(launch.directory,'stderr.log'),launch.stderr);await fs.writeFile(path.join(launch.directory,'stdout.log'),launch.stdout);});
   await attempt('terminal-log-write',writeLogs);return launch.cleanup;

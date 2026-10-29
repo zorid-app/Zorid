@@ -21,9 +21,17 @@ export function installMainObserver(config){
   };
   for(const window of BrowserWindow.getAllWindows())windowEvents(window);
   app.on('browser-window-created',(_event,window)=>windowEvents(window));
-  app.once('before-quit',()=>mark('before-quit'));
-  app.once('will-quit',()=>{
-    state.normalQuitObserved=true;mark('will-quit');
+  const willQuits=[],prevented=event=>{try{const value=event?.defaultPrevented;return typeof value==='boolean'?value:null;}catch{return null;}};
+  app.on('before-quit',()=>mark('before-quit'));
+  app.on('will-quit',event=>{
+    const phase={phase:'will-quit',at:now(),defaultPreventedAtObserver:prevented(event)};
+    state.phases.push(phase);willQuits.push({event,phase});
+  });
+  app.once('quit',(_event,exitCode)=>{
+    // Product may cancel will-quit while it asynchronously drains Core. Only
+    // the actual terminal quit event can freeze the final native-exit receipt.
+    for(const attempt of willQuits)attempt.phase.defaultPreventedAtFinalQuit=prevented(attempt.event);
+    state.quitExitCode=exitCode;state.normalQuitObserved=exitCode===0;mark('quit',{exitCode});
     try{fs.writeFileSync(config.outputFile,JSON.stringify(state),{mode:0o600});}catch(error){state.errors.push('Final main observer write: '+error.message);}
   });
   try{

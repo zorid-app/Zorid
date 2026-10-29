@@ -12,7 +12,7 @@ import {assessNote,baseFixtureSource,clockInterval,DEADLINE_MS,fixtureText,planC
 import {observerSource} from './observer.mjs';
 import {installMainObserver} from './main-observer.mjs';
 import {stopOwned} from './cleanup.mjs';
-import {appPins,hash,hashFile,journalHeads,launchEnvironment,ownedOutput,ownedProcesses} from './support.mjs';
+import {appPins,currentBrowserEndpoint,hash,hashFile,journalHeads,launchEnvironment,ownedOutput,ownedProcesses} from './support.mjs';
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const getOption=(args,name,fallback)=>{const index=args.indexOf(name);return index<0?fallback:args[index+1];};
@@ -165,10 +165,20 @@ export async function main(args=process.argv.slice(2)){
         const mainURL=await bounded(()=>{const url=/Debugger listening on (ws:\/\/127\.0\.0\.1:\d+\/[^\s]+)/.exec(launch.stderr)?.[1];assert.ok(url,'Packaged main inspector not observable');return url;},launch);
         active.main=new CDP(mainURL);await active.main.call('Runtime.enable');launch.mainAttachedMs=launch.elapsed();launch.mainClockSamples=[await clock(active.main,launch)];
         launch.mainScope=await active.main.evaluate(`(${installMainObserver.toString()})(${JSON.stringify({expectedAppPath:pinned.archive,profile:pair.profile,localDataDirectory:pair.data,outputFile:launch.mainFinalFile})})`);
-        const port=await bounded(async()=>{const value=(await fs.readFile(path.join(pair.profile,'DevToolsActivePort'),'utf8')).split('\n')[0];assert.match(value,/^\d+$/);return Number(value);},launch);
+        const endpoint=await bounded(()=>currentBrowserEndpoint(launch.stderr),launch);launch.browserEndpoint=endpoint;
+        active.browser=new CDP(endpoint.url);await active.browser.opened;
         const expectedURL=pathToFileURL(path.join(pinned.archive,'dist/index.html')).href;
-        const target=await bounded(async()=>{const response=await fetch(`http://127.0.0.1:${port}/json/list`),targets=await response.json();const pages=targets.filter(t=>t.type==='page'&&(t.url.split('#')[0]===expectedURL||t.url==='about:blank'));assert.equal(pages.length,1,'Expected one owned packaged renderer target');return pages[0];},launch);
+        const target=await bounded(async()=>{
+          // The current child's nonce-bearing browser WS must authenticate the
+          // target ID; a recycled HTTP port cannot grant another app's page.
+          const {targetInfos}=await active.browser.call('Target.getTargets');
+          const owned=targetInfos.filter(t=>t.type==='page'&&(t.url.split('#')[0]===expectedURL||t.url==='about:blank'));assert.equal(owned.length,1,'Expected one current browser page');
+          const response=await fetch(`http://127.0.0.1:${endpoint.port}/json/list`),targets=await response.json();
+          const page=targets.find(t=>t.id===owned[0].targetId&&t.type==='page'&&(t.url.split('#')[0]===expectedURL||t.url==='about:blank'));
+          assert.ok(page,'HTTP page is not the current authenticated browser target');return page;
+        },launch);
         active.renderer=new CDP(target.webSocketDebuggerUrl);await active.renderer.opened;launch.rendererAttachedMs=launch.elapsed();
+        active.browser.close();active.browser=null;
         await configure(launch,startup,true);startup.configured=true;
         await active.renderer.call('Runtime.enable');await active.renderer.call('Page.enable');
         await bounded(async()=>assert.equal(await active.renderer.evaluate('location.href.split("#")[0]'),expectedURL),launch);

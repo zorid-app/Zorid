@@ -3,18 +3,22 @@ import assert from 'node:assert/strict';
 import {stopOwned} from './cleanup.mjs';
 test('PID evidence, quit, inspector close and TERM failures cannot skip exact child KILL cleanup',async()=>{
   const calls=[],child={exitCode:null,signalCode:null,kill(signal){calls.push(signal);if(signal==='SIGTERM')throw Error('TERM failed');this.signalCode=signal;}};
-  const owned={child,exit:new Promise(()=>{}),main:{get events(){throw Error('main evidence failed');},evaluate(){calls.push('quit');throw Error('quit failed');},close(){calls.push('main-close');throw Error('main close failed');}},renderer:{get events(){throw Error('renderer evidence failed');},close(){calls.push('renderer-close');throw Error('renderer close failed');}}};
+  const owned={child,exit:new Promise(()=>{}),main:{get events(){throw Error('main evidence failed');},evaluate(){calls.push('quit');throw Error('quit failed');},close(){calls.push('main-close');throw Error('main close failed');}},renderer:{get events(){throw Error('renderer evidence failed');},close(){calls.push('renderer-close');throw Error('renderer close failed');}},browser:{close(){calls.push('browser-close');throw Error('browser close failed');}}};
   const launch={errors:['original failure']};
   await stopOwned(owned,launch,{apps:['/owned.app'],shutdownMs:1,io:{snapshot(){throw Error('ps denied');},waitExit:async()=>{},readMain(){throw Error('no final');},writeLogs(){throw Error('log failure');}}});
-  assert.deepEqual(calls,['quit','renderer-close','main-close','SIGTERM','SIGKILL']);
+  assert.deepEqual(calls,['quit','renderer-close','browser-close','main-close','SIGTERM','SIGKILL']);
   assert.deepEqual(launch.errors,['original failure']);assert.equal(launch.cleanup.forced,true);assert.equal(launch.cleanup.gone,false);assert.equal(launch.cleanup.normal,false);
-  for(const phase of ['ownedProcessesBeforeQuit','app-quit','renderer-inspector-close','main-inspector-close','owned-child-TERM','owned-PID-proof','terminal-log-write'])assert.ok(launch.cleanupErrors.some(error=>error.phase===phase),phase);
+  for(const phase of ['ownedProcessesBeforeQuit','app-quit','renderer-inspector-close','browser-inspector-close','main-inspector-close','owned-child-TERM','owned-PID-proof','terminal-log-write'])assert.ok(launch.cleanupErrors.some(error=>error.phase===phase),phase);
 });
 test('normal cleanup records actual terminal receipt and removes no process by guess',async()=>{
   const child={exitCode:0,signalCode:null,kill(){assert.fail('Normal child must not be signaled');}};
   const launch={};let wrote=false;
-  await stopOwned({child,exit:Promise.resolve(),main:{close(){}},renderer:{close(){}}},launch,{apps:['/owned.app'],shutdownMs:1,io:{snapshot:()=>[],waitExit:async()=>{},readMain:()=>({normalQuitObserved:true,nativePids:[22],nativeExits:[{pid:22,code:0,signal:null}]}),writeLogs:()=>{wrote=true;}}});
+  await stopOwned({child,exit:Promise.resolve(),main:{close(){}},renderer:{close(){}}},launch,{apps:['/owned.app'],shutdownMs:1,io:{snapshot:()=>[],waitExit:async()=>{},readMain:()=>({normalQuitObserved:true,quitExitCode:0,nativePids:[22],nativeExits:[{pid:22,code:0,signal:null}]}),writeLogs:()=>{wrote=true;}}});
   assert.equal(launch.cleanup.normal,true);assert.equal(launch.cleanup.gone,true);assert.equal(launch.cleanup.forced,false);assert.ok(wrote);
+});
+test('PID absence and an early normal marker cannot replace the actual app quit exit code',async()=>{
+  const launch={};await stopOwned({child:{exitCode:0,signalCode:null},exit:Promise.resolve()},launch,{apps:['/owned.app'],shutdownMs:1,io:{snapshot:()=>[],waitExit:async()=>{},readMain:()=>({normalQuitObserved:true}),writeLogs:()=>{}}});
+  assert.equal(launch.cleanup.gone,true);assert.equal(launch.cleanup.normal,false);
 });
 test('one descendant signal failure never skips other owned descendants or final verified absence',async()=>{
   let processes=[{pid:1},{pid:2}],time=0;const calls=[],child={exitCode:0,signalCode:null};

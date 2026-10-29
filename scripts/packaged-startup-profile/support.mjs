@@ -5,6 +5,11 @@ import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 export const hash=value=>createHash('sha256').update(value).digest('hex');
 export const hashFile=async file=>hash(await fs.readFile(file));
+export function currentBrowserEndpoint(stderr){
+  const matches=[...stderr.matchAll(/(?:^|\n)DevTools listening on (ws:\/\/127\.0\.0\.1:(\d+)\/devtools\/browser\/[A-Za-z0-9_-]+)(?:\s|$)/g)];
+  const match=matches.at(-1);assert.ok(match,'Current launch renderer debugger is not observable');
+  const port=Number(match[2]);assert.ok(port>0&&port<=65535);return {url:match[1],port};
+}
 export function ownedOutput(value){const out=path.resolve(value);assert.ok(path.dirname(out)==='/private/tmp'&&path.basename(out).startsWith('zorid-packaged-startup-')&&!out.includes('\0'),'Output must be a fresh owned /private/tmp/zorid-packaged-startup-* directory');return out;}
 export function launchEnvironment(profile,localDataDirectory,inherited=process.env){
   const result={...inherited,ZORID_LOCAL_DATA_DIR:localDataDirectory};
