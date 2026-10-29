@@ -94,6 +94,20 @@ test('same-vault foreign client cannot inspect or retire another client receipt'
   assert.equal((await f.send('read',[receipt])).draft,change().draft);
 });
 
+test('targeted inventory returns only own-client metadata for one entry across incarnations',async t=>{
+  const f=await fixture(t),prior=await f.send('compareAndSwap',[change()]);f.manager.revoke(f.record);const fresh=f.manager.attach(f.record,f.context);
+  const send=(op,args=[])=>f.send(op,args,fresh.token),current=await send('compareAndSwap',[change({writer:'writer-two'})]);
+  await send('compareAndSwap',[change({entryId:'entry-two',baseline:{...change().baseline,entryId:'entry-two'}})]);
+  const selected=await send('list',[{entryId:'entry-one'}]);
+  assert.deepEqual(selected.map(row=>row.incarnationId).sort(),[prior.incarnationId,current.incarnationId].sort());
+  assert.ok(selected.every(row=>row.entryId==='entry-one'&&row.clientId==='client-one'&&!Object.hasOwn(row,'draft')&&!Object.hasOwn(row,'baseline')));
+  assert.deepEqual(await send('list',[{entryId:'missing-entry'}]),[]);assert.equal((await send('list')).length,3);
+  const other=f.broker.register(windowStub());other.clientSlot={clientId:'client-two',slotId:'other'};f.broker.bind(other,f.record.vault);
+  const grant=f.manager.attach(other,{scope:{vaultId:'vault-one',clientId:'client-two'}});
+  assert.deepEqual(await f.manager.dispatch(other,event(other),'/vault-one',grant.token,{op:'list',args:[{entryId:'entry-one'}]}),[]);
+  for(const args of [[{}],[{entryId:''}],[{entryId:'entry-one',clientId:'client-one'}],[{entryId:'x'.repeat(257)}],[{entryId:'entry-one'},{}]])await assert.rejects(send('list',args));
+});
+
 test('a replaced main frame gets a fresh incarnation without granting its old document token',async t=>{
   const f=await fixture(t),receipt=await f.send('compareAndSwap',[change()]);f.record.window.webContents.mainFrame={url:'file:///app/index.html'};
   const fresh=f.manager.attach(f.record,f.context);assert.notEqual(fresh.token,f.grant.token);assert.notEqual(fresh.scope.incarnationId,f.grant.scope.incarnationId);

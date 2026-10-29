@@ -32,9 +32,9 @@ const receiptKeys=['vaultId','clientId','incarnationId','entryId','writer','revi
 function capture(request,scope){
   object(request,['op','args']);
   const {op,args}=request;
-  if(!['list','read','compareAndSwap','retire'].includes(op)||!Array.isArray(args)||Object.getPrototypeOf(args)!==Array.prototype||args.length!==(op==='list'?0:1)||op!=='list'&&!Object.hasOwn(args,'0')
+  if(!['list','read','compareAndSwap','retire'].includes(op)||!Array.isArray(args)||Object.getPrototypeOf(args)!==Array.prototype||(op==='list'?args.length>1:args.length!==1)||args.length===1&&!Object.hasOwn(args,'0')
     ||Reflect.ownKeys(args).some(key=>key!=='length'&&(key!=='0'||!Object.hasOwn(Object.getOwnPropertyDescriptor(args,key),'value'))))throw failure('invalid_draft_request');
-  if(op==='list')return{op,args:[]};
+  if(op==='list')return{op,args:args.length?[{entryId:id(object(args[0],['entryId']).entryId)}]:[]};
   const value=args[0];
   if(op==='read'){
     object(value,receiptKeys,['entryId','writer']);
