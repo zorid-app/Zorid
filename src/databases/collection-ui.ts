@@ -415,6 +415,12 @@ export function mountCollectionEditor(container: HTMLElement, options: Collectio
     root.style.top = `${Math.max(8, Math.min(rect.bottom + 4, (view?.innerHeight ?? 768) - root.offsetHeight - 8))}px`;
   };
   const changed = () => { dirty = true; request = undefined; };
+  const compactAction = (control: HTMLButtonElement, action: 'up' | 'down' | 'remove') => {
+    if (!focusedProperty) return control;
+    const text = control.textContent ?? '', label = element(doc, 'span', text); label.className = 'collection-property-action-label'; label.setAttribute('aria-hidden', 'true');
+    control.classList.add('collection-property-icon-button'); control.setAttribute('aria-label', text); control.title = text; control.dataset.action = action;
+    control.replaceChildren(icon(action === 'remove' ? 'trash' : 'down', 16, doc), label); return control;
+  };
   name.addEventListener('input', changed);
   function confirmRemoval(label: string, count: number, remove: () => void, host: HTMLElement) {
     const confirmation = element(doc, 'div'); confirmation.className = 'collection-delete-confirmation';
@@ -455,6 +461,8 @@ export function mountCollectionEditor(container: HTMLElement, options: Collectio
       type.addEventListener('change', changeType);
       const count = options.entries.filter(entry => property.id && entry.values[property.id] != null).length;
       row.append(label, type);
+      const propertyControls = focusedProperty ? element(doc, 'div') : row;
+      if (focusedProperty) { propertyControls.className = 'collection-property-controls'; row.append(propertyControls); }
       if (focusedProperty) {
         type.hidden = true;
         const types = element(doc, 'div'); types.className = 'collection-property-edit-types'; types.hidden = true; types.setAttribute('role', 'menu'); types.setAttribute('aria-label', 'Property type');
@@ -468,33 +476,37 @@ export function mountCollectionEditor(container: HTMLElement, options: Collectio
             if (delta !== undefined) { event.preventDefault(); event.stopPropagation(); types.querySelectorAll<HTMLButtonElement>('button')[Math.max(0, Math.min(pickerDatatypes.length - 1, typeIndex + delta))]?.focus(); }
             if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); types.hidden = true; toggle.setAttribute('aria-expanded', 'false'); toggle.focus(); }
           }); types.append(choice);
-        }); row.append(toggle, types);
+        }); propertyControls.append(toggle); row.append(types);
       }
-      const moveUp = button(doc, 'Move property up', () => moveProperty(index, -1, moveUp));
-      const moveDown = button(doc, 'Move property down', () => moveProperty(index, 1, moveDown));
+      const moveUp = compactAction(button(doc, 'Move property up', () => moveProperty(index, -1, moveUp)), 'up');
+      const moveDown = compactAction(button(doc, 'Move property down', () => moveProperty(index, 1, moveDown)), 'down');
       if (moveFocus?.property === property && !moveFocus.option) focusTarget = moveFocus.direction === 'up' ? moveUp : moveDown;
-      row.append(moveUp, moveDown, button(doc, 'Remove property', () => confirmRemoval(`“${label.value}”`, count, () => { properties.splice(index, 1); }, row)));
+      propertyControls.append(moveUp, moveDown, compactAction(button(doc, 'Remove property', () => confirmRemoval(`“${label.value}”`, count, () => { properties.splice(index, 1); }, row)), 'remove'));
       if (['select', 'multi-select', 'status'].includes(property.datatype)) {
         const choices = element(doc, 'div'); choices.className = 'collection-option-list';
         (property.options ?? []).forEach((option, optionIndex) => {
           const optionRow = element(doc, 'div'), optionName = element(doc, 'input'); optionName.value = option.name; optionName.setAttribute('aria-label', `${property.name} option ${optionIndex + 1}`);
+          const optionControls = focusedProperty ? element(doc, 'div') : optionRow;
+          if (focusedProperty) { optionName.className = 'collection-option-name'; optionControls.className = 'collection-option-controls'; optionControls.classList.toggle('has-category', property.datatype === 'status'); }
           optionName.addEventListener('input', () => { const next = [...properties[index].options ?? []]; next[optionIndex] = { ...next[optionIndex], name: optionName.value }; properties[index] = { ...properties[index], options: next }; changed(); }); optionRow.append(optionName);
           if (property.datatype === 'status') {
-            const category = element(doc, 'select'); category.setAttribute('aria-label', `${option.name} status category`);
+            const category = element(doc, 'select'); if (focusedProperty) category.className = 'collection-option-category'; category.setAttribute('aria-label', `${option.name} status category`);
             categories.forEach((value, i) => { const item = element(doc, 'option', categoryLabels[i]); item.value = value; category.append(item); }); category.value = option.category ?? 'not_started';
-            category.addEventListener('change', () => { const next = [...properties[index].options ?? []]; next[optionIndex] = { ...next[optionIndex], category: category.value as typeof categories[number] }; properties[index] = { ...properties[index], options: next }; changed(); }); optionRow.append(category);
+            category.addEventListener('change', () => { const next = [...properties[index].options ?? []]; next[optionIndex] = { ...next[optionIndex], category: category.value as typeof categories[number] }; properties[index] = { ...properties[index], options: next }; changed(); }); optionControls.append(category);
           }
-          const color=element(doc,'select');color.setAttribute('aria-label',`${option.name} color`);
+          const color=element(doc,'select');if(focusedProperty)color.className='collection-option-color';color.setAttribute('aria-label',`${option.name} color`);
           for(const value of ['', 'gray','red','orange','yellow','green','blue','purple','pink']){const item=element(doc,'option',value?value[0].toUpperCase()+value.slice(1):'Default color');item.value=value;color.append(item);}color.value=option.color??'';
-          color.addEventListener('change',()=>{const next=[...properties[index].options??[]];next[optionIndex]={...next[optionIndex],color:color.value||undefined};properties[index]={...properties[index],options:next};changed();});optionRow.append(color);
-          const moveOptionUp = button(doc, 'Move option up', () => moveOption(index, optionIndex, -1, moveOptionUp));
-          const moveOptionDown = button(doc, 'Move option down', () => moveOption(index, optionIndex, 1, moveOptionDown));
+          const paintColor = () => { if (focusedProperty) { if (color.value) optionRow.dataset.optionColor = color.value; else delete optionRow.dataset.optionColor; } }; paintColor();
+          color.addEventListener('change',()=>{const next=[...properties[index].options??[]];next[optionIndex]={...next[optionIndex],color:color.value||undefined};properties[index]={...properties[index],options:next};changed();paintColor();});optionControls.append(color);
+          const moveOptionUp = compactAction(button(doc, 'Move option up', () => moveOption(index, optionIndex, -1, moveOptionUp)), 'up');
+          const moveOptionDown = compactAction(button(doc, 'Move option down', () => moveOption(index, optionIndex, 1, moveOptionDown)), 'down');
           if (moveFocus?.property === property && moveFocus.option === option) focusTarget = moveFocus.direction === 'up' ? moveOptionUp : moveOptionDown;
-          optionRow.append(moveOptionUp, moveOptionDown);
+          optionControls.append(moveOptionUp, moveOptionDown);
           const used = options.entries.filter(entry => property.id && option.id && (entry.values[property.id] === option.id || Array.isArray(entry.values[property.id]) && (entry.values[property.id] as unknown[]).includes(option.id))).length;
-          optionRow.append(button(doc, 'Remove option', () => confirmRemoval(`“${optionName.value}”`, used, () => { const next = [...properties[index].options ?? []]; next.splice(optionIndex, 1); const previousDefault=properties[index].default; const selectedDefault=Array.isArray(previousDefault)?previousDefault.filter(id=>id!==option.id):previousDefault===option.id?undefined:previousDefault;properties[index] = { ...properties[index], options: next,default:selectedDefault }; }, optionRow))); choices.append(optionRow);
+          optionControls.append(compactAction(button(doc, 'Remove option', () => confirmRemoval(`“${optionName.value}”`, used, () => { const next = [...properties[index].options ?? []]; next.splice(optionIndex, 1); const previousDefault=properties[index].default; const selectedDefault=Array.isArray(previousDefault)?previousDefault.filter(id=>id!==option.id):previousDefault===option.id?undefined:previousDefault;properties[index] = { ...properties[index], options: next,default:selectedDefault }; }, optionRow)), 'remove')); if (focusedProperty) optionRow.append(optionControls); choices.append(optionRow);
         });
-        choices.append(button(doc, 'Add option', () => { properties[index] = { ...properties[index], options: [...properties[index].options ?? [], { name: 'New option', ...(property.datatype === 'status' ? { category: 'not_started' as const } : {}) }] }; changed(); render(); })); row.append(choices);
+        const addOption = button(doc, 'Add option', () => { properties[index] = { ...properties[index], options: [...properties[index].options ?? [], { name: 'New option', ...(property.datatype === 'status' ? { category: 'not_started' as const } : {}) }] }; changed(); render(); });
+        if (focusedProperty) { addOption.className = 'collection-option-add'; addOption.prepend(icon('plus', 14, doc)); } choices.append(addOption); row.append(choices);
       }
       const defaultLabel=element(doc,'label','Default value');
       if(['select','status','multi-select'].includes(property.datatype)){
@@ -531,7 +543,8 @@ export function mountCollectionEditor(container: HTMLElement, options: Collectio
     if (event.key === 'Escape' && !request) { event.preventDefault(); event.stopPropagation(); dirty = false; options.onClose(); }
     else if (event.key === 'Enter' && event.target === list.querySelector('.collection-property-row > input')) { event.preventDefault(); event.stopPropagation(); save.click(); }
   });
-  root.append(title, name, list, add, error, cancel, save); container.append(root); render();
+  if (focusedProperty) { const footer = element(doc, 'div'); footer.className = 'collection-property-footer'; footer.append(cancel, save); root.append(title, name, list, add, error, footer); }
+  else root.append(title, name, list, add, error, cancel, save); container.append(root); render();
   const resize = anchor && view?.ResizeObserver ? new view.ResizeObserver(place) : undefined;
   if (anchor) { doc.addEventListener('scroll', place, true); view?.addEventListener('resize', place); resize?.observe(root); }
   const first = options.propertyId ? list.querySelector<HTMLElement>(`[data-property-id="${options.propertyId}"] input`) : name;
