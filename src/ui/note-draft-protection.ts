@@ -148,7 +148,11 @@ export class NoteDraftProtection {
     }
     for(;;){
       this.assertActive();const capture=this.latest;if(!capture)return;
-      if(this.covered(capture)){await this.retireClean(capture);return;}
+      if(this.covered(capture)){
+        await this.retireClean(capture);this.assertActive();
+        if(this.latest===capture)return;
+        continue;
+      }
       const protection=this.protection??=this.createProtection(capture);
       if(this.offered?.capture!==capture){const sequence=protection.offer(capture.snapshot);this.offered={capture,sequence};}
       await protection.flushThrough(this.offered.sequence);this.assertActive();this.errorValue=null;

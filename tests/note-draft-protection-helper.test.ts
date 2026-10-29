@@ -14,12 +14,12 @@ function held<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>(yes
 function receipt(request:IndependentDraftChange|IndependentDraftRetirement,deleted=false):IndependentDraftReceipt{return{...scope,entryId:request.entryId,writer:request.writer,generation:request.generation,revision:request.nextRevision,deleted};}
 function fixture(extra:Partial<NoteDraftProtectionOptions>={}){
   const writes:IndependentDraftChange[]=[],retirements:IndependentDraftRetirement[]=[],statuses:NoteDraftProtectionStatus[]=[];
-  let failed:unknown,writeGate:Promise<void>|undefined,retireGate:Promise<void>|undefined;
+  let failed:unknown,writeGate:Promise<void>|undefined,retireGate:Promise<void>|undefined,activeWrites=0,maximumWrites=0;
   const provider:IndependentDraftProvider={scope,read:async()=>null,list:async()=>[],
-    async compareAndSwap(request){writes.push(request);if(writeGate)await writeGate;if(failed)throw failed;return receipt(request);},
+    async compareAndSwap(request){writes.push(request);activeWrites++;maximumWrites=Math.max(maximumWrites,activeWrites);try{if(writeGate)await writeGate;if(failed)throw failed;return receipt(request);}finally{activeWrites--;}},
     async retire(request){retirements.push(request);if(retireGate)await retireGate;return receipt(request,true);}};
   const helper=new NoteDraftProtection({provider,writesScope:scope,coreCovered:()=>false,onStatus:status=>statuses.push(status),...extra});
-  return{helper,writes,retirements,statuses,fail(...args:[unknown?]){failed=args.length?args[0]:error();},holdWrite(gate:Promise<void>){writeGate=gate;},holdRetire(gate:Promise<void>){retireGate=gate;}};
+  return{helper,writes,retirements,statuses,get maximumWrites(){return maximumWrites;},fail(...args:[unknown?]){failed=args.length?args[0]:error();},holdWrite(gate:Promise<void>){writeGate=gate;},holdRetire(gate:Promise<void>){retireGate=gate;}};
 }
 
 test('capture owns immutable metadata, deduplicates exact captures, and never encodes on the editing stack',async()=>{
@@ -106,6 +106,19 @@ test('real core commit protects its changed clean baseline before retiring the f
   assert.equal(f.writes[1].baseline.revision,'core-r2');assert.equal(f.writes[1].baseline.content,'Final exact body');assert.equal(f.writes[1].checkpointRevision,'confirmed-checkpoint');assert.equal(f.writes[1].pendingOperation,null);
   assert.equal(f.retirements.length,1);assert.equal(f.retirements[0].expectedRevision,f.writes[1].nextRevision);assert.equal(f.helper.status.protection?.retiredSequence,2);assert.equal(f.helper.status.currentJournalAcknowledged,true);f.helper.stop();
   const startup=fixture({coreCovered:()=>true});startup.helper.markInventory('ready');startup.helper.capture(clean);await startup.helper.flush();assert.equal(startup.writes.length,0);assert.equal(startup.retirements.length,0);assert.equal(startup.helper.status.currentProtected,true);assert.equal(startup.helper.status.currentJournalAcknowledged,false);startup.helper.stop();
+});
+
+test('a flush drains newer core-covered capture C arriving while clean capture B journal acknowledgement is held',async()=>{
+  let coreGeneration=0;const f=fixture({coreCovered:current=>current.snapshot.generation===coreGeneration&&current.snapshot.baseline.revision==='core-r'+coreGeneration&&current.snapshot.baseline.content===current.snapshot.draft,
+    getCleanWitness:current=>({entryId:'note',writer:current.writer,generation:current.snapshot.generation,content:current.snapshot.draft,revision:'core-r'+coreGeneration})});
+  f.helper.markInventory('ready');f.helper.capture(capture('Raw A',1));await f.helper.flush();
+  const clean=(body:string,generation:number):NoteDraftCapture=>{const value=capture(body,generation);return{...value,snapshot:{...value.snapshot,baseline:{...value.snapshot.baseline,revision:'core-r'+generation,content:body},checkpointRevision:'core-checkpoint-'+generation}};};
+  const gate=held<void>();f.holdWrite(gate.promise);coreGeneration=2;f.helper.capture(clean('Clean B',2));const first=f.helper.flush();await until(()=>f.writes.length===2);
+  coreGeneration=3;f.helper.capture(clean('Clean C',3));const joined=f.helper.flush();await drain();assert.equal(f.writes.length,2);assert.equal(f.helper.status.currentJournalAcknowledged,false);
+  gate.resolve();await Promise.all([first,joined]);
+  assert.equal(f.writes.length,3,'the existing flush must protect clean C before resolving');assert.equal(f.writes[2].draft,'Clean C');assert.equal(f.writes[2].baseline.revision,'core-r3');
+  assert.deepEqual(f.retirements.map(retirement=>retirement.generation),[3],'superseded B cannot authorize a retirement after C becomes current');
+  assert.equal(f.helper.status.currentJournalAcknowledged,true);assert.equal(f.helper.status.protection?.retiredSequence,3);assert.equal(f.maximumWrites,1);f.helper.stop();
 });
 
 test('core coverage with an older generic journal acknowledgement cannot authorize latest-capture cleanup',async()=>{
