@@ -1375,7 +1375,9 @@ export class Workspace {
   }
 
   private async bufferFor(path:string,expectedEntryId?:string,validate:()=>void=()=>{}):Promise<NoteBuffer>{
-    validate();
+    const vault=this.vault,generation=this.vaultGeneration;
+    const check=()=>{validate();if(this.vault!==vault||this.vaultGeneration!==generation)throw new Error('The selected vault changed before this note finished opening.');};
+    check();
     if(expectedEntryId!==undefined){
       if(this.vault.entries.get(path)?.entryId!==expectedEntryId)throw new Error('The selected note identity changed');
       for(const [key,other] of this.buffers)if(key!==path&&other.savedDurableWitness?.entryId===expectedEntryId)throw new Error('The selected note moved; its existing draft is retained');
@@ -1385,17 +1387,16 @@ export class Workspace {
       if(loading){
         // Join the creator's complete admission/cleanup before inspecting the
         // registry again. A superseded creator may have retired its empty buffer.
-        await loading.catch(()=>{});validate();
+        await loading.catch(()=>{});check();
         return this.bufferFor(path,expectedEntryId,validate);
       }
-      await buffer.load(expectedEntryId,validate);validate();await this.bindRecoveredBuffer(path,buffer,validate);validate();return buffer;
+      await buffer.load(expectedEntryId,check);check();await this.bindRecoveredBuffer(path,buffer,check);check();return buffer;
     }
-    const vault=this.vault;
     buffer=new NoteBuffer(vault,path,{onMetadata:()=>this.draftMetadataChanged(buffer!,vault),storage:localStorage,storageKey:this.storageScope.draftPrefix(this.platform.id),onState:()=>{if(buffer)this.draftBufferStateChanged(buffer,vault);}});
     this.buffers.set(path,buffer);const token=this.treeEntryToken(path);if(token)this.bufferEntries.set(buffer,token);
     const admitted=buffer;
     const loading=(async()=>{
-      try{await admitted.load(expectedEntryId,validate);validate();return admitted;}
+      try{await admitted.load(expectedEntryId,check);check();return admitted;}
       catch(error){if(this.buffers.get(path)===admitted&&!admitted.savedDurableWitness){await admitted.closeMetadataProjection();if(this.buffers.get(path)===admitted)this.buffers.delete(path);}throw error;}
     })();
     this.bufferLoads.set(admitted,loading);

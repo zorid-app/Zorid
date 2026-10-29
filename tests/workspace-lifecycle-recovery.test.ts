@@ -118,6 +118,18 @@ test('a superseded pending loader cannot strand a newer note admission outside t
  assert.equal(f.workspace.buffers.get('One.md'),admitted);assert.equal(admitted.savedDurableWitness?.entryId,'one');assert.equal(reads,2);
 });
 
+test('a pending note admission cannot follow its waiter into another vault generation',async t=>{
+ const f=await fixture(t);await f.workspace.openNote('Two.md');
+ await f.workspace.buffers.get('One.md')!.dispose();f.workspace.buffers.delete('One.md');
+ const hold=gate();let reads=0;f.interceptRead(async()=>{reads++;await hold.promise;});
+ const first=f.internal.bufferFor('One.md','one');void first.catch(()=>{});await until(()=>reads===1);
+ const second=f.internal.bufferFor('One.md','one');void second.catch(()=>{});
+ const checkpoints=f.calls.filter(call=>call.method==='checkpoints.load'&&call.args[0]==='note/v1/one').length;
+ f.internal.vaultGeneration++;hold.resolve();
+ await assert.rejects(first,/selected vault changed/);await assert.rejects(second,/selected vault changed/);
+ assert.equal(reads,1);assert.equal(f.calls.filter(call=>call.method==='checkpoints.load'&&call.args[0]==='note/v1/one').length,checkpoints);
+});
+
 test('retirement automatically settles both original uncertain checkpoint identities before fresh editor installation',async t=>{
  const f=await fixture(t);await f.workspace.openNote('Two.md');
  const one=f.workspace.buffers.get('One.md')!,two=f.workspace.buffers.get('Two.md')!,old=f.workspace.platform;f.loseStorage();
