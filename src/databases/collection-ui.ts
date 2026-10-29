@@ -64,16 +64,34 @@ export function mountSourceChooser(container: HTMLElement, options: SourceChoose
   const heading = element(doc, 'h2', 'New database');
   const choices = element(doc, 'div'); choices.className = 'collection-source-choices';
   const form = element(doc, 'div'), error = element(doc, 'p'); error.setAttribute('role', 'alert'); error.hidden = true;
-  let destroyed = false, busy = false, draft = false;
+  let destroyed = false, busy = false, draft = false, composing = false, focusIntent = 0;
+  let screen: 'choices' | 'existing' | 'create' = 'choices', canLeaveCreate: (() => boolean) | undefined;
   let emptyRequest: DatabaseRequest | undefined, emptySource: BaseViewSource | undefined;
   const live = () => !destroyed && options.isCurrent();
+  const outsideFocus = (event: Event) => {
+    if (busy && event.target instanceof doc.defaultView!.Node && !root.contains(event.target)
+      && (event.type !== 'focusin' || event.target !== doc.body && event.target !== doc.documentElement)) focusIntent++;
+  };
+  const windowBlur = () => { if (busy) focusIntent++; };
+  doc.addEventListener('focusin', outsideFocus, true); doc.addEventListener('pointerdown', outsideFocus, true);
+  doc.defaultView?.addEventListener('blur', windowBlur);
+  root.addEventListener('compositionstart', () => { composing = true; });
+  root.addEventListener('compositionend', () => { composing = false; });
   async function run(action: () => Promise<void>) {
     if (busy || !live()) return;
+    const focused = doc.activeElement instanceof doc.defaultView!.HTMLElement && root.contains(doc.activeElement) ? doc.activeElement : undefined;
+    const intent = focusIntent;
     busy = true; root.setAttribute('aria-busy', 'true'); error.hidden = true;
     for (const control of root.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>('input,button,select')) control.disabled = true;
     try { await action(); }
     catch (problem) { if (live()) { error.textContent = problemText(problem); error.hidden = false; options.onError?.(problem); } }
-    finally { busy = false; root.removeAttribute('aria-busy'); for (const control of root.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>('input,button,select')) control.disabled = false; availability(); }
+    finally {
+      busy = false; root.removeAttribute('aria-busy');
+      for (const control of root.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>('input,button,select')) control.disabled = false;
+      availability();
+      if (focused && live() && intent === focusIntent && focused.isConnected && !focused.closest('[hidden]') && !focused.matches(':disabled')
+        && (doc.activeElement === doc.body || doc.activeElement === doc.documentElement || root.contains(doc.activeElement))) focused.focus();
+    }
   }
   const select = (source: BaseViewSource) => run(async () => { if (!live()) throw new Error('This view changed.'); await options.choose(source); });
   const empty = button(doc, 'New empty data source', () => { void createEmpty(); }); empty.className = 'collection-source-primary';
@@ -92,8 +110,7 @@ export function mountSourceChooser(container: HTMLElement, options: SourceChoose
     collection.disabled = !options.service || busy || retained;
     notes.disabled = busy || retained;
     if (cancel) cancel.disabled = busy || retained;
-    const available = [...choices.querySelectorAll<HTMLButtonElement>('button')].filter(control => !control.disabled);
-    available.forEach((control, index) => { control.tabIndex = index === 0 ? 0 : -1; });
+    updateTabStops();
   }
   async function createEmpty() {
     if (!options.service || busy || !live()) return;
@@ -126,22 +143,47 @@ export function mountSourceChooser(container: HTMLElement, options: SourceChoose
       }
     });
   }
-  choices.addEventListener('keydown', event => {
-    if (event.isComposing || busy || !live() || !(event.target instanceof doc.defaultView!.HTMLButtonElement)) return;
-    const available = [...choices.querySelectorAll<HTMLButtonElement>('button')].filter(control => !control.disabled);
-    const index = available.indexOf(event.target as HTMLButtonElement);
-    const next = event.key === 'ArrowDown' ? (index + 1) % available.length : event.key === 'ArrowUp' ? (index - 1 + available.length) % available.length : event.key === 'Home' ? 0 : event.key === 'End' ? available.length - 1 : undefined;
-    if (next !== undefined) { event.preventDefault(); event.stopPropagation(); available.forEach((control, index) => { control.tabIndex = index === next ? 0 : -1; }); available[next]?.focus(); }
-    else if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); (event.target as HTMLButtonElement).click(); }
-    else if (event.key === 'Escape' && !draft && !emptyRequest && !emptySource && cancel) { event.preventDefault(); event.stopPropagation(); cancel.click(); }
+  function navigationButtons(): HTMLButtonElement[] {
+    const region = screen === 'choices' ? choices : screen === 'existing' ? form : undefined;
+    return region ? [...region.querySelectorAll<HTMLButtonElement>('button')].filter(control => !control.disabled && !control.closest('[hidden]')) : [];
+  }
+  function updateTabStops(preferred?: HTMLButtonElement) {
+    const available = navigationButtons(), active = preferred ?? available.find(control => control === doc.activeElement) ?? available.find(control => control.tabIndex === 0) ?? available[0];
+    for (const control of available) control.tabIndex = control === active ? 0 : -1;
+  }
+  function showChoices() {
+    screen = 'choices'; composing = false; draft = false; canLeaveCreate = undefined;
+    choices.hidden = false; heading.textContent = 'New database'; form.replaceChildren(); error.hidden = true; availability();
+    if (live()) collection.focus();
+  }
+  root.addEventListener('focusin', event => {
+    if (event.target instanceof doc.defaultView!.HTMLButtonElement && navigationButtons().includes(event.target)) updateTabStops(event.target);
   });
-  availability(); (options.service ? empty : notes).focus();
+  root.addEventListener('keydown', event => {
+    if (composing || event.isComposing || event.keyCode === 229 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || busy || !live()) return;
+    if (event.key === 'Escape' && !(event.target instanceof doc.defaultView!.HTMLSelectElement)) {
+      if (screen === 'choices' && !draft && !emptyRequest && !emptySource && cancel) { event.preventDefault(); event.stopPropagation(); cancel.click(); }
+      else if (screen !== 'choices') {
+        event.preventDefault(); event.stopPropagation();
+        if (screen === 'existing' && error.hidden) showChoices();
+        else if (screen === 'create' && canLeaveCreate?.()) showCollections();
+      }
+      return;
+    }
+    const available = navigationButtons(), index = available.indexOf(event.target as HTMLButtonElement);
+    if (index < 0 || !available.length) return;
+    const next = event.key === 'ArrowDown' ? (index + 1) % available.length : event.key === 'ArrowUp' ? (index - 1 + available.length) % available.length : event.key === 'Home' ? 0 : event.key === 'End' ? available.length - 1 : undefined;
+    if (next !== undefined) { event.preventDefault(); event.stopPropagation(); updateTabStops(available[next]); available[next].focus(); }
+    else if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); available[index].click(); }
+  });
+  availability(); if (live()) (options.service ? empty : notes).focus();
   function showCollections() {
     if (!options.service) { error.textContent = 'Collections are unavailable in this vault.'; error.hidden = false; return; }
-    choices.hidden = true; heading.textContent = 'Choose a collection'; form.replaceChildren();
+    screen = 'existing'; composing = false; canLeaveCreate = undefined; choices.hidden = true; heading.textContent = 'Choose a collection'; form.replaceChildren();
     const list = element(doc, 'div'); list.className = 'collection-source-existing';
     const create = button(doc, 'Create a collection', showCreate);
-    form.append(create, list, button(doc, 'Back', () => { draft = false; choices.hidden = false; heading.textContent = 'New database'; form.replaceChildren(); error.hidden = true; availability(); collection.focus(); }));
+    form.append(create, list, button(doc, 'Back', showChoices));
+    if (live()) create.focus();
     void run(async () => {
       const response = await options.service!.request({ op: 'list' }); if (!live()) return;
       for (const item of response.collections.filter(item => !item.deleted)) list.append(button(doc, item.name, () => { void select({ kind: 'collection', id: item.id }); }));
@@ -149,7 +191,7 @@ export function mountSourceChooser(container: HTMLElement, options: SourceChoose
     });
   }
   function showCreate() {
-    form.replaceChildren(); heading.textContent = 'Create a collection';
+    screen = 'create'; composing = false; form.replaceChildren(); heading.textContent = 'Create a collection';
     const name = element(doc, 'input'); name.placeholder = 'Collection name'; name.setAttribute('aria-label', 'Collection name');
     const preset = element(doc, 'select'); preset.setAttribute('aria-label', 'Collection preset');
     for (const [value, label] of [['blank', 'Start blank'], ['tasks', 'Tasks']] as const) { const option = element(doc, 'option', label); option.value = value; preset.append(option); }
@@ -163,10 +205,11 @@ export function mountSourceChooser(container: HTMLElement, options: SourceChoose
       if (!created) throw new Error('The collection was not returned. Retry this creation.');
       await options.choose({ kind: 'collection', id: created.id });
     }); });
-    name.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); submit.click(); } });
+    canLeaveCreate = () => !request && !name.value && preset.value === 'blank' && error.hidden;
+    name.addEventListener('keydown', event => { if (event.key === 'Enter' && !composing && !event.isComposing && event.keyCode !== 229 && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) { event.preventDefault(); event.stopPropagation(); submit.click(); } });
     form.append(name, preset, submit, button(doc, 'Back', () => { if (!busy) showCollections(); })); name.focus();
   }
-  return { element: root, hasPendingChanges: () => busy || draft, destroy() { destroyed = true; root.remove(); } };
+  return { element: root, hasPendingChanges: () => busy || draft, destroy() { destroyed = true; doc.removeEventListener('focusin', outsideFocus, true); doc.removeEventListener('pointerdown', outsideFocus, true); doc.defaultView?.removeEventListener('blur', windowBlur); root.remove(); } };
 }
 
 export interface CollectionEditorOptions {
