@@ -3,6 +3,54 @@
 ## URGENT: real-session automatic save failure — 2026-10-28
 
 
+**Reviewed retry/backend integrated; frontend/end-to-end still pending — 2026-10-28.**
+Main autoretry source1c85e026/f7bff9f0/8da6ebd7 composed as
+7f4a6863/8ed5fd2a/d4745094; backend reviewed992c81dd composed2a2905ed.
+Actual main validation:137/137 NoteBuffer+durable-state selections,53/53 desktop
+editor-core/admission/main,zeroSkip; full TypeScript exit0. Initial Node26 removed
+experimental-transform-types flag attempt did not run tests and is excluded;
+corrected native TypeScript invocation supplies the137 result. Receipt/logs:
+`tmp/save-recovery-20261028/main-composition-checkpoint.json`. Upstream live root
+reports independent actualnative hostdeath1/1zeroSkip344ms/a1c, not rerun here.
+User handoff described retry files as two; exact commit also contains the focused
+7-line failed-facts-retirement regression in note-buffer-metadata.test.ts, within
+existing focused-test scope. No unrelated production file change.
+
+Named scope extension ACK: checkpoint_review and child save_platform_rebind may
+edit ONLY the tiny flush-entry uncertain-persist guard in
+`src/ui/note-durable-state.ts` plus meaningful core-focused ordering regression.
+When retained uncertain CAS exists without operation, settle EXACT original CAS
+before ANY new plan. They coordinate a single author for that file; NoteBuffer
+worker ownership stays separate. This guard is pending, not implicitly supplied
+by the integrated retry batch.
+
+Backend bounded limitation retained: combined lost outer recovery ACK and another
+replacement host death before retrying the old admission ID fails closed. No
+unbounded recovery or original-host-exit cause claimed. Frontend dynamic proxy/
+Workspace retire-signal composition/review, complete source build and actual
+native Electron UI gates remain pending. Existing staged R6 package predates these
+fixes and cannot stand in for new source-matched verification; Rust remains a1c.
+
+Installation owner remains this thread. Preserve latest ALL pending live buffers,
+base/intent/uncertain CAS and checkpoints again before recovery. Use matching
+client/store to resume exact requests, verify physical bytes and retained durable
+state before contemplating close. Static exact-old-ASAR close audit: prepare-close
+awaits Workspace.destroy; completeClose additionally requires released main context.
+Therefore external persistence alone does NOT prove the old renderer can quit
+through its dead adapter. Validate that precise graceful-close path in a disposable
+old-build fixture or coordinate a reviewed handoff; do not fake successful close
+or bypass flags. No real-session close/retry/reload here.
+
+Owned fault-smoke harness SOURCE ONLY assigned notion_schema_menu under ignored
+tmp/save-recovery-20261028; NO RUN before composed review/pins. It must edit MD+Base,
+fault ONLY exact owned fixture host at an observed pending write dispatch, await
+valid automatic reconnect with no manualRetry, verify exact bytes/state/restart
+and normal closure. Required diagnostic gate identifies hostPID/generation/admission
+and actual dispatched frame; queued-request observation alone is insufficient.
+Fail closed if absent. Disk observed383MiB; serialize future frontend packaging,
+no Rust rebuild, no deletion of protected exports/current bundles in this step.
+
+
 **Additional independent copies verified; no quit until recovery proof — 2026-10-28.**
 Live owner preserved both exports in ignored project
 `tmp/save-recovery-20261028/private/`; this main owner verified directory0700,

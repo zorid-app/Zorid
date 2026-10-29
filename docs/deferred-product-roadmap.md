@@ -3,6 +3,26 @@
 ## Execution checkpoint — shared-core coordinator
 
 
+**Main retry/backend composed; full live-save recovery unaccepted — 2026-10-28.**
+Reviewed autoretry1c85/f7bf/8da6 -> main7f4a/8ed5/d474; reviewedbackend992c ->2a2905ed.
+Actual main137/137NoteBuffer+durable selections,53/53desktop backend,zeroSkip,
+fullTSexit0. Composition receipt tmp/save-recovery-20261028/main-composition-checkpoint.json.
+Named checkpoint_review +save_platform_rebind ACK tiny note-durable-state.ts flush
+uncertainCAS-first guard +focused ordering regression; no NoteBuffer overlap.
+Frontend proxy/Workspace and this guard still pending; stagedR6 bundle predates
+save changes, no build/package/UI acceptance claim. Rust unchanged reusesa1c.
+Backend limit: lostrecoverACK +replacementdeath beforeoldIDretry failsclosed;
+original host exit unknown. Installation owner stays here, protected appOPEN.
+Exact old close path awaits Workspace.destroy then main requireReleased: externally
+persisted drafts alone do not prove graceful close can succeed through deadadapter.
+Need full latest pendingstate/CAS outcome/bytes/checkpoint proof and a validated
+close handoff before any quit; no force/faked close. Fault-smoke harness source
+preparation delegated only, never run before composedreview/pins; exact ownedhost
+pending-frame dispatch gate, automatic reconnect/noManualRetry, bytes/restart/
+normalexit required. Disk383MiB; no Rust build/GUI or bundle deletion now.
+See urgent queue for details and explicit ownership/limitations.
+
+
 **Independent preservation stable; protected app must remain OPEN — 2026-10-28.**
 Ignored project tmp/save-recovery-20261028/private copies independently verified:
 dir0700/files0600, initial3851/full6272 SHA unchanged. Preservation receipt records
