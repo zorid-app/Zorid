@@ -3,6 +3,70 @@
 ## URGENT: real-session automatic save failure — 2026-10-28
 
 
+**Final source composed; strict GUI005 still fails Base error paint — 2026-10-28.**
+Reviewed Workspace/embed25e1e6be ->main058be655; exact tracked runtime equals reviewed
+final composition. Actual main64/64 focused composition tests PASS0skip/exit0,
+fullTS/frontendbuild003 pass, isolated delivery044.9.1 stage/package356files verified.
+ASARee package superseded by current
+cfd8d4e98a01751d306451616458e316f94760540153936baa3fe1de13758f73;
+embeddedhosta1c862be unchanged, no Rust rebuild. Receipt recovery-package-receipt003.
+
+Strict005 uses corrected painted-error oracle (inert/ariahidden do not suppress).
+Markdown phase PASS exact original CAS replay/newadmission, bytes/cleanUI/noFlash.
+Numeric Base original operationbc3a22bb/full request digest84258f37 native committed
+with publicationComplete=true; rendererACK deliberately withheld. Exact same
+command/body accepted on newhost94055, but widgetmod-error+Base.status painted at
+187.9/188ms and nextframe199.6 (DOM clock). OverallFAIL; no restart acceptance.
+Observer/RPC and DOM clocks have different origins: do NOT subtract their times.
+Actual request replay is not enough if original widget promise rejects visibly.
+Failed005 plus full safe events/input evidence retained. Native/realapply/install
+remain unaccepted. No weakening/skipping Base gate.
+
+Independent read-only source triage: platform runEntry rejects original capsule
+promise via settleEntry(error) for uncertain host_exited before any Retire hint;
+code only recognizes client_not_admitted/client_ownership_lost for markRetired,
+and even those currently settle before marking. Session request rejection can
+paint both status and widgeterror before later same-command recovery succeeds.
+This is a source-confirmed reachable ordering; historical005 does not retain the
+specific widget rejection/title or callback trace, so do not claim historical
+catch identity established. Retired post-save derived reads are another possible
+paint route. Named save_platform_rebind owns narrow platform/index.ts delta/tests:
+recognized actual terminal transport uncertainty +eligible captured owner must
+establish retirement/hold original promise BEFORE deciding rejection. Add actual
+host_exited-before-Nudge regression, original promise remains pending through
+positive same-scope ACK/replay, no onError/mod-error. Do not simply add one code
+but keep settle-before-mark, swallow all errors, replan or replay unclaimed work.
+Definite semantics/foreign scope/release and failed recovery stay truthful.
+
+Owned005 main93948/profile/fixture/package verified; pending UI+canonicalcommand
+privately captured owned-private/fault005-pending.json,0600,3057bytes,SHA256
+5a5a693e25356311e1dc3fca6fdede561fa2f5a1738645c5fdaf1a06d767ced6.
+Normal Quit after capture succeeded: actual exit0/nullsignal, no forced closure.
+This is failed-test cleanup, not a passing complete smoke. Real71549 untouched.
+
+Post-proof coordinator decision: old installed JS permanently captures dead host;
+external successful recovery cannot clear its requireReleased/dirty ownership.
+Guarded termination may be used ONLY after strict new native acceptance +owned
+cleanup, fresh all-writers quiescence/latest RAM+pending union capture and verified
+matching-scope originalCAS ->LATESTstate ->normal save; then independent final
+physical/logical identity/revision and clean checkpoint/writer proof, plus unchanged
+latest RAM recapture. Never require old PID gone before this persistence; never
+fake old close ACK/hotpatch dirty flags. Forced old-session closure must be recorded
+as forced, not normal, and preserve preferences/vaults. NO freeze/attestation/apply/
+termination authorized or performed now. Protected default app stays OPEN.
+
+Independent main readiness audit of operational helper SOURCE ONLY verifies runner
+SHA00a646b2/pin004SHA67d6dd22 and all107 imported file bytes match current main;
+recorded githead in pin is historical, not a full-current-tree claim. No runner or
+real/private data execution/read by that reviewer. Future invocation needs fresh
+backup hashes (not historicala51),0600 currentUID coordinator attestation<=5min,
+backupcapture<=60sec, exact oldPID/profile/start/exe/scope/per-note hashes and no
+foreign nativehost before/after claim. UIinert remains attested, not runner-observed.
+Runner apply output alone lacks final logical revision/checkpoint state proof;
+coordinator must obtain separate read-only final metadata proof BEFORE termination.
+Commands/proof procedure must be prepared before fresh-capture TTL begins.
+
+
 **Stable platform/Session layers integrated; Workspace final still required — 2026-10-28.**
 Reviewed ordered sourcec526d9e0 ->59c1bafb ->56e0ca5b ->2758b79c integrated on
 main as1719ffff ->7045cebe ->e6deb743 ->a4aa7434. Duplicate platform3968f51d

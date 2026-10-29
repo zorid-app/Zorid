@@ -3,6 +3,25 @@
 ## Execution checkpoint — shared-core coordinator
 
 
+**Strict005 stillfails Baseflash after finalsource058be655 — 2026-10-28.**
+Workspace25e->058, main64/64zeroSkip/fullTS/frontendbuildPASS, package356verified/
+ASARcfd8d4e9/hosta1c/Electron44.9.1. Correctedoracle MDexactCAS/noFlash phasepasses;
+Baseexact bc3a command/body replayACCEPTEDnewhost94055 butmoderror/statuspaint188ms,
+overallFAIL/restartunreached. No cross-clock timestamp subtraction. Independent
+source shows originalpromise settleEntry(error) before retirementmark, including
+host_exited uncertain-beforeNudge; historicalcatchobjectnotcaptured. Narrow named
+save_platform_rebind delta/tests musthold eligibleoriginalpromise before error
+paint through knownterminal recovery, notglobalhide/newIDs. Existingdefiniteerror/
+foreign/release/failedrepair controls retained. Own005preserved0600/SHA5a5a693e,
+normalexit0/nullsignalaftercapture, real71549untouched. Nativeaccept/apply/installheld.
+Post-proofdecisionconditional ONLY: afterstrictGUIaccept/ownedcleanup/freshquiescence,
+alllatestRAM/originalCAS/lateststate/bytes/revisions/cleancheckpoints+unchangedRAM
+proof, guarded old-contexttermination canhandoff; recordforcednotnormal, nohotpatch.
+No action now. Operationalrunner/pin107bytes sourceverified; finalrevision/checkpoint
+metadata proof separate from applyoutput required before any real termination.
+See urgentqueue/005/source-readiness records for complete bounds.
+
+
 **Stable Base layers on main; no build until Workspace final — 2026-10-28.**
 Sourcec526/59c1/56e0/2758 ->main1719ffff/7045cebe/e6deb743/a4aa7434, duplicate3968
 SKIPPED. Actualmain dedicated33/33,0skip,exit0; receipt/log under save-recovery task.
