@@ -1170,7 +1170,7 @@ mod enrolled_scan_tests {
     }
 
     #[test]
-    fn enrolled_scan_full_boundaries_reject_graph_corruption() {
+    fn enrolled_scan_readiness_keeps_explicit_and_selected_corruption_guards() {
         let root = tempfile::tempdir().unwrap();
         let mut vault = enrolled(root.path());
         std::fs::write(root.path().join("retained.md"), b"retained").unwrap();
@@ -1180,6 +1180,19 @@ mod enrolled_scan_tests {
                 .unwrap()
                 .complete
         );
+        let path = VaultPath::new("retained.md").unwrap();
+        let selected = vault
+            .store
+            .read_path_metadata(&path)
+            .unwrap()
+            .unwrap()
+            .state
+            .id;
+        assert!(vault
+            .store
+            .family_materialization(&selected)
+            .unwrap()
+            .is_some());
         let lock = vault.paths.lock(vault.options.lock_timeout).unwrap();
         let scan = EnrolledScan::admit(&vault, &lock).unwrap();
         let sql = rusqlite::Connection::open(root.path().join(".zorid/vault.sqlite")).unwrap();
@@ -1190,26 +1203,28 @@ mod enrolled_scan_tests {
             .unwrap();
         sql.execute("DELETE FROM family_materializations", [])
             .unwrap();
-        // Per-file membership is scalar, rather than an implicit whole-graph
-        // status read. The unchanged full corruption oracle still guards both
-        // ends of a scan; Store writers retain their own source validation.
+        // Routing/readiness is a scalar authority check, not an implicit scrub
+        // of unrelated publications. Explicit status and selected publication
+        // admission must still reject the missing materialization independently.
         scan.check(&vault).unwrap();
+        scan.finish(&vault).unwrap();
+        EnrolledScan::admit(&vault, &lock).unwrap();
         assert!(matches!(
-            scan.finish(&vault),
-            Err(Error::Store(zorid_store::StoreError::Corrupt(_)))
+            vault.store.family_status(),
+            Err(zorid_store::StoreError::Corrupt(_))
         ));
         assert!(matches!(
-            EnrolledScan::admit(&vault, &lock),
-            Err(Error::Store(zorid_store::StoreError::Corrupt(_)))
+            vault.store.family_materialization(&selected),
+            Err(zorid_store::StoreError::Corrupt(_))
         ));
-        let path = VaultPath::new("retained.md").unwrap();
         let (parent, name) = vault.paths.parent(&path).unwrap();
         let expected = content_stream::file_snapshot(&parent, &name)
             .unwrap()
             .unwrap();
-        // The ordinary capture entrypoint still performs the same full check.
-        assert!(matches!(
-            vault.capture_observed_file(
+        // An inert capture proves these actual bytes and parent; it does not
+        // authorize authoring or publication from a damaged materialization.
+        let captured = vault
+            .capture_observed_file(
                 &path,
                 &parent,
                 &name,
@@ -1218,9 +1233,9 @@ mod enrolled_scan_tests {
                 None,
                 &expected,
                 true,
-            ),
-            Err(Error::Store(zorid_store::StoreError::Corrupt(_)))
-        ));
+            )
+            .unwrap();
+        assert_eq!(captured.inline_bytes(), Some(b"retained".as_slice()));
         assert_eq!(
             sql.query_row("SELECT count(*) FROM authored_envelopes", [], |row| row
                 .get::<_, i64>(0))

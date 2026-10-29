@@ -49,7 +49,7 @@ fn child_path(scope: Option<&VaultPath>, name: &str) -> Result<VaultPath> {
     })?)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DirectoryCursor {
     path: Option<VaultPath>,
@@ -106,7 +106,7 @@ fn binding_fences(
     fences
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Inventory {
     version: u8,
@@ -291,12 +291,9 @@ impl ProgressScan {
         let durable =
             durable.ok_or_else(|| corrupt("active external inventory checkpoint missing"))?;
         durable.validate()?;
-        // A stable revision cannot bless changed materialized cursor bytes.
-        // Serialization is deterministic: sets/maps are ordered, vectors retain
-        // their durable ordering, and both values use this exact versioned type.
-        let before = serde_json::to_vec(&self.inventory).map_err(zorid_store::StoreError::from)?;
-        let current = serde_json::to_vec(&durable).map_err(zorid_store::StoreError::from)?;
-        if before != current {
+        // Compare the exact ordered typed state without allocating two copies
+        // of the complete inventory JSON for a read-only acknowledgement.
+        if self.inventory != durable {
             return Err(corrupt("external inventory checkpoint state changed"));
         }
         vault.paths.verify()

@@ -175,7 +175,7 @@ pub struct ExternalReconcileQuantum {
     pub pending: bool,
     pub work_units: u16,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScanIssue {
     pub path: Option<VaultPath>,
     pub reason: String,

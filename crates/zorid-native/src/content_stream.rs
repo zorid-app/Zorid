@@ -198,7 +198,12 @@ impl NativeVault {
         let enrolled = match scan {
             Some(scan) => { scan.check(self)?; true }
             None => {
-                self.paths.verify_parent(path, parent)?;
+                // Inert recovery captures may read our private retained file
+                // under its original logical path. They acquire no public
+                // inode authority; exact caller snapshot/parent/digest checks
+                // below still bind the captured bytes. Public observation and
+                // mutation entrypoints retain their own verify_parent guard.
+                self.paths.verify()?;
                 self.store.family_enrollment_ready()?
             },
         };
