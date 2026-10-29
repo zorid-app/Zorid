@@ -18,6 +18,7 @@ function metadata(state, presentation) {
 function visible(path) { return !path.split('/').some(part => part.startsWith('.')); }
 const HEALTHY_WATCH_AUDIT_MS = 5 * 60 * 1000;
 const MAX_KNOWN_HINTS_PER_POLL = 16;
+function sourceImportPending(status){const work=status?.work;return work?.pending===true&&(work.phase==='discovery'||work.phase==='import');}
 async function physicalWatchRoot(root){
   const path=await fs.realpath(root),stat=await fs.stat(path,{bigint:true});
   if(!stat.isDirectory())throw error('invalid_watch_root');
@@ -120,7 +121,7 @@ class CoreVaultFixtureService {
     if (documentRuntime) requireDocumentRuntime(host);
     this.documentRuntimeEnabled=documentRuntime;
     this.documentRuntimeOwners=new Set();
-    this.documentScheduler=null;this.pendingIndexSource=false;this.hasStartedPolling=false;this.reconciliationRetry=null;this.continuation=null;this.continuationFailed=false;
+    this.documentScheduler=null;this.pendingIndexSource=false;this.pendingIndexProgress=false;this.pendingIndexProgressHost=null;this.hasStartedPolling=false;this.reconciliationRetry=null;this.continuation=null;this.continuationFailed=false;
     this.host = host;
     this.familyMode = familyMode;
     this.root = host.root;
@@ -254,10 +255,14 @@ class CoreVaultFixtureService {
     });
   }
   ensureDocumentScheduler(){
-    if(!this.documentScheduler)this.documentScheduler=new DocumentRuntimeScheduler({
-      ...(this.documentRuntimeEnabled&&this.host.capabilities?.includes('document_drafts')?{workHost:this.host}:{}),
-      onError:()=>{if(this.host.fatal||this.host.exited){this.runtimeFailed=true;this.stopPolling();void this.documentScheduler.close().catch(()=>{});}},
-    });
+    if(!this.documentScheduler){
+      const host=this.host;
+      this.documentScheduler=new DocumentRuntimeScheduler({
+        ...(this.documentRuntimeEnabled&&host.capabilities?.includes('document_drafts')?{workHost:host}:{}),
+        isSourceImportPending:()=>this.host===host&&!this.closed&&!this.runtimeFailed&&sourceImportPending(this.reconciliation),
+        onError:()=>{if(this.host===host&&(host.fatal||host.exited)){this.runtimeFailed=true;this.stopPolling();void this.documentScheduler.close().catch(()=>{});}},
+      });
+    }
     return this.documentScheduler;
   }
   registerDocumentDraftOwner(options){
@@ -270,10 +275,19 @@ class CoreVaultFixtureService {
   }
   documentRuntimeSourceHint() { this.documentScheduler?.sourceHint(); }
   flushIndexSourceNotification(maintenanceGuard,retry=false){
-    if(!this.pendingIndexSource&&!retry)return false;
+    if(!this.pendingIndexSource&&!this.pendingIndexProgress&&!retry)return false;
     maintenanceGuard?.();
     if(this.closed||this.runtimeFailed||!this.documentScheduler)return false;
-    this.documentScheduler.wake();this.pendingIndexSource=false;return true;
+    if(this.pendingIndexProgress&&this.pendingIndexProgressHost!==this.host){
+      this.pendingIndexProgress=false;this.pendingIndexProgressHost=null;this.needsScan=true;
+    }
+    // Progress alone is not evidence to reset a failed transport. Genuine
+    // journal advancement retains its existing Wake/retry behavior.
+    if(this.pendingIndexSource)this.documentScheduler.wake();
+    else if(this.pendingIndexProgress)this.documentScheduler.sourceImportProgress();
+    else if(retry)this.documentScheduler.wake();
+    else return false;
+    this.pendingIndexSource=false;this.pendingIndexProgress=false;this.pendingIndexProgressHost=null;return true;
   }
   databaseChanged() { this.live();this.notify({type:'change'}); }
   async poll() {
@@ -326,19 +340,27 @@ class CoreVaultFixtureService {
   }
   updateReconciliation(status) {
     if(!status)return;
+    const previous=this.reconciliation,oldWork=previous?.work,newWork=status.work;
+    if((sourceImportPending(previous)&&!sourceImportPending(status))
+      ||(oldWork?.pending===true&&newWork?.pending===false)
+      ||(newWork?.phase==='publication'&&oldWork?.phase!=='publication')){
+      this.pendingIndexProgress=true;this.pendingIndexProgressHost=this.host;
+    }
     this.reconciliation=structuredClone(status);
     this.notify({type:'reconciliation',reconciliation:structuredClone(status)});
   }
   async scanNow(host=this.host,maintenanceGuard=null) {
+    const authorityHost=this.host;
+    const current=()=>{maintenanceGuard?.();if(this.closed||this.runtimeFailed||this.host!==authorityHost)throw error('client_ownership_lost');};
     try {
-      maintenanceGuard?.();
+      current();
       // Rescan is trusted main-process maintenance, not an admitted client RPC.
       // Retain the selected owner's guard through the actual transport queue
       // and response; journal reads below still use that owner's leased host.
       const scan=maintenanceGuard
-        ?(await this.host.request({method:'rescan'},undefined,undefined,maintenanceGuard)).result
+        ?(await authorityHost.request({method:'rescan'},undefined,undefined,current)).result
         :await host.rescan();
-      maintenanceGuard?.();
+      current();
       this.lastScan=this.now();
       this.updateReconciliation(scan.reconciliation);
       if(!scan.complete&&scan.reconciliation?.work?.pending!==true)this.notify({type:'error',code:'scan_incomplete',message:'Native vault scan is incomplete; existing files are retained.'});
@@ -349,8 +371,11 @@ class CoreVaultFixtureService {
       // the status. Preserve observation duty for the next admitted owner.
       this.needsScan=true;
       this.continuationFailed=reason?.code!=='client_ownership_lost';
-      maintenanceGuard?.();
+      current();
       if(this.reconciliation)this.updateReconciliation({...this.reconciliation,complete:false,...(this.reconciliation.work?{work:{...this.reconciliation.work,phase:'blocked',pending:false}}:{}),failure:'scan_failed'});
+      // Poll merges this with any already accepted journal duty. An explicit
+      // scan failure has no following poll, so deliver its progress-only wake.
+      if(!this.polling)this.flushIndexSourceNotification(current);
       throw reason;
     }
   }

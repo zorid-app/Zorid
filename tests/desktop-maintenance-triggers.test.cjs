@@ -14,7 +14,7 @@ function fixture(options={}){
     async listSnapshot(){calls.push('snapshot');return{entries:[],cursor:'1'};},
   };
   const service=new CoreVaultFixtureService(host,{pollMs:750,rescanMs:30000,familyMode:true,...options});
-  service.documentScheduler={wake(){calls.push('wake');notifications.push('wake');},sourceHint(){calls.push('hint');notifications.push('hint');},needsRetry(){return blocked;}};
+  service.documentScheduler={wake(){calls.push('wake');notifications.push('wake');},sourceHint(){calls.push('hint');notifications.push('hint');},sourceImportProgress(){calls.push('progress');notifications.push('progress');},needsRetry(){return blocked;}};
   return{service,host,calls,notifications,changed(rows=[]){change=true;pendingRows=rows;},blocked(){blocked=true;},reload(){reload=true;},blockHint(){hintBlocked=true;},hintChanges(){hintChange=true;}};
 }
 
@@ -192,7 +192,7 @@ async function startupOwnerFixture(t,{startupHint=false,rootChanged=false}={}){
   });
   service.documentScheduler={
     addOwner(){let retired;return{subscribe(_listener,onRetire){retired=onRetire;return()=>{};},async pause(){},resume(){},revoke(){retired?.();return Promise.resolve();},release(){retired?.();}};},
-    wake(){},sourceHint(){},needsRetry(){return false;},async close(){},
+    wake(){},sourceHint(){},sourceImportProgress(){},needsRetry(){return false;},async close(){},
   };
   t.after(()=>service.close());
   const register=(clientId='client')=>service.registerDocumentRuntimeOwner({host,clientId,localStoreId:'store',assertActive(){}});
@@ -280,7 +280,7 @@ test('interactive import continuations yield event-loop turns, share explicit Re
   f.event('Unobserved-later.md');release();await retry;
   assert.equal(scans,1,'one RPC per event-loop turn');assert.equal(f.service.hints.has('Unobserved-later.md'),true);
   for(let n=0;n<8&&scans<3;n++)await turn();
-  f.service.stopPolling();assert.equal(scans,3);assert.equal(maximum,1);assert.deepEqual(f.notifications,[]);
+  f.service.stopPolling();assert.equal(scans,3);assert.equal(maximum,1);assert.deepEqual(f.notifications,['progress','progress']);
   assert.equal(notices.some(change=>change.type==='error'),false,'a voluntary yield is ordinary progress');
 });
 

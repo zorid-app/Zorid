@@ -57,8 +57,9 @@ test('real service startup and import quanta defer background Begin/Pump until l
       assert.deepEqual(commands(f).slice(before),['sourceHint'],'completion wakes even without a journal change');
       assert.equal(commands(f).filter(value=>value==='wake').length,1,'only initial owner admission needs Wake');
       assert.equal(f.core.continuation,null);
-      const scans=f.calls.filter(call=>call.op==='rescan').length;await f.core.poll();await f.drain();
+      const scans=f.calls.filter(call=>call.op==='rescan').length,controls=commands(f).length;await f.core.poll();await f.drain();
       assert.equal(f.calls.filter(call=>call.op==='rescan').length,scans,'healthy idle adds no scan');
+      assert.equal(commands(f).length,controls,'healthy idle adds no index wake');
       assert.deepEqual(f.errors,[]);
     }finally{first.resolve(status('complete'));second.resolve(status('complete'));third.resolve(status('complete'));await f.core.close();}
   }
@@ -107,6 +108,29 @@ test('a failed scan releases the import hold through progress without clearing t
     await until(()=>!f.core.polling);await f.drain();
     assert.equal(f.core.reconciliation.work.phase,'blocked');assert.equal(f.scheduler.isSourceImportPending(),false);
     assert.equal(progress,1);assert.equal(wakes,0);assert.equal(f.scheduler.needsRetry(),true);
+  }finally{scan.resolve(status('complete'));await f.core.close();}
+});
+
+test('successful completion without journal changes does not turn the legacy retry fallback into a transport reset',async()=>{
+  const scan=deferred(),f=fixture({initial:status('import'),scanReplies:[scan.promise]});f.register();
+  try{
+    await f.drain();f.scheduler.blocked=true;
+    let progress=0,wakes=0;
+    const oldProgress=f.scheduler.sourceImportProgress.bind(f.scheduler),oldWake=f.scheduler.wake.bind(f.scheduler);
+    f.scheduler.sourceImportProgress=()=>{progress++;oldProgress();};f.scheduler.wake=()=>{wakes++;oldWake();};
+    scan.resolve(status('complete'));await until(()=>!f.core.polling);await f.drain();
+    assert.equal(f.core.reconciliation.work.phase,'complete');
+    assert.equal(progress,1);assert.equal(wakes,0);assert.equal(f.scheduler.needsRetry(),true);
+  }finally{scan.resolve(status('complete'));await f.core.close();}
+});
+
+test('an import reply after owner retirement retains discovery duty without waking another runtime',async()=>{
+  const scan=deferred(),f=fixture({initial:status('import'),scanReplies:[scan.promise]});const owner=f.register();
+  try{
+    await f.drain();const paused=owner.pause();scan.resolve(status('complete'));await paused;
+    assert.equal(f.core.reconciliation.work.phase,'import');assert.equal(f.core.needsScan,true);
+    assert.equal(commands(f).filter(kind=>kind==='sourceHint').length,0);
+    assert.equal(f.core.pendingIndexProgress,false);assert.equal(steps(f).length,0);
   }finally{scan.resolve(status('complete'));await f.core.close();}
 });
 
