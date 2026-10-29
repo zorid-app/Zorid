@@ -59,6 +59,21 @@ performed. `--build-only` stages the package without launching it.
   again after exit. This **does not prove production save authority or power-loss
   durability** and never writes a real vault.
 
+Main and renderer milestones are buffered in memory through the timed phases;
+report files are written only at the terminal result/quit. Configuration, source
+and runtime hashes are prepared by the outer runner before spawn. The full fixture
+read plus its before/after file-stat witness remain inside the measured path.
+Renderer module-body entry (after dependency evaluation), bootstrap completion,
+`createEditor` start/end, restore, focus and the two ready animation frames have
+separate ordered timestamps. These timestamps are not interchangeable with paint
+or trusted input.
+
+A receipt is `target-met`, `target-missed`, or `invalid-receipt`. Missing the fixed
+800 ms probe makes a receipt invalid, even when a later trusted readiness probe
+provides a useful elapsed-time diagnostic. `diagnosticReadyInputMs` never turns
+such an incomplete receipt into a valid latency failure or acceptance. Valid
+receipts additionally require every ordered construction marker.
+
 The app captures its viewport and records startup events, runtime/source/asset
 pins, journal receipts and memory metrics. Successful evidence requires ordinary
 app quit, exit code zero, no signal, and absence of all processes from the unique
@@ -68,7 +83,7 @@ Failures, screenshots and logs remain available for review.
 Pure oracle checks do not launch Electron:
 
 ```sh
-node --test scripts/startup-editor-floor/oracle.test.mjs
+node --test scripts/startup-editor-floor/*.test.mjs
 ```
 
 No result from this floor may be relabeled as an 800 ms production startup or an

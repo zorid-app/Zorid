@@ -1,22 +1,24 @@
 'use strict';
+const {performance}=require('node:perf_hooks');
+const mainModuleEntryEpoch=performance.timeOrigin+performance.now();
 const {app,BrowserWindow,ipcMain,Menu}=require('electron');
-const fs=require('node:fs'),fsp=fs.promises,path=require('node:path'),{performance}=require('node:perf_hooks');
-const cfg=JSON.parse(fs.readFileSync(process.env.ZORID_EDITOR_FLOOR_CASE,'utf8'));
+const fs=require('node:fs'),fsp=fs.promises,path=require('node:path');
+const cfg=JSON.parse(process.env.ZORID_EDITOR_FLOOR_CONFIG);
 if(!path.isAbsolute(cfg.directory)||!cfg.directory.startsWith('/private/tmp/zorid-editor-floor-'))throw Error('Unowned floor output');
 const epoch=()=>performance.timeOrigin+performance.now(),spawnEpoch=Number(process.env.ZORID_EDITOR_FLOOR_SPAWN_EPOCH);
 if(!Number.isFinite(spawnEpoch))throw Error('Missing launch clock');
 app.setPath('userData',cfg.profile);app.setName('Zorid editor floor');
-const report={floorOnly:true,mode:cfg.mode,deadlineMs:cfg.deadlineMs,spawnEpoch,selectionEpoch:null,events:[],mainTimeOrigin:performance.timeOrigin,expectedElectronVersion:cfg.electronVersion,electronVersion:process.versions.electron,execPath:process.execPath,appPath:app.getAppPath(),packaged:app.isPackaged,errors:[],probeSends:[]};
+const report={floorOnly:true,mode:cfg.mode,deadlineMs:cfg.deadlineMs,spawnEpoch,selectionEpoch:null,events:[],mainModuleEntryEpoch,mainTimeOrigin:performance.timeOrigin,expectedElectronVersion:cfg.electronVersion,electronVersion:process.versions.electron,execPath:process.execPath,appPath:app.getAppPath(),packaged:app.isPackaged,errors:[],probeSends:[]};
 const persist=()=>fs.writeFileSync(path.join(cfg.directory,'app-report.json'),JSON.stringify(report,null,2),{mode:0o600});
-const event=(kind,data={})=>{report.events.push({kind,mainEpoch:epoch(),...data});persist();};
-event('main-entry');let window,armed=false,readySent=false,quitting=false,finishRequested=false,journal=Promise.resolve(),journalSequence=0;
+const event=(kind,data={})=>{report.events.push({kind,mainEpoch:epoch(),...data});};
+event('main-module-entry',{at:mainModuleEntryEpoch});let window,armed=false,readySent=false,quitting=false,finishRequested=false,journal=Promise.resolve(),journalSequence=0;
 const seen=new Set();
 const owns=event=>{if(!window||event.sender!==window.webContents||event.senderFrame!==window.webContents.mainFrame||event.senderFrame.url.split('#')[0]!==new URL('file://'+path.join(__dirname,'renderer/index.html')).href)throw Error('Foreign fixture IPC');};
 function sendProbe(name){
  const row={name,insert:name==='ready'?'x':'y',sentEpoch:epoch(),targetPresent:!!window&&!window.isDestroyed()};report.probeSends.push(row);event('probe-sent',row);
  if(!row.targetPresent)return;
  try{window.focus();window.webContents.focus();window.webContents.sendInputEvent({type:'keyDown',keyCode:row.insert.toUpperCase()});window.webContents.sendInputEvent({type:'char',keyCode:row.insert});window.webContents.sendInputEvent({type:'keyUp',keyCode:row.insert.toUpperCase()});}
- catch(error){report.errors.push('Input dispatch: '+error.message);persist();}
+ catch(error){report.errors.push('Input dispatch: '+error.message);}
 }
 function requestFinish(){if(finishRequested)return;finishRequested=true;event('finish-requested');if(window&&!window.isDestroyed())window.webContents.send('floor:finish');}
 function arm(origin){if(armed)throw Error('Repeated input deadline');armed=true;setTimeout(()=>{sendProbe('deadline');setTimeout(requestFinish,cfg.diagnosticMs);},Math.max(0,origin+cfg.deadlineMs-epoch()));}
@@ -41,9 +43,9 @@ ipcMain.handle('floor:journal',(message,input)=>{
   const rows=(await fsp.readFile(file,'utf8')).trim().split('\n').map(row=>JSON.parse(row)),readback=JSON.stringify(rows.at(-1))===JSON.stringify(record);
   if(!readback)throw Error('Fixture journal readback mismatch');
   const ack={ack:true,fsynced:true,readback,ackEpoch:epoch(),sequence:input.sequence};event('fixture-journal-fsync-ack',{name:input.name,...ack});return ack;
- });journal=operation.catch(error=>{report.errors.push(error.message);persist();});return operation;
+ });journal=operation.catch(error=>{report.errors.push(error.message);});return operation;
 });
-async function quit(){if(quitting)return;quitting=true;await journal;event('quit-requested');app.quit();}
+async function quit(){if(quitting)return;quitting=true;await journal;event('quit-requested');persist();app.quit();}
 ipcMain.handle('floor:result',async(message,result)=>{
  owns(message);if(JSON.stringify(result).length>100000)throw Error('Oversized floor receipt');const priorErrors=[...report.errors];Object.assign(report,result);report.errors=[...priorErrors,...(result.errors??[])];
  try{const image=await window.webContents.capturePage();await fsp.writeFile(path.join(cfg.directory,'viewport.png'),image.toPNG());report.screenshot='viewport.png';}catch(error){report.errors.push('Screenshot: '+error.message);}
@@ -59,5 +61,5 @@ app.whenReady().then(async()=>{
  window.webContents.on('render-process-gone',(_event,details)=>{if(quitting)return;report.errors.push('Renderer exited: '+details.reason);event('renderer-gone',details);void quit();});
  window.webContents.setWindowOpenHandler(()=>({action:'deny'}));window.webContents.on('will-navigate',event=>event.preventDefault());
  event('load-start');await window.loadFile(path.join(__dirname,'renderer/index.html'));event('load-complete');
-}).catch(error=>{report.errors.push(error.stack??String(error));persist();void quit();});
+}).catch(error=>{report.errors.push(error.stack??String(error));void quit();});
 setTimeout(()=>{report.errors.push('Owned floor case timed out');event('case-timeout');void quit();},cfg.timeoutMs);

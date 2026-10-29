@@ -75,7 +75,7 @@ try{
   const text=fixtureText(bytes),fixturePath=path.join(caseDirectory,'Fixture.md'),sha256=hash(text),caret=text.indexOf('first paragraph');await fs.writeFile(fixturePath,text,{flag:'wx',mode:0o600});
   const config={directory:caseDirectory,profile,mode,deadlineMs,timeoutMs,diagnosticMs,electronVersion:version,fixture:{id:'fixture-'+sha256,path:fixturePath,bytes,sha256,caret,prefix:text.slice(0,96)}};await fs.writeFile(path.join(caseDirectory,'case.json'),JSON.stringify(config),{mode:0o600});
   const record={bytes,mode,directory:caseDirectory,spawnEpoch:null,forced:false,stdout:'',stderr:''};report.cases.push(record);await save();
-  record.spawnEpoch=Date.now();const env={...process.env,ZORID_EDITOR_FLOOR_CASE:path.join(caseDirectory,'case.json'),ZORID_EDITOR_FLOOR_SPAWN_EPOCH:String(record.spawnEpoch)};delete env.ELECTRON_RUN_AS_NODE;
+  const env={...process.env,ZORID_EDITOR_FLOOR_CONFIG:JSON.stringify(config)};delete env.ELECTRON_RUN_AS_NODE;record.spawnEpoch=Date.now();env.ZORID_EDITOR_FLOOR_SPAWN_EPOCH=String(record.spawnEpoch);
   child=spawn(executable,['--user-data-dir='+profile],{cwd:out,env,stdio:['ignore','pipe','pipe']});record.pid=child.pid;process.stdout.write(JSON.stringify({event:'case-start',pid:child.pid,bytes,mode,out:caseDirectory})+'\n');
   child.stdout.on('data',chunk=>{record.stdout=(record.stdout+chunk.toString()).slice(-100000);});child.stderr.on('data',chunk=>{record.stderr=(record.stderr+chunk.toString()).slice(-100000);});
   let done=false;const exited=activeExit=new Promise(resolve=>{child.once('exit',(code,signal)=>{done=true;record.exitCode=code;record.signal=signal;resolve();});child.once('error',error=>{record.launchError=error.message;done=true;resolve();});});

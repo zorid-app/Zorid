@@ -13,6 +13,14 @@ export function assessFloor(value){
  const origin=value.mode==='normal-reopen'?value.spawnEpoch:value.mode==='first-folder-selection'?value.selectionEpoch:null;
  require(finite(origin)&&finite(value.spawnEpoch),'Missing explicit launch/selection clock');
  require(value.clockVerified===true,'Renderer/main epoch handshake failed');
+ const stageNames=['renderer-module-entry','bootstrap-complete','fixture-body-delivered','create-editor-start','create-editor-end','restore-start','restore-end','focus-start','focus-end','ready-frames-start','ready-frames-end'];
+ const stages=(value.rendererEvents??[]).filter(event=>stageNames.includes(event.kind));
+ const orderedStages=stages.length===stageNames.length&&stages.every((stage,index)=>stage.kind===stageNames[index]&&finite(stage.at)&&(index===0||stage.at>=stages[index-1].at));
+ require(orderedStages&&stages[0].at>=value.spawnEpoch&&stages.at(-1).at<=value.firstViewportEpoch,'Missing or unordered editor-stage markers');
+ require(finite(value.mainModuleEntryEpoch)&&value.mainModuleEntryEpoch>=value.spawnEpoch&&value.mainModuleEntryEpoch<=stages[0]?.at,'Missing or invalid main-module entry clock');
+ const stageAt=kind=>stages.find(stage=>stage.kind===kind)?.at;
+ const stageDelta=(end,start)=>finite(stageAt(end))&&finite(stageAt(start))?stageAt(end)-stageAt(start):null;
+ const stageTimings={mainModuleEntryFromSpawnMs:finite(value.mainModuleEntryEpoch)?value.mainModuleEntryEpoch-value.spawnEpoch:null,rendererModuleEntryFromSpawnMs:finite(stageAt('renderer-module-entry'))?stageAt('renderer-module-entry')-value.spawnEpoch:null,createEditorMs:stageDelta('create-editor-end','create-editor-start'),restoreMs:stageDelta('restore-end','restore-start'),focusMs:stageDelta('focus-end','focus-start'),twoFramesMs:stageDelta('ready-frames-end','ready-frames-start')};
  require(value.packaged===true,'Renderer did not run from the packaged fixture app');
  require(value.electronVersion==='44.9.1'&&value.electronVersion===value.expectedElectronVersion,'Electron version differs from pin');
  require(value.initialDocumentLength===value.expectedBytes&&value.initialPrefixMatches===true,'Wrong initial document');
@@ -31,5 +39,9 @@ export function assessFloor(value){
  require(value.normalExit===true&&value.exitCode===0&&value.signal===null&&!value.forced&&value.ownedProcessesGone===true,'Owned app did not exit normally and cleanly');
  const readyInputMs=ready&&finite(origin)?ready.appliedEpoch-origin:null,deadlineInputMs=deadline&&finite(origin)?deadline.appliedEpoch-origin:null;
  const valid=errors.length===0;
- return{label:FLOOR_LABEL,valid,usableByDeadline:valid&&finite(readyInputMs)&&readyInputMs>=0&&readyInputMs<=value.deadlineMs&&finite(value.firstViewportEpoch)&&value.firstViewportEpoch>=origin&&value.firstViewportEpoch<=ready.appliedEpoch&&value.firstViewportEpoch-origin<=value.deadlineMs,readyInputMs,deadlineInputMs,spawnToReadyInputMs:ready&&finite(value.spawnEpoch)?ready.appliedEpoch-value.spawnEpoch:null,productionAuthorityProven:false,errors};
+ const usableByDeadline=valid&&finite(readyInputMs)&&readyInputMs>=0&&readyInputMs<=value.deadlineMs&&finite(value.firstViewportEpoch)&&value.firstViewportEpoch>=origin&&value.firstViewportEpoch<=ready.appliedEpoch&&value.firstViewportEpoch-origin<=value.deadlineMs;
+ // Invalid receipts cannot establish a valid target miss. Preserve observed late
+ // input separately, without letting it stand in for the missed fixed probe.
+ const diagnosticReadyInputMs=!valid&&ready?.trusted===true&&ready.identity===value.fixtureId&&ready.guard===true&&finite(readyInputMs)?readyInputMs:null;
+ return{label:FLOOR_LABEL,valid,outcome:!valid?'invalid-receipt':usableByDeadline?'target-met':'target-missed',usableByDeadline,stageTimings,diagnosticReadyInputMs,readyInputMs,deadlineInputMs,spawnToReadyInputMs:ready&&finite(value.spawnEpoch)?ready.appliedEpoch-value.spawnEpoch:null,productionAuthorityProven:false,errors};
 }

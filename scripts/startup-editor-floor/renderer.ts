@@ -15,6 +15,10 @@ import '../../src/editor/folding.css';
 import '../../src/editor/find-panel.css';
 import './floor.css';
 
+const rendererModuleEntryEpoch=performance.timeOrigin+performance.now();
+const rendererEvents:any[]=[];
+const mark=(kind:string,data:Record<string,unknown>={})=>{rendererEvents.push({kind,rendererEpoch:performance.timeOrigin+performance.now(),...data});};
+mark('renderer-module-entry',{at:rendererModuleEntryEpoch});
 const bridge=(window as any).editorFloor,host=document.querySelector<HTMLElement>('#editor')!,status=document.querySelector('#status')!;
 const epoch=()=>performance.timeOrigin+performance.now(),frames=()=>new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())));
 const errors:string[]=[],probes:any[]=[],trusted:{data:string;at:number;trusted:boolean;type:string}[]=[];
@@ -23,13 +27,14 @@ const guard=()=>ready&&!disposed&&!!view&&view.contentDOM.isConnected&&fixture?.
 let identity:string|undefined;
 document.addEventListener('beforeinput',event=>{const input=event as InputEvent;if(view?.contentDOM.contains(input.target as Node)&&['x','y'].includes(input.data??''))trusted.push({data:input.data!,at:epoch(),trusted:input.isTrusted,type:input.inputType});},true);
 const digest=async(text:string)=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text)))].map(byte=>byte.toString(16).padStart(2,'0')).join('');
-const fail=(error:unknown)=>{errors.push(error instanceof Error?error.message:String(error));bridge.event('renderer-error',{message:errors.at(-1),at:epoch()});};
+const fail=(error:unknown)=>{errors.push(error instanceof Error?error.message:String(error));mark('renderer-error',{message:errors.at(-1),at:epoch()});};
 const startup=(async()=>{
  const before=epoch(),settings=await bridge.bootstrap(),after=epoch();const clockVerified=settings.mainEpoch>=before-5&&settings.mainEpoch<=after+5;
- bridge.event('renderer-entry',{at:after,timeOrigin:performance.timeOrigin,clockBracket:[before,after],mainEpoch:settings.mainEpoch,clockVerified});
- if(settings.mode==='first-folder-selection'){status.textContent='Owned fixture folder selection';await frames();bridge.event('selection-shell-visible',{at:epoch()});fixture=await bridge.select();}
+ mark('bootstrap-complete',{at:after,timeOrigin:performance.timeOrigin,clockBracket:[before,after],mainEpoch:settings.mainEpoch,clockVerified});
+ if(settings.mode==='first-folder-selection'){status.textContent='Owned fixture folder selection';await frames();mark('selection-shell-visible',{at:epoch()});fixture=await bridge.select();}
  else fixture=await bridge.load();
- identity=fixture.id;bridge.event('fixture-body-delivered',{at:epoch(),bytes:fixture.bytes,id:fixture.id});
+ identity=fixture.id;mark('fixture-body-delivered',{at:epoch(),bytes:fixture.bytes,id:fixture.id});
+ mark('create-editor-start',{at:epoch()});
  editor=createEditor(host,{value:fixture.text,mode:'live',paths:()=>['Fixture.md'],interactionState:{active:false},canMutate:guard,isCurrent:guard,
   validateChange:()=>{if(!guard())throw Error('Fixture interaction guard denied the edit');},onChangeRejected:fail,open:()=>{},
   // Enable the same live embed/Base extension slots. This declared plain fixture
@@ -40,15 +45,18 @@ const startup=(async()=>{
    const event=trusted.findLast(item=>item.data===insert&&epoch()-item.at<1000);
    if(probes.some(probe=>probe.name===name)||name==='unknown'||sequence>2){fail(Error('Unexpected or repeated editor change'));return;}
    const caret=view!.state.selection.main.head,probe:any={name,insert,sequence,appliedEpoch:epoch(),identity,guard:guard(),trusted:event?.trusted===true,inputType:event?.type??null,caret,expectedCaret:fixture.caret+sequence,documentLength:view!.state.doc.length};probes.push(probe);
-   bridge.event('input-applied',probe);
-   probe.journalPending=bridge.journal({name,insert,sequence,identity,from:fixture.caret+sequence-1,caret,beforeLength:fixture.bytes+sequence-1,afterLength:view!.state.doc.length,appliedEpoch:probe.appliedEpoch}).then((ack:any)=>{probe.journal=ack;bridge.event('journal-ack',{name,at:epoch(),ackEpoch:ack.ackEpoch});},fail);
-   probe.paintPending=frames().then(()=>{probe.caretAfterPaint=view?.state.selection.main.head;probe.expectedCaretAfterPaint=fixture.caret+probes.length;bridge.event('input-painted',{name,at:epoch(),caret:probe.caretAfterPaint});});
+   mark('input-applied',probe);
+   probe.journalPending=bridge.journal({name,insert,sequence,identity,from:fixture.caret+sequence-1,caret,beforeLength:fixture.bytes+sequence-1,afterLength:view!.state.doc.length,appliedEpoch:probe.appliedEpoch}).then((ack:any)=>{probe.journal=ack;mark('journal-ack',{name,at:epoch(),ackEpoch:ack.ackEpoch});},fail);
+   probe.paintPending=frames().then(()=>{probe.caretAfterPaint=view?.state.selection.main.head;probe.expectedCaretAfterPaint=fixture.caret+probes.length;mark('input-painted',{name,at:epoch(),caret:probe.caretAfterPaint});});
   }});
+ mark('create-editor-end',{at:epoch()});
  view=EditorView.findFromDOM(host.querySelector('.cm-editor')!)!;if(!view)throw Error('Production EditorView not found');
  const initialDocumentLength=view.state.doc.length,initialPrefixMatches=view.state.doc.sliceString(0,fixture.prefix.length)===fixture.prefix;
  if(initialDocumentLength!==fixture.bytes||!initialPrefixMatches)throw Error('Initial fixture document does not match its identity');
+ mark('restore-start',{at:epoch()});
  editor.restoreViewState?.({selection:{ranges:[{anchor:fixture.caret,head:fixture.caret}],mainIndex:0},scrollTop:0,scrollLeft:0});
- ready=true;editor.setInteractionState?.({active:true});editor.focus();await frames();
+ mark('restore-end',{at:epoch()});
+ ready=true;editor.setInteractionState?.({active:true});mark('focus-start',{at:epoch()});editor.focus();mark('focus-end',{at:epoch()});mark('ready-frames-start',{at:epoch()});await frames();mark('ready-frames-end',{at:epoch()});
  const bounds=view.contentDOM.getBoundingClientRect(),visible=bounds.width>0&&bounds.height>0&&bounds.top<innerHeight&&bounds.bottom>0;
  firstViewportEpoch=epoch();
  const visibleText=[...host.querySelectorAll('.cm-line')].slice(0,5).map(line=>line.textContent).join('\n');
@@ -65,8 +73,8 @@ bridge.onFinish(async()=>{
   const restored=fixture?value.slice(0,fixture.caret)+value.slice(fixture.caret+inserted.length):value;
   const sourceSha=await digest(restored),editedSha=await digest(value);
   const body={checkedEpoch,sourceSha,editedSha,sourceMatches:sourceSha===fixture?.sha256,editedMatches:!!fixture&&value.length===fixture.bytes+probes.length&&value.slice(fixture.caret,fixture.caret+inserted.length)===inserted};
-  bridge.event('full-body-checked',{at:epoch(),sourceSha,editedSha});
-  await bridge.result({floorOnly:true,fixtureId:identity,expectedBytes:fixture?.bytes,initialDocumentLength:initial?.initialDocumentLength,initialPrefixMatches:initial?.initialPrefixMatches,viewportMatches:initial?.viewportMatches,clockVerified:initial?.clockVerified,readyIdentity:initial?.id,editableAtReady:initial?.editable&&initial?.visible,firstViewportEpoch,body,probes:probes.map(({journalPending,paintPending,...probe})=>probe),errors,rendererTimeOrigin:performance.timeOrigin});
- }catch(error){fail(error);await bridge.result({floorOnly:true,probes:[],errors,rendererTimeOrigin:performance.timeOrigin});}
+  mark('full-body-checked',{at:epoch(),sourceSha,editedSha});
+  await bridge.result({floorOnly:true,fixtureId:identity,expectedBytes:fixture?.bytes,initialDocumentLength:initial?.initialDocumentLength,initialPrefixMatches:initial?.initialPrefixMatches,viewportMatches:initial?.viewportMatches,clockVerified:initial?.clockVerified,readyIdentity:initial?.id,editableAtReady:initial?.editable&&initial?.visible,firstViewportEpoch,body,probes:probes.map(({journalPending,paintPending,...probe})=>probe),errors,rendererEvents,rendererModuleEntryEpoch,rendererTimeOrigin:performance.timeOrigin});
+ }catch(error){fail(error);await bridge.result({floorOnly:true,probes:[],errors,rendererEvents,rendererModuleEntryEpoch,rendererTimeOrigin:performance.timeOrigin});}
 });
 addEventListener('beforeunload',()=>{disposed=true;editor?.destroy();});
