@@ -1,0 +1,96 @@
+# Real packaged Zorid startup benchmark
+
+This harness launches the supplied **actual `.app` executable**. It does not load
+a development launcher, build a replacement app, or set `isPackaged` manually.
+It requires an exclusive app profiling slot. Preparing or testing this harness
+does not establish any native startup result.
+
+```sh
+node scripts/packaged-startup-profile/run.mjs \
+  --candidate-app /absolute/path/to/candidate/Zorid.app \
+  --baseline-app /Users/ctk/Applications/Zorid.app \
+  --candidate-source-manifest /absolute/path/to/matching/.release/inputs.json \
+  --notes 1000 --repetitions 1 --seed 42
+```
+
+`--baseline-source-manifest` is also supported. Both manifests are optional; each
+provided file is retained and its file/native hashes checked against the actual
+ASAR and packaged host. Without one, source provenance is **unknown**. An ASAR
+hash or the harness Git commit is never substituted for an app source commit.
+The harness pins the executable, Electron framework, native host, ASAR and plist
+and records the actual main process Electron version. Different Electron versions
+are an explicit comparison confound, not silently treated as equal runtimes.
+
+Two byte-identical APFS `.app` clones are made under a fresh owned
+`/private/tmp/zorid-packaged-startup-*` campaign. They are reused across cases;
+profiles, vaults and `ZORID_LOCAL_DATA_DIR` are unique to each baseline/candidate
+repetition. No installed bundle, real vault or real profile is changed. The clone
+is launched directly with its ordinary packaged entry, `--user-data-dir`, a
+loopback renderer CDP port and main inspector. Dev/fixture/native overrides and
+inherited Node/Electron debugging environment are removed. Main scope validation
+requires actual `app.isPackaged`, the cloned ASAR, exact owned profile and data
+directory before any probe. Vault selection is independently checked too.
+
+The matrix randomizes baseline/candidate pair order with a recorded seed. Each
+pair runs first import followed by a normal process reopen of the same profile.
+Each launch measures the correct selected 8 KiB note, opening a different ordinary
+note, opening an exact **432,000-byte** note and normal Base view readiness. A
+fresh-import shell, Welcome page, blank editor, wrong file or truncated body can
+never satisfy the selected-note check. Reopen preparation returns to Note0000
+through its normal file-tree command before normal quit.
+
+The renderer observer is registered with
+`Page.addScriptToEvaluateOnNewDocument` as early as the owned target is available,
+then installed in the current document if needed. Main and renderer observations
+are buffered. Pre-attachment phases remain censored. Main request observation
+retains normal Promise/result identity and records actual receipt metadata, not
+bodies. Composite effect kind/priority stays unknown unless its exact committed
+descriptor was actually observed.
+
+All elapsed clocks use the runner's monotonic spawn/open origin. Remote
+`performance.now()` events map through request/response handshake **intervals**;
+independent `timeOrigin` values are never naively subtracted. Handshake bounds,
+attachment overhead and late input dispatch remain in each receipt.
+
+There is one earliest-ready probe and one fixed 800 ms attempt, without retries.
+Normal trusted CDP keyboard input must produce a trusted `beforeinput` in the
+exact selected CodeMirror, with exact document growth, caret and post-paint state.
+Initial length/prefix, known first viewport text and two frames are checked. Full
+body hashing happens after the deadline. Ordinary Save and trusted Undo restore
+the original fixture, verified against physical files and read-only Core reads.
+No CodeMirror transaction, bridge write or direct filesystem edit simulates input
+or restoration.
+
+An 800 ms success requires conservative clock bounds to meet the target. A valid
+miss requires a continuously installed observer to show the correct editor was
+not ready at the deadline, followed by actual trusted input. If the inspector or
+observer was not ready to observe the deadline, the result is **indeterminate**;
+later successful input is a diagnostic, not a fabricated valid miss or success.
+
+Base timing is separately labeled: visible enabled controls, a current/non-busy
+grid, exact expected row count, a known fixture row and two frames. It does not
+claim CodeMirror input or protected Base-edit authority.
+
+Actual successful Core commit receipts matching readback ID/revision and
+checkpoint acknowledgments are retained when observable. Independent journal
+disk heads are a separate read-only artifact; their existence is **not** a
+journal fsync/ACK, power-loss durability or recovery proof. Missing authority
+evidence is explicitly `not-observed`, never replaced by a fixture journal.
+
+Every owned PID and ordinary quit/exit is recorded. TERM/KILL fallback or an
+unverifiable process proof invalidates acceptance. Only paths under the two
+unique clone bundles may be signaled. Clones are removed after all owned PIDs
+are absent; `--keep-clones` retains them for diagnosis. Profiles, fixtures, logs,
+per-launch receipts and the campaign report remain. A run exits zero only when
+artifacts/cleanup are valid and all candidate note targets are met; inspect
+individual outcomes and the separate baseline results, not exit status alone.
+
+Other bounded options: `--out` (fresh owned prefix above), `--timeout-ms` (4–120s),
+`--shutdown-timeout-ms` (10–120s), `--repetitions` (1–5), `--notes` (2–10000).
+Filesystem caches are uncontrolled; these are process-cold, **not disk-cold** runs.
+
+Pure protocol/oracle checks do not launch Electron, compile Rust or package:
+
+```sh
+node --test scripts/packaged-startup-profile/*.test.mjs
+```
