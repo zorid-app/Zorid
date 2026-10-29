@@ -4,10 +4,11 @@ import { Text, Binary, SquareCheck, Calendar, CalendarClock, List, Tags, Link, C
 import type { IconNode } from 'lucide';
 import { BASE_TABLE_CLIPBOARD_LIMIT, baseTableClipboardHTML, baseTableCellsFromHTML, parseBaseTableTSV } from './table-clipboard.ts';
 import type { BaseViewPatch, BaseValue } from './document.ts';
+import { baseViewSource } from './document.ts';
 import type { BasePropertyPresentation } from './presentation-common.ts';
 import type { BasePropertyEditorCompletionIntent } from './property-widgets.ts';
 import { basePropertyPopoverOwner } from './property-widgets.ts';
-import { displaySharedBaseValue } from './presentation-common.ts';
+import { displaySharedBaseValue, groupIdentity } from './presentation-common.ts';
 import { BASE_NULL, baseValueToString, baseExpressionValue } from './expression.ts';
 import type { BaseExpressionValue } from './expression.ts';
 import type { BaseQueryResult, BaseQueryRow } from './query.ts';
@@ -126,6 +127,16 @@ function sameConfigurationValue(left: unknown, right: unknown): boolean {
 function publishedConfigurationMatches(view: BaseQueryResult['view'], patch: BaseViewPatch): boolean {
   return Object.entries(patch).every(([key, expected]) => sameConfigurationValue(key === 'columnSize' ? view[key] ?? {} : view[key], key === 'columnSize' ? expected ?? {} : expected));
 }
+function collapseContext(snapshot: BaseQueryResult, entryId: string | undefined) {
+  const view = snapshot.view, grouping = view.groupBy;
+  const groupBy = grouping && typeof grouping === 'object' && !Array.isArray(grouping)
+    ? Object.fromEntries(Object.entries(grouping).filter(([key]) => key !== 'direction')) : grouping;
+  const property = groupBy && typeof groupBy === 'object' && !Array.isArray(groupBy) ? groupBy.property : undefined;
+  // Group order, sorting and query revisions do not change a group's meaning.
+  // Only exposed configuration belongs here; no hidden formula state is inferred.
+  return structuredClone({ entryId, view: typeof view.id === 'string' ? { id: view.id } : { name: view.name }, type: view.type,
+    source: baseViewSource(view), groupBy, formulas: typeof property === 'string' && property.startsWith('formula.') ? view.formulas : undefined });
+}
 function display(value: BaseExpressionValue, shared = false): string {
   if (value.type === 'null') return '';
   if (value.type === 'namespace') return value.name;
@@ -160,7 +171,8 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
   const editFocusEpochs = new WeakMap<HTMLElement, number>();
   let focusEpoch = 0;
   let blockedActivation: { cell: HTMLElement; event: MouseEvent; open: boolean; title: boolean; checkbox: boolean } | undefined;
-  const collapsed = new Set<number>();
+  const collapsed = new Set<string>();
+  let collapsedContext: ReturnType<typeof collapseContext> | undefined;
   const widgetDisposers = new Map<HTMLElement, () => void>();
   let bulkPending = false, configPending = false;
   let newPending = false;
@@ -259,7 +271,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     for (let i = 0; i < result.groups.length; i++) {
       const group = result.groups[i];
       if (group.key !== null) items.push({ group: i });
-      if (!collapsed.has(i)) {
+      if (!collapsed.has(groupIdentity(group))) {
         group.rows.forEach((row, rowIndex) => items.push({ row, groupIndex: i, rowIndex }));
         if (result.groups.length > 1 && group.key !== null && result.properties.some(property => options.getSummary?.(property, i))) items.push({ summary: i });
       }
@@ -589,7 +601,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     if (!property) return false;
     const group = result.groups.findIndex(group => group.rows.some(row => row.path === path && row.entryId === entryId && typeof row.revision === 'string'));
     if (group < 0) return false;
-    if (collapsed.delete(group)) rebuildItems();
+    if (collapsed.delete(groupIdentity(result.groups[group]))) rebuildItems();
     const item = items.find(item => item.row?.path === path && item.row.entryId === entryId && typeof item.row.revision === 'string');
     if (!item?.row || !/\.md$/i.test(path)) return false;
     range = undefined; anchor = undefined;
@@ -847,9 +859,10 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
         for (const property of result.properties) el.append(createSummaryCell(property, item.summary!));
       } else {
         el.classList.add('zorid-bases-table-group'); const button = doc.createElement('button'), group = result.groups[item.group], token = revision;
-        button.type = 'button'; button.dataset.groupButton = String(item.group); button.setAttribute('aria-expanded', String(!collapsed.has(item.group)));
-        button.textContent = `${collapsed.has(item.group) ? '▸' : '▾'} ${group.key?.type === 'null' ? 'Empty' : display(group.key!, result.shared !== undefined)} (${group.rows.length})`;
-        button.addEventListener('click', () => { if (destroyed || token !== revision || !body.contains(button) || hasActiveEdits()) return; collapsed.has(item.group) ? collapsed.delete(item.group) : collapsed.add(item.group); rebuildItems(); range = undefined; anchor = undefined;
+        const identity = groupIdentity(group);
+        button.type = 'button'; button.dataset.groupButton = String(item.group); button.setAttribute('aria-expanded', String(!collapsed.has(identity)));
+        button.textContent = `${collapsed.has(identity) ? '▸' : '▾'} ${group.key?.type === 'null' ? 'Empty' : display(group.key!, result.shared !== undefined)} (${group.rows.length})`;
+        button.addEventListener('click', () => { if (destroyed || token !== revision || !body.contains(button) || hasActiveEdits()) return; collapsed.has(identity) ? collapsed.delete(identity) : collapsed.add(identity); rebuildItems(); range = undefined; anchor = undefined;
           if (selection && !items.some(item => item.row?.path === selection!.path)) {
             const first = items.find(item => item.row)?.row;
             selection = first && result.properties[0] ? { path: first.path, property: result.properties[0] } : undefined;
@@ -1227,6 +1240,11 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     if (destroyed || (initialized && next === result)) return;
     const selectedEntryId = selection && result.rows.find(row => row.path === selection!.path)?.entryId;
     const entryId = options.getConfigurationIdentity?.();
+    const nextCollapseContext = collapseContext(next, entryId);
+    if (!sameConfigurationValue(collapsedContext, nextCollapseContext)) collapsed.clear();
+    collapsedContext = nextCollapseContext;
+    const groupIdentities = new Set(next.groups.map(groupIdentity));
+    for (const identity of collapsed) if (!groupIdentities.has(identity)) collapsed.delete(identity);
     if (initialized && (next.view.name !== result.view.name || next.view.type !== result.view.type || entryId !== configurationEntryId)) configurationScope++;
     configurationEntryId = entryId;
     for (const command of resizeCommands) if (!next.properties.includes(command.property)) command.retired = true;
@@ -1237,7 +1255,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     const focusedColumn = focusedHeader?.closest<HTMLElement>('[role="columnheader"]');
     const headerFocus = focusedColumn && (focusedHeader === focusedColumn || focusedHeader?.getAttribute('role') === 'separator') ? { property: focusedColumn.dataset.property!, separator: focusedHeader !== focusedColumn } : undefined;
     const cancelledDraft = !!editing;
-    initialized = true; revision++; stopRename?.(); stopDrag?.(); stopResize?.(); closeMenu?.(); closePicker?.(); draggedColumn = undefined; resizeWidths.clear(); measuredWidths.clear(); for (const cell of [...widgetDisposers.keys()]) releaseCell(cell); for (const cell of root.querySelectorAll('[data-base-editing]')) cell.removeAttribute('data-base-editing'); range = undefined; anchor = undefined; if (selection) selection.point = undefined; editing = undefined; result = next; collapsed.clear();
+    initialized = true; revision++; stopRename?.(); stopDrag?.(); stopResize?.(); closeMenu?.(); closePicker?.(); draggedColumn = undefined; resizeWidths.clear(); measuredWidths.clear(); for (const cell of [...widgetDisposers.keys()]) releaseCell(cell); for (const cell of root.querySelectorAll('[data-base-editing]')) cell.removeAttribute('data-base-editing'); range = undefined; anchor = undefined; if (selection) selection.point = undefined; editing = undefined; result = next;
     status.textContent = cancelledDraft ? 'Results changed. The unfinished edit was cancelled.' : '';
     root.dataset.baseRenderedVersion = String(result.version);
     root.setAttribute('aria-label', result.view.name);
@@ -1247,7 +1265,13 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     }
     if (!selection || !result.rows.some(row => row.path === selection!.path) || !result.properties.includes(selection.property)) selection = result.rows[0] && result.properties[0] ? { path: result.rows[0].path, property: result.properties[0] } : undefined;
     dimensions(); rebuildItems();
-    const selectedItem = items.find(item => item.row?.path === selection?.path);
+    let selectedItem = items.find(item => item.row?.path === selection?.path);
+    // A saved edit may move the selected row into a retained collapsed group.
+    // Keep keyboard entry on visible rows without expanding or moving outside focus.
+    if (selection && !selectedItem?.row) {
+      selectedItem = items.find(item => item.row);
+      if (selectedItem?.row) selection.path = selectedItem.row.path;
+    }
     if (selection && selectedItem?.row) selection.point = { group: selectedItem.groupIndex, row: selectedItem.rowIndex, column: result.properties.indexOf(selection.property) };
     // Disposal/host callbacks may have deliberately moved focus outside. Only
     // replace a target that was still focused immediately before its removal.
