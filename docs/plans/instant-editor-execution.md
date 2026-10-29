@@ -48,6 +48,25 @@ was blocked; that is historical, not a current execution blocker.
 ## Current owners and acceptance state
 
 Latest composition: `49c9177c`, then bounded journal idle cleanup `efd2aa6c`.
+Successor performance candidate source `cd480ee7` composes independent note
+protection and its exact-receipt/drain/provenance review corrections, continued
+transient autosave, deferred selected-note counts and concurrent lazy editor
+prewarming. Corrected Notes `312d5dd6`, autosave `175b9400` and editor split
+`59d885c8` have independent source acceptance. Counts review remains open.
+The composed 159 checks passed with no skips; TypeScript and native-mode frontend
+build passed. One prior 151-check run failed because an emoji fixture reported
+UTF-16 length instead of UTF-8 bytes; only that fixture was corrected, preserving
+the failed log and strict production proof validation.
+
+Actual packaging retry `build-002.json` still FAILED: the new staged workspace
+boundary permits the first empty collection, but electron-builder then falls back
+to the development root and encounters the incompatible pnpm lockfile. The earlier
+collector regression was too shallow to cover this fallback. The package owner is
+correcting the complete invocation path. No verified app or install from either run.
+Build 002 source remained unchanged; native binary SHA-256
+`3f1a37a5d4a52a59b709df723941c3f400c8fc323162118d655ec0a0b5594a8b`
+was compiled at `49c9177c`; later changes are renderer/desktop/tooling only.
+
 The interim build at `49c9177c` passed native release compilation, TypeScript,
 frontend generation and desktop module allowlisting. Packaging failed in the
 pnpm dependency collector with `ERR_PNPM_BROKEN_LOCKFILE`; it did not produce a
