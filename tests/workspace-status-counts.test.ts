@@ -5,8 +5,10 @@ import {JSDOM} from 'jsdom';
 import {Workspace} from '../src/ui/workspace.ts';
 import type {EditorOptions,EditorHandle} from '../src/ui/editor.ts';
 import {MemoryAdapter} from '../src/core/memory-adapter.ts';
+import type {PlatformVault} from '../src/platform/index.ts';
+import type {MobileLifecycle} from '../src/platform/mobile-native.ts';
 
-async function setup(t:TestContext,files:Record<string,string>){
+async function setup(t:TestContext,files:Record<string,string>,features:Partial<PlatformVault>={},bridge?:unknown){
   const dom=new JSDOM('<!doctype html><body><div id="app"></div>',{url:'https://zorid.test/',pretendToBeVisual:true});
   const saved=new Map<string,PropertyDescriptor|undefined>(),frames=new Map<number,FrameRequestCallback>(),idle=new Map<number,IdleRequestCallback>();let sequence=0;
   dom.window.requestAnimationFrame=callback=>{const id=++sequence;frames.set(id,callback);return id;};
@@ -20,6 +22,7 @@ async function setup(t:TestContext,files:Record<string,string>){
     saved.set(key,Object.getOwnPropertyDescriptor(globalThis,key));Object.defineProperty(globalThis,key,{configurable:true,writable:true,value});
   }
   dom.window.matchMedia=matchMedia as typeof window.matchMedia;
+  if(bridge)Object.assign(dom.window,{zorid:bridge});
   const factory=(parent:HTMLElement,options:EditorOptions):EditorHandle=>{
     const body=document.createElement('textarea');body.setAttribute('aria-label','Note body');body.value=options.value;parent.append(body);
     body.addEventListener('input',()=>{options.validateChange?.(body.value);options.onChange(body.value);});
@@ -27,7 +30,7 @@ async function setup(t:TestContext,files:Record<string,string>){
   };
   const root=document.querySelector<HTMLElement>('#app')!,workspace=new Workspace(root,factory),adapter=new MemoryAdapter(files);
   t.after(async()=>{try{await workspace.destroy();}finally{dom.window.close();for(const[key,descriptor]of saved){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else Reflect.deleteProperty(globalThis,key);}}});
-  await workspace.start({adapter,id:'test:deferred-counts',label:'Test'});
+  await workspace.start({adapter,id:'test:deferred-counts',label:'Test',...features});
   return{dom,workspace,root,frames,idle,adapter,
     frame(){const batch=[...frames.values()];frames.clear();for(const callback of batch)callback(0);},
     idleTurn(){assert.ok(idle.size,'expected one idle count slice');const[id,callback]=idle.entries().next().value!;idle.delete(id);callback({didTimeout:false,timeRemaining:()=>8});},
@@ -116,4 +119,34 @@ test('browsers without requestIdleCallback still update counts after paint throu
   await ui.workspace.openNote('Note.md');assert.match(ui.status(),/… words/);ui.frame();ui.frame();
   const end=Date.now()+1000;while(ui.status().includes('…')){if(Date.now()>end)assert.fail('fallback counts did not finish');await new Promise(resolve=>setTimeout(resolve,5));}
   assert.match(ui.status(),/3 words/);assert.match(ui.status(),/15 characters/);
+});
+
+function gate(){let resolve!:()=>void;const promise=new Promise<void>(done=>{resolve=done;});return{promise,resolve};}
+for(const reason of ['background','rejected-switch'] as const)test(`counts resume without an edit after a held ${reason} ACK restores the mounted owner`,async t=>{
+  let lifecycle!:Parameters<MobileLifecycle['subscribe']>[0];
+  const ui=await setup(t,{'Note.md':'Count after lifecycle'},{mobileLifecycle:{subscribe(handler){lifecycle=handler;return()=>{};}}});await ui.workspace.openNote('Note.md');
+  const entered=gate(),held=gate(),error=Error('Native ACK rejected');
+  const pending=lifecycle(reason==='background'?'background':'switchVault',async()=>{entered.resolve();await held.promise;if(reason==='rejected-switch')throw error;});
+  const settled=reason==='background'?pending:assert.rejects(pending,error);
+  try{
+    await entered.promise;assert.equal(ui.root.inert,true);ui.frame();ui.frame();if(ui.idle.size)ui.idleTurn();
+    assert.equal(ui.idle.size,0);assert.equal(ui.frames.size,0);assert.match(ui.status(),/… words/);
+    held.resolve();await settled;assert.notEqual(ui.root.inert,true);
+    ui.frame();ui.frame();ui.drain();assert.match(ui.status(),/3 words/);assert.match(ui.status(),/21 characters/);
+  }finally{held.resolve();await settled.catch(()=>{});}
+});
+
+for(const mode of ['direct','desktop'] as const)test(`failed pre-drain ${mode} close rearms canceled counts without editing`,async t=>{
+  let desktopClose!:()=>Promise<void>,armed=false;
+  const entered=gate(),held=gate(),bridge={
+    onBeforeClose(handler:()=>Promise<void>){desktopClose=handler;return()=>{};},
+    async dismissContextMenu(){if(armed){entered.resolve();await held.promise;throw Error('Injected close cleanup failure');}},
+  };
+  const ui=await setup(t,{'Note.md':'Retained after close failure'}, {},bridge);await ui.workspace.openNote('Note.md');armed=true;
+  const closing=mode==='direct'?ui.workspace.destroy():desktopClose(),rejected=assert.rejects(closing,/Injected close cleanup failure/);
+  try{
+    await entered.promise;ui.frame();ui.frame();if(ui.idle.size)ui.idleTurn();assert.equal(ui.idle.size,0);
+    held.resolve();await rejected;armed=false;
+    assert.notEqual(ui.root.inert,true);ui.frame();ui.frame();ui.drain();assert.match(ui.status(),/4 words/);assert.match(ui.status(),/28 characters/);
+  }finally{held.resolve();armed=false;await rejected.catch(()=>{});}
 });
