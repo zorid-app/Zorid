@@ -23,6 +23,7 @@
 .bases-kanban-card-properties { display: flex; flex-direction: column; gap: 8px; padding-block: 8px; }
 .bases-kanban-card-property { height: 24px; min-width: 0; overflow: hidden; }
 .bases-kanban-card-property.mod-title { height: 24px; font-weight: 600; pointer-events: none; --link-color: var(--text-normal, #222); --link-decoration: none; }
+.bases-kanban-card-property.mod-title .internal-link { color: var(--text-normal, #222); text-decoration: none; }
 .bases-kanban-card-property.mod-title .bases-kanban-card-label { display: none; }
 .bases-kanban-card-label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; clip-path: inset(50%); overflow: hidden; white-space: nowrap; }
 .bases-kanban-card-line { height: var(--bases-kanban-line-height, 24px); line-height: var(--bases-kanban-line-height, 24px); padding-inline: 12px; font-size: var(--font-ui-medium, 14px); }
