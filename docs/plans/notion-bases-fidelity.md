@@ -83,3 +83,27 @@ No protected app quit, bundle replacement or deletion is cleared by this branch.
 These component/native clipboard checks are not whole-app storage acceptance.
 Exact animation/every-interaction parity remains unproven. Separate Base post-edit
 latency and external adoption/Search latency findings remain OPEN.
+
+## User-requested main merge and Applications staging — 2026-10-29
+
+The user explicitly requested merge without further cross-session coordination;
+clean main fast-forwarded de72ad3f→58da213c. Tested runtime is byte-identical to the
+reviewed branch. The user then explicitly requested Applications replacement.
+Rebuilt native frontend using existing frozen44.9.1 dependency graph; PASS.
+Standard packaging hit the existing pnpm collector lockfile issue; isolated staged
+packaging succeeded without runtime/source changes.356 packed files verified.
+Embedded native host remains a1c862be; no Rust compilation occurred.
+
+Actual packaged app with separate disposable userData/vault, no host/dev overrides:
+ordinary-note save plus restart and Base render PASS in both normal0/nullsignal
+launches. Evidence under isolated worktree tmp/notion-fidelity-20261028:
+install-build001.log, install-package003.log, install-verify001.log,
+package-smoke001/receipt.json, applications-stage-receipt001.json.
+
+Verified byte-identical new bundle staged at
+/Users/ctk/Applications/.Zorid-next-58da213c.app (273 file/link inventory entries).
+ASAR33474da8c2e7369b017dec4a11404f192e758df1c86f76d3aebffd7f6d1398ad.
+Installation and previous-bundle deletion remain PENDING: exact protected real
+PID71549 is still running, with no new proof of saved Home/Project Idea drafts.
+No Quit, reload, freeze, draft apply or replacement was attempted. User was asked
+only for the current durable-save status after all safe staging/checks completed.
