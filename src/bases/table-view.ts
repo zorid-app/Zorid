@@ -437,7 +437,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     header.replaceChildren();
     for (const [index, property] of result.properties.entries()) {
       const cell = doc.createElement('div'); cell.className = 'zorid-bases-table-column';
-      cell.setAttribute('role', 'columnheader'); cell.setAttribute('aria-colindex', String(index + 1)); cell.tabIndex = -1;
+      cell.setAttribute('role', 'columnheader'); cell.setAttribute('aria-colindex', String(index + 1)); cell.tabIndex = 0;
       cell.textContent = options.getPropertyLabel?.(property) ?? property.replace(/^(?:note|file|formula)\./, '');
       cell.dataset.property = property; cell.dataset.baseTooltip = cell.textContent ?? property;
       const label = doc.createElement('span'); label.className = 'zorid-bases-table-header-name'; label.textContent = cell.textContent; cell.replaceChildren(propertyGlyph(property), label);
