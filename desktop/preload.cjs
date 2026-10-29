@@ -1,7 +1,33 @@
 'use strict';
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 const invoke = (name, ...args) => ipcRenderer.invoke(`zorid:${name}`, ...args);
-const durable = async (name, ...args) => {
+// This optional route transfers generic errors as data. Keep legacy throws and
+// all established domain envelopes unchanged for older renderer callers.
+const durableFailure = (code, commitUncertain, source) => ({durableError:true,schemaVersion:1,error:{code,commitUncertain,source}});
+const plain = value => !!value && typeof value === 'object' && !Array.isArray(value)
+  && [null,Object.prototype].includes(Object.getPrototypeOf(value))
+  && Reflect.ownKeys(value).every(key => typeof key === 'string' && Object.hasOwn(Object.getOwnPropertyDescriptor(value,key),'value'));
+const exact = (value, keys) => plain(value) && Reflect.ownKeys(value).length === keys.length && keys.every(key => Object.hasOwn(value,key));
+const durableMethods = new Set(['readText','readTextById','composeNote','planWrite','prepare','commit','query','listUnacknowledged','acknowledge',
+  'checkpoints.load','checkpoints.compareAndSwap','checkpoints.list','checkpoints.changes','createText','createTextReceipt','fileCommand',
+  'captureSavedSource','releaseSavedSource','databaseCommand','workblockCommand','documentCommand','documentDrafts','binaryCommand',
+  'documentRuntimeObserve','documentRuntimeControl','documentRuntimeAckControl','documentRuntimeAckOutcome']);
+const durable = (name, ...args) => runDurable(false,name,args);
+const durableRequest = request => {
+  const kind = plain(request) ? request.kind : undefined;
+  const keys = kind === 'context' ? ['kind','vault'] : kind === 'invoke' ? ['kind','vault','admissionId','method','args'] : ['kind','vault','admissionId'];
+  if (!['context','recover','invoke','release'].includes(kind) || !exact(request,keys)
+    || typeof request.vault !== 'string' || !request.vault || request.vault.length > 4096
+    || kind !== 'context' && (typeof request.admissionId !== 'string' || !request.admissionId || request.admissionId.length > 128)
+    || kind === 'invoke' && (!durableMethods.has(request.method) || !Array.isArray(request.args) || request.args.length > 2)) {
+    return Promise.resolve(durableFailure('invalid_durable_request',false,'protocol'));
+  }
+  if (kind === 'context') return runDurable(true,'getDurableContext',[request.vault]);
+  if (kind === 'recover') return runDurable(true,'recoverDurableContext',[request.vault,request.admissionId]);
+  if (kind === 'release') return runDurable(true,'releaseDurableContext',[request.vault,request.admissionId]);
+  return runDurable(true,'durableInvoke',[request.vault,request.admissionId,request.method,Array.prototype.slice.call(request.args)]);
+};
+const runDurable = async (typed, name, args) => {
   const databases = name === 'durableInvoke' && args[2] === 'databaseCommand';
   const workblock = name === 'durableInvoke' && args[2] === 'workblockCommand';
   const planning = name === 'durableInvoke' && args[2] === 'planWrite';
@@ -13,7 +39,14 @@ const durable = async (name, ...args) => {
     if (planning) return {notePlanning:true,schemaVersion:1,ok:false,error:{code:'planning_transport_lost',source:'host',commitUncertain:true}};
     if (workblock) return {workblocks:true,schemaVersion:1,ok:false,error:{code:'workblock_transport_lost',source:'host',commitUncertain:true}};
     if (runtime) return {documentRuntime:true,schemaVersion:1,ok:false,error:{code:'document_runtime_transport_lost',source:'host',commitUncertain:true}};
+    if (typed) return durableFailure('durable_transport_lost',true,'transport');
     throw error;
+  }
+  if (typed && !databases && !planning && !workblock && !runtime) {
+    if (exact(reply,['ok','result']) && reply.ok === true) return reply.result;
+    const valid = exact(reply,['ok','error']) && reply.ok === false && exact(reply.error,['code','commitUncertain'])
+      && typeof reply.error.code === 'string' && /^[a-z_]{1,64}$/.test(reply.error.code) && typeof reply.error.commitUncertain === 'boolean';
+    return valid ? durableFailure(reply.error.code,reply.error.commitUncertain,'host') : durableFailure('invalid_durable_response',true,'protocol');
   }
   if (databases) {
     if(reply?.ok===true)return {databases:true,schemaVersion:1,ok:true,value:reply.result};
@@ -95,6 +128,7 @@ contextBridge.exposeInMainWorld('zorid', Object.freeze({
     };
   },
   getDurableContext: vault => durable('getDurableContext', vault),
+  durableRequest,
   recoverDurableContext: (vault, admissionId) => durable('recoverDurableContext', vault, admissionId),
   durableInvoke: (vault, admissionId, method, args) => durable('durableInvoke', vault, admissionId, method, args),
   onDocumentRuntimeNudge: (vault, admissionId, callback, onRetire) => {

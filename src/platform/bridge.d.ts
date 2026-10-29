@@ -18,7 +18,17 @@ export interface RecoveryHistory {
 export interface DesktopVault { path: string; name: string; reconciliation?: DesktopReconciliation }
 export interface DesktopWindowInfo { id: string; initialState: 'restore' | 'empty' }
 export interface VaultChange { vault?: string; type: string; path?: string; message?: string; reconciliation?: DesktopReconciliation }
+/** Optional internal route over the existing admitted desktop IPC handlers. */
+export type DesktopDurableRequest = {kind:'context';vault:string}
+  | {kind:'recover'|'release';vault:string;admissionId:string}
+  | {kind:'invoke';vault:string;admissionId:string;method:string;args:readonly unknown[]};
+export interface DesktopDurableFailure {
+  durableError:true;schemaVersion:1;
+  error:{code:string;commitUncertain:boolean;source:'host'|'transport'|'protocol'};
+}
 export interface DesktopBridge {
+  /** Successes/domain envelopes are unchanged; generic errors are plain data. */
+  durableRequest?(request:DesktopDurableRequest):Promise<unknown>;
   getWindowInfo?(): Promise<DesktopWindowInfo>;
   newWindow?(): Promise<{ id: string }>;
   setMenuHotkeys?(bindings: { id: 'new-window' | 'close-tab'; shortcut: string }[]): Promise<void>;

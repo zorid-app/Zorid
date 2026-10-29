@@ -1,3 +1,4 @@
+import {createDesktopDurableTransport} from './desktop-durable-transport.ts';
 import {createDatabaseService} from '../core/databases.ts';
 import type {DatabaseService,DatabaseRequest,DatabaseResponse,DesktopDatabaseRequest} from '../core/databases.ts';
 import {captureDatabaseRequest} from '../../desktop/databases.cjs';
@@ -64,7 +65,8 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
     },
     retry:async()=>{reconciliationStatus=await bridge.retryReconciliation!(info.path);},
   }:undefined;
-  const binding = recoveredBinding??await bridge.getDurableContext?.(info.path);
+  const transport=createDesktopDurableTransport(bridge);
+  const binding = recoveredBinding??await transport.getDurableContext?.(info.path);
   let durableWrites: DurableWrites | undefined;
   let release: (() => Promise<void>) | undefined;
   let recovery:PlatformVault['recovery'];
@@ -77,8 +79,8 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
   let documentRuntime:ReturnType<typeof createDesktopDocumentRuntime>|undefined;
   let drafts:ReturnType<typeof createDesktopDocumentDraftTransport>|undefined;
   if (binding) {
-    if (!bridge.durableInvoke || !bridge.releaseDurableContext || !binding.admissionId || !binding.scope?.vaultId || !binding.scope.clientId) throw new Error('Incomplete durable desktop capability');
-    const invoke = bridge.durableInvoke.bind(bridge), releaseContext = bridge.releaseDurableContext.bind(bridge);
+    if (!transport.durableInvoke || !transport.releaseDurableContext || !binding.admissionId || !binding.scope?.vaultId || !binding.scope.clientId) throw new Error('Incomplete durable desktop capability');
+    const invoke = transport.durableInvoke, releaseContext = transport.releaseDurableContext;
     const admissionId = binding.admissionId, scope = Object.freeze({...binding.scope});
     let released = false,releasePending:Promise<void>|undefined,recovering:Promise<PlatformVault>|undefined,recovered:PlatformVault|undefined;
     let durableEpoch=0,retainedTarget:DurableWrites,recoveryNeeded=false,recoveryStop:(()=>void)|undefined;
@@ -283,7 +285,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
     }
     if(binding.documentSemantics)documents=createDesktopDocumentService(request=>call('documentCommand',request),documentRuntime?.transport,{metadataRowsAvailable:binding.metadataRowsAvailable===true,propertyTargetsAvailable:binding.propertyTargetsAvailable===true,basePreviewAvailable:binding.basePreviewAvailable===true,draftsAvailable:binding.draftsAvailable===true,drafts:drafts?.transport});
     if(binding.binaryLimits)binary=createDesktopBinaryStreams({scope,checkpoints:durableWrites.checkpoints,limits:binding.binaryLimits,assertActive:()=>{if(released||binaryDrained)throw new Error('Desktop binary context released');},invoke:bytes=>call<Uint8Array>('binaryCommand',bytes)});
-    const recoveryBridge=bridge as DesktopBridge&{recoverDurableContext?:(root:string,priorAdmissionId:string)=>Promise<DesktopDurableContext>};
+    const recoveryBridge=transport;
     if(recoveryBridge.recoverDurableContext){
       recoveryStop=bridge.onDocumentRuntimeNudge?.(info.path,admissionId,()=>{},markRetired);
       recovery=Object.freeze({
