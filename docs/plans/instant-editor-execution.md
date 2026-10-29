@@ -21,6 +21,41 @@ The user resumed the existing thread goal: it is active. The objective is not
 complete. Earlier create_goal replacement was rejected while the unfinished goal
 was blocked; that is historical, not a current execution blocker.
 
+## Delivery checkpoint — 2026-10-29, source f08e63d7
+
+User reports unacceptable elapsed time. Freeze scope expansion and prioritize a
+measured performance delivery; all remaining recovery requirements stay open.
+No new version has been installed and the 800 ms target is not yet established.
+
+The former candidate exposed a real regression: 1000-note first-import host hello
+fell from 5667 ms to 222 ms, but full import rose from 18.6 s to 84.2 s and unchanged
+reconciliation exceeded the 180 s cap. Sampling identified repeated full family
+status/graph metrics in scope-only readiness checks. The new scalar readiness
+implementation removes those traversals while preserving dedicated full-status
+corruption checks and selected-source authority validation.
+
+Actual Root validation: readiness 10/10; Store capture/migration suites 83/83;
+Native conditional recovery 22/22; host conditional recovery 7/7. Receipt
+`tmp/instant-editor-validation/native-composed-green003.json` confirms unchanged
+Rust inputs. Release host build004 exited 0; binary SHA-256
+`418f91a0e2afbb3401fc13db47277e0dac36737df043d72dc5f90affdd361d6a`.
+Same physical 1000-note workload remeasurement is next; this binary has not yet
+been verified in a packaged app. Schema19 durable pre-prepare capture is composed
+and these tests pass; caller-owned capture request identity remains an open gap.
+
+The previous packaged pilot is INVALID, not accepted: a malformed Base fixture,
+canceled-quit observation and stale debugger binding invalidated receipts. All
+four owned apps exited normally and were cleaned up. Reviewed harness repairs
+are composed through f08e63d7, with 21/21 Root checks. Protected-draft late-owner
+panel guard has its mounted regression passing. No native fault campaign or final
+800 ms/install acceptance is implied by these focused checks.
+
+Pending, preserved recovery batches include raw Base settings/readable dates and
+load-continuation ownership; remaining review issues must be resolved before
+integration. Do not start further recovery architecture while delivering the
+bounded performance measurement/build. The installed app and real vault data
+remain unchanged.
+
 ## Implementation and evidence gates
 
 1. Establish an honest packaged editor benchmark. Separate process launch from

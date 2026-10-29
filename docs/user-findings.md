@@ -16,6 +16,15 @@ The built-in goal is active again. See [execution gates](plans/instant-editor-ex
 Implementation/review, native measurement, main integration and installed acceptance
 remain distinct; no complete automatic-recovery or 800 ms claim yet.
 
+## Delivery delay — 2026-10-29
+
+User repeatedly requests status and objects to the duration. Root acknowledges
+scope expansion delayed delivery. Freeze new scope, complete measured performance
+build first, and retain automatic recovery work as required, incomplete work.
+Native scalar-readiness and composed recovery tests now pass; release host built.
+Packaged 800 ms proof, integration and installation remain open. See execution
+checkpoint for failed/invalid runs and exact evidence.
+
 ## Current direct user priority: original Notion Bases UX — 2026-10-28
 
 User redirects this session to its ORIGINAL Notion-style Bases task only. Full
