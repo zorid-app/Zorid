@@ -121,6 +121,14 @@ interface Pane {
   propertyTimer?:ReturnType<typeof setTimeout>; refreshPreview?:()=>void; readingFind?:ReadingFind;
   history:string[]; historyIndex:number; persisted?:Record<string,unknown>;
 }
+interface StatusCountJob {
+  buffer:NoteBuffer;text:string;offset:number;words:number;characters:number;inWord:boolean;highSurrogate:boolean;
+  ownerCurrent:()=>boolean;cancel?:()=>void;
+}
+// ECMAScript \s, matching the existing trim/split word definition without
+// creating a substring or regular-expression match for each character.
+const statusWhitespace=(unit:number)=>unit>=0x09&&unit<=0x0d||unit===0x20||unit===0xa0||unit===0x1680
+  ||unit>=0x2000&&unit<=0x200a||unit===0x2028||unit===0x2029||unit===0x202f||unit===0x205f||unit===0x3000||unit===0xfeff;
 interface Settings extends AttachmentImportSettings { theme: 'system' | 'dark' | 'light'; fontSize: number; readableWidth: boolean; showInlineTitle: boolean; defaultMode: 'live'; useTab: boolean; tabSize: number; smartIndentList: boolean; autoConvertHtml: boolean; }
 interface Command { id?: string; name: string; shortcut?: string; icon?: string; action: () => void | Promise<void>; }
 export interface WorkspaceViewFactories { pdf?: typeof createPdfView; media?: typeof createMediaView; canvas?: typeof createCanvasView; base?: typeof createBaseSession }
@@ -163,6 +171,8 @@ export class Workspace {
   private metadataOpenings = new Set<Promise<void>>();
   private metadataGraphs = new WeakMap<HTMLElement,{vault:Vault;frame:CommittedMetadataFrame|null;container:HTMLElement;status:HTMLElement}>();
   private status = el('footer', 'status-bar');
+  private statusCounts=new WeakMap<NoteBuffer,{text:string;words:number;characters:number}>();
+  private statusCountJob?:StatusCountJob;
   private nativeDocumentStatus?:HTMLElement;
   private nativeRecoveryBusy=new WeakSet<NoteBuffer>();
   private treeTab: 'files' | 'search' | 'bookmarks' = 'files';
@@ -1196,6 +1206,7 @@ export class Workspace {
   }
 
   private disposeShell(): void {
+    this.cancelStatusCounts();
     this.nativeDocumentStatus=undefined;
     this.clearDocumentBacklinks();
     this.documentSearchSuspended=true;this.clearDocumentSearch();
@@ -3093,15 +3104,73 @@ export class Workspace {
     status.hidden=!status.childElementCount;
   }
 
+  private cancelStatusCounts():void{
+    const job=this.statusCountJob;this.statusCountJob=undefined;job?.cancel?.();
+  }
+  private statusCountCurrent(job:StatusCountJob):boolean{
+    return this.statusCountJob===job&&job.ownerCurrent()&&job.buffer.text===job.text;
+  }
+  private scheduleStatusCountSlice(job:StatusCountJob,view:Window):void{
+    const run=(budget=2)=>{
+      job.cancel=undefined;
+      if(!this.statusCountCurrent(job)){if(this.statusCountJob===job)this.cancelStatusCounts();return;}
+      const text=job.text,end=Math.min(text.length,job.offset+32768),started=view.performance.now();
+      while(job.offset<end){
+        const unit=text.charCodeAt(job.offset++),whitespace=statusWhitespace(unit);
+        if(!whitespace&&!job.inWord)job.words++;
+        job.inWord=!whitespace;job.characters++;
+        if(unit>=0xdc00&&unit<=0xdfff&&job.highSurrogate)job.characters--;
+        job.highSurrogate=unit>=0xd800&&unit<=0xdbff;
+        if((job.offset&255)===0&&view.performance.now()-started>=budget)break;
+      }
+      if(job.offset<text.length){this.scheduleStatusCountSlice(job,view);return;}
+      if(!this.statusCountCurrent(job))return;
+      this.statusCounts.set(job.buffer,{text,words:job.words,characters:job.characters});
+      this.statusCountJob=undefined;this.renderStatus();
+    };
+    if(typeof view.requestIdleCallback==='function'){
+      const id=view.requestIdleCallback(deadline=>run(deadline.didTimeout?2:Math.max(0.25,Math.min(2,deadline.timeRemaining()))),{timeout:500});
+      job.cancel=()=>view.cancelIdleCallback?.(id);
+    }else{const id=view.setTimeout(()=>run(),0);job.cancel=()=>view.clearTimeout(id);}
+  }
+  private selectedStatusCounts(buffer:NoteBuffer|undefined,text:string):{words:number;characters:number}|undefined{
+    if(!buffer||!text){this.cancelStatusCounts();return{words:0,characters:0};}
+    const cached=this.statusCounts.get(buffer);
+    if(cached?.text===text){this.cancelStatusCounts();return cached;}
+    const pane=this.activePane,tab=this.current(pane),content=pane.content,runtime=pane.runtime,path=tab?.path;
+    if(!pane.viewReady||pane.viewTabId!==tab?.id||pane.viewPath!==path||!content?.isConnected||runtime?.phase!=='active'){
+      this.cancelStatusCounts();return;
+    }
+    const existing=this.statusCountJob;
+    if(existing?.buffer===buffer&&existing.ownerCurrent()){
+      if(existing.text!==text)Object.assign(existing,{text,offset:0,words:0,characters:0,inWord:false,highSurrogate:false});
+      return;
+    }
+    this.cancelStatusCounts();
+    const vault=this.vault,generation=this.vaultGeneration,version=pane.renderVersion,view=content.ownerDocument.defaultView;
+    if(!view)return;
+    const ownerCurrent=()=>this.vault===vault&&this.vaultGeneration===generation&&!this.closing&&!this.platformReleased&&!this.platformDrained
+      &&this.activePane===pane&&this.panes.includes(pane)&&this.current(pane)===tab&&tab.path===path&&pane.viewPath===path&&pane.viewTabId===tab.id
+      &&pane.renderVersion===version&&pane.content===content&&content.isConnected&&this.status.isConnected&&pane.runtime===runtime&&runtime.phase==='active'
+      &&pane.viewReady===true&&this.buffers.get(path!)===buffer&&buffer.path===path;
+    const job:StatusCountJob={buffer,text,offset:0,words:0,characters:0,inWord:false,highSurrogate:false,ownerCurrent};this.statusCountJob=job;
+    const frame=(then:()=>void)=>{
+      const next=()=>{job.cancel=undefined;if(this.statusCountCurrent(job))then();else if(this.statusCountJob===job)this.cancelStatusCounts();};
+      if(typeof view.requestAnimationFrame==='function'){const id=view.requestAnimationFrame(next);job.cancel=()=>view.cancelAnimationFrame(id);}
+      else{const id=view.setTimeout(next,0);job.cancel=()=>view.clearTimeout(id);}
+    };
+    frame(()=>frame(()=>this.scheduleStatusCountSlice(job,view)));return;
+  }
   private renderStatus():void{
     this.renderNativeDocumentStatus();
-    if(!this.activePane)return;const tab=this.current();const buffer=tab?.path?this.buffers.get(tab.path):undefined;const text=buffer?.text||'';
+    if(!this.activePane){this.cancelStatusCounts();return;}const tab=this.current();const buffer=tab?.path?this.buffers.get(tab.path):undefined;const text=buffer?.text||'';
     this.status.replaceChildren(...(this.importStatusHost?[this.importStatusHost]:[]));
-    if(tab?.kind!=='note')return;
-    if(tab?.path&&!isMarkdown(tab.path)){if(/\.base$/i.test(tab.path))this.status.append(el('span','save-state',buffer?.error&&!buffer.autosaveRetryPending&&!this.lifecycleRecovery?'Couldn’t save — keep this Base open':buffer?.dirty?'Saving…':''));this.status.append(el('span','',`${this.vault.entries.get(tab.path)?.size??0} bytes`));return;}
+    if(tab?.kind!=='note'){this.cancelStatusCounts();return;}
+    if(tab?.path&&!isMarkdown(tab.path)){this.cancelStatusCounts();if(/\.base$/i.test(tab.path))this.status.append(el('span','save-state',buffer?.error&&!buffer.autosaveRetryPending&&!this.lifecycleRecovery?'Couldn’t save — keep this Base open':buffer?.dirty?'Saving…':''));this.status.append(el('span','',`${this.vault.entries.get(tab.path)?.size??0} bytes`));return;}
     this.status.append(el('span','save-state',buffer?.error&&!buffer.autosaveRetryPending&&!this.lifecycleRecovery?'Couldn’t save — keep this note open':buffer?.dirty?'Saving…':''));
     const mode=textButton(tab?.mode==='reading'?'Reading view':'Live Edit',()=>this.modeMenu(mode),'status-mode');
-    this.status.append(mode,el('span','',`${text.trim()?text.trim().split(/\s+/u).length:0} words`),el('span','',`${[...text].length} characters`));
+    const counts=this.selectedStatusCounts(buffer,text);
+    this.status.append(mode,el('span','status-word-count',`${counts?.words??'…'} words`),el('span','status-character-count',`${counts?.characters??'…'} characters`));
   }
 
   async newNote(folder=''):Promise<void>{
