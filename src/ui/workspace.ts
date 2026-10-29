@@ -154,6 +154,7 @@ export class Workspace {
   private documentBacklinks?: ReturnType<typeof mountDocumentBacklinks>;
   private backlinksPresentedContents=new WeakSet<HTMLElement>();
   private backlinksPendingPresentation=new WeakSet<HTMLElement>();
+  private backlinksAwaitingView?:{pane:Pane;tab:Tab;path:string;generation:number};
   private documentBacklinksGeneration = 0;
   private metadataSubscription?: {vault:Vault;stop:()=>void};
   private retiredMetadataVaults = new Set<Vault>();
@@ -1415,10 +1416,16 @@ export class Workspace {
   }
 
   async renderPane(initialPane:Pane,options:{flush?:boolean;refresh?:boolean}={}):Promise<void>{
+    const generation=this.vaultGeneration,request=(this.renderRequests.get(initialPane)??0)+1;
     await this.renderPaneContent(initialPane,options);
     this.observeNativeNoteView(initialPane);
     this.notifyNativeNoteOpened(initialPane);
     this.flushNativePresentation(initialPane);
+    const waiting=this.backlinksAwaitingView;
+    if(waiting?.pane===initialPane&&waiting.generation===generation&&this.vaultGeneration===generation
+      &&this.renderRequests.get(initialPane)===request&&this.activePane===initialPane&&this.current(initialPane)===waiting.tab
+      &&initialPane.viewReady&&initialPane.viewTabId===waiting.tab.id&&initialPane.viewPath===waiting.path
+      &&this.rightTab==='backlinks'&&!this.root.classList.contains('right-hidden')&&!this.closing&&!this.platformReleased)this.renderRight();
   }
 
   private async renderPaneContent(initialPane:Pane,options:{flush?:boolean;refresh?:boolean}={}):Promise<void>{
@@ -2956,6 +2963,7 @@ export class Workspace {
 
   private renderRight():void{
     this.clearDocumentBacklinks();
+    this.backlinksAwaitingView=undefined;
     if(!this.vault||!this.activePane)return;
     this.renderSidebarPinControl();
     if(this.rightTab==='base'&&this.sidebarBase){
@@ -2973,7 +2981,10 @@ export class Workspace {
     if(this.rightTab==='backlinks'){
       if(this.vault.adapter.documentSemantics){
         if(!this.root.classList.contains('right-hidden')){
-          if(this.deferBacklinksUntilPresented())this.rightContent.append(el('h3','right-heading','Linked mentions'),el('p','sidebar-empty','Linked mentions will update when this note opens.'));
+          if(this.deferBacklinksUntilPresented()){
+            if(path)this.backlinksAwaitingView={pane:this.activePane,tab:this.current(),path,generation:this.vaultGeneration};
+            this.rightContent.append(el('h3','right-heading','Linked mentions'),el('p','sidebar-empty','Linked mentions will update when this note opens.'));
+          }
           else void this.renderSharedBacklinks(path);
         }
         return;

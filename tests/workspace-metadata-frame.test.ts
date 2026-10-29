@@ -129,6 +129,35 @@ test('retired document presentation callbacks cannot start secondary sidebar IO'
   assert.equal(lookups,0,'a completed old frame cannot reacquire IO after retirement');
 });
 
+for(const cached of [false,true])test(`tab selection resumes passive backlinks after ${cached?'cached':'held'} view readiness`,async t=>{
+  const ui=await setup(t,{wait:Promise.resolve(),entered(){}}),body=deferred<void>();
+  ui.root.classList.remove('right-hidden');
+  const stat=ui.adapter.stat.bind(ui.adapter);let lookups=0;
+  ui.adapter.stat=async path=>{if(path==='Current.md')lookups++;return stat(path);};
+  await ui.workspace.openNote('Current.md');await until(()=>lookups>0);
+  const tab=ui.internal.current();
+  await ui.workspace.openNote('Target.md',true);
+  if(!cached){await ui.internal.clearCachedViews();await ui.workspace.buffers.get('Current.md')!.dispose();ui.workspace.buffers.delete('Current.md');}
+  const read=ui.adapter.read.bind(ui.adapter);let entered=false;
+  ui.adapter.read=async path=>{if(!cached&&path==='Current.md'){entered=true;await body.promise;}return read(path);};
+  const before=lookups,selecting=ui.internal.selectTab(ui.workspace.activePane,tab);
+  try{if(!cached){await until(()=>entered);assert.equal(lookups,before);}}
+  finally{body.resolve();await selecting;}
+  assert.ok(ui.workspace.activePane.editor);
+  await until(()=>lookups>before);
+});
+
+test('active note rename resumes deferred backlinks for the renamed view',async t=>{
+  const ui=await setup(t,{wait:Promise.resolve(),entered(){}});
+  ui.root.classList.remove('right-hidden');
+  const stat=ui.adapter.stat.bind(ui.adapter);let renamedLookups=0;
+  ui.adapter.stat=async path=>{if(path==='Renamed.md')renamedLookups++;return stat(path);};
+  await ui.workspace.openNote('Current.md');
+  await ui.workspace.vault.rename('Current.md','Renamed.md');
+  await until(()=>ui.workspace.activePane.viewPath==='Renamed.md'&&!!ui.workspace.activePane.editor);
+  await until(()=>renamedLookups>0);
+});
+
 test('tags and graph use one committed namespace and resolver despite unrelated live entries',async t=>{
   const ui=await setup(t),saved=frame(['Saved.md','OldTarget.md']);ui.project({status:'current',frame:saved});
   ui.workspace.vault.metadata.get=()=>assert.fail('Capable display must not mix live metadata with the frame');
