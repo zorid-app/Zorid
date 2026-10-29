@@ -3,6 +3,17 @@
 ## Execution checkpoint — shared-core coordinator
 
 
+**Outer chooser/close/release cycle OPEN — 2026-10-28.**
+Reviewfound transition preflightflush awaitsheldBasewrite while retired-admission
+receiver awaitstransition. ParentchooserRED andnarrowWorkspace+Sessionclose-first
+successor in progress; startup_audit independentdeltareview reopened. Sameapproved
+files/owners only, no extra protocol/Rustscope. Fourgreenfixtures notfinal. Do not
+drop heldwrite or bypass admission/release to resolvecycle. Mainrecords only;
+retain native/GUI/build/realfreeze/apply/installhold until coherentreviewedhandoff.
+Protected71549/pendingstatebackups untouched; fullBase exactrequest/strictoracle
+acceptance stillrequired.
+
+
 **Base source progress; race fixes/review still pending — 2026-10-28.**
 Reported platformc526d9e0 reviewclosed51/51; Session59c1->56e0 cleanemptycapsule;
 Workspace/embed4mountedcasesGREEN (nativeACKheld,knownACK+oldlistheld). No native

@@ -3,6 +3,24 @@
 ## URGENT: real-session automatic save failure — 2026-10-28
 
 
+**Outer lifecycle dependency cycle found; coherent successor required — 2026-10-28.**
+Bounded source review reports a real cycle when retirement arrives during
+chooseVault/destroy/release preflight: transition flush awaits the held submitted
+Base write, while the recovery receiver awaits that same transition. Parent is
+adding an actual chooser RED regression and coordinating the narrow Workspace
+correction with the Base close-first successor. startup_audit reopened independent
+delta review. This is within existing Workspace +Session ownership only; no
+additional files/authors or protocol/Rust scope. Do not break the cycle by dropping
+the held write, bypassing release/admission guards or rebuilding away its draft.
+
+Four controlled recovery fixtures currently green are not final acceptance while
+this outer deadlock and ownership-race corrections remain open. No final corrected
+pin/review handoff yet. This main owner records the finding only; native/GUI/build,
+real freeze/apply and installation remain held until coherent reviewed successor.
+Protected default71549 and all real pending-state copies remain untouched. Retain
+full Base recovery, exact request/CAS and corrected painted-error oracle gates.
+
+
 **Base recovery source progress; final ownership-race corrections pending — 2026-10-28.**
 Owner reports platform pending-database proxy c526d9e0 source/review CLOSED with
 51/51 focused checks. Exact commit touches platform/index.ts and its dedicated
