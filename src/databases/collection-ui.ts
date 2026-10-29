@@ -1,6 +1,7 @@
 import type { DatabaseService, DatabaseCollection, DatabaseProperty, DatabasePropertyInput, DatabaseEntry, DatabaseRequest } from '../core/databases.ts';
 import type { BaseViewSource } from '../bases/document.ts';
 import {validDateText} from '../bases/property-definitions.ts';
+import {icon} from '../ui/icons.ts';
 import type { BasePropertyDefinition } from '../bases/property-definitions.ts';
 
 const datatypes = ['text', 'number', 'checkbox', 'date', 'datetime', 'select', 'multi-select', 'status'] as const;
@@ -95,13 +96,21 @@ export function mountSourceChooser(container: HTMLElement, options: SourceChoose
     }
   }
   const select = (source: BaseViewSource) => run(async () => { if (!live()) throw new Error('This view changed.'); await options.choose(source); });
+  const decorateChoice = (control: HTMLButtonElement, glyph: string, suggested = false) => {
+    const label = element(doc, 'span', control.textContent ?? ''); label.className = 'collection-source-label';
+    const copy = element(doc, 'span'); copy.className = 'collection-source-copy'; copy.append(label);
+    const slot = element(doc, 'span'); slot.className = `collection-source-icon${suggested ? ' is-suggested' : ''}`; slot.setAttribute('aria-hidden', 'true'); slot.append(icon(glyph, suggested ? 20 : 16, doc));
+    control.replaceChildren(slot, copy); return {label, copy};
+  };
   const empty = button(doc, 'New empty data source', () => { void createEmpty(); }); empty.className = 'collection-source-primary';
+  const emptyLabel = decorateChoice(empty, 'plus').label;
   const notes = button(doc, 'Notes in your vault', () => { void select({ kind: 'untyped' }); });
-  notes.append(element(doc, 'small', 'Browse note titles, previews and file information.'));
-  const tasks = button(doc, 'Tasks', () => { showCreate('choices', tasks, 'tasks'); });
-  const configured = button(doc, 'New data source with options', () => { showCreate('choices', configured); });
-  const collection = button(doc, 'Link to existing data source', () => { draft = true; showCollections(); });
-  choices.append(empty, tasks, configured, collection, notes);
+  decorateChoice(notes, 'file').copy.append(element(doc, 'small', 'Browse note titles, previews and file information.'));
+  const tasks = button(doc, 'Tasks', () => { showCreate('choices', tasks, 'tasks'); }); decorateChoice(tasks, 'square-check', true);
+  const configured = button(doc, 'New data source with options', () => { showCreate('choices', configured); }); decorateChoice(configured, 'sliders-horizontal');
+  const collection = button(doc, 'Link to existing data source', () => { draft = true; showCollections(); }); decorateChoice(collection, 'link');
+  const suggested = element(doc, 'div', 'Suggested'); suggested.className = 'collection-source-section-label';
+  choices.append(empty, suggested, tasks, configured, collection, notes);
   root.append(heading, choices, form, error);
   const cancel = options.onCancel ? button(doc, 'Cancel', () => { if (!busy && !emptyRequest && !emptySource && !retainedCreate && (screen !== 'create' || canLeaveCreate?.())) options.onCancel!(); }) : undefined;
   if (cancel) root.append(cancel);
@@ -146,7 +155,7 @@ export function mountSourceChooser(container: HTMLElement, options: SourceChoose
         if (!emptyAccepted && !emptyUncertain && !emptySource && rejected?.source === 'host' && rejected.commitUncertain === false) emptyRequest = undefined;
         else if (emptyRequest && !(rejected?.source === 'host' && rejected.commitUncertain === false)) emptyUncertain = true;
         draft = !!emptyRequest || !!emptySource;
-        if (live()) empty.textContent = 'Retry data source';
+        if (live()) emptyLabel.textContent = 'Retry data source';
         throw problem;
       }
     });
