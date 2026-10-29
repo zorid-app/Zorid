@@ -47,6 +47,27 @@ was blocked; that is historical, not a current execution blocker.
 
 ## Current owners and acceptance state
 
+Latest composition: `49c9177c`, then bounded journal idle cleanup `efd2aa6c`.
+The interim build at `49c9177c` passed native release compilation, TypeScript,
+frontend generation and desktop module allowlisting. Packaging failed in the
+pnpm dependency collector with `ERR_PNPM_BROKEN_LOCKFILE`; it did not produce a
+verified candidate or replace the installed app. Source hashes matched before
+and after the build. Receipt: `tmp/instant-editor-performance-build-20261029/build-001.json`.
+Disk remained above 7 GB, so this failure is separate from the earlier disk blocker.
+
+Reviewed cooperative import/publication, import-aware background indexing, idle
+history maintenance, passive Backlinks and selected-pane-first startup changes are
+composed. Their focused checks do not establish packaged latency. Journal idle
+cleanup passed 15 integrated focused checks after composition.
+
+Active remaining scopes: file_open_audit owns NoteBuffer independent protection
+and exact pending canonical replay; startup_audit owns RAM capture/restore of
+unsubmitted property/table/title controls across a fresh admission; checkpoint_review
+owns the narrow package collector fix; maintenance_triggers owns paired native
+workload measurements using the new release host; index_redundancy owns a real
+packaged startup oracle; checkpoint_dedup audits eager optional renderer imports.
+No other session is involved. No 800 ms, recovery completion or installation claim.
+
 | Scope | Owner / branch | State |
 | --- | --- | --- |
 | Floor benchmark | checkpoint_review / startup-editor-floor | `032c95b3`; independent review requires buffered event reporting and finer phase markers before reruns |
