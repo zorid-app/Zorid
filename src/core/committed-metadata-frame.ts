@@ -61,6 +61,7 @@ export class CommittedMetadataProjection {
   private readonly held=new Set<DocumentPin>();
   private closed=false;
   private unsubscribe:(()=>void)|undefined;
+  private attached:Promise<void>|undefined;
   private started:Promise<void>|undefined;
   private running:Promise<void>|undefined;
   private closing:Promise<void>|undefined;
@@ -88,18 +89,25 @@ export class CommittedMetadataProjection {
     this.invalidatedObservation=this.latest?{lifetime:this.latest.lifetime,revision:this.latest.revision}:null;
     this.locallyStale=true;this.publish(this.installed?'stale':'pending');
   }
-  start():Promise<void> {
+  start(options:{waitForFrame?:boolean}={}):Promise<void> {
     if(!this.alive())return Promise.resolve();
-    if(this.started)return this.started;
-    this.started=(async()=>{
-      if(this.service.maintenance){
-        const observed=await this.service.maintenance.observeAndSubscribe(update=>this.hint(update));
-        if(!this.alive()){observed.unsubscribe();return;}this.unsubscribe=observed.unsubscribe;this.latest=observed.snapshot;
-        if(this.freshObservation())this.locallyStale=false;
-      }
-      if(this.alive())await this.request();
-    })().catch(()=>{this.publish('unavailable');});
-    return this.started;
+    if(!this.started){
+      const attached=(async()=>{
+        if(this.service.maintenance){
+          const observed=await this.service.maintenance.observeAndSubscribe(update=>this.hint(update));
+          if(!this.alive()){observed.unsubscribe();return;}this.unsubscribe=observed.unsubscribe;this.latest=observed.snapshot;
+          if(this.freshObservation())this.locallyStale=false;
+        }
+      })();
+      // Both callers share attachment and hydration ownership. Namespace-ready
+      // startup may stop awaiting here; close still joins the complete task.
+      this.attached=attached.catch(()=>{this.publish('unavailable');});
+      this.started=(async()=>{
+        await attached;
+        if(this.alive())await this.request();
+      })().catch(()=>{this.publish('unavailable');});
+    }
+    return options.waitForFrame===false?this.attached!:this.started;
   }
   private hint(update:DocumentRuntimeUpdate|null):void {
     if(!this.alive())return;this.latest=update;

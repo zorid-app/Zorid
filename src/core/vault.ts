@@ -10,6 +10,11 @@ import type { VaultAdapter, VaultChange, VaultEntry, VaultEvent, TextCreateRecei
 import type { DurableWrites, DurableWriteIntent, DurableWriteRead, DurableWriteRef } from './durable-writes.ts';
 
 export type DurableCommitReceipt = Extract<DurableWriteIntent, { state: 'committed' }>['receipt'];
+export interface VaultInitializationOptions {
+  /** Background mode awaits the namespace and maintenance attachment, not the
+   * complete committed metadata frame. Legacy providers still index normally. */
+  readonly metadata?: 'await' | 'background';
+}
 export interface VaultCreateOperation {
   readonly path: string;
   readonly text: string;
@@ -186,7 +191,14 @@ export class Vault {
     this.contents = contents;
   }
 
-  initialize(): Promise<void> { return this.enqueue(async () => { await this.refresh(); await this.metadataProjection?.start(); this.emit('ready', { path: '' }); }); }
+  initialize(options: VaultInitializationOptions = {}): Promise<void> {
+    const waitForFrame = options.metadata !== 'background';
+    return this.enqueue(async () => {
+      await this.refresh();
+      await this.metadataProjection?.start({waitForFrame});
+      this.emit('ready', { path: '' });
+    });
+  }
   load(): Promise<void> { return this.initialize(); }
 
   private captureDurableBinding(): DurableBinding {
