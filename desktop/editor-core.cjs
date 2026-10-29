@@ -27,9 +27,46 @@ function createEditorCoreManager(environment=process.env, options={}){
   // the foreground compatibility path.
   const documentRuntime=options.documentRuntime===true;
   if(documentRuntime&&typeof options.onDocumentRuntimeNudge!=='function')throw runtimeUnavailable();
-  const contexts=new Map(), admissions=new Map(), released=new WeakMap(), services=new Set(), openings=new Map(), retirements=new Map();
+  const contexts=new Map(), admissions=new Map(), released=new WeakMap(), services=new Set(), openings=new Map(), retirements=new Map(), recovering=new Map(), replacements=new Map(), recoveryStates=new WeakMap();
   const describe=saved=>({admissionId:saved.id,scope:saved.admission.scope,...(saved.admission.createTextReceipt?{textCreateReceiptsAvailable:true}:{}),...(saved.admission.conditionalSavedSourceAvailable===true?{conditionalSavedSourceAvailable:true}:{}),...(saved.admission.documentCommand?{documentSemantics:true}:{}),...(saved.admission.metadataRowsAvailable===true?{metadataRowsAvailable:true}:{}),...(saved.admission.propertyTargetsAvailable===true?{propertyTargetsAvailable:true}:{}),...(saved.admission.basePreviewAvailable===true?{basePreviewAvailable:true}:{}),...(saved.admission.draftsAvailable===true?{draftsAvailable:true}:{}),...(documentRuntime&&runtimeAvailable(saved.admission)?{documentMaintenance:true}:{}),...(saved.admission.workblockCommand?{workBlocks:true}:{}),...(saved.admission.databaseCommand?{databases:true}:{}),...(saved.admission.binaryLimits?{binaryLimits:saved.admission.binaryLimits}:{})});
   const executable=()=>require('./host-location.cjs').resolveDesktopHost({...options,override:config.executable});
+  const terminated=service=>!!(service?.host?.fatal||service?.host?.exited);
+  function openService(canonical){
+    if(!openings.has(canonical)){
+      const pending=(async()=>{
+        const fixtureSelected=fixture&&canonical===await fs.realpath(config.root);
+        const service=await VaultService.open(canonical,{coreFixture:{executable:await executable(),
+          ...(fixtureSelected?{fixtureSyncConfig:config.fixtureSyncConfig}:{initializeLocal:true}),familyMode:true,documentRuntime}});
+        if(closed){await service.close();throw fail('editor_core_closed');}
+        services.add(service);return service;
+      })();
+      openings.set(canonical,pending);pending.catch(()=>{if(openings.get(canonical)===pending)openings.delete(canonical);});
+    }
+    return openings.get(canonical);
+  }
+  function replaceTerminatedService(broker,entry,service){
+    if(entry.service!==service)return terminated(entry.service)?replaceTerminatedService(broker,entry,entry.service):Promise.resolve(entry.service);
+    const previous=replacements.get(service);if(previous)return previous;
+    const pending=(async()=>{
+      if(!terminated(service))throw fail('recovery_not_available');
+      // Closing waits for the failed process to exit before a fresh native host
+      // can claim the same persistent clients. No old lease is revived.
+      await service.close();
+      if(closed)throw fail('editor_core_closed');
+      if(entry.service!==service)return entry.service;
+      const oldOpening=openings.get(service.root);
+      if(oldOpening&&await oldOpening===service&&openings.get(service.root)===oldOpening)openings.delete(service.root);
+      const next=await openService(service.root);
+      if(closed)throw fail('editor_core_closed');
+      if(entry.service!==service)throw fail('durable_scope_changed');
+      entry.unsubscribe?.();entry.unsubscribe=null;entry.service=next;services.delete(service);
+      if(entry.members.size)entry.unsubscribe=next.subscribe(change=>broker.broadcast(entry,change));
+      return next;
+    })();
+    replacements.set(service,pending);entry.retiring=pending;
+    const clear=()=>{if(replacements.get(service)===pending)replacements.delete(service);if(entry.retiring===pending)delete entry.retiring;};
+    void pending.then(clear,clear);return pending;
+  }
   function checked(broker,record,expectedRoot,admissionId,allowRetired=false){
     broker.assertLive(record);
     const saved=contexts.get(record);
@@ -77,20 +114,56 @@ function createEditorCoreManager(environment=process.env, options={}){
       if(closed)throw fail('editor_core_closed');
       const canonical=await fs.realpath(input);
       while(retirements.has(canonical)){await retirements.get(canonical);if(closed)throw fail('editor_core_closed');}
-      if(!openings.has(canonical)){
-        const pending=(async()=>{
-          const fixtureSelected=fixture&&canonical===await fs.realpath(config.root);
-          const service=await VaultService.open(canonical,{coreFixture:{executable:await executable(),
-            ...(fixtureSelected?{fixtureSyncConfig:config.fixtureSyncConfig}:{initializeLocal:true}),familyMode:true,documentRuntime}});
-          if(closed){await service.close();throw fail('editor_core_closed');}
-          services.add(service);return service;
-        })();
-        openings.set(canonical,pending);pending.catch(()=>{if(openings.get(canonical)===pending)openings.delete(canonical);});
+      return openService(canonical);
+    },
+    async recover(broker,record,event,expectedRoot,admissionId){
+      broker.authenticate(event);
+      const previous=recovering.get(record);
+      if(previous){if(previous.root!==expectedRoot||previous.id!==admissionId)throw fail('durable_scope_changed');previous.check();return previous.promise;}
+      const current=contexts.get(record),entry=record.vault;
+      let state=recoveryStates.get(record);
+      if(!state||state.id!==admissionId){
+        if(closed||!current||current.id!==admissionId||current.service.root!==expectedRoot||current.entry!==entry||current.generation!==record.generation)throw fail('durable_scope_changed');
+        const dead=terminated(current.service);
+        if(dead?typeof current.admission.abandonTerminatedHost!=='function':!current.runtimeRetired&&!current.draftsRetired)throw fail('recovery_not_available');
+        state={id:admissionId,root:expectedRoot,saved:current,scope:{...current.admission.scope},retired:false,replacementId:null};
+        recoveryStates.set(record,state);
       }
-      return openings.get(canonical);
+      const {saved,scope}=state;
+      const check=()=>{broker.authenticate(event);if(closed||state.root!==expectedRoot||record.vault!==saved.entry||record.generation!==saved.generation||record.vaultSelectionPending||record.persistedVaultRoot!==expectedRoot||record.clientSlot?.clientId!==scope.clientId)throw fail('durable_scope_changed');};
+      check();
+      if(current&&current!==saved){
+        if(state.replacementId&&current.id!==state.replacementId)throw fail('durable_scope_changed');
+        current.check();
+        if(current.admission.scope.vaultId!==scope.vaultId||current.admission.scope.clientId!==scope.clientId)throw fail('durable_scope_changed');
+        state.replacementId=current.id;return describe(current);
+      }
+      const pending=(async()=>{
+        check();
+        if(!state.retired){
+          if(terminated(saved.service))await saved.admission.abandonTerminatedHost();
+          else await saved.admission.release(()=>{});
+          state.retired=true;
+        }
+        check();
+        const service=terminated(saved.service)?await replaceTerminatedService(broker,entry,saved.service):saved.service;check();
+        saved.stopRuntime?.();saved.stopDrafts?.();
+        if(contexts.has(record)&&contexts.get(record)!==saved)throw fail('durable_scope_changed');
+        contexts.delete(record);
+        released.set(record,{id:admissionId,root:expectedRoot,service:saved.service,admission:saved.admission});
+        // Never replay source operations. The renderer retains its exact pending
+        // checkpoint revision and write reference across this lease replacement.
+        admissions.delete(record);
+        const next=await this.context(broker,record,expectedRoot,scope);check();
+        if(contexts.get(record)?.service!==service)throw fail('durable_scope_changed');
+        state.replacementId=next.admissionId;return next;
+      })();
+      recovering.set(record,{root:expectedRoot,id:admissionId,promise:pending,check});admissions.set(record,pending);
+      void pending.finally(()=>{if(recovering.get(record)?.promise===pending)recovering.delete(record);if(admissions.get(record)===pending)admissions.delete(record);}).catch(()=>{});
+      return pending;
     },
     requireReleased(record){if(contexts.has(record)||admissions.has(record))throw fail('durable_release_required');},
-    async context(broker,record,expectedRoot){
+    async context(broker,record,expectedRoot,recoveryScope){
       broker.assertLive(record);
       const entry=record.vault;
       if(record.vaultSelectionPending||!entry||entry.service.root!==expectedRoot)throw fail('durable_scope_changed');
@@ -98,6 +171,8 @@ function createEditorCoreManager(environment=process.env, options={}){
       if(!services.has(entry.service))return null;
       const existing=contexts.get(record);if(existing){existing.check();return describe(existing);}
       const inFlight=admissions.get(record);if(inFlight)return inFlight;
+      const recoveringState=recoveryStates.get(record);
+      if(recoveringState&&!recoveringState.replacementId&&recoveringState.root===expectedRoot&&recoveringState.saved.entry===entry&&recoveringState.saved.generation===record.generation)recoveryScope??=recoveringState.scope;
       const generation=record.generation,service=entry.service;
       const check=()=>{
         broker.assertLive(record);
@@ -106,10 +181,10 @@ function createEditorCoreManager(environment=process.env, options={}){
       };
       check();
       const pending=(async()=>{
-        const admission=await admitDesktopFixtureClient(service,{fixture:true,clientId:fixture&&record.id==='main'?config.clientId:record.clientSlot?.clientId,assertOwner:check});
-        try {check();}
+        const admission=await admitDesktopFixtureClient(service,{fixture:true,clientId:fixture&&record.id==='main'?config.clientId:record.clientSlot?.clientId,assertOwner:check,...(recoveryScope?{expectedScope:recoveryScope}:{})});
+        try {check();if(recoveryScope&&(admission.scope.vaultId!==recoveryScope.vaultId||admission.scope.clientId!==recoveryScope.clientId))throw fail('durable_scope_changed');}
         catch(error){await admission.retire();throw error;}
-        const saved={id:randomUUID(),admission,service,check:(allowRetired=false)=>{check();if((saved.runtimeRetired||saved.draftsRetired)&&!allowRetired)throw fail('client_not_admitted');}};contexts.set(record,saved);
+        const saved={id:randomUUID(),admission,service,entry,generation,check:(allowRetired=false)=>{check();if((saved.runtimeRetired||saved.draftsRetired)&&!allowRetired)throw fail('client_not_admitted');}};contexts.set(record,saved);
         try{
           if(admission.conditionalSavedSourceAvailable===true&&!['captureSavedSource','releaseSavedSource'].every(name=>typeof admission.durableWrites?.[name]==='function'))throw fail('unsupported_host_capability');
           if(documentRuntime&&(!runtimeAvailable(admission)||typeof admission.documentCommand!=='function'))throw runtimeUnavailable();

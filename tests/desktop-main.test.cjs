@@ -31,13 +31,13 @@ test('main wiring creates empty authenticated windows and scopes vault picking t
     Menu: { buildFromTemplate: value => { template = value; return value; }, setApplicationMenu() {} }, shell: { openExternal() {} } };
   const mainPath = path.resolve(__dirname, '../desktop/main.cjs');
   let slotNumber=0;
-  const retirements=[];let coreFailure,coreOptions;
+  const retirements=[],recoveries=[];let coreFailure,coreOptions;
   const openService=async root=>{
     if (!services.has(root)) services.set(root, { root, watchers: 0, stops: 0, subscribe() { this.watchers++; return () => { this.watchers--; this.stops++; }; }, read: async () => 'base', write: async () => {}, recoveryList:async(entryId,options)=>({entryId,options}),recoveryRead:async(entryId,snapshotId)=>({entryId,snapshotId,content:'old'}), remove: async (target, force) => { removals.push([root, target, force]); } });
     return services.get(root);
   };
   const nativeRequire = name => {
-    if (name === './editor-core.cjs') return { createEditorCoreManager: (_environment,options) => {coreOptions=options;return ({open:openService,owns:()=>false,requireReleased(){},async invoke(){if(coreFailure)throw coreFailure;return {queryId:'query'};},retire:async(_broker,_record,service)=>{retirements.push(service.root);},close:async()=>{}}); } };
+    if (name === './editor-core.cjs') return { createEditorCoreManager: (_environment,options) => {coreOptions=options;return ({open:openService,owns:()=>false,requireReleased(){},async recover(_broker,record,_event,root,admissionId){if(coreFailure)throw coreFailure;recoveries.push({recordId:record.id,root,admissionId});return {admissionId:'fresh-admission',scope:{vaultId:'store',clientId:'client'}};},async invoke(){if(coreFailure)throw coreFailure;return {queryId:'query'};},retire:async(_broker,_record,service)=>{retirements.push(service.root);},close:async()=>{}}); } };
     if (name === './client-slots.cjs') return {openClientSlots:async()=>({listRestorable:async()=>[],claim:async({primary}={})=>({slotId:primary?'primary':`window-${++slotNumber}`,clientId:'client',vaultPath:null}),setVault:async()=>{},release:async()=>{}})};
     if (name === './document-semantics.cjs') return require('../desktop/document-semantics.cjs');
     if (name === 'electron') return electron;
@@ -101,6 +101,14 @@ test('main wiring creates empty authenticated windows and scopes vault picking t
     assert.equal(name,'electron');return {contextBridge:{exposeInMainWorld(_name,value){exposed=value;}},ipcRenderer:{invoke:(name,...args)=>handlers.get(name)({sender:windows[0].webContents,senderFrame:windows[0].webContents.mainFrame},...args)},webUtils:{}};
   }});
   assert.deepEqual(structuredClone(await exposed.durableInvoke('/first','admitted','documentCommand',[richRequest])),structuredClone(richReply.result));
+  const priorFailure=coreFailure;coreFailure=undefined;
+  assert.deepEqual(structuredClone(await exposed.recoverDurableContext('/first','previous-admission')),{admissionId:'fresh-admission',scope:{vaultId:'store',clientId:'client'}});
+  assert.deepEqual(recoveries,[{recordId:'main',root:'/first',admissionId:'previous-admission'}]);
+  coreFailure=Object.assign(new Error('/private/recovery details'),{code:'durable_scope_changed',commitUncertain:false});
+  assert.deepEqual(structuredClone(await invoke(windows[0],'recoverDurableContext','/first','foreign')),{ok:false,error:{code:'durable_scope_changed',commitUncertain:false}});
+  await assert.rejects(exposed.recoverDurableContext('/first','foreign'),/retain pending recovery state/);
+  coreFailure=priorFailure;
+
   const legacy=await invoke(windows[0],'durableInvoke','/first','admitted','fileCommand',[{}]);
   assert.deepEqual(structuredClone(legacy),{ok:false,error:{code:'search_compile',commitUncertain:false}},'other RPCs do not gain raw details');
   coreFailure.details={diagnostic:{...diagnostic,internal:'/private/secret'}};

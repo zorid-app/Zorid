@@ -8,7 +8,7 @@ const {createRequire}=require('node:module');
 const {WindowBroker}=require('../desktop/window-broker.cjs');
 const deferred=()=>{let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};};
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
-function fixture({admission,options={}}={}){
+function fixture({admission,admissionFactory,options={}}={}){
   const opened=[],closed=deferred();
   const filename=path.resolve(__dirname,'../desktop/editor-core.cjs');
   const sourceRequire=createRequire(filename);
@@ -16,11 +16,11 @@ function fixture({admission,options={}}={}){
   vm.runInNewContext(fs.readFileSync(filename,'utf8'),{module,exports:module.exports,process,structuredClone,require(name){
     if(name==='node:fs/promises')return {realpath:async value=>value};
     if(name==='./vault-service.cjs')return {VaultService:{async open(root,configuration){
-      const service={root,configuration,closed:false,subscribe(){return ()=>{};},async close(){this.closed=true;if(opened[0]===this)await closed.promise;}};
+      const service={root,configuration,host:{fatal:null,exited:false},closed:false,subscribe(){return ()=>{};},async close(){this.closed=true;if(opened[0]===this)await closed.promise;}};
       opened.push(service);return service;
     }}};
     if(name==='./host-location.cjs')return {resolveDesktopHost:async()=>'/trusted/host'};
-    if(name==='./client-admission.cjs')return {admitDesktopFixtureClient:admission?async()=>admission:assert.fail};
+    if(name==='./client-admission.cjs')return {admitDesktopFixtureClient:admissionFactory??(admission?async()=>admission:assert.fail)};
     // Unmocked dependencies resolve beside the evaluated production module.
     return sourceRequire(name);
   }});
@@ -286,4 +286,82 @@ test('a late physical-source response is rejected after its broker generation ch
     a.generation++;gate.resolve();
     await assert.rejects(pending,{code:'durable_scope_changed'});
   }finally{f.closed.resolve();await f.manager.close();}
+});
+
+
+test('terminal host recovery replaces the shared service and preserves the exact registered durable scope',async()=>{
+  const admissions=[],requests=[],scope={vaultId:'store',clientId:'registered-client'};
+  const f=fixture({admissionFactory:async(service,options)=>{
+    const admitted={scope:{...scope},durableWrites:{async query(ref){requests.push({service,ref:structuredClone(ref)});return {state:'prepared',ref};}},
+      async abandonTerminatedHost(){assert.ok(service.host.fatal||service.host.exited);this.abandoned=true;},async retire(){},async release(){assert.fail('A dead lease must not be released through its transport');}};
+    admissions.push({admitted,service,options});return admitted;
+  }}),a=f.window(),b=f.window();a.clientSlot={clientId:scope.clientId};b.clientSlot={clientId:'other-client'};
+  await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
+  const before=await f.manager.context(f.broker,a,'/vault'),event={sender:a.window.webContents,senderFrame:a.window.webContents.mainFrame};
+  f.broker.bind(b,a.vault);b.persistedVaultRoot='/vault';const old=f.opened[0];old.host.fatal=Object.assign(new Error('Transport ended'),{code:'host_exited'});old.host.exited=true;f.closed.resolve();
+  const [recovered,duplicate]=await Promise.all([f.manager.recover(f.broker,a,event,'/vault',before.admissionId),f.manager.recover(f.broker,a,event,'/vault',before.admissionId)]);
+  assert.equal(recovered.admissionId,duplicate.admissionId);assert.notEqual(recovered.admissionId,before.admissionId);assert.deepEqual(recovered.scope,before.scope);
+  assert.equal(f.opened.length,2);assert.equal(a.vault,b.vault);assert.equal(a.vault.service,f.opened[1]);assert.equal(admissions[0].admitted.abandoned,true);assert.equal(admissions[1].options.clientId,scope.clientId);
+  const originalRef={vaultId:'store',clientId:scope.clientId,operationId:'original-operation',token:'original-intent'};
+  assert.equal(requests.length,0,'Recovery never plans, prepares, queries or commits pending writes');
+  await assert.rejects(f.manager.invoke(f.broker,a,event,'/vault',before.admissionId,'query',[originalRef]),{code:'durable_scope_changed'});
+  await f.manager.invoke(f.broker,a,event,'/vault',recovered.admissionId,'query',[originalRef]);assert.deepEqual(requests[0].ref,originalRef);
+  assert.equal(requests[0].service,f.opened[1]);await f.manager.close();
+});
+
+function recoveryFixture({runtime=false}={}){
+  const made=[],calls=[],retireCallbacks=new Map();let rejectAdmission=false,killHostOnFailure=false,changedStore=false,releaseError=false;
+  const f=fixture({options:{documentRuntime:runtime,onDocumentRuntimeNudge(){}},admissionFactory:async(service,options)=>{
+    if(rejectAdmission){rejectAdmission=false;if(killHostOnFailure){killHostOnFailure=false;service.host.fatal={code:'host_exited'};service.host.exited=true;}throw Object.assign(new Error('Admission interrupted'),{code:'temporarily_unavailable'});}
+    const admission={scope:{vaultId:changedStore?'different-store':'store',clientId:options.clientId},durableWrites:{async query(ref){calls.push(['query',structuredClone(ref)]);return ref;}},
+      async abandonTerminatedHost(){calls.push(['abandon',options.clientId]);},async release(){calls.push(['release',options.clientId]);if(releaseError)throw Object.assign(new Error('release ACK lost'),{code:'host_timeout',commitUncertain:true});},async retire(){calls.push(['retire',options.clientId]);}};
+    if(runtime){admission.documentCommand=()=>{};admission.documentRuntime={observe(){},control(){},ackControl(){},ackOutcome(){},subscribe(_listener,onRetire){retireCallbacks.set(admission,onRetire);return()=>{};}};}
+    made.push({admission,service});return admission;
+  }});
+  const owner=async(clientId)=>{const record=f.window();record.clientSlot={clientId};await f.broker.select(record,'/vault');record.persistedVaultRoot='/vault';const context=await f.manager.context(f.broker,record,'/vault');const event={sender:record.window.webContents,senderFrame:record.window.webContents.mainFrame};return {record,context,event,recover:()=>f.manager.recover(f.broker,record,event,'/vault',context.admissionId)};};
+  return {...f,made,calls,owner,retireCallbacks,failNextAdmission({killHost=false}={}){rejectAdmission=true;killHostOnFailure=killHost;},changeStore(){changedStore=true;},failRelease(value){releaseError=value;}};
+}
+for(const concurrent of [false,true])test(`two admitted windows recover one dead shared host ${concurrent?'concurrently':'sequentially'}`,async()=>{
+  const f=recoveryFixture(),a=await f.owner('client-a'),b=await f.owner('client-b');
+  const old=f.opened[0];old.host.fatal={code:'host_exited'};old.host.exited=true;f.closed.resolve();
+  const next=concurrent?await Promise.all([a.recover(),b.recover()]):[await a.recover(),await b.recover()];
+  assert.equal(f.opened.length,2);assert.equal(a.record.vault.service,b.record.vault.service);
+  assert.equal(next[0].scope.clientId,'client-a');assert.equal(next[1].scope.clientId,'client-b');assert.equal(next[0].scope.vaultId,'store');
+  await f.manager.release(f.broker,a.record,a.event,'/vault',a.context.admissionId);
+  assert.equal((await f.manager.context(f.broker,a.record,'/vault')).admissionId,next[0].admissionId,'Old cleanup ACK does not release replacement');
+  assert.equal((await a.recover()).admissionId,next[0].admissionId,'Lost outer recovery reply retries the same new admission');
+  assert.equal(f.made.length,4);await f.manager.close();
+});
+test('interrupted fresh admission retries without a third host or repeating old lease retirement',async()=>{
+  const f=recoveryFixture(),a=await f.owner('client-a');f.opened[0].host.fatal={code:'host_exited'};f.closed.resolve();f.failNextAdmission();
+  await assert.rejects(a.recover(),{code:'temporarily_unavailable'});const next=await a.recover();
+  assert.equal(next.scope.clientId,'client-a');assert.equal(f.opened.length,2);assert.deepEqual(f.calls,[['abandon','client-a']]);await f.manager.close();
+});
+test('recovery never admits changed store scope and does not expose the replacement writer',async()=>{
+  const f=recoveryFixture(),a=await f.owner('client-a');f.opened[0].host.fatal={code:'host_exited'};f.closed.resolve();f.changeStore();
+  await assert.rejects(a.recover(),{code:'durable_scope_changed'});await assert.rejects(f.manager.context(f.broker,a.record,'/vault'),{code:'durable_scope_changed'});
+  assert.equal(f.calls.some(call=>call[0]==='query'),false);await f.manager.close();
+});
+test('healthy runtime retirement retries its exact release before a fresh admission and leaves another client alive',async()=>{
+  const f=recoveryFixture({runtime:true}),a=await f.owner('client-a'),b=await f.owner('client-b');
+  f.retireCallbacks.get(f.made[0].admission)();f.failRelease(true);
+  await assert.rejects(a.recover(),{code:'host_timeout'});assert.equal(f.made.length,2);assert.equal(f.opened.length,1);
+  assert.equal((await f.manager.context(f.broker,b.record,'/vault')).admissionId,b.context.admissionId);
+  f.failRelease(false);const next=await a.recover();assert.notEqual(next.admissionId,a.context.admissionId);assert.equal(f.opened.length,1);assert.equal(f.made.length,3);
+  assert.deepEqual(f.calls,[['release','client-a'],['release','client-a']]);f.closed.resolve();await f.manager.close();
+});
+test('recovery rejects healthy active, foreign admission and changed owner generation without host mutation',async()=>{
+  const f=recoveryFixture(),a=await f.owner('client-a');
+  await assert.rejects(a.recover(),{code:'recovery_not_available'});
+  await assert.rejects(f.manager.recover(f.broker,a.record,a.event,'/vault','foreign'),{code:'durable_scope_changed'});
+  f.opened[0].host.fatal={code:'host_exited'};a.record.generation++;
+  await assert.rejects(a.recover(),{code:'durable_scope_changed'});assert.equal(f.opened.length,1);assert.deepEqual(f.calls,[]);f.closed.resolve();await f.manager.close();
+});
+
+
+test('the original recovery request can replace a second host lost during interrupted fresh admission',async()=>{
+  const f=recoveryFixture(),a=await f.owner('client-a');f.opened[0].host.fatal={code:'host_exited'};f.closed.resolve();f.failNextAdmission({killHost:true});
+  await assert.rejects(a.recover(),{code:'temporarily_unavailable'});assert.equal(f.opened.length,2);assert.equal(f.opened[1].host.exited,true);
+  const next=await a.recover();assert.equal(f.opened.length,3);assert.deepEqual(next.scope,a.context.scope);assert.equal(f.opened[1].closed,true);
+  assert.deepEqual(f.calls,[['abandon','client-a']],'Original admission is abandoned once without source replay');await f.manager.close();
 });

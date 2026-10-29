@@ -14,7 +14,7 @@ function fail(code, uncertain = false) { return Object.assign(new Error('Desktop
  * assertOwner must verify the selected WindowBroker record/grant generation.
  * Returns an injected editor context: {scope,durableWrites,assertActive,release}.
  */
-async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwner } = {}) {
+async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwner, expectedScope } = {}) {
   if (fixture !== true || !uuid(clientId) || typeof assertOwner !== 'function') throw fail('invalid_admission');
   const host = service.host;
   let phase = 'admitting', closing = null, flushed = false, releasePrepared = false, activeFlush = null, runtime = null, drafts = null,draftRetired=false;
@@ -28,6 +28,9 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
   const releaseLease=()=>drafts?service.releaseDocumentDraftClient(reference):host.releaseClient(reference);
   try {
     live();
+    // Recovery must verify the persistent authority before consumer admission
+    // can inspect or replay any namespace recovery checkpoints in that store.
+    if(expectedScope&&(reference.local_store_id!==expectedScope.vaultId||reference.client_id!==expectedScope.clientId))throw fail('durable_scope_changed');
     const shadow = Object.create(service);
     const guarded = host.withClientLease(reference, () => {
       if (!['admitting', 'active', 'flushing'].includes(phase)) throw fail('client_not_admitted');
@@ -164,6 +167,15 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
       ...(databasesAvailable?{databaseCommand}:{}),
       ...(host.capabilities?.includes('binary_streams')?{binaryCommand,binaryLimits:host.binaryLimits}:{}),
       ...(creates?{createText:input=>invoke(async()=>{const value=await creates.create(input);service.documentRuntimeSourceHint?.();return value;},null),createTextReceipt:input=>invoke(async()=>{const value=await creates.createReceipt(input);service.documentRuntimeSourceHint?.();return value;},null),fileCommand:input=>invoke(async()=>{const value=await creates.execute(input);service.documentRuntimeSourceHint?.();return value;},null)}:{}),
+      async abandonTerminatedHost() {
+        // A dead transport cannot acknowledge lease release. Fence its old
+        // capabilities, settle accepted calls and leave durable recovery intact.
+        // A healthy/uncertain release must still use its exact release protocol.
+        if (!host.fatal && !host.exited) throw fail('recovery_not_available');
+        phase='retiring';activeFlush=null;draftRetired=true;drafts?.revoke();
+        await runtime?.revoke();await drain();
+        drafts?.release();documents?.forget();phase='released';
+      },
       async retire() {
         // Window has gone away. Drain accepted calls and drop ownership only;
         // leave every checkpoint/intent intact for the same slot on restart.

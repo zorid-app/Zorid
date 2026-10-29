@@ -122,6 +122,10 @@ function registerIPC() {
     catch (error) { return { ok: false, error: { code: typeof error?.code === 'string' && /^[a-z_]{1,64}$/.test(error.code) ? error.code : 'durable_request_failed', commitUncertain: error?.commitUncertain === true } }; }
   };
   handle('getDurableContext', (record, _event, expectedRoot) => durableReply(() => editorCore ? editorCore.context(broker, record, expectedRoot) : null));
+  handle('recoverDurableContext', (record, event, expectedRoot, admissionId) => durableReply(() => {
+    if (!editorCore) throw new Error('No Rust editor context');
+    return editorCore.recover(broker, record, event, expectedRoot, admissionId);
+  }));
   handle('durableInvoke', (record, event, expectedRoot, admissionId, method, args) => durableReply(async () => {
     if (!editorCore) throw new Error('No Rust editor context');
     if(method==='documentDrafts'){

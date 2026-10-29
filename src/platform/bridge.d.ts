@@ -34,6 +34,8 @@ export interface DesktopBridge {
   /** Native close is held until this asynchronous save/release callback succeeds. */
   onBeforeClose?(handler: () => Promise<void>): () => void;
   getDurableContext?(vault: string): Promise<DesktopDurableContext | null>;
+  /** Explicit replacement of a terminal admission; keeps its durable store/client scope. */
+  recoverDurableContext?(vault: string, admissionId: string): Promise<DesktopDurableContext>;
   /** WorkBlock commands resolve a versioned plain-data envelope; decode after this bridge. */
   durableInvoke?(vault: string, admissionId: string, method: string, args: readonly unknown[]): Promise<unknown>;
   /** Dedicated derived-state hints; these must never become VaultChange events. */

@@ -291,3 +291,23 @@ test('revocation during an accepted capture cannot return physical source into a
   await assert.rejects(pending,{code:'grant_retired'});
   await context.retire();
 });
+
+test('terminal host abandonment preserves an uncertain operation and never sends release or replay',async()=>{
+  const f=fixture(),context=await admitDesktopFixtureClient(f.service,f.options),writes=context.durableWrites;
+  const read=await writes.readText('note.md');
+  const plan=await writes.planWrite({operationId:'original-operation',path:read.path,expectedEntryId:read.entryId,expectedRevision:read.revision,expectedContent:read.content,content:'retained draft'});
+  const intent=await writes.prepare(plan),before=[...f.calls];
+  await assert.rejects(context.abandonTerminatedHost(),{code:'recovery_not_available'});
+  assert.deepEqual(f.calls,before);context.assertActive();
+  f.host.fatal=Object.assign(new Error('Lost reply'),{code:'host_exited',commitUncertain:true});f.host.exited=true;
+  await context.abandonTerminatedHost();
+  assert.deepEqual(f.calls,before,'Abandonment does not release, replan, prepare, commit or acknowledge');
+  assert.equal(intent.ref.operationId,'original-operation');assert.equal(plan.operationId,'original-operation');
+  await assert.rejects(writes.commit(intent.ref),{code:'client_not_admitted'});
+});
+
+test('recovery scope mismatch releases the fresh claim before loading or replaying any durable checkpoint',async()=>{
+  const f=fixture();
+  await assert.rejects(admitDesktopFixtureClient(f.service,{...f.options,expectedScope:{vaultId:'different-authority',clientId}}),{code:'durable_scope_changed'});
+  assert.deepEqual(f.calls,['claim_client','release_client']);assert.equal(f.active,null);
+});

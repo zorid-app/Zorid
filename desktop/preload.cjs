@@ -95,6 +95,7 @@ contextBridge.exposeInMainWorld('zorid', Object.freeze({
     };
   },
   getDurableContext: vault => durable('getDurableContext', vault),
+  recoverDurableContext: (vault, admissionId) => durable('recoverDurableContext', vault, admissionId),
   durableInvoke: (vault, admissionId, method, args) => durable('durableInvoke', vault, admissionId, method, args),
   onDocumentRuntimeNudge: (vault, admissionId, callback, onRetire) => {
     if(typeof vault!=='string'||!vault||typeof admissionId!=='string'||!admissionId||typeof callback!=='function'||typeof onRetire!=='function')throw new TypeError('Admitted runtime receiver required');
