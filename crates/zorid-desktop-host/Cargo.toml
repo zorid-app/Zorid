@@ -15,6 +15,8 @@ zorid-native = { path = "../zorid-native" }
 zorid-store = { path = "../zorid-store" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+rusqlite = { version = "=0.40.2", features = ["bundled"] }
+libc = "0.2"
 
 sha2 = "=0.11.0"
 

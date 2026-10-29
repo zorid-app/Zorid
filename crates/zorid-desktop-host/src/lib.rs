@@ -1468,6 +1468,8 @@ pub fn run_stdio() -> io::Result<()> {
     Ok(())
 }
 #[cfg(test)]
+mod retry_fault_tests;
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]

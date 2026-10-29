@@ -460,3 +460,17 @@ pub(super) fn execute(
     .encode_to_vec();
     (json!({"binary":true}), body)
 }
+
+#[cfg(test)]
+mod retry_fault_tests {
+    use super::*;
+    #[test]
+    fn retry_fault_binary_uses_classified_busy_io_and_corrupt_categories() {
+        let classify = |code| native(zorid_native::Error::Store(zorid_store::StoreError::Sql(
+            rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(code), None))));
+        assert_eq!(classify(rusqlite::ffi::SQLITE_BUSY), wire::ErrorCode::Busy);
+        assert_eq!(classify(rusqlite::ffi::SQLITE_IOERR_WRITE), wire::ErrorCode::Io);
+        assert_eq!(classify(rusqlite::ffi::SQLITE_FULL), wire::ErrorCode::Io);
+        assert_eq!(classify(rusqlite::ffi::SQLITE_CORRUPT), wire::ErrorCode::Corrupt);
+    }
+}

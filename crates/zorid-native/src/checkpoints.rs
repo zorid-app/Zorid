@@ -1,4 +1,13 @@
 use super::*;
+#[cfg(test)]
+mod retry_fault_tests {
+    use super::*;
+    #[test]
+    fn retry_fault_checkpoint_retains_native_error_type_instead_of_display_text() {
+        let CheckpointError::ExternalStorage(error) = uncertain(Error::LockTimeout) else { panic!("external boundary expected") };
+        assert!(matches!(error.get_ref().and_then(|inner| inner.downcast_ref::<Error>()), Some(Error::LockTimeout)));
+    }
+}
 fn uncertain(error: Error) -> CheckpointError {
     CheckpointError::ExternalStorage(std::io::Error::other(error.to_string()))
 }
