@@ -8,7 +8,7 @@ import {randomUUID} from 'node:crypto';
 import {createRequire} from 'node:module';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {CDP} from '../../tests/tasks-electron-integration/cdp.mjs';
-import {assessNote,clockInterval,DEADLINE_MS,fixtureText,planCampaign} from './oracle.mjs';
+import {assessNote,baseFixtureSource,clockInterval,DEADLINE_MS,fixtureText,planCampaign} from './oracle.mjs';
 import {observerSource} from './observer.mjs';
 import {installMainObserver} from './main-observer.mjs';
 import {stopOwned} from './cleanup.mjs';
@@ -147,7 +147,7 @@ export async function main(args=process.argv.slice(2)){
         const directory=path.join(out,scheduled.pairId),profile=path.join(directory,'profile'),vault=path.join(directory,'vault'),data=path.join(directory,'app-data');
         await fs.mkdir(directory);await fs.mkdir(profile);await fs.mkdir(vault);await fs.mkdir(data);
         const sources=new Map(Array.from({length:notes},(_,index)=>[`Note ${String(index).padStart(4,'0')}.md`,fixtureText(8192,index)]));sources.set('Large 432000.md',fixtureText(432000,notes));
-        sources.set('Profile.base',JSON.stringify({filters:'file.ext == "md"',views:[{id:'profilebase',type:'table',name:'Profile table',source:{kind:'untyped'},order:['file.name'],sort:[{property:'file.name',direction:'ASC'}]}]},null,2)+'\n');
+        sources.set('Profile.base',baseFixtureSource());
         for(const [name,text] of sources)await fs.writeFile(path.join(vault,name),text,{flag:'wx',mode:0o600});
         await fs.writeFile(path.join(profile,'vault.json'),JSON.stringify({path:vault}),{flag:'wx'});
         pair={directory,profile,vault,data,sources,fixtureHashes:Object.fromEntries([...sources].map(([name,text])=>[name,hash(text)]))};pairs.set(scheduled.pairId,pair);

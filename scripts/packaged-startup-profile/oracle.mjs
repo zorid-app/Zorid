@@ -1,4 +1,5 @@
 export const DEADLINE_MS=800;
+export const baseFixtureSource=()=>JSON.stringify({filters:'file.ext == "md"',views:[{id:'profilebase',type:'table',name:'Profile table',source:{kind:'untyped'},order:['file.name'],sort:[{property:'file.name',direction:'ASC'}]}]},null,2)+'\n';
 const finite=value=>typeof value==='number'&&Number.isFinite(value);
 export function fixtureText(bytes,index=0){
   if(!Number.isSafeInteger(bytes)||bytes<1024||bytes>1024*1024)throw Error('Fixture size outside bounded note range');

@@ -7,6 +7,14 @@ import path from 'node:path';
 import {EventEmitter} from 'node:events';
 import {installMainObserver} from './main-observer.mjs';
 import {appPins,hash,launchEnvironment,ownedOutput} from './support.mjs';
+import {BaseDocument} from '../../src/bases/document.ts';
+import {baseFixtureSource} from './oracle.mjs';
+
+test('the exact packaged benchmark Base fixture passes the actual production BaseDocument parser',()=>{
+  const document=BaseDocument.parse(baseFixtureSource());
+  assert.equal(document.views.length,1);assert.equal(document.views[0].id,'profilebase1');
+  assert.equal(document.views[0].type,'table');assert.equal(document.views[0].source.kind,'untyped');
+});
 
 test('launch environment removes development/native overrides and never accepts an output under real profiles',()=>{
   const env=launchEnvironment('/private/tmp/owned/profile','/private/tmp/owned/data',{PATH:'/bin',ZORID_DEV_URL:'http://bad',ZORID_DESKTOP_HOST_BIN:'/bad',ZORID_FIXTURE_VAULT:'/real',ZORID_LOCAL_DATA_DIR:'/real',NODE_OPTIONS:'--require=bad',ELECTRON_RUN_AS_NODE:'1',ELECTRON_USER_DATA_DIR:'/real',CHROME_LOG_FILE:'/real/log'});
@@ -15,8 +23,10 @@ test('launch environment removes development/native overrides and never accepts 
   for(const value of ['/Users/person/Library/Application Support/Zorid','/private/tmp/other','/private/tmp/zorid-packaged-startup-owned/nested','/private/tmp/zorid-packaged-startup-x/../real'])assert.throws(()=>ownedOutput(value));
 });
 
-test('main observer preserves actual request/open Promise identity and records only observed normal ACKs',async()=>{
-  const app=new EventEmitter();Object.assign(app,{isPackaged:true,getAppPath:()=>'/clone.app/Contents/Resources/app.asar',getPath:()=>'/owned/profile',isReady:()=>true,quit(){this.emit('will-quit');}});
+test('main observer preserves actual request/open Promise identity and records final quit after a cancelled quit and native exit',async()=>{
+  let closing=true;const app=new EventEmitter();
+  Object.assign(app,{isPackaged:true,getAppPath:()=>'/clone.app/Contents/Resources/app.asar',getPath:()=>'/owned/profile',isReady:()=>true,quit(){const event={defaultPrevented:false,preventDefault(){this.defaultPrevented=true;}};this.emit('before-quit');this.emit('will-quit',event);if(!event.defaultPrevented)this.emit('quit',{},0);}});
+  app.on('will-quit',event=>{if(closing)event.preventDefault();});
   const writes=[],calls=[];let now=10;
   const reply={result:{checkpoint:{key:'note/v1/entry',revision:'2',deleted:false}},bytes:new Uint8Array()},nativeChild=new EventEmitter();nativeChild.pid=23;
   const originalPromise=Promise.resolve(reply),openPromise=Promise.resolve({child:nativeChild,reconciliation:{complete:false}});
@@ -35,7 +45,12 @@ test('main observer preserves actual request/open Promise identity and records o
   assert.equal(calls[0].thisValue,host);assert.equal(calls[0].args[0],command);assert.equal(calls[0].args[1],bytes);assert.equal(calls[1].thisValue,Host);
   const observed=context.__zoridPackagedMain;assert.equal(observed.requests[0].ok,true);assert.equal(observed.requests[0].checkpointResult.revision,'2');
   assert.equal(observed.phases[0].phase,'inspector-attached');assert.equal(observed.phases[0].appReadyAlready,true);assert.ok(!observed.phases.some(phase=>phase.phase==='app-ready'));
-  nativeChild.emit('exit',0,null);context.__zoridPackagedQuit();assert.equal(observed.nativeExits[0].pid,23);assert.equal(observed.nativeExits[0].code,0);assert.equal(observed.normalQuitObserved,true);assert.equal(writes.length,1);assert.equal(writes[0][0],'/owned/final.json');
+  context.__zoridPackagedQuit();assert.equal(observed.normalQuitObserved,false,'cancelled first will-quit cannot establish normal exit');assert.equal(writes.length,0,'no terminal receipt before native close');
+  nativeChild.emit('exit',0,null);closing=false;context.__zoridPackagedQuit();
+  assert.equal(observed.nativeExits[0].pid,23);assert.equal(observed.nativeExits[0].code,0);assert.equal(observed.normalQuitObserved,true);assert.equal(observed.quitExitCode,0);
+  assert.equal(writes.length,1);assert.equal(writes[0][0],'/owned/final.json');
+  const terminal=JSON.parse(writes[0][1]);assert.equal(terminal.nativeExits[0].code,0);
+  assert.deepEqual(terminal.phases.filter(phase=>phase.phase==='will-quit').map(phase=>phase.defaultPreventedAtFinalQuit),[true,false]);
 });
 
 test('artifact pins never infer source provenance and reject a mismatched supplied manifest',async t=>{
