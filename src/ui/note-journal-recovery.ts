@@ -67,7 +67,7 @@ export function mountNoteJournalRecovery(options:NoteJournalRecoveryOptions):{el
   const element=make('section','note-journal-recovery version-history');element.role='region';element.setAttribute('aria-label','Protected drafts');element.tabIndex=-1;
   const label=options.noteLabel.split(/[\\/]/).at(-1)?.replace(/[\u0000-\u001f\u007f]/g,'').slice(0,200)||'this note';
   const heading=make('h2','','Protected drafts');
-  const explanation=make('p','',`Inspect versions kept for ${label}. Copy text or create a separate note. The original note and protected versions are kept.`);
+  const explanation=make('p','',`Inspect versions kept for ${label}. ${options.requestRecoveryCopy?'Copy text or create a separate note.':'Copy text to keep a version.'} The original note and protected versions are kept.`);
   const message=make('p','version-history-message');message.role='status';message.setAttribute('aria-live','polite');
   const list=make('div','version-history-list');list.setAttribute('aria-label','Protected draft versions');list.role='group';
   const preview=make('textarea','version-history-preview');preview.readOnly=true;preview.setAttribute('aria-label','Protected draft preview');

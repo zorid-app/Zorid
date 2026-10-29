@@ -138,20 +138,35 @@ test('native selected document does not restore unrelated workspace panes',async
 });
 
 
-for(const editorOnly of [true,false])test(`${editorOnly?'native editor-only':'full workspace'} autosave errors stay visible and retry the shared save`,async t=>{
+for(const editorOnly of [true,false])test(`${editorOnly?'native editor-only':'full workspace'} transient autosave recovers without a retry action`,async t=>{
   const f=await setup(t,{editorOnly,initialPath:'A.md',initialEntryId:'id_A_md'});
+  const write=f.adapter.write.bind(f.adapter);f.adapter.write=async()=>{throw Object.assign(new Error('Disk unavailable: IPC checkpoint_cas operation-uuid schema_version'),{code:'io'});};
+  try{
+    const input=document.querySelector('textarea')!;input.value='Retained after transient failure';input.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));
+    await assert.rejects(f.workspace.flush(),/Disk unavailable/);
+    const status=document.querySelector<HTMLElement>('.native-document-status')!;
+    assert.equal(status.hidden,true);assert.doesNotMatch(document.body.textContent??'',/Retry save|Could not save|Keep.*try again|IPC|checkpoint_cas|operation-uuid|schema_version|Disk unavailable/);
+    f.adapter.write=write;
+    for(let n=0;n<250&&f.workspace.buffers.get('A.md')!.dirty;n++)await new Promise(done=>setTimeout(done,5));
+    assert.equal(f.workspace.buffers.get('A.md')!.dirty,false);assert.equal(await f.adapter.read('A.md'),'Retained after transient failure');assert.equal(status.hidden,true);
+  }finally{f.adapter.write=write;}
+});
+
+for(const editorOnly of [true,false])test(`${editorOnly?'native editor-only':'full workspace'} terminal storage leaves a truthful copyable draft without retry-save UI`,async t=>{
+  const f=await setup(t,{editorOnly,initialPath:'A.md',initialEntryId:'id_A_md'});
+  let copied='';Object.defineProperty(f.dom.window.navigator,'clipboard',{configurable:true,value:{writeText:async(text:string)=>{copied=text;}}});
   const write=f.adapter.write.bind(f.adapter);f.adapter.write=async()=>{throw new Error('Disk unavailable: IPC checkpoint_cas operation-uuid schema_version');};
-  const input=document.querySelector('textarea')!;input.value='Retained after failure';input.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));
-  await assert.rejects(f.workspace.flush(),/Disk unavailable/);
-  const status=document.querySelector<HTMLElement>('.native-document-status')!;
-  assert.equal(status.hidden,false);assert.match(status.textContent??'',/Could not save.*A.*Keep this note open and try again/);
-  assert.doesNotMatch(document.body.textContent??'',/IPC|checkpoint_cas|operation-uuid|schema_version|Disk unavailable/);
-  status.querySelector<HTMLButtonElement>('button')!.click();await new Promise(done=>setTimeout(done,0));
-  assert.match(document.querySelector('.notice')?.textContent??'',/Keep it open and try again/);
-  assert.doesNotMatch(document.body.innerHTML,/IPC|checkpoint_cas|operation-uuid|schema_version|Disk unavailable/);
-  f.adapter.write=write;status.querySelector<HTMLButtonElement>('button')!.click();
-  await new Promise(done=>setTimeout(done,0));await f.workspace.flush();
-  assert.equal(await f.adapter.read('A.md'),'Retained after failure');assert.equal(status.hidden,true);
+  try{
+    const input=document.querySelector('textarea')!;input.value='Exact retained terminal draft';input.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));
+    await assert.rejects(f.workspace.flush(),/Disk unavailable/);
+    const status=document.querySelector<HTMLElement>('.native-document-status')!;
+    assert.equal(status.hidden,false);assert.match(status.textContent??'',/Edits to.*A.*retained in this window/);
+    assert.doesNotMatch(document.body.textContent??'',/Retry save|Could not save|Keep.*try again|IPC|checkpoint_cas|operation-uuid|schema_version|Disk unavailable/);
+    if(!editorOnly)assert.equal(document.querySelector('.save-state')?.textContent,'Local draft');
+    [...status.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='Copy draft')!.click();await new Promise(done=>setTimeout(done,0));
+    assert.equal(copied,'Exact retained terminal draft');assert.equal(f.workspace.buffers.get('A.md')!.dirty,true);assert.ok(f.workspace.buffers.get('A.md')!.error);
+    assert.equal(await f.adapter.read('A.md'),'Alpha');
+  }finally{f.adapter.write=write;await f.workspace.flush();}
 });
 
 test('retained conflict outside the selected native document has a visible recovery action',async t=>{
@@ -422,7 +437,7 @@ async function finiteNavigationFixture(t:TestContext,initialPath='A.md'){
   const textReads:string[]=[];
   const read=async(path:string)=>{textReads.push(path);return({entryId:'id_'+path.replaceAll('.','_'),path,revision:'rev1',content:await adapter.read(path),stat:{ctime:1,mtime:1,size:(await adapter.read(path)).length}});};
   const unused=async():Promise<never>=>{throw new Error('Unexpected durable write');};
-  (adapter as any).durableWrites={checkpoints:{scope,load:async(key:string)=>heads.get(key)??null,list:async()=>({items:[],cursor:null,highWater:'0'}),changes:async()=>({items:[],cursor:null,highWater:'0'}),compareAndSwap:async(change:any)=>{const head={...scope,version:1,key:change.key,revision:change.nextRevision,encodedState:change.encodedState,sequence:'1',deleted:false,byteLength:0};heads.set(change.key,head);return head;}},
+  (adapter as any).durableWrites={checkpoints:{scope,load:async(key:string)=>heads.get(key)??null,list:async()=>({items:[],cursor:null,highWater:'0'}),changes:async()=>({items:[],cursor:null,highWater:'0'}),compareAndSwap:async(change:any)=>{const head={...scope,version:1,key:change.key,revision:change.nextRevision,encodedState:change.encodedState,sequence:'1',deleted:change.encodedState===null,byteLength:Buffer.byteLength(change.encodedState??'','utf8')};heads.set(change.key,head);return head;}},
     readText:read,readTextById:async(id:string)=>{const row=(await adapter.list()).find(row=>row.entryId===id);return row?read(row.path):null;},planWrite:unused,prepare:unused,commit:unused,query:unused,listUnacknowledged:async()=>[],acknowledge:unused};
   let handler:any,lifecycle:any;
   const f=await setup(t,{editorOnly:true,initialPath,initialEntryId:'id_'+initialPath.replaceAll('.','_'),
@@ -599,7 +614,7 @@ test('shared note-save command failures never surface checkpoint internals in no
   const input=document.querySelector('textarea')!;input.value='Pending edit';input.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));
   (f.workspace as any).run(()=>f.workspace.flush());
   await new Promise(done=>setTimeout(done,0));
-  assert.match(document.querySelector('.notice')?.textContent??'',/Keep it open and try again/);
+  assert.match(document.querySelector('.notice')?.textContent??'',/edits are retained in this window/);
   assert.doesNotMatch(document.body.innerHTML,/IPC|checkpoint_cas|operation-uuid|schema_version/);
   f.adapter.write=write;await f.workspace.flush();
 });
@@ -614,7 +629,7 @@ test('recovery-copy failures show an actionable message without native details',
   buffer.saveRecoveryCopy=async()=>{throw new Error('IPC operation-uuid checkpoint_cas schema_version');};
   const button=[...document.querySelectorAll<HTMLButtonElement>('.note-recovery button')].find(button=>button.textContent==='Save recovery copy')!;
   assert.ok(button);button.click();await new Promise(done=>setTimeout(done,0));
-  assert.match([...document.querySelectorAll('.notice')].at(-1)?.textContent??'',/Keep this note open and try again/);
+  assert.match([...document.querySelectorAll('.notice')].at(-1)?.textContent??'',/draft is retained here.*copy has not been confirmed/);
   assert.doesNotMatch(document.body.innerHTML,/IPC|operation-uuid|checkpoint_cas|schema_version/);
   buffer.saveRecoveryCopy=save;await save();await f.workspace.flush();
 });
@@ -665,4 +680,38 @@ test('captured Version history command cannot target a replacement entry',async 
   const command=(f.workspace as any).commands().find((command:{id:string})=>command.id==='version-history');assert.ok(command);
   const entry=f.workspace.vault.entries.get('A.md')!;f.workspace.vault.entries.set('A.md',{...entry,entryId:'replacement'});
   await command.action();assert.equal(reads,0);assert.equal(document.querySelector('.version-history'),null);
+});
+
+test('ambiguous protected versions stay accessible as exact read-only copies without replaying saved operations',async t=>{
+  const recovered=await durableRecoveryFixture(),scope={...recovered.adapter.durableWrites.checkpoints.scope,incarnationId:'panel-current'};
+  const base=await recovered.adapter.durableWrites.readTextById('retained-note');assert.ok(base);
+  const branches=new Map<string,any>(),reads:unknown[]=[],mutations:unknown[]=[];
+  for(const [writer,draft] of [['branch-a','Exact protected A\r\n<script>inert</script>'],['branch-b','Protected B']]){
+    const value={...scope,incarnationId:'prior-panel',entryId:'retained-note',writer,revision:'1',generation:2,deleted:false,baseline:{entryId:base.entryId,path:base.path,revision:base.revision,content:base.content},draft,checkpointRevision:null,pendingOperation:'{"operation":"must never execute"}'};
+    branches.set(value.incarnationId+':'+writer,value);
+  }
+  const receipt=(value:any)=>Object.fromEntries(['vaultId','clientId','incarnationId','entryId','writer','revision','generation','deleted'].map(key=>[key,value[key]]));
+  const provider={scope,
+    list:async({entryId}:any)=>[...branches.values()].filter(row=>!row.deleted&&row.entryId===entryId).map(receipt),
+    read:async(address:any)=>{reads.push(address);return structuredClone(branches.get((address.incarnationId??scope.incarnationId)+':'+address.writer)??null);},
+    compareAndSwap:async(change:any)=>{mutations.push(change);const value={...change,...scope,revision:change.nextRevision,deleted:false};branches.set(scope.incarnationId+':'+change.writer,value);return receipt(value);},
+    retire:async(change:any)=>{mutations.push(change);const value={...scope,...change,revision:change.nextRevision,deleted:true};branches.set(change.incarnationId+':'+change.writer,value);return receipt(value);},
+  };
+  Object.assign(recovered.adapter,{independentDrafts:provider});
+  const f=await setup(t,{editorOnly:true},false,{},undefined,recovered.adapter),buffer=f.workspace.buffers.get('One.md')!;assert.ok(buffer);
+  await buffer.flushDraftProtection();const mutationsBefore=mutations.length,readsBefore=reads.length;
+  let copied='';Object.defineProperty(f.dom.window.navigator,'clipboard',{configurable:true,value:{writeText:async(text:string)=>{copied=text;}}});
+  const versions=[...document.querySelectorAll<HTMLButtonElement>('.native-document-status button')].find(button=>button.textContent==='Protected drafts');assert.ok(versions);versions.click();
+  for(let n=0;n<100&&!document.querySelector('.note-journal-recovery .version-history-version');n++)await new Promise(done=>setTimeout(done,5));
+  const panel=document.querySelector<HTMLElement>('.note-journal-recovery')!;assert.ok(panel);assert.equal(reads.length,readsBefore,'listing versions must not read their bodies');
+  panel.querySelector<HTMLButtonElement>('.version-history-version')!.click();
+  const raw='Exact protected A\r\n<script>inert</script>';
+  for(let n=0;n<100&&panel.querySelector<HTMLTextAreaElement>('textarea')!.value!==raw.replace(/\r\n/g,'\n');n++)await new Promise(done=>setTimeout(done,5));
+  [...panel.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='Copy preview text')!.click();await new Promise(done=>setTimeout(done,0));
+  assert.equal(copied,raw);assert.equal(panel.querySelector('script'),null);assert.equal(mutations.length,mutationsBefore);assert.equal(recovered.plans,0);
+  assert.equal(await recovered.adapter.read('One.md'),externalText);assert.equal(recovered.copies.length,0);
+  assert.doesNotMatch(panel.textContent??'',/Create recovery copy|create a separate note/);
+  [...panel.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='Close')!.click();assert.equal(document.querySelector('.note-journal-recovery'),null);
+  assert.ok(branches.has('prior-panel:branch-a'));assert.ok(branches.has('prior-panel:branch-b'));
+  await buffer.saveRecoveryCopy();
 });

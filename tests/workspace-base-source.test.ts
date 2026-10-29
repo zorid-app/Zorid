@@ -152,7 +152,7 @@ test('failed source save blocks mode changes and keeps the exact editor, selecti
   replace(f.workspace, repaired); view.dispatch({ selection: EditorSelection.single(8, 19) }); const selection = view.state.selection.toJSON(); f.adapter.fail = true;
   sourceToggle(f.workspace, 'Return to Base').click(); await until(() => !!buffer.error, 'source save failure is retained');
   assert.equal(f.workspace.activePane.editor, handle); assert.deepEqual(view.state.selection.toJSON(), selection); assert.equal(buffer.text, repaired); assert.equal(buffer.dirty, true); assert.equal(await f.adapter.read('Invalid.base'), invalid);
-  assert.match(f.root.querySelector('.save-state')?.textContent ?? '', /Couldn’t save/);
+  assert.match(f.root.querySelector('.save-state')?.textContent ?? '', /Local draft/);
   f.adapter.fail = false; sourceToggle(f.workspace, 'Return to Base').click(); await until(() => !!f.workspace.activePane.baseView?.state.result, 'retry returns repaired Base');
   assert.equal(await f.adapter.read('Invalid.base'), repaired); assert.equal(buffer.dirty, false);
 });

@@ -200,6 +200,7 @@ export class Workspace {
   private statusCounts=new WeakMap<NoteBuffer,{text:string;words:number;characters:number}>();
   private statusCountJob?:StatusCountJob;
   private nativeDocumentStatus?:HTMLElement;
+  private noteJournalPanel?:{close():void;updateOwner():void};
   private nativeRecoveryBusy=new WeakSet<NoteBuffer>();
   private treeTab: 'files' | 'search' | 'bookmarks' = 'files';
   private rightTab: 'backlinks' | 'outline' | 'tags' | 'base' = 'backlinks';
@@ -314,8 +315,11 @@ export class Workspace {
   private importStatusHost?:HTMLElement;
 
   constructor(root: HTMLElement, editorFactory?: EditorFactory, viewFactories: WorkspaceViewFactories = {}) { this.root = root; this.editorFactory = editorFactory; this.viewFactories = viewFactories; }
-  private noteStorageFailure(error:unknown,message='This note couldn’t be saved. Keep it open and try again.'):void {
-    console.error('Note storage operation failed',error);notice(message);
+  private noteStorageFailure(error:unknown,message='Your edits are retained in this window.'):void {
+    console.error('Note storage operation failed',error);
+    const buffer=[...this.buffers.values()].find(buffer=>buffer.error===error);
+    if(buffer&&(buffer.autosaveRetryPending||buffer.pendingCanonicalRecovery||this.lifecycleRecovery))return;
+    notice(buffer?.draftProtectionStatus?.currentProtected?'Your latest edits are protected locally.':message);
   }
   private run(operation: () => unknown | Promise<unknown>): void { Promise.resolve().then(operation).catch(error => {
     if([...this.buffers.values()].some(buffer=>buffer.error!==null&&buffer.error===error)){this.noteStorageFailure(error);return;}
@@ -1419,6 +1423,7 @@ export class Workspace {
 
   private disposeShell(): void {
     this.cancelStatusCounts();
+    this.noteJournalPanel?.close();this.noteJournalPanel=undefined;
     this.nativeDocumentStatus=undefined;
     this.clearDocumentBacklinks();
     this.documentSearchSuspended=true;this.clearDocumentSearch();
@@ -1578,18 +1583,21 @@ export class Workspace {
   private async bindRecoveredBuffer(path:string,buffer:NoteBuffer,validate:()=>void):Promise<void>{
     if(this.bufferEntries.has(buffer))return;
     const vault=this.vault,generation=this.vaultGeneration,adapter=vault.adapter,durable=adapter.durableWrites;
-    const witness=buffer.savedDurableWitness,token=this.treeEntryToken(path),scope=durable?.checkpoints.scope,vaultId=scope?.vaultId,clientId=scope?.clientId;
+    const witness=buffer.savedDurableWitness,token=this.treeEntryToken(path),scope=durable?.checkpoints.scope,vaultId=scope?.vaultId,clientId=scope?.clientId,conflict=buffer.hasRecoveryConflict;
     const changed=()=>new Error('This recovered note changed or was replaced; its draft is retained.');
     const check=()=>{
       validate();const current=buffer.savedDurableWitness,entry=vault.entries.get(path);
       if(this.vault!==vault||this.vaultGeneration!==generation||vault.adapter!==adapter||adapter.durableWrites!==durable||durable?.checkpoints.scope.vaultId!==vaultId||durable?.checkpoints.scope.clientId!==clientId
         ||!this.recoveredBufferBindings.has(buffer)&&this.bufferEntries.get(buffer)!==token||!witness||witness.path!==path||!token||this.treeEntryToken(path)!==token||this.buffers.get(path)!==buffer||buffer.path!==path||entry?.type!=='file'
-        ||entry.entryId&&entry.entryId!==witness.entryId||!current||current.entryId!==witness.entryId||current.path!==witness.path||current.revision!==witness.revision)throw changed();
+        ||entry.entryId&&entry.entryId!==witness.entryId||!current||current.entryId!==witness.entryId||current.path!==witness.path||current.revision!==witness.revision||buffer.hasRecoveryConflict!==conflict)throw changed();
     };
     check();
     const observed=await vault.readDurableTextById(witness!.entryId);
     check();
-    if(!observed||observed.entryId!==witness!.entryId||observed.path!==path||observed.revision!==witness!.revision)throw changed();
+    // A retained conflict deliberately keeps its older baseline. It may display
+    // that draft beside a newer revision of the SAME actor; normal saves still
+    // reject the conflict rather than treating the newer revision as its base.
+    if(!observed||observed.entryId!==witness!.entryId||observed.path!==path||!conflict&&observed.revision!==witness!.revision)throw changed();
     // Another simultaneous admission may have bound the same exact actor while
     // the read was pending. It may never replace a previously owned token.
     const bound=this.bufferEntries.get(buffer);if(bound&&bound!==token)throw changed();
@@ -3259,6 +3267,35 @@ export class Workspace {
     if(!state.frame.coverageComplete)return 'Some saved notes could not be indexed.';
   }
 
+  private async showProtectedDrafts(path:string,buffer:NoteBuffer):Promise<void>{
+    const vault=this.vault,generation=this.vaultGeneration,provider=vault.adapter.independentDrafts,witness=buffer.savedDurableWitness;
+    if(!provider||!witness)return;
+    const entryId=witness.entryId;
+    const current=()=>this.vault===vault&&this.vaultGeneration===generation&&!this.platformReleased&&!this.platformDrained
+      &&this.buffers.get(path)===buffer&&buffer.path===path&&buffer.savedDurableWitness?.entryId===entryId
+      &&vault.entries.get(path)?.type==='file'&&(vault.entries.get(path)?.entryId??entryId)===entryId;
+    const {mountNoteJournalRecovery}=await import('./note-journal-recovery.ts');
+    if(!current())return;
+    this.noteJournalPanel?.close();
+    const {content,close}=modal('Protected drafts');
+    let finished=false,panel:ReturnType<typeof mountNoteJournalRecovery>|undefined,observer:MutationObserver|undefined;
+    const finish=()=>{
+      if(finished)return;finished=true;observer?.disconnect();
+      if(this.noteJournalPanel===handle)this.noteJournalPanel=undefined;
+      panel?.close();close();
+    };
+    const handle={close:finish,updateOwner:()=>panel?.updateOwner()};
+    try{
+      panel=mountNoteJournalRecovery({host:content,entryId,noteLabel:nameOf(path),provider,
+        getCurrentEntry:()=>current()?{entryId,scope:provider.scope}:null,
+        copyText:text=>navigator.clipboard.writeText(text),onClose:finish});
+      this.noteJournalPanel=handle;
+      observer=new MutationObserver(()=>{if(!content.isConnected)finish();});
+      observer.observe(content.ownerDocument.body,{childList:true,subtree:true});
+      await panel.refresh();if(!finished)panel.focus();
+    }catch(error){finish();this.noteStorageFailure(error,'Stored drafts have been kept.');}
+  }
+
   private mountNoteRecovery(content:HTMLElement,buffer:NoteBuffer):()=>void{
     const banner=el('section','note-recovery');banner.setAttribute('aria-label','Retained note draft');
     const message=el('p','','This note changed elsewhere. Your draft is shown below and is safely retained. Save a recovery copy to keep both versions.');
@@ -3272,7 +3309,7 @@ export class Workspace {
         notice(result.resolved?`Draft saved to “${result.path}”. The original now shows its latest version.`:`Draft saved to “${result.path}”. Newer edits are still retained here.`);
         // Every pane sharing this buffer must follow its newly adopted text.
         if(result.resolved)for(const view of this.loadedViews())if(view.viewPath===buffer.path){view.editor?.setValue(buffer.text);view.refreshPreview?.();view.properties?.refresh();}
-      }catch(error){this.noteStorageFailure(error,'Your draft couldn’t be saved as a separate note. Keep this note open and try again.');}
+      }catch(error){this.noteStorageFailure(error,'Your draft is retained here. A separate copy has not been confirmed.');}
       finally{busy=false;save.disabled=false;refresh();}
     }),'mod-cta');
     actions.append(copy,save);banner.append(message,actions);content.insertBefore(banner,content.querySelector('.note-scroll'));
@@ -3293,29 +3330,34 @@ export class Workspace {
     status.replaceChildren();
     const generation=this.vaultGeneration;
     for(const [path,buffer] of this.buffers){
-      const conflict=buffer.hasRecoveryConflict;
+      const conflict=buffer.hasRecoveryConflict,versions=!!this.vault.adapter.independentDrafts&&buffer.draftProtectionStatus?.inventory==='retained';
       // Current-note conflicts already have the full shared recovery banner.
-      if(conflict&&this.activePane?.viewPath===path)continue;
-      if(!buffer.error&&!conflict)continue;
-      if(!conflict&&(buffer.autosaveRetryPending||this.lifecycleRecovery))continue;
+      const showConflict=conflict&&this.activePane?.viewPath!==path;
+      const retainedError=!conflict&&!!buffer.error&&!buffer.autosaveRetryPending&&!buffer.pendingCanonicalRecovery&&!this.lifecycleRecovery;
+      if(!showConflict&&!retainedError&&!versions)continue;
       const row=el('div','native-document-notice');
-      row.append(el('p','',conflict?`Retained draft for “${nameOf(path)}” needs attention.`:`Could not save “${nameOf(path)}”. Keep this note open and try again.`));
+      row.append(el('p','',showConflict?`Retained draft for “${nameOf(path)}” needs attention.`:retainedError
+        ?`Edits to “${nameOf(path)}” are ${buffer.draftProtectionStatus?.currentProtected?'protected locally':'retained in this window'}.`
+        :`Protected versions of “${nameOf(path)}” are available.`));
       const current=()=>generation===this.vaultGeneration&&this.buffers.get(path)===buffer&&!this.platformReleased;
       const actions=el('div','note-recovery-actions');
-      if(conflict&&this.vault.entries.get(path)?.type==='file')actions.append(textButton('Review draft',()=>{if(current())this.run(()=>this.openNote(path));}));
-      const save=textButton(conflict?'Save recovery copy':'Retry save',()=>this.run(async()=>{
+      if(versions)actions.append(textButton('Protected drafts',()=>{if(current())this.run(()=>this.showProtectedDrafts(path,buffer));}));
+      if(retainedError)actions.append(textButton('Copy draft',()=>this.run(async()=>{if(current()){await navigator.clipboard.writeText(buffer.text);notice('Draft copied.');}})));
+      if(showConflict){
+      if(this.vault.entries.get(path)?.type==='file')actions.append(textButton('Review draft',()=>{if(current())this.run(()=>this.openNote(path));}));
+      const save=textButton('Save recovery copy',()=>this.run(async()=>{
         if(!current()||this.nativeRecoveryBusy.has(buffer))return;
         this.nativeRecoveryBusy.add(buffer);this.renderStatus();
         try{
-          if(conflict){
-            const result=await buffer.saveRecoveryCopy();
-            if(current()&&result.resolved)for(const view of this.loadedViews())if(view.viewPath===path){view.editor?.setValue(buffer.text);view.refreshPreview?.();view.properties?.refresh();}
-            notice(`Draft saved to “${result.path}”.`);
-          }else await buffer.flush();
+          const result=await buffer.saveRecoveryCopy();
+          if(current()&&result.resolved)for(const view of this.loadedViews())if(view.viewPath===path){view.editor?.setValue(buffer.text);view.refreshPreview?.();view.properties?.refresh();}
+          notice(`Draft saved to “${result.path}”.`);
         }catch(error){this.noteStorageFailure(error);}
         finally{this.nativeRecoveryBusy.delete(buffer);if(current())this.renderStatus();}
       }));
-      save.disabled=this.nativeRecoveryBusy.has(buffer);actions.append(save);row.append(actions);status.append(row);
+      save.disabled=this.nativeRecoveryBusy.has(buffer);actions.append(save);
+      }
+      row.append(actions);status.append(row);
     }
     status.hidden=!status.childElementCount;
   }
@@ -3380,13 +3422,20 @@ export class Workspace {
     };
     frame(()=>frame(()=>this.scheduleStatusCountSlice(job,view)));return;
   }
+  private noteSaveLabel(buffer:NoteBuffer|undefined):string{
+    if(!buffer||!buffer.dirty&&!buffer.error)return'';
+    if(buffer.draftProtectionStatus?.currentProtected)return'Protected locally';
+    if(buffer.error&&!buffer.autosaveRetryPending&&!buffer.pendingCanonicalRecovery&&!this.lifecycleRecovery)return'Local draft';
+    return'Saving…';
+  }
   private renderStatus():void{
     this.renderNativeDocumentStatus();
+    this.noteJournalPanel?.updateOwner();
     if(!this.activePane){this.cancelStatusCounts();return;}const tab=this.current();const buffer=tab?.path?this.buffers.get(tab.path):undefined;const text=buffer?.text||'';
     this.status.replaceChildren(...(this.importStatusHost?[this.importStatusHost]:[]));
     if(tab?.kind!=='note'){this.cancelStatusCounts();return;}
-    if(tab?.path&&!isMarkdown(tab.path)){this.cancelStatusCounts();if(/\.base$/i.test(tab.path))this.status.append(el('span','save-state',buffer?.error&&!buffer.autosaveRetryPending&&!this.lifecycleRecovery?'Couldn’t save — keep this Base open':buffer?.dirty?'Saving…':''));this.status.append(el('span','',`${this.vault.entries.get(tab.path)?.size??0} bytes`));return;}
-    this.status.append(el('span','save-state',buffer?.error&&!buffer.autosaveRetryPending&&!this.lifecycleRecovery?'Couldn’t save — keep this note open':buffer?.dirty?'Saving…':''));
+    if(tab?.path&&!isMarkdown(tab.path)){this.cancelStatusCounts();if(/\.base$/i.test(tab.path))this.status.append(el('span','save-state',this.noteSaveLabel(buffer)));this.status.append(el('span','',`${this.vault.entries.get(tab.path)?.size??0} bytes`));return;}
+    this.status.append(el('span','save-state',this.noteSaveLabel(buffer)));
     const mode=textButton(tab?.mode==='reading'?'Reading view':'Live Edit',()=>this.modeMenu(mode),'status-mode');
     const counts=this.selectedStatusCounts(buffer,text);
     this.status.append(mode,el('span','status-word-count',`${counts?.words??'…'} words`),el('span','status-character-count',`${counts?.characters??'…'} characters`));
