@@ -652,6 +652,8 @@ fn validate_header(
 }
 #[cfg(test)]
 thread_local! { static BUILDER_RESTORES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+thread_local! { static PUMP_MANIFEST_ENTRY_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
 fn builder(tx: &DocumentTransaction<'_>, h: &Header) -> IndexResult<GenerationBuilder> {
     #[cfg(test)]
@@ -1478,7 +1480,11 @@ impl Store {
                 .manifest
                 .entries
                 .iter()
-                .find(|e| e.state.id == witness.entry().id)
+                .find(|e| {
+                    #[cfg(test)]
+                    PUMP_MANIFEST_ENTRY_VISITS.with(|count| count.set(count.get() + 1));
+                    e.state.id == witness.entry().id
+                })
                 .ok_or(DocumentIndexError::RebuildRequired)?;
             let bytes = original.content.as_ref().map_or(0, ContentMetadata::len);
             if !prepared.is_empty() && source_bytes.saturating_add(bytes as usize) > MAX_PUMP_BYTES
@@ -2251,6 +2257,121 @@ mod cache_snapshot_tests {
         store.publish_document_index(&stage).unwrap();
         let pin = store.open_document_snapshot().unwrap();
         assert_eq!(pin.generation().records().count(), 33);
+    }
+
+    fn pump_lookup_fixture(documents: usize) -> (tempfile::TempDir, Store) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path().join("store.sqlite")).unwrap();
+        let mut folder = create("folder");
+        if let Mutation::Create { path, kind, content, .. } = &mut folder.mutation {
+            *path = zorid_core::VaultPath::new("folder").unwrap();
+            *kind = EntryKind::Folder;
+            *content = None;
+        }
+        store.apply_at(&folder, 99).unwrap();
+        // Normal mutation validation/journaling; one setup transaction keeps
+        // fixture fsync cost out of the representative Pump measurements.
+        let tx = store.connection.unchecked_transaction().unwrap();
+        for index in (0..documents).rev() {
+            let mut request = create(&format!("note-{index:05}"));
+            if let Mutation::Create { path, content, .. } = &mut request.mutation {
+                // Exact IDs and path order deliberately disagree.
+                *path = zorid_core::VaultPath::new(format!(
+                    "folder/{:05}.md", documents - index
+                )).unwrap();
+                *content = Some(format!("# Note {index}\n\nneedle {index}\n").into_bytes());
+            }
+            Store::apply_transaction_at(&tx, &request, Some(index as u64 + 100)).unwrap();
+        }
+        tx.commit().unwrap();
+        store.initialize_document_index().unwrap();
+        (dir, store)
+    }
+
+    fn check_pump_lookup_output(store: &Store, expected: &DocumentManifest, documents: usize) {
+        let pin = store.open_document_snapshot().unwrap();
+        assert_eq!(store.document_snapshot_manifest(&pin).unwrap(), *expected);
+        assert_eq!(pin.generation().records().count(), documents);
+        for record in pin.generation().records() {
+            assert_eq!(pin.generation().manifest().check_witness(record.witness()), Ok(()));
+        }
+        for index in 0..documents {
+            let id = EntryId::new(format!("note-{index:05}")).unwrap();
+            let actual = store.read_document_projection(&pin, &id).unwrap();
+            assert_eq!(actual.witness, expected.manifest().unwrap().witness(&id).unwrap());
+            assert_eq!(actual.content.unwrap(), format!("# Note {index}\n\nneedle {index}\n").into_bytes());
+        }
+        store.close_document_snapshot(pin);
+    }
+
+    #[test]
+    fn pump_manifest_lookup_visits_each_entry_at_most_once_per_request() {
+        let (_dir, mut store) = pump_lookup_fixture(65);
+        let expected = store.capture_document_manifest().unwrap();
+        let stage = store.begin_document_index().unwrap();
+        let mut previous = 0;
+        loop {
+            PUMP_MANIFEST_ENTRY_VISITS.with(|count| count.set(0));
+            let progress = store.pump_document_index(&stage).unwrap();
+            let visits = PUMP_MANIFEST_ENTRY_VISITS.with(std::cell::Cell::get);
+            assert!(visits <= expected.entries.len(),
+                "Pump revisited complete manifest rows: {visits} for {} entries", expected.entries.len());
+            assert_eq!(progress.prepared_documents, (previous + 32).min(65));
+            assert_eq!(progress.total_documents, 65);
+            previous = progress.prepared_documents;
+            if progress.ready { break; }
+        }
+        store.publish_document_index(&stage).unwrap();
+        check_pump_lookup_output(&store, &expected, 65);
+    }
+
+    #[test]
+    #[ignore = "serialized representative 1000/10000-document Pump benchmark"]
+    fn benchmark_pump_manifest_lookup_1000_and_10000_documents() {
+        let sizes = match std::env::var("ZORID_PUMP_BENCH_DOCUMENTS") {
+            Ok(value) => {
+                let size = value.parse::<usize>().unwrap();
+                assert!([1000, 10000].contains(&size));
+                vec![size]
+            }
+            Err(_) => vec![1000, 10000],
+        };
+        for documents in sizes {
+            let (_dir, mut store) = pump_lookup_fixture(documents);
+            let expected = store.capture_document_manifest().unwrap();
+            let stage = store.begin_document_index().unwrap();
+            let mut times = Vec::new();
+            let mut visits = 0usize;
+            loop {
+                PUMP_MANIFEST_ENTRY_VISITS.with(|count| count.set(0));
+                let start = std::time::Instant::now();
+                let progress = store.pump_document_index(&stage).unwrap();
+                times.push(start.elapsed().as_secs_f64() * 1000.0);
+                visits += PUMP_MANIFEST_ENTRY_VISITS.with(std::cell::Cell::get);
+                if progress.ready { break; }
+            }
+            store.publish_document_index(&stage).unwrap();
+            // Exact metadata/witness coverage for the whole result; sample
+            // bodies avoid adding an O(N^2) verification workload to this run.
+            let pin = store.open_document_snapshot().unwrap();
+            assert_eq!(store.document_snapshot_manifest(&pin).unwrap(), expected);
+            assert_eq!(pin.generation().records().count(), documents);
+            for record in pin.generation().records() {
+                assert_eq!(pin.generation().manifest().check_witness(record.witness()), Ok(()));
+            }
+            for index in [0, documents / 2, documents - 1] {
+                let id = EntryId::new(format!("note-{index:05}")).unwrap();
+                assert_eq!(store.read_document_projection(&pin, &id).unwrap().content.unwrap(),
+                    format!("# Note {index}\n\nneedle {index}\n").into_bytes());
+            }
+            store.close_document_snapshot(pin);
+            let total_ms = times.iter().sum::<f64>();
+            let first_ms = times[0];
+            let last_ms = *times.last().unwrap();
+            times.sort_by(f64::total_cmp);
+            eprintln!("PUMP_MANIFEST_BENCH documents={documents} pumps={} entry_visits={visits} total_ms={total_ms:.3} first_ms={first_ms:.3} last_ms={last_ms:.3} median_ms={:.3} max_ms={:.3}",
+                times.len(), times[times.len() / 2], times[times.len() - 1]);
+        }
     }
 
     fn pump_source_fixture() -> (tempfile::TempDir, Store, DocumentIndexStage) {
