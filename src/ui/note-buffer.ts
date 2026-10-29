@@ -6,6 +6,7 @@ import type { NoteMetadata } from '../core/types.ts';
 import type { ConditionalSavedSourceCapture, ConditionalSavedSourceWitness, ConditionalSavedSourceStatus } from '../core/durable-writes.ts';
 import { DocumentDraftProjection } from './document-draft-projection.ts';
 import type { DraftMetadataState } from './document-draft-projection.ts';
+import type {NoteDraftProtectionStatus} from './note-draft-protection.ts';
 
 export interface StorageLike {
   getItem(key: string): string | null;
@@ -31,7 +32,8 @@ function retryableSaveError(error:unknown):boolean {
   for(let depth=0;depth<8;depth++){
     if(!error||typeof error!=='object'||seen.has(error))return false;
     seen.add(error);
-    const value=error as {code?:unknown;message?:unknown;cause?:unknown};
+    const value=error as {code?:unknown;message?:unknown;cause?:unknown;source?:unknown};
+    if(value.source==='protocol')return false;
     if(typeof value.code==='string'){
       if(!transientSaveCodes.has(value.code))return false;
     }else if(typeof value.message!=='string'||!/^Durable(?: editor)? request failed(?:; retain pending recovery state\.)?\.?$/.test(value.message))return false;
@@ -75,6 +77,7 @@ export class NoteBuffer {
   private metadataRetired=false;
   private metadataNotificationPending=false;
   private disposing?:Promise<void>;
+  private independentRecoverySeen=false;
 
   /** Clean buffers use committed facts. Only an actual unsaved Markdown read
    * starts transient analysis; subsequent revisions share this buffer owner. */
@@ -112,6 +115,11 @@ export class NoteBuffer {
     return this.retryingAutosave||this.autosaveRetries<autosaveRetryDelays.length
       &&(this.timer!==undefined||this.autosaveRunningEpoch===this.autosaveEpoch||this.recoverableFlushEpoch===this.autosaveEpoch);
   }
+  /** Independent protection never clears dirty or claims a domain save. */
+  get draftProtectionStatus():NoteDraftProtectionStatus|undefined{return this.durable?.draftProtectionStatus;}
+  flushDraftProtection():Promise<void>{return this.durable?.flushDraftProtection()??Promise.resolve();}
+  draftProtectionAvailable():void{this.durable?.draftProtectionAvailable();}
+  get pendingCanonicalRecovery():boolean{return this.durable?.pendingCanonicalRecovery??false;}
 
   private validateWrite(): void { for (const validate of this.writeValidators) validate(); }
 
@@ -151,6 +159,8 @@ export class NoteBuffer {
     if(!this.durable)return;
     if(this.durable.ready){this.text=this.durable.text;this.savedText=this.durable.base.content;this.path=this.durable.base.path;}
     this.dirty=this.durable.dirty;this.error=this.durable.error;this.notify();
+    if(this.loaded&&!this.independentRecoverySeen&&this.durable.recoveredIndependentDraft){this.independentRecoverySeen=true;
+      if(this.dirty&&!this.hasRecoveryConflict)this.scheduleAutosave(this.options.debounceMs??400);}
   }
   private key(path = this.path): string {
     return `${this.options.storageKey ?? 'zorid:draft'}:${encodeURIComponent(path)}`;
@@ -388,6 +398,7 @@ export class NoteBuffer {
 
   flush(options:{autoRetry?:boolean}={}): Promise<void> {
     this.cancelAutosave();
+    this.durable?.retryCanonicalRecovery();
     // A completed retirement already saved this immutable buffer. Workspace
     // teardown may retry after a later buffer's independent close failed.
     if(this.disposed)return Promise.resolve();
@@ -410,6 +421,7 @@ export class NoteBuffer {
   flushForNavigation(options:{autoRetry?:boolean}={}):Promise<void> {
     if(!this.hasRecoveryConflict)return this.flush(options);
     this.cancelAutosave();
+    if(this.draftProtectionStatus)return this.durable!.preserveDraft().then(()=>this.syncDurable());
     return this.enqueue(async()=>{await this.durable!.preserveDraft();this.syncDurable();});
   }
 
@@ -430,6 +442,7 @@ export class NoteBuffer {
   }
 
   reload(): Promise<void> {
+    this.durable?.draftProtectionAvailable();
     return this.enqueue(async () => {
       this.requireLoaded();
       if(this.durable){await this.durable.reload();this.syncDurable();return;}
@@ -505,17 +518,26 @@ export class NoteBuffer {
   dispose(): Promise<void> {
     if(this.disposing)return this.disposing;
     this.cancelAutosave();
+    this.durable?.retryCanonicalRecovery();
     // Reserve retirement before calling any save/provider code. Save remains
     // usable after a failed facts ACK, while editing cannot race the barrier.
     const closing=Promise.resolve().then(async()=>{
+      // Start protection outside both save queues. Its ACK can complete while
+      // Rust is blocked; it never authorizes pretending the source was saved.
+      const protection=this.flushDraftProtection().then(()=>null,error=>error);
       await this.enqueue(async () => {
         if (this.disposed) return;
         try { await this.save(); }
         finally { this.cancelTimer(); }
       });
+      let protectionError=await protection;
+      // Saving can advance canonical text, operation phases and checkpoint
+      // identity after the first barrier. Join that exact final protection too.
+      try{await this.flushDraftProtection();protectionError=null;}catch(error){protectionError=error;}
+      if(protectionError&&!this.durable?.coreCoversCurrentDraft)throw protectionError;
       await this.durable?.releaseUnattachedConditionalSavedSources();
       // Facts cleanup must never become a durable save failure.
-      await this.closeMetadataProjection();this.disposed=true;
+      await this.closeMetadataProjection();this.disposed=true;this.durable?.stopDraftProtection();
     }).finally(()=>{if(this.disposing===closing)this.disposing=undefined;});
     this.disposing=closing;return closing;
   }

@@ -2,9 +2,36 @@ import type { Vault } from '../core/vault.ts';
 import {DurableWritePlanningError} from '../core/durable-writes.ts';
 import type { DurableWrites, DurableWriteRead, DurableWritePlan, DurableWriteRef, DurableWriteOutcome, DurableWriteInput, ConditionalSavedSourceWitness, ConditionalSavedSourceCapture, ConditionalSavedSourceStatus } from '../core/durable-writes.ts';
 import type { CheckpointChange } from '../core/durable-checkpoints.ts';
-import { boundedUtf8 } from '../core/checkpoint-input.ts';
+import { boundedUtf8,checkpointRevision,snapshotCheckpointChange } from '../core/checkpoint-input.ts';
+import {NoteDraftProtection} from './note-draft-protection.ts';
+import type {NoteDraftCapture,NoteDraftProtectionStatus} from './note-draft-protection.ts';
+import type {IndependentDraftReceipt,IndependentDraftCandidate,IndependentDraftRetirement} from '../core/independent-drafts.ts';
 interface Operation { plan?:DurableWritePlan; input?:DurableWriteInput; content:string; ref?:DurableWriteRef; pendingAck?:DurableWriteOutcome; planningRejected?:string }
 interface State {version:1;writer:string;generation:number;base:DurableWriteRead;draft:string;conflict:boolean;operation?:Operation}
+interface CoreCoverage {writer:string;generation:number;base:DurableWriteRead;draft:string;clean:boolean;revision:string}
+interface JournalCandidatePlan {canonical:State;exact?:CheckpointChange}
+const journalError=(code:string)=>Object.assign(new Error('Independent draft inventory could not be verified; candidates were retained.'),{code});
+const validId=(value:unknown):value is string=>typeof value==='string'&&!!value&&value.length<=256&&!value.includes('\0');
+const validGeneration=(value:unknown):value is number=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0&&!Object.is(value,-0);
+const validCheckpointReference=(value:unknown):boolean=>{if(value===null)return true;try{checkpointRevision(value);return true;}catch{return false;}};
+const object=(value:unknown):value is Record<string,any>=>!!value&&typeof value==='object'&&!Array.isArray(value)&&[null,Object.prototype].includes(Object.getPrototypeOf(value));
+const sameBase=(a:Pick<DurableWriteRead,'entryId'|'path'|'revision'|'content'>,b:Pick<DurableWriteRead,'entryId'|'path'|'revision'|'content'>)=>a.entryId===b.entryId&&a.path===b.path&&a.revision===b.revision&&a.content===b.content;
+function plainCheckpointState(encoded:string):State|undefined {
+  try{const value=JSON.parse(encoded);
+    if(!object(value)||value.version!==1||!validId(value.writer)||!validGeneration(value.generation)||typeof value.draft!=='string'||value.conflict!==false||value.operation!==undefined
+      ||!object(value.base)||!validId(value.base.entryId)||!validId(value.base.revision)||typeof value.base.path!=='string'||typeof value.base.content!=='string'||!object(value.base.stat))return;
+    const stat=value.base.stat;if(!['ctime','mtime','size'].every(key=>typeof stat[key]==='number'&&Number.isFinite(stat[key])&&stat[key]>=0)||!Number.isSafeInteger(stat.size))return;
+    return value as unknown as State;
+  }catch{return;}
+}
+/** Operation graphs contain small records and immutable strings. Copy records,
+ * never encode their potentially large source/plan strings on the edit stack. */
+function frozenPhase(value:unknown,depth=0):any {
+  if(value===null||value===undefined||typeof value!=='object')return value;
+  if(depth>8||Array.isArray(value)||![null,Object.prototype].includes(Object.getPrototypeOf(value))||Reflect.ownKeys(value).length>32)throw failure('invalid protection phase');
+  const copy:Record<string,unknown>={};for(const key of Object.keys(value))copy[key]=frozenPhase((value as Record<string,unknown>)[key],depth+1);
+  return Object.freeze(copy);
+}
 const failure=(message:string)=>new Error(`Durable note recovery: ${message}`);
 /** Generated frontmatter can advance independently while the user keeps typing
  * in the body. Reconcile only an untouched submitted header; a concurrently
@@ -40,14 +67,253 @@ export class DurableNoteState {
   error:Error|null=null;
   private vault:Vault;
   private writes:DurableWrites;
+  private readonly noteScope:{readonly vaultId:string;readonly clientId:string};
   private changed:()=>void;
-  constructor(vault:Vault,writes:DurableWrites,changed:()=>void){this.vault=vault;this.writes=writes;this.changed=changed;}
+  private protection?:NoteDraftProtection;
+  private protectionCaptureError:Error|null=null;
+  private protectionAuthoringStarted=false;
+  private protectionStopped=false;
+  private recoveredIndependent=false;
+  private recoveredJournalCandidate?:IndependentDraftCandidate;
+  private sourceRetirement?:IndependentDraftRetirement;
+  private sourceCleanupRunning?:Promise<void>;
+  private sourceCleanupError:Error|null=null;
+  private candidateCanonical?:State;
+  private candidateTerminal=false;
+  private candidateTerminalError:unknown;
+  private candidateRetryStep=0;
+  private candidateRetryTimer:ReturnType<typeof setTimeout>|undefined;
+  private candidateRetryWake?:()=>void;
+  private coreRecoveryPending=false;
+  private phase?:{operation?:Operation;input?:DurableWriteInput;plan?:DurableWritePlan;ref?:DurableWriteRef;ack?:DurableWriteOutcome;rejected?:string;conflict:boolean;checkpoint?:CheckpointChange;capture:Readonly<object>|null};
+  private coverage?:CoreCoverage;
+  private uncertainCoverage?:Omit<CoreCoverage,'revision'>;
+  constructor(vault:Vault,writes:DurableWrites,changed:()=>void){this.vault=vault;this.writes=writes;this.noteScope=Object.freeze({...writes.checkpoints.scope});this.changed=()=>{this.captureProtection();this.protection?.coreSettled();changed();};this.protectionChanged=changed;}
+  private protectionChanged:()=>void;
   get ready(){return !!this.state;}
   get text(){return this.state!.draft;}
   get conflicted(){return !!this.state?.conflict;}
   get base(){return this.state!.base;}
   get dirty(){return !!this.error||!!this.state&&(this.state.conflict||!!this.state.operation||!!this.uncertain||this.state.draft!==this.state.base.content);}
-  private queue<T>(run:()=>Promise<T>):Promise<T>{const p=this.tail.then(run).catch(error=>{this.error=error instanceof Error?error:failure('operation failed');this.changed();throw this.error;});this.tail=p.catch(()=>{});return p;}
+  get draftProtectionStatus():NoteDraftProtectionStatus|undefined {
+    const status=this.protection?.status;
+    if(status&&this.protectionCaptureError)return Object.freeze({...status,currentProtected:false,pending:true,error:this.protectionCaptureError});
+    return status&&this.sourceCleanupError?Object.freeze({...status,error:status.error??this.sourceCleanupError}):status;
+  }
+  async flushDraftProtection():Promise<void>{
+    this.captureProtection();if(this.protectionCaptureError)throw this.protectionCaptureError;
+    const owner=this.protection;
+    try{await owner?.flush();}catch(error){if(this.protection===owner||this.protectionStopped)throw error;await this.protection?.flush();}
+    await this.cleanupRecoveredSource(true);
+  }
+  stopDraftProtection():void{this.protectionStopped=true;this.candidateTerminal=true;this.candidateRetryWake?.();this.protection?.stop();}
+  draftProtectionAvailable():void{this.candidateRetryStep=0;this.candidateRetryWake?.();this.protection?.availability();}
+  retryCanonicalRecovery():void{
+    if(this.protectionStopped)return;
+    if(this.candidateCanonical&&this.candidateTerminal){this.candidateTerminal=false;void this.queue(()=>this.persist()).catch(()=>{});}
+    this.draftProtectionAvailable();
+  }
+  get pendingCanonicalRecovery():boolean{return !!this.candidateCanonical&&!this.candidateTerminal;}
+  get coreCoversCurrentDraft():boolean{return !!this.state&&this.covered(this.state);}
+  get recoveredIndependentDraft():boolean{return this.recoveredIndependent;}
+  private coverageFor(state:State):Omit<CoreCoverage,'revision'> {return{writer:state.writer,generation:state.generation,base:{...state.base,stat:{...state.base.stat}},draft:state.draft,clean:!state.conflict&&!state.operation&&state.draft===state.base.content};}
+  private covered(state:Pick<State,'writer'|'generation'|'base'|'draft'>):boolean {
+    const current=this.state,confirmed=this.coverage;
+    return !!current&&!!confirmed&&confirmed.clean&&!this.error&&!this.uncertain&&!current.operation&&!current.conflict&&this.revision===confirmed.revision
+      &&state.writer===current.writer&&state.generation===current.generation&&state.draft===current.draft&&current.draft===current.base.content
+      &&confirmed.writer===current.writer&&confirmed.generation===current.generation&&confirmed.draft===current.draft
+      &&['entryId','path','revision','content'].every(key=>confirmed.base[key as keyof DurableWriteRead]===current.base[key as keyof DurableWriteRead])
+      &&['entryId','path','revision','content'].every(key=>state.base[key as keyof DurableWriteRead]===current.base[key as keyof DurableWriteRead]);
+  }
+  private captureProtection():void {
+    const state=this.state;if(!state||!this.protection)return;
+    // An unopened clean baseline needs no independent body copy.
+    if(!this.protection.status.sequence&&!state.operation&&!state.conflict&&state.draft===state.base.content
+      &&(!this.uncertain||!this.protectionAuthoringStarted&&!this.recoveredIndependent))return;
+    try{
+      const op=state.operation,prior=this.phase;
+      if(!prior||prior.operation!==op||prior.input!==op?.input||prior.plan!==op?.plan||prior.ref!==op?.ref||prior.ack!==op?.pendingAck
+        ||prior.rejected!==op?.planningRejected||prior.conflict!==state.conflict||prior.checkpoint!==this.uncertain){
+        const capture=op||state.conflict||this.uncertain?Object.freeze({schemaVersion:1,conflict:state.conflict,operation:op?frozenPhase(op):null,checkpoint:this.uncertain?frozenPhase(this.uncertain):null}):null;
+        this.phase={operation:op,input:op?.input,plan:op?.plan,ref:op?.ref,ack:op?.pendingAck,rejected:op?.planningRejected,conflict:state.conflict,checkpoint:this.uncertain,capture};
+      }
+      this.protection.capture({writer:state.writer,snapshot:{generation:state.generation,baseline:{entryId:state.base.entryId,path:state.base.path,revision:state.base.revision,content:state.base.content},draft:state.draft,
+        checkpointRevision:this.uncertain?this.uncertain.expectedRevision:this.revision,pendingOperation:this.phase!.capture}});this.protectionCaptureError=null;
+    }catch{this.protectionCaptureError=failure('independent capture failed; current draft remains in memory');}
+  }
+  private async initializeProtection(validate:()=>void):Promise<void>{
+    const provider=this.vault.adapter.independentDrafts;if(!provider)return;
+    if(provider.scope.vaultId!==this.writes.checkpoints.scope.vaultId||provider.scope.clientId!==this.writes.checkpoints.scope.clientId)throw journalError('draft_scope_mismatch');
+    let initialReceipt:IndependentDraftReceipt|undefined,inventory:'ready'|'unknown'|'retained'='unknown',inventoryError:unknown;
+    const inspect=async()=>{
+      const initial=!this.protection,entryId=this.base.entryId;
+      const live=()=>{if(this.protectionStopped||this.base.entryId!==entryId)throw journalError('draft_lease_revoked');if(initial)validate();};
+      live();const rows=await provider.list({entryId});live();
+      if(!Array.isArray(rows)||rows.some(row=>!this.validJournalReceipt(row)||row.deleted||row.entryId!==entryId))throw journalError('invalid_draft_response');
+      inventory=rows.length?'retained':'ready';
+      let mayAdopt=!this.protectionAuthoringStarted&&(!this.protection||this.protection.status.sequence===0);
+      if(rows.length&&!initial&&mayAdopt){const observed=await this.vault.readDurableTextById(entryId);live();mayAdopt=!!observed&&sameBase(observed,this.base);}
+      // Never partially rank a large or mixed-writer inventory. The explicit
+      // recovery inventory retains every receipt and can inspect it separately.
+      if(rows.length&&rows.length<=16&&mayAdopt&&(rows.length===1||this.revision!==null&&new Set(rows.map(row=>row.writer)).size===1)){
+        const candidates:IndependentDraftCandidate[]=[];let verified=true,inspectedBytes=0;
+        for(const listed of rows){
+          const candidate=await provider.read({entryId,writer:listed.writer,incarnationId:listed.incarnationId});live();
+          if(!candidate||candidate.deleted||!this.validJournalReceipt(candidate)||!['vaultId','clientId','incarnationId','entryId','writer','revision','generation','deleted'].every(key=>candidate[key as keyof IndependentDraftReceipt]===listed[key as keyof IndependentDraftReceipt])
+            ||!object(candidate.baseline)||candidate.baseline.entryId!==entryId||!validId(candidate.baseline.revision)||typeof candidate.baseline.path!=='string'||typeof candidate.baseline.content!=='string'||typeof candidate.draft!=='string'
+            ||!validCheckpointReference(candidate.checkpointRevision)||!(candidate.pendingOperation===null||typeof candidate.pendingOperation==='string')){verified=false;break;}
+          inspectedBytes+=(candidate.baseline.content.length+candidate.draft.length+(candidate.pendingOperation?.length??0))*2;
+          if(inspectedBytes>32*1024*1024){verified=false;break;}
+          candidates.push(candidate);
+        }
+        const eligible=verified?candidates.filter(candidate=>!!this.planJournalCandidate(candidate)):[];
+        if(eligible.length===1&&candidates.every(candidate=>candidate===eligible[0]||this.historicalJournalCandidate(candidate))){
+          const candidate=eligible[0];
+          const adopt=()=>this.adoptJournalCandidate(candidate,live);
+          const adopted=initial?await adopt():await this.queue(adopt);
+          live();if(adopted){inventory='ready';this.recoveredJournalCandidate=Object.freeze({...candidate,baseline:Object.freeze({...candidate.baseline})});this.recoveredIndependent=true;
+            if(candidate.incarnationId===provider.scope.incarnationId)initialReceipt=candidate;
+          }
+        }
+      }
+      const own=await provider.read({entryId,writer:this.state!.writer});live();
+      if(own&&(!this.validJournalReceipt(own)||own.entryId!==entryId||own.writer!==this.state!.writer||own.incarnationId!==provider.scope.incarnationId))throw journalError('invalid_draft_response');
+      if(own?.deleted)initialReceipt=own;
+      // Unknown inventory may have held local captures without issuing any CAS.
+      // Rebuild only that unused lane when a verified current tombstone appears.
+      if(this.protection&&!this.protection.status.protection&&initialReceipt){this.protection.stop();this.protection=undefined;create();}
+      this.protection?.markInventory(inventory);this.captureProtection();
+    };
+    try{await inspect();}catch(error){inventory='unknown';inventoryError=error;}
+    const create=()=>{this.protection=new NoteDraftProtection({provider,writesScope:this.writes.checkpoints.scope,initialReceipt,onStatus:()=>{this.protectionChanged();void this.cleanupRecoveredSource().catch(()=>{});},
+      coreCovered:(capture:NoteDraftCapture)=>this.covered({writer:capture.writer,generation:capture.snapshot.generation,draft:capture.snapshot.draft,base:{...capture.snapshot.baseline,stat:this.base.stat}}),
+      getCleanWitness:capture=>this.covered({writer:capture.writer,generation:capture.snapshot.generation,draft:capture.snapshot.draft,base:{...capture.snapshot.baseline,stat:this.base.stat}})
+        ?{entryId:this.base.entryId,writer:this.state!.writer,generation:this.state!.generation,content:this.text,revision:this.base.revision}:undefined,
+      retryInventory:inspect});};
+    create();
+    this.protection!.markInventory(inventory,inventoryError);this.captureProtection();
+    if(this.recoveredIndependent)void this.queue(()=>this.persist()).catch(()=>{});
+  }
+  private validJournalReceipt(value:IndependentDraftReceipt):boolean {
+    const scope=this.writes.checkpoints.scope;
+    return object(value)&&value.vaultId===scope.vaultId&&value.clientId===scope.clientId&&validId(value.incarnationId)&&validId(value.entryId)&&validId(value.writer)
+      &&typeof value.revision==='string'&&/^[1-9][0-9]{0,19}$/.test(value.revision)&&BigInt(value.revision)<=18446744073709551615n&&validGeneration(value.generation)&&typeof value.deleted==='boolean';
+  }
+  private async adoptJournalCandidate(candidate:IndependentDraftCandidate,validate:()=>void):Promise<boolean>{
+    const before=this.state!;
+    const current=()=>!this.protectionAuthoringStarted&&!this.protectionStopped&&this.state===before&&this.state.generation===beforeGeneration&&this.state.draft===beforeDraft;
+    const beforeGeneration=before.generation,beforeDraft=before.draft;
+    const plan=this.planJournalCandidate(candidate);if(!current()||!plan)return false;
+    validate();if(!current())return false;
+    if(plan.exact){this.uncertain=plan.exact;this.uncertainCoverage=this.coverageFor(plan.canonical);this.candidateCanonical=plan.canonical;this.candidateTerminal=false;}
+    this.state={version:1,writer:candidate.writer,generation:candidate.generation,base:plan.canonical.base,draft:candidate.draft,conflict:false};
+    // The validated raw draft is usable before this pure checkpoint replay.
+    // Only revision metadata settles later; S1 must never replace visible D2/D3.
+    this.error=null;this.phase=undefined;this.captureProtection();this.protectionChanged();
+    if(this.protection)void this.queue(()=>this.persist()).catch(()=>{});
+    return true;
+  }
+  private checkpointCapsule(candidate:IndependentDraftCandidate):JournalCandidatePlan|undefined {
+    if(candidate.pendingOperation===null)return;
+    let capsule:any;try{capsule=JSON.parse(candidate.pendingOperation);}catch{return;}
+    const request=capsule?.checkpoint;
+    if(!object(capsule)||Object.keys(capsule).length!==4||capsule.schemaVersion!==1||capsule.conflict!==false||capsule.operation!==null||!object(request)
+      ||Object.keys(request).length!==4||request.key!==this.key||request.expectedRevision!==candidate.checkpointRevision
+      ||request.nextRevision===request.expectedRevision||typeof request.encodedState!=='string')return;
+    let exact:CheckpointChange;
+    try{exact=snapshotCheckpointChange(request as CheckpointChange).change;}catch{return;}
+    const stored=plainCheckpointState(request.encodedState);
+    if(!stored||stored.writer!==candidate.writer||!sameBase(stored.base,candidate.baseline)||stored.generation>candidate.generation||stored.generation===candidate.generation&&stored.draft!==candidate.draft)return;
+    return{canonical:stored,exact};
+  }
+  private planJournalCandidate(candidate:IndependentDraftCandidate):JournalCandidatePlan|undefined {
+    const before=this.state!;
+    if(before.operation||before.conflict||!sameBase(candidate.baseline,before.base)||candidate.generation<before.generation||!object(before.base.stat)
+      ||!['ctime','mtime','size'].every(key=>typeof before.base.stat[key as keyof typeof before.base.stat]==='number'&&Number.isFinite(before.base.stat[key as keyof typeof before.base.stat])&&before.base.stat[key as keyof typeof before.base.stat]>=0)
+      ||!Number.isSafeInteger(before.base.stat.size))return;
+    if(candidate.pendingOperation!==null){
+      const plan=this.checkpointCapsule(candidate);if(!plan?.exact)return;
+      const exact=plan.exact,stored=plan.canonical;
+      if(this.uncertain&&['key','expectedRevision','nextRevision','encodedState'].some(key=>this.uncertain![key as keyof CheckpointChange]!==exact[key as keyof CheckpointChange]))return;
+      const already=this.revision===exact.nextRevision&&this.confirmedState===exact.encodedState;
+      const expectedState=this.confirmedState?plainCheckpointState(this.confirmedState):undefined;
+      const expected=this.revision===exact.expectedRevision&&(this.revision===null?this.confirmedState==null:
+        !!expectedState&&expectedState.writer===candidate.writer&&sameBase(expectedState.base,stored.base)&&expectedState.generation<=stored.generation&&(expectedState.generation!==stored.generation||expectedState.draft===stored.draft));
+      return already||expected?plan:undefined;
+    }else{
+      if(this.uncertain)return;
+      const initial=this.revision===null&&this.confirmedState==null&&candidate.checkpointRevision===null&&before.generation===0&&before.draft===before.base.content;
+      if(!initial&&(candidate.writer!==before.writer||candidate.checkpointRevision!==this.revision))return;
+      if(candidate.generation===before.generation&&candidate.draft!==before.draft)return;
+      return{canonical:before};
+    }
+  }
+  private historicalJournalCandidate(candidate:IndependentDraftCandidate):boolean {
+    const canonical=this.confirmedState?plainCheckpointState(this.confirmedState):undefined;
+    return this.revision!==null&&!!canonical&&candidate.writer===canonical.writer&&candidate.generation<canonical.generation
+      &&(candidate.checkpointRevision!==this.revision||!sameBase(candidate.baseline,canonical.base))
+      &&(candidate.pendingOperation===null||!!this.checkpointCapsule(candidate));
+  }
+  private async settleCandidateCheckpoint():Promise<void>{
+    const exact=this.uncertain!,canonical=this.candidateCanonical!;
+    const scope=this.noteScope;this.candidateTerminal=false;
+    for(;;){
+      if(this.protectionStopped||this.uncertain!==exact||this.candidateCanonical!==canonical||this.key!==`note/v1/${this.base.entryId}`
+        ||this.writes.checkpoints.scope.vaultId!==scope.vaultId||this.writes.checkpoints.scope.clientId!==scope.clientId){
+        this.candidateTerminal=true;this.candidateTerminalError=journalError('draft_lease_revoked');throw this.candidateTerminalError;
+      }
+      try{
+        const result=await this.writes.checkpoints.compareAndSwap(exact);
+        if(result.key!==exact.key||result.revision!==exact.nextRevision||result.encodedState!==exact.encodedState||result.vaultId!==scope.vaultId||result.clientId!==scope.clientId||result.deleted)throw journalError('invalid_draft_checkpoint_receipt');
+        this.revision=result.revision;this.confirmedState=exact.encodedState;this.coverage={...this.coverageFor(canonical),revision:result.revision};this.uncertain=undefined;this.uncertainCoverage=undefined;
+        this.candidateCanonical=undefined;this.candidateRetryStep=0;if(this.error===this.candidateTerminalError)this.error=null;this.candidateTerminalError=undefined;
+        this.coreProtectionProgress();this.captureProtection();this.protectionChanged();return;
+      }catch(error){
+        const value=error&&typeof error==='object'?error as {code?:unknown;source?:unknown}:undefined,code=String(value?.code??'');
+        const provenance=value?.source===undefined||value.source==='host'||value.source==='transport';
+        const admission=provenance&&['host_exited','host_unavailable','client_not_admitted','client_ownership_lost','desktop_recovery_pending'].includes(code);
+        const transient=provenance&&['outcome_unknown','durable_transport_lost','transport_io','host_timeout','transport_error','transport_lost','timeout','request_timeout',
+          'checkpoint_storage','storage_io','filesystem_io','busy','io','checkpoint_unavailable','temporarily_unavailable'].includes(code);
+        if(!admission&&!transient){this.candidateTerminal=true;this.candidateTerminalError=error;throw error;}
+        await this.waitForCandidateRetry(admission?undefined:[500,1500,4000,30000][Math.min(this.candidateRetryStep++,3)]);
+      }
+    }
+  }
+  private waitForCandidateRetry(delay?:number):Promise<void>{
+    return new Promise(resolve=>{
+      const wake=()=>{if(this.candidateRetryWake!==wake)return;if(this.candidateRetryTimer!==undefined)clearTimeout(this.candidateRetryTimer);this.candidateRetryTimer=undefined;this.candidateRetryWake=undefined;resolve();};
+      this.candidateRetryWake=wake;if(delay!==undefined)this.candidateRetryTimer=setTimeout(wake,delay);
+      this.protectionChanged();if(this.protectionStopped)wake();
+    });
+  }
+  private cleanupRecoveredSource(retry=false):Promise<void>{
+    if(this.sourceCleanupRunning)return this.sourceCleanupRunning;
+    const candidate=this.recoveredJournalCandidate,provider=this.vault.adapter.independentDrafts,state=this.state;
+    if(!candidate||!provider||!state||this.protectionStopped||candidate.incarnationId===provider.scope.incarnationId||this.sourceCleanupError&&!retry)return Promise.resolve();
+    if(!this.sourceRetirement){
+      if(!this.covered(state)||!this.protection?.status.currentJournalAcknowledged||candidate.writer!==state.writer||candidate.generation!==state.generation||candidate.draft!==state.draft)return Promise.resolve();
+      const next=BigInt(candidate.revision)+1n;if(next>18446744073709551615n)return Promise.resolve();
+      this.sourceRetirement=Object.freeze({entryId:candidate.entryId,writer:candidate.writer,incarnationId:candidate.incarnationId,generation:candidate.generation,expectedRevision:candidate.revision,nextRevision:String(next)});
+    }
+    const request=this.sourceRetirement;
+    const cleanup=(async()=>{
+      const receipt=await provider.retire(request);
+      if(!this.validJournalReceipt(receipt)||receipt.incarnationId!==candidate.incarnationId||receipt.entryId!==candidate.entryId||receipt.writer!==candidate.writer
+        ||receipt.generation!==candidate.generation||receipt.revision!==request.nextRevision||!receipt.deleted)throw journalError('invalid_draft_response');
+      if(this.recoveredJournalCandidate===candidate)this.recoveredJournalCandidate=undefined;
+      this.sourceRetirement=undefined;this.sourceCleanupError=null;
+    })().catch(error=>{this.sourceCleanupError=error instanceof Error?error:journalError('draft_storage_failure');throw error;});
+    this.sourceCleanupRunning=cleanup;
+    void cleanup.finally(()=>{if(this.sourceCleanupRunning===cleanup)this.sourceCleanupRunning=undefined;if(!this.protectionStopped)this.protectionChanged();}).catch(()=>{});
+    return cleanup;
+  }
+  private queue<T>(run:()=>Promise<T>):Promise<T>{const p=this.tail.then(run).catch(error=>{this.error=error instanceof Error?error:failure('operation failed');this.coreRecoveryPending=true;this.changed();throw this.error;});this.tail=p.catch(()=>{});return p;}
+  private coreProtectionProgress():void {
+    // Only a failed-to-healthy transition signals availability. Healthy typing
+    // checkpoints do not bypass the independent storage retry backoff.
+    if(this.coreRecoveryPending){this.coreRecoveryPending=false;this.protection?.availability();}
+    this.protection?.coreSettled();
+  }
   private checkIdentity(value:DurableWritePlan|DurableWriteRef){const scope=this.writes.checkpoints.scope;if(value.vaultId!==scope.vaultId||value.clientId!==scope.clientId||value.entryId!==this.base.entryId||!value.operationId)throw failure('checkpoint identity mismatch');}
   private checkPlan(plan:DurableWritePlan):void {
     this.checkIdentity(plan);boundedUtf8(plan.encodedPlan,8*1024*1024,'plan_too_large');
@@ -118,14 +384,20 @@ export class DurableNoteState {
     if(op.planningRejected!==undefined&&(!['revision_conflict','source_capture_expired','conditional_source_changed'].includes(op.planningRejected)||op.ref))throw failure('invalid saved conditional planning rejection');
   }
   private async persist(state=this.state):Promise<void>{
-    if(this.uncertain){const result=await this.writes.checkpoints.compareAndSwap(this.uncertain);this.revision=result.revision;this.confirmedState=this.uncertain.encodedState;this.uncertain=undefined;}
+    if(this.candidateCanonical&&this.candidateTerminal)throw this.candidateTerminalError;
+    if(this.candidateCanonical&&this.uncertain)await this.settleCandidateCheckpoint();
+    this.captureProtection();
+    if(this.uncertain){const result=await this.writes.checkpoints.compareAndSwap(this.uncertain);this.revision=result.revision;this.confirmedState=this.uncertain.encodedState;
+      if(this.uncertainCoverage)this.coverage={...this.uncertainCoverage,revision:result.revision};this.uncertain=undefined;this.uncertainCoverage=undefined;if(this.protectionAuthoringStarted)this.candidateCanonical=undefined;this.captureProtection();this.coreProtectionProgress();}
     const encodedState=JSON.stringify(state);boundedUtf8(encodedState,32*1024*1024,'checkpoint_too_large');
     // Unchanged drafts can reuse a confirmed checkpoint, but retained operations
     // must recheck ownership before authorizing any intent continuation.
     // An uncertain request above still settles under its original identity.
     if(!state?.operation&&encodedState===this.confirmedState)return;
     this.uncertain={key:this.key,expectedRevision:this.revision,nextRevision:crypto.randomUUID(),encodedState};
-    const result=await this.writes.checkpoints.compareAndSwap(this.uncertain);this.revision=result.revision;this.confirmedState=encodedState;this.uncertain=undefined;
+    if(state)this.uncertainCoverage=this.coverageFor(state);this.captureProtection();
+    const result=await this.writes.checkpoints.compareAndSwap(this.uncertain);this.revision=result.revision;this.confirmedState=encodedState;
+    if(this.uncertainCoverage)this.coverage={...this.uncertainCoverage,revision:result.revision};this.uncertain=undefined;this.uncertainCoverage=undefined;if(this.protectionAuthoringStarted)this.candidateCanonical=undefined;this.captureProtection();this.coreProtectionProgress();
   }
   load(path:string,expectedEntryId?:string,validate:()=>void=()=>{}):Promise<void>{return this.queue(async()=>{
     validate();
@@ -141,11 +413,13 @@ export class DurableNoteState {
       const raw=JSON.parse(head.encodedState) as State;
       if(raw.version!==1||typeof raw.writer!=='string'||!Number.isSafeInteger(raw.generation)||raw.generation<0||typeof raw.draft!=='string'||typeof raw.conflict!=='boolean'||!raw.base||raw.base.entryId!==observed.entryId||typeof raw.base.content!=='string'||typeof raw.base.revision!=='string'||typeof raw.base.path!=='string')throw failure('malformed or unsupported checkpoint; retained');
       this.state=raw;
+      this.coverage={...this.coverageFor(raw),revision:head!.revision};
       if(raw.operation){const op=raw.operation;if(typeof op.content!=='string'||!op.plan&&!op.input)throw failure('invalid saved operation');if(op.input!==undefined)this.checkInput(op);if(op.plan!==undefined){if(!op.plan||op.plan.version!==1||typeof op.plan.encodedPlan!=='string')throw failure('invalid saved operation');this.checkPlan(op.plan);}if(op.ref){this.checkIdentity(op.ref);if(!op.plan||op.ref.operationId!==op.plan.operationId)throw failure('plan/ref mismatch');}}
       if(raw.operation?.ref)await this.resume(validate);
       else if(observed.revision!==raw.base.revision){if(!raw.operation&&raw.draft===raw.base.content){raw.base=observed;raw.draft=observed.content;}else raw.conflict=true;}
     }
     if(this.state.conflict)this.error=failure('file changed elsewhere; your draft is retained');
+    await this.initializeProtection(validate);validate();
     this.changed();
   });}
   update(text:string,capture?:ConditionalSavedSourceCapture):void{
@@ -157,7 +431,9 @@ export class DurableNoteState {
       const input:DurableWriteInput=Object.freeze({operationId:crypto.randomUUID(),path:base.path,expectedEntryId:base.entryId,expectedRevision:base.revision,expectedContent:base.content,content:text,conditionalSavedSource:Object.freeze({captureId:capture.captureId,logicalWitness:Object.freeze({...capture.logicalWitness})})});
       this.state!.operation={input,content:text};this.captures.set(capture,'pending');
     }
-    this.state!.draft=text;this.state!.generation++;void this.queue(()=>this.persist()).catch(()=>{});
+    const changed=text!==this.state!.draft||!!capture;
+    this.state!.draft=text;if(changed){this.state!.generation++;this.protectionAuthoringStarted=true;}
+    this.captureProtection();void this.queue(()=>this.persist()).catch(()=>{});
   }
   flush(validate:()=>void):Promise<void>{return this.queue(async()=>{
     // A retained uncertain checkpoint must settle under its original identity
@@ -183,7 +459,7 @@ export class DurableNoteState {
     await this.persist();this.error=null;this.changed();
   });}
   /** Navigation may retain a conflict, but must durably checkpoint every edit. */
-  preserveDraft():Promise<void>{return this.queue(()=>this.persist());}
+  preserveDraft():Promise<void>{return this.protection?this.flushDraftProtection():this.queue(()=>this.persist());}
   /** Refresh a completed collection-property operation without replacing later
    * body typing. In-flight intents retain their original plan and must settle
    * first; a UI refresh never reinterprets or retries them. */
