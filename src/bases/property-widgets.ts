@@ -47,6 +47,45 @@ export function basePropertyEditRecovery(element:HTMLElement):BasePropertyEditRe
   const retained=propertyEditRecoveries.get(element);
   return retained?.isCurrent()?retained:undefined;
 }
+/** An unsubmitted control's process-local state. It grants no write/replay
+ * authority; the fresh owner must independently validate its saved actor. */
+export interface BasePropertyRawDraft {
+  readonly target:{readonly entryId?:string;readonly path:string;readonly revision?:string;readonly property:string};
+  readonly valueFingerprint:string;
+  readonly definitionFingerprint:string;
+  readonly state:{readonly input:string;readonly inputType:string;readonly multiple:boolean;readonly tokens:readonly {readonly text:string;readonly value:BaseExpressionValue}[];readonly editingIndex?:number;readonly selected:number;readonly choiceActivated:boolean;readonly focus:boolean;readonly focusedToken?:number;readonly focusRemove?:boolean;readonly selectionStart:number|null;readonly selectionEnd:number|null;readonly selectionDirection:'forward'|'backward'|'none'|null};
+  /** A composing control stays mounted until its real final input arrives. */
+  readonly ready:Promise<void>;
+}
+interface RawPropertyOwner {
+  canCapture():boolean;
+  capture():BasePropertyRawDraft|undefined;
+  restore(draft:BasePropertyRawDraft):boolean;
+}
+const rawPropertyOwners=new WeakMap<HTMLElement,RawPropertyOwner>();
+export function canCaptureBasePropertyRawDraft(element:HTMLElement):boolean{return rawPropertyOwners.get(element)?.canCapture()??false;}
+/** Freezes every submission path before its owner changes focus or tears down. */
+export function captureBasePropertyRawDraft(element:HTMLElement):BasePropertyRawDraft|undefined{return rawPropertyOwners.get(element)?.capture();}
+export function restoreBasePropertyRawDraft(element:HTMLElement,draft:BasePropertyRawDraft):boolean{return rawPropertyOwners.get(element)?.restore(draft)??false;}
+const completedRawDrafts=new WeakSet<BasePropertyRawDraft>();
+/** Compare decoded data independently of object key insertion order. Accessors,
+ * cycles and oversized values cannot become a raw restoration witness. */
+function rawDraftFingerprint(value:unknown):string|undefined {
+  const active=new Set<object>();let remaining=20000;
+  const encode=(item:unknown,depth=0):string=>{
+    if(--remaining<0||depth>64)throw new Error('Raw property witness exceeds its bound');
+    if(item===null||typeof item==='string'||typeof item==='boolean')return JSON.stringify(item);
+    if(typeof item==='number'&&Number.isFinite(item))return JSON.stringify(item);
+    if(!item||typeof item!=='object'||active.has(item))throw new Error('Raw property witness is not data');
+    active.add(item);
+    try{
+      const read=(key:string)=>{const field=Object.getOwnPropertyDescriptor(item,key);if(!field||!('value'in field))throw new Error('Raw property witness has an accessor');return field.value;};
+      if(Array.isArray(item)){if(item.length>remaining)throw new Error('Raw property witness exceeds its bound');return`[${Array.from({length:item.length},(_,index)=>encode(read(String(index)),depth+1)).join(',')}]`;}
+      return`{${Object.keys(item).sort().flatMap(key=>{const data=read(key);return data===undefined?[]:[`${JSON.stringify(key)}:${encode(data,depth+1)}`];}).join(',')}}`;
+    }finally{active.delete(item);}
+  };
+  try{return encode(value);}catch{return;}
+}
 export type BasePropertyEditorCompletionIntent =
   | { readonly reason: 'enter'; readonly key: 'Enter'; readonly shiftKey: boolean }
   | { readonly reason: 'tab'; readonly key: 'Tab'; readonly direction: 1 | -1 }
@@ -139,6 +178,10 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   let acceptedPresentation = presentation;
   element.dataset.baseWidgetVersion = String(acceptedPresentation.version);
   let disposed = false, pending = false, editing = false, composing = false;
+  let rawFrozen=false,rawDraft:BasePropertyRawDraft|undefined,completeRawDraft:(()=>void)|undefined;
+  let compositionSettling=false;
+  let compositionStartValue='',compositionUpdate:string|undefined,compositionInput:{value:string;data:string|null|undefined;update:string|undefined}|undefined;
+  let restoredPassive=false;
   let editOwner={};
   let refreshRetainedInput:(()=>void)|undefined;
   let blurDuringComposition = false, compositionEpoch = 0;
@@ -156,7 +199,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   const current = () => !disposed && (options.isCurrent?.(acceptedPresentation) ?? true);
   const report = (error: unknown) => { try { options.onError?.(error); } catch { /* report failures cannot discard the draft */ } };
   const completed = (intent?: BasePropertyEditorCompletionIntent) => {
-    if (!intent || !current() || !element.isConnected) return;
+    if (rawFrozen || !intent || !current() || !element.isConnected) return;
     try { options.onEditorComplete?.(element, acceptedPresentation, intent); } catch (failure) { report(failure); }
   };
   const mark = (state?: string) => { if (state) element.dataset.baseEditing = state; else element.removeAttribute('data-base-editing'); };
@@ -204,7 +247,11 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   };
   pairTargets();
   const targetFor = (text: string) => pairedTargets.get(text) ?? targets().find(target => targetValue(target) === text || target.path === text);
-  const closePopup = () => { if(popup){propertyPopoverOwners.delete(popup);popup.remove();} popup = undefined; document.removeEventListener('pointerdown', outside, true); win?.removeEventListener('resize', position); win?.removeEventListener('scroll', position, true); };
+  const resumeFreshInteraction=()=>{if(!rawFrozen)restoredPassive=false;};
+  const freshInteractionEvents=['pointerdown','keydown','click','input'] as const;
+  const watchFreshInteractions=(node:HTMLElement)=>{for(const event of freshInteractionEvents)node.addEventListener(event,resumeFreshInteraction,true);};
+  const unwatchFreshInteractions=(node:HTMLElement)=>{for(const event of freshInteractionEvents)node.removeEventListener(event,resumeFreshInteraction,true);};
+  const closePopup = () => { if(popup){unwatchFreshInteractions(popup);propertyPopoverOwners.delete(popup);popup.remove();} popup = undefined; document.removeEventListener('pointerdown', outside, true); win?.removeEventListener('resize', position); win?.removeEventListener('scroll', position, true); };
   const error = (failure: unknown) => {
     if (disposed) return;
     mark('draft'); element.classList.add('mod-error'); input?.setAttribute('aria-invalid', 'true');
@@ -226,7 +273,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     if(!disposed){element.classList.remove('mod-error');if(keepOpen&&rebased&&current()){draftChanged=false;mark('draft');input?.removeAttribute('aria-invalid');}else{editing=false;closePopup();draw();}}
   };
   const commit = async (next: BaseExpressionValue, keepOpen = false, restoreFailureFocus = true, intent?: BasePropertyEditorCompletionIntent): Promise<boolean> => {
-    if (!editable || !current() || pending) return false;
+    if (rawFrozen || restoredPassive || !editable || !current() || pending) return false;
     const focusInput = !picker && restoreFailureFocus ? input : undefined;
     const ownedFocus = !!focusInput && document.activeElement === focusInput && document.hasFocus();
     let focusMoved = false;
@@ -329,7 +376,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
       const canBeginCheckbox = () => editable && (element.dataset.baseEditing === 'draft' || options.canBegin?.() !== false);
       checkbox.addEventListener('click', event => { event.stopPropagation(); if (!canBeginCheckbox()) event.preventDefault(); });
       checkbox.addEventListener('change', async () => {
-        if (pending || !current()) return;
+        if (rawFrozen || pending || !current()) return;
         if (!canBeginCheckbox()) { checkbox.checked = value.type === 'boolean' && value.value; checkbox.indeterminate = value.type === 'null'; return; }
         // Chromium can blur a control as soon as it becomes disabled. Capture
         // keyboard ownership first, and relinquish it if any other node focuses.
@@ -402,17 +449,17 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   }
   const pointerIntent = (event: PointerEvent): BasePropertyEditorCompletionIntent => ({ reason:'pointer', target:event.target, button:event.button, shiftKey:event.shiftKey, ctrlKey:event.ctrlKey, metaKey:event.metaKey, altKey:event.altKey });
   function outside(event: PointerEvent) {
-    if (!editing || element.contains(event.target as Node) || popup?.contains(event.target as Node)) return;
+    if (rawFrozen || restoredPassive || !editing || element.contains(event.target as Node) || popup?.contains(event.target as Node)) return;
     if (pending) { finishAfterPending = true; pendingCompletionIntent ??= pointerIntent(event); return; }
     if (!composing) void finish(false, pointerIntent(event));
   }
   function cancel(restoreFocus = true) {
-    if (pending) return;
+    if (rawFrozen || pending) return;
     blurDuringComposition = false; compositionEpoch++;
     editing = false; closePopup(); draw(); if (restoreFocus) element.focus();
   }
   function activateChoice(index: number, scroll = false) {
-    if (!input || !popup || pending || !choiceRows[index] || choiceRows[index].disabled) return;
+    if (rawFrozen || !input || !popup || pending || !choiceRows[index] || choiceRows[index].disabled) return;
     selected = index; choiceActivated = true;
     choiceRows.forEach((row, current) => { row.classList.toggle('is-selected', current === selected); row.setAttribute('aria-selected', String(current === selected)); });
     const row = choiceRows[selected];
@@ -449,7 +496,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     if (input.value && options.createOption && ['select', 'multiselect', 'status'].includes(type) && !definition.options?.some(option => option.value === input!.value || option.label === input!.value)) {
       const add = document.createElement('button'); add.type = 'button'; add.className = 'suggestion-item bases-property-create-option'; add.textContent = `Create “${input.value}”`; add.id = `${list.id}-create`; add.setAttribute('role','option'); add.setAttribute('aria-selected','false'); add.tabIndex = -1;
       add.addEventListener('mouseenter',()=>activateChoice(choices.length));
-      add.addEventListener('mousedown', event => event.preventDefault()); add.addEventListener('click', async () => { if (pending || !current()) return; const next = input!.value; pending = true; mark('pending'); if (input) input.disabled = true; try { const acknowledgement = await options.createOption!(presentation.property, next, acceptedPresentation); acknowledge(acknowledgement, value); const updated = options.getDefinition(presentation.property); if (updated?.type === type) definition = updated; pending = false; if (!current()) { editing = false; closePopup(); draw(); report(new Error('Option created. Reopen the property to use the refreshed definition.')); return; } mark('draft'); if (input) input.disabled = false; const matches = definition.options?.filter(option => option.label === next || option.value === next) ?? []; if (matches.length !== 1) throw new Error('The created option is not uniquely available in the refreshed definition. Reopen the property before choosing it.'); await choose(matches[0].value); } catch (failure) { pending = false; if (input) input.disabled = false; error(failure); } }); list.append(add); choiceRows.push(add);
+      add.addEventListener('mousedown', event => event.preventDefault()); add.addEventListener('click', async () => { if (rawFrozen || pending || !current()) return; const next = input!.value; pending = true; mark('pending'); if (input) input.disabled = true; try { const acknowledgement = await options.createOption!(presentation.property, next, acceptedPresentation); acknowledge(acknowledgement, value); const updated = options.getDefinition(presentation.property); if (updated?.type === type) definition = updated; pending = false; if (!current()) { editing = false; closePopup(); draw(); report(new Error('Option created. Reopen the property to use the refreshed definition.')); return; } mark('draft'); if (input) input.disabled = false; const matches = definition.options?.filter(option => option.label === next || option.value === next) ?? []; if (matches.length !== 1) throw new Error('The created option is not uniquely available in the refreshed definition. Reopen the property before choosing it.'); await choose(matches[0].value); } catch (failure) { pending = false; if (input) input.disabled = false; error(failure); } }); list.append(add); choiceRows.push(add);
     }
     if (!list.children.length) { const empty = document.createElement('div'); empty.className = 'suggestion-empty'; empty.textContent = type === 'relation' && definition.relation?.targetFilter && options.getRelationTargets?.(presentation.property, acceptedPresentation) === undefined ? 'Relation choices are unavailable until the shared index is ready.' : type === 'link' ? 'Type a link or URL' : ['list', 'tags'].includes(type) ? 'Type a value and press Enter' : 'No matching options'; list.append(empty); }
     position();
@@ -467,7 +514,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     } catch (failure) { error(failure); return false; }
   }
   async function choose(next: string, intent?: BasePropertyEditorCompletionIntent) {
-    if (!current() || pending || !validateRelationChoice(next, true)) return;
+    if (rawFrozen || restoredPassive || !current() || pending || !validateRelationChoice(next, true)) return;
     if (choices.find(choice => choice.value === next)?.missing || ((type === 'relation' || type === 'link') && targetFor(next)?.missing)) { error(new Error('This related note is unavailable. Choose another note.')); return; }
     if (!multiple && value.type === 'string' && value.value === next) { cancel(); completed(intent); return; }
     if (multiple) {
@@ -480,6 +527,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     else await commitChoice(str(next), intent);
   }
   async function commitChoice(next: BaseExpressionValue, intent?: BasePropertyEditorCompletionIntent) {
+      if(rawFrozen||restoredPassive)return;
       // A picker keeps focus in its search while a choice saves. Return it to
       // the owning cell only if that ownership survives the asynchronous write.
       const field = input, owned = !!field && (document.activeElement === field || !!popup?.contains(document.activeElement)) && document.hasFocus();
@@ -499,12 +547,13 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
       } finally { removeObservers(); if (removeFocusObserver === removeObservers) removeFocusObserver = undefined; }
   }
   function removeChip(index: number) {
+    if(rawFrozen||restoredPassive||pending||!current())return;
     if (editingIndex === index) { editingIndex = undefined; if (input) input.value = ''; }
     else if (editingIndex !== undefined && editingIndex > index) editingIndex--;
     draft.splice(index, 1); draftChanged = true; renderEditor(); input?.focus(); void saveDraft();
   }
   function editChip(index: number) {
-    if (pending || !current() || !input || !multiple) return;
+    if (rawFrozen || pending || !current() || !input || !multiple) return;
     editingIndex = index; input.value = draft[index].text; renderChoices(); input.focus(); input.select();
   }
   async function saveDraft() {
@@ -519,7 +568,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     chips.append(input); renderChoices();
   }
   async function finish(restoreFailureFocus = true, intent?: BasePropertyEditorCompletionIntent) {
-    if (!current() || !editing || pending || composing || !input) return;
+    if (rawFrozen || restoredPassive || !current() || !editing || pending || composing || !input) return;
     const unchanged = () => { cancel(intent ? intent.reason === 'enter' : restoreFailureFocus); completed(intent); };
     try {
       let next: BaseExpressionValue;
@@ -557,10 +606,10 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
       await commit(next, false, restoreFailureFocus, intent);
     } catch (failure) { error(failure); }
   }
-  function begin(event: MouseEvent | KeyboardEvent, seed?: string) {
-    if (!editable || !current() || pending || editing || options.readOnly?.(acceptedPresentation) || options.canBegin?.() === false) return;
-    if ((event.target as HTMLElement).closest('a,button,input,[role="link"]')) return;
-    event.preventDefault(); event.stopPropagation(); editing = true; draftChanged = false; mark('draft');
+  function begin(event?: MouseEvent | KeyboardEvent, seed?: string, focus=true) {
+    if (rawFrozen || !editable || !current() || pending || editing || options.readOnly?.(acceptedPresentation) || options.canBegin?.() === false) return;
+    if ((event?.target as HTMLElement|undefined)?.closest('a,button,input,[role="link"]')) return;
+    event?.preventDefault(); event?.stopPropagation(); editing = true; draftChanged = false; mark('draft');
     // Chip labels are editable text; untouched persisted values retain their
     // types and nested data until that specific chip is explicitly changed.
     draft = (value.type === 'list' ? value.value : value.type === 'null' ? [] : [value]).map(item => ({text:renderText(item),value:item}));
@@ -571,20 +620,31 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     input.value = seed ?? (multiple || optionPicker ? '' : inputText(value, definition));
     if (type === 'date' || type === 'datetime') configureBaseDateInput(input, seed ?? inputText(value, definition), type === 'datetime');
     selected = optionPicker && seed === undefined ? -1 : 0;
-    input.addEventListener('focus', () => { blurDuringComposition = false; compositionEpoch++; });
-    input.addEventListener('compositionstart', () => { composing = true; blurDuringComposition = false; compositionEpoch++; });
-    input.addEventListener('compositionend', () => {
+    input.addEventListener('focus', () => { if(!rawFrozen){blurDuringComposition = false; compositionEpoch++;} });
+    input.addEventListener('compositionstart', () => { composing = true;compositionStartValue=input!.value;compositionUpdate=undefined;compositionInput=undefined; compositionSettling=false;blurDuringComposition = false; compositionEpoch++; });
+    input.addEventListener('compositionupdate',event=>{compositionUpdate=event.data;});
+    input.addEventListener('compositionend', event => {
       composing = false;
+      // A final input can precede compositionend, or follow it. Observe the
+      // real DOM update rather than treating an elapsed task as confirmation.
+      const observed=compositionInput?.value===input!.value&&(compositionInput.update===event.data||compositionInput.data===event.data);
+      const unchanged=event.data===''&&input!.value===compositionStartValue;
+      compositionSettling=!observed&&!unchanged;
       const blurred = blurDuringComposition, epoch = compositionEpoch; blurDuringComposition = false;
+      if(rawFrozen&&!compositionSettling)completeRawDraft?.();
       // The final input event follows compositionend. A retained blur must still
       // finish when a synthetic/native blur leaves activeElement on this input.
-      later(() => { if (epoch !== compositionEpoch) return; if (picker) renderChoices(); if (blurred || (!element.contains(document.activeElement) && !popup?.contains(document.activeElement))) void finish(false); });
+      later(() => { if (epoch !== compositionEpoch||rawFrozen) return;if (picker) renderChoices(); if (blurred || (!element.contains(document.activeElement) && !popup?.contains(document.activeElement))) void finish(false); });
     });
-    input.addEventListener('input', () => { input?.removeAttribute('aria-invalid'); if (picker && !composing) { selected = optionPicker && !input?.value ? -1 : 0; renderChoices(); } });
-    input.addEventListener('blur', () => { if (composing) { blurDuringComposition = true; return; } later(() => { if (!element.contains(document.activeElement) && !popup?.contains(document.activeElement)) void finish(false); }); });
+    input.addEventListener('input', event => {
+      if(composing)compositionInput={value:input!.value,data:(event as InputEvent).data,update:compositionUpdate};
+      else if(compositionSettling){compositionSettling=false;completeRawDraft?.();}
+      if(rawFrozen)return;input?.removeAttribute('aria-invalid'); if (picker && !composing) { selected = optionPicker && !input?.value ? -1 : 0; renderChoices(); }
+    });
+    input.addEventListener('blur', () => { if(rawFrozen)return;if (composing) { blurDuringComposition = true; return; } later(() => { if (!element.contains(document.activeElement) && !popup?.contains(document.activeElement)) void finish(false); }); });
     input.addEventListener('keydown', event => {
       event.stopPropagation();
-      if (composing || event.isComposing || pending) return;
+      if (rawFrozen || composing || event.isComposing || pending) return;
       if (event.key === 'Escape') { event.preventDefault(); if (editingIndex !== undefined) { const index = editingIndex; editingIndex = undefined; if (input) input.value = ''; renderChoices(); popup?.querySelectorAll<HTMLElement>('.multi-select-pill')[index]?.focus(); } else cancel(); }
       else if (picker && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) { event.preventDefault(); const direction = event.key === 'ArrowDown' ? 1 : -1; let next = selected < 0 && direction < 0 ? choiceRows.length - 1 : selected + direction; while (next >= 0 && next < choiceRows.length && choiceRows[next].disabled) next += direction; if (next >= 0 && next < choiceRows.length) activateChoice(next,true); }
       else if (event.key === 'Enter') {
@@ -608,19 +668,20 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
       popup = document.createElement('div'); popup.className = inlineList ? 'bases-property-inline-editor' : 'bases-property-popover popover';
       popup.dataset.propertyType = type;
       propertyPopoverOwners.set(popup,element);
-      if (inlineList) element.replaceChildren(popup); else document.body.append(popup); renderEditor(); document.addEventListener('pointerdown', outside, true); win?.addEventListener('resize', position); win?.addEventListener('scroll', position, true);
+      if (inlineList) element.replaceChildren(popup); else document.body.append(popup);watchFreshInteractions(popup); renderEditor(); document.addEventListener('pointerdown', outside, true); win?.addEventListener('resize', position); win?.addEventListener('scroll', position, true);
     } else {
       element.replaceChildren(input);
       // A navigation owner needs the pointer target before the following blur
       // disables this scalar input and blocks another cell's activation.
       if (options.onEditorComplete) document.addEventListener('pointerdown', outside, true);
     }
-    input.focus();
+    if(focus)input.focus();
     if (seed !== undefined) input.setSelectionRange?.(seed.length, seed.length);
     else if (!multiple) input.select();
   }
   const activate = (event: MouseEvent) => { if (!event.defaultPrevented && event.button === 0) begin(event); };
   const key = (event: KeyboardEvent) => {
+    if(rawFrozen)return;
     if (event.key === 'Escape' && !pending && type === 'checkbox' && element.hasAttribute('data-base-editing')) { event.preventDefault(); draw(); return; }
     if (event.defaultPrevented || event.isComposing || composing || event.target !== element || event.ctrlKey || event.metaKey || event.altKey || event.getModifierState('AltGraph')) return;
     if (['Enter', 'F2'].includes(event.key)) { begin(event); return; }
@@ -635,6 +696,35 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     // draft, and the initial key is never itself a persistence operation.
     if (Array.from(event.key).length === 1 && !/[\u0000-\u001f\u007f]/.test(event.key)) begin(event, event.key);
   };
+  const fingerprints=()=>{const raw=rawDraftFingerprint(value),schema=rawDraftFingerprint(definition);return raw!==undefined&&schema!==undefined?{value:raw,definition:schema}:undefined;};
+  const canCapture=()=>!!rawDraft||(!rawFrozen&&current()&&editable&&editing&&!!input&&!pending&&!propertyEditRecoveries.has(element)&&element.dataset.baseEditing==='draft'&&!!fingerprints());
+  const rawOwner:RawPropertyOwner={canCapture,capture(){
+    if(rawDraft)return rawDraft;if(!canCapture())return;
+    const baseline=fingerprints()!;rawFrozen=true;
+    const focused=document.hasFocus()&&!!input&&(document.activeElement===input||!!popup?.contains(document.activeElement));
+    const focusedChip=(document.activeElement as HTMLElement|null)?.closest('.multi-select-pill'),focusedToken=focusedChip&&popup?[...popup.querySelectorAll('.multi-select-pill')].indexOf(focusedChip):-1;
+    const focusRemove=!!focusedChip&&(document.activeElement as HTMLElement).classList.contains('multi-select-pill-remove-button');
+    const snapshot=():BasePropertyRawDraft['state']=>({input:input!.value,inputType:input!.type,multiple,tokens:draft.map(item=>({...item})),...(editingIndex!==undefined?{editingIndex}:{}),selected,choiceActivated,focus:focused,...(focusedToken>=0?{focusedToken,focusRemove}:{}),selectionStart:input!.selectionStart,selectionEnd:input!.selectionEnd,selectionDirection:input!.selectionDirection});
+    let state=snapshot(),resolve!:()=>void;const ready=new Promise<void>(yes=>{resolve=yes;});
+    const captured:BasePropertyRawDraft={target:{entryId:acceptedPresentation.row.entryId,path:acceptedPresentation.row.path,revision:acceptedPresentation.row.revision,property:acceptedPresentation.property},valueFingerprint:baseline.value,definitionFingerprint:baseline.definition,get state(){return state;},ready};rawDraft=captured;
+    completeRawDraft=()=>{if(composing||compositionSettling||completedRawDrafts.has(captured))return;state=snapshot();completedRawDrafts.add(captured);resolve();completeRawDraft=undefined;};
+    if(!composing&&!compositionSettling)completeRawDraft();return captured;
+  },restore(captured){
+    if(rawFrozen||disposed||pending||editing||!current()||!editable||!completedRawDrafts.has(captured))return false;
+    const baseline=fingerprints(),target=captured.target;
+    if(target.property!==acceptedPresentation.property||target.path!==acceptedPresentation.row.path||target.entryId!==acceptedPresentation.row.entryId||baseline?.value!==captured.valueFingerprint||baseline.definition!==captured.definitionFingerprint)return false;
+    const state=captured.state;
+    begin(undefined,undefined,false);
+    if(!editing||!input||input.type!==state.inputType)return false;
+    restoredPassive=true;
+    draft=state.tokens.map(item=>({...item}));draftChanged=false;editingIndex=state.editingIndex;selected=state.selected;choiceActivated=state.choiceActivated;input.value=state.input;
+    if(picker){renderEditor();selected=state.selected;choiceActivated=state.choiceActivated;if(state.choiceActivated&&selected>=0)activateChoice(selected);}
+    try{if(state.selectionStart!==null&&state.selectionEnd!==null)input.setSelectionRange(state.selectionStart,state.selectionEnd,state.selectionDirection??undefined);}catch{/* Native date controls have no text selection. */}
+    if(state.focus){const token=state.focusedToken===undefined?undefined:popup?.querySelectorAll<HTMLElement>('.multi-select-pill')[state.focusedToken];const focus=state.focusRemove?token?.querySelector<HTMLElement>('.multi-select-pill-remove-button'):token;(focus??input).focus();}
+    return true;
+  }};
+  rawPropertyOwners.set(element,rawOwner);
+  watchFreshInteractions(element);
   element.addEventListener('click', activate); element.addEventListener('dblclick', activate); element.addEventListener('keydown', key); draw();
-  return () => { disposed = true; delete element.dataset.baseWidgetVersion; delete element.dataset.basePropertyEditable; element.removeAttribute('aria-disabled'); removeFocusObserver?.(); removeFocusObserver = undefined; disposeRich?.(); disposeRich = undefined; closePopup(); timers.forEach(clearTimeout); timers.clear(); mark(); element.removeEventListener('click', activate); element.removeEventListener('dblclick', activate); element.removeEventListener('keydown', key); };
+  return () => { disposed = true;rawPropertyOwners.delete(element);unwatchFreshInteractions(element); delete element.dataset.baseWidgetVersion; delete element.dataset.basePropertyEditable; element.removeAttribute('aria-disabled'); removeFocusObserver?.(); removeFocusObserver = undefined; disposeRich?.(); disposeRich = undefined; closePopup(); timers.forEach(clearTimeout); timers.clear(); mark(); element.removeEventListener('click', activate); element.removeEventListener('dblclick', activate); element.removeEventListener('keydown', key); };
 }
