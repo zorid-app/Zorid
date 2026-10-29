@@ -86,7 +86,8 @@ test('a committed checkpoint with a lost ACK is reconciled under the same origin
 test('a foreign canonical advance prevents journal candidate adoption or checkpoint replay',async t=>{
   const f=await fixture(t),gate=f.first.holdCheckpoint();f.buffer.update('Protected pending draft');await until(()=>f.checkpointCalls.length===1);await f.buffer.flushDraftProtection();
   const foreign={version:1,writer:'foreign-canonical-lineage',generation:7,base:initial,draft:'Canonical writer draft retained',conflict:false};
-  f.heads.set('note/v1/entry',{version:1,...scope,key:'note/v1/entry',revision:crypto.randomUUID(),sequence:'2',deleted:false,byteLength:1,encodedState:JSON.stringify(foreign)});
+  const encodedForeign=JSON.stringify(foreign);
+  f.heads.set('note/v1/entry',{version:1,...scope,key:'note/v1/entry',revision:crypto.randomUUID(),sequence:'2',deleted:false,byteLength:Buffer.byteLength(encodedForeign),encodedState:encodedForeign});
   await f.buffer.closeMetadataProjection();f.first.retire();const next=f.context('foreign-guard'),vault=new Vault(next.owned);await vault.initialize();const buffer=new NoteBuffer(vault,'One.md',{debounceMs:60000});t.after(()=>buffer.closeMetadataProjection());
   await buffer.load('entry');assert.equal(buffer.text,foreign.draft);assert.equal(buffer.draftProtectionStatus?.inventory,'retained');assert.equal(f.checkpointCalls.length,1);assert.equal(f.commits,0);
   assert.ok([...f.drafts.values()].some(row=>!row.deleted&&row.draft==='Protected pending draft'));gate.resolve();await buffer.dispose();
