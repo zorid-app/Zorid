@@ -205,3 +205,31 @@ test('symlinked storage root and branch are rejected rather than following repla
   await fs.rename(branch,path.join(target,'moved'));await fs.symlink(path.join(target,'moved'),branch);
   await assert.rejects(lease.read(change()),{code:'draft_storage_corrupt'});
 });
+
+test('selected entry inventory opens no unrelated heads or bodies, including after restart',async t=>{
+  const directory=await fixture(t);let headReads=0,blobReads=0;
+  const counted=new Proxy(fs,{get(target,key){
+    if(key==='open')return async(file,...args)=>{
+      if(path.basename(file)==='head.json')headReads++;
+      else if(path.basename(path.dirname(file))==='blobs')blobReads++;
+      return fs.open(file,...args);
+    };
+    const value=target[key];return typeof value==='function'?value.bind(target):value;
+  }});
+  const journal=await openDraftJournal(directory),lease=journal.bind(scope);
+  await lease.compareAndSwap(change());
+  const otherEntry=change({entryId:'another-entry',baseline:{...change().baseline,entryId:'another-entry'},draft:'Unrelated body'});
+  await lease.compareAndSwap(otherEntry);
+  const anotherWriter=journal.bind({...scope,incarnationId:'another-renderer'});
+  await anotherWriter.compareAndSwap(change({draft:'Same entry, another writer'}));
+  const foreign=journal.bind({...scope,vaultId:'foreign-vault'});await foreign.compareAndSwap(change());
+  await journal.close();
+  const reopened=await openDraftJournal(directory,{fileSystem:counted}),recovery=reopened.bind({...scope,incarnationId:'recovery'});
+  assert.equal(headReads,0,'opening the owner only validates directory names');
+  const selected=await recovery.list({entryId:'entry-one'});
+  assert.equal(selected.length,2);assert.equal(headReads,2);assert.equal(blobReads,0);
+  headReads=0;
+  assert.deepEqual(await recovery.list({entryId:'missing-entry'}),[]);assert.equal(headReads,0);assert.equal(blobReads,0);
+  headReads=0;
+  assert.equal((await recovery.list()).length,3);assert.equal(headReads,3,'foreign scope head is never opened');assert.equal(blobReads,0);
+});
