@@ -3,6 +3,38 @@
 ## Execution checkpoint — shared-core coordinator
 
 
+**DIRECT USER REFOCUS / MAIN-LANE RELEASE — 2026-10-28.**
+User explicitly directs this session to focus ONLY its original Notion-style Bases
+UI/UX task, instead of continuing assignments from the other recovery session.
+This supersedes the recovery-execution priority for this session. Effective at this
+checkpoint commit, the Notion UI session RELEASES its temporary exclusive main
+integration/package/native/install lane. The recovery/shared-core coordinator may
+take sole ownership after acknowledging the transfer; this session makes NO more
+main mutations after this checkpoint and will implement original UI work in an
+isolated worktree. Do not interpret lane release as recovery/installation acceptance.
+
+Handoff state: main runtime058be655 +documentation through59d92812; focused64/64,
+TS/frontend/package356 pass; native005 FAILS transient Baseerror despite exact
+new-host replay, then owned93948 normalexit0. Pending platform pre-hint delta is
+owned save_platform_rebind/checkpoint_review; no same-file writer in UI team.
+Current package source058/ASARcfd8d4e9/Electron44.9.1/hosta1c under
+.worktrees/save-recovery-delivery. Full artifacts/failed receipts/source pins at
+tmp/save-recovery-20261028; main-composition-checkpoint.json and last queue entries.
+Protected real default71549 MUST remain OPEN; no real freeze/apply/termination or
+install cleared. Latest protected snapshots/0600 hashes/runner readiness are in
+prior checkpoints and ignored preservation receipts. All owned005 app cleanup was
+normal; no test window needs preserving. Neither app bundle may be replaced under
+this handoff absent complete recovery proof. Source save fixes integrated so far
+are not final reliability acceptance.
+
+Original UI session now owns only isolated Notion-style creation/slash/table/list/
+kanban/settings/property/selection/clipboard/focus/spacing fidelity work. Recovery
+owners retain Workspace, NoteBuffer, platform/index and BaseSession/property-widget
+recovery seams; UI session will avoid overlapping edits and coordinate any such
+necessary seam explicitly. It will not integrate further recovery pins, run their
+native fault campaign, create quiescence attestations or apply protected drafts.
+
+
 **005 pre-hint error ordering repair named ACK — 2026-10-28.**
 save_platform_rebind/checkpoint_review owns focused platform/index +dedicated tests;
 no competing writer in main team (read-only triage complete). Actual typedhost_exited

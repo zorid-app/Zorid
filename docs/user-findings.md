@@ -1,5 +1,14 @@
 # User findings queue
 
+## Current direct user priority: original Notion Bases UX — 2026-10-28
+
+User redirects this session to its ORIGINAL Notion-style Bases task only. Full
+interaction/visual matching and final installed UI acceptance remain incomplete;
+prior bounded deliveries are evidence, not whole-request completion. Recovery
+coordination returns to the recovery/shared-core session with the main-lane release
+in the roadmap. Protected app/draft/install holds remain in force. UI work stays
+isolated and avoids active recovery-owned files.
+
 ## URGENT: real-session automatic save failure — 2026-10-28
 
 
