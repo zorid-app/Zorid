@@ -27,6 +27,7 @@ import { createFileTreeDrag, executeFileTreeMove } from './file-tree-drag.ts';
 import type { FileTreeDragRow } from './file-tree-drag.ts';
 import { shouldOverrideInputContextMenu } from '../platform/input-context-menu.ts';
 import { bindNoteTitleFocus } from './note-title-focus.ts';
+import type { NoteTitleFocusHandle, NoteTitleRawDraft } from './note-title-focus.ts';
 import { Vault } from '../core/index.ts';
 import type { VaultEntry } from '../core/index.ts';
 import { pickDesktopVault, createPlatformAdapter } from '../platform/index.ts';
@@ -42,6 +43,7 @@ import type { CanvasMarkdownBufferSession } from './canvas-markdown-session.ts';
 import { MarkdownEmbeds } from './embeds.ts';
 import { renderProperties } from './properties.ts';
 import type { PropertiesView } from './properties.ts';
+import type { PropertiesRawDrafts } from './properties.ts';
 import { AttachmentResources, isImage } from './attachments.ts';
 import type {AttachmentLease} from './attachments.ts';
 import { createImageView } from './image-view.ts';
@@ -119,6 +121,9 @@ interface Pane {
   calendarView?:CalendarView; tasksView?:TasksView;
   canvasSource?:string; baseEmbeds?:BaseEmbedSessions; embeds?:MarkdownEmbeds; properties?:PropertiesView;
   propertyTimer?:ReturnType<typeof setTimeout>; refreshPreview?:()=>void; readingFind?:ReadingFind;
+  noteTitle?:NoteTitleFocusHandle;
+  noteTitleActor?:{readonly path:string;readonly entryId:string;readonly revision?:string};
+  rawAdmissionActor?:{readonly path:string;readonly entryId:string;readonly revision?:string};
   history:string[]; historyIndex:number; persisted?:Record<string,unknown>;
 }
 interface StatusCountJob {
@@ -129,6 +134,9 @@ interface StatusCountJob {
 // creating a substring or regular-expression match for each character.
 const statusWhitespace=(unit:number)=>unit>=0x09&&unit<=0x0d||unit===0x20||unit===0xa0||unit===0x1680
   ||unit>=0x2000&&unit<=0x200a||unit===0x2028||unit===0x2029||unit===0x202f||unit===0x205f||unit===0x3000||unit===0xfeff;
+type AdmissionRawLocation={readonly paneId:string;readonly savedTabId:string;readonly path:string;readonly entryId:string}|{readonly sidebar:true;readonly path:string;readonly entryId:string};
+type AdmissionRawInput={readonly kind:'base';readonly draft:import('../bases/session.ts').BaseSessionRawDraft}|{readonly kind:'embeds';readonly draft:import('./base-embed-sessions.ts').BaseEmbedRawDraft}|{readonly kind:'properties';readonly draft:PropertiesRawDrafts}|{readonly kind:'title';readonly draft:NoteTitleRawDraft};
+interface RetainedAdmissionRawInput {readonly location:AdmissionRawLocation;readonly scope:{readonly vaultId:string;readonly clientId:string};readonly input:AdmissionRawInput;reason?:string;}
 interface Settings extends AttachmentImportSettings { theme: 'system' | 'dark' | 'light'; fontSize: number; readableWidth: boolean; showInlineTitle: boolean; defaultMode: 'live'; useTab: boolean; tabSize: number; smartIndentList: boolean; autoConvertHtml: boolean; }
 interface Command { id?: string; name: string; shortcut?: string; icon?: string; action: () => void | Promise<void>; }
 export interface WorkspaceViewFactories { pdf?: typeof createPdfView; media?: typeof createMediaView; canvas?: typeof createCanvasView; base?: typeof createBaseSession }
@@ -136,6 +144,21 @@ type EditorFactory = (parent: HTMLElement, options: EditorOptions) => EditorHand
 const nameOf = (path: string) => path.split('/').at(-1)!.replace(/\.md$/i, '');
 const parentOf = (path: string) => path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
 const makeId = () => crypto.randomUUID();
+
+/** Only a positively identified transport/admission failure permits another
+ * automatic recovery attempt. Unknown errors and authority/data failures keep
+ * their explicit retained-state UI. */
+function transientAdmissionFailure(error:unknown):boolean {
+  const seen=new Set<object>();let transient=false;
+  for(let depth=0;error&&typeof error==='object'&&depth<16;depth++){
+    if(seen.has(error))return false;seen.add(error);
+    const value=error as {code?:unknown;cause?:unknown},code=String(value.code??'');
+    if(/scope|corrupt|permission|integrity|protocol|invalid|conflict/.test(code)||code==='recovery_not_available')return false;
+    if(['host_exited','client_not_admitted','client_ownership_lost','desktop_recovery_pending','desktop_recovery_stale_reply','ETIMEDOUT','ECONNRESET','EPIPE'].includes(code))transient=true;
+    error=value.cause;
+  }
+  return transient;
+}
 
 export class Workspace {
   root: HTMLElement;
@@ -320,7 +343,7 @@ export class Workspace {
       this.closeCleanup=window.zorid?.onBeforeClose?.(async()=>{
         if(this.closing||this.choosingVault||this.lifecycleRecovery)throw new Error('Window close already pending');
         this.closing=true;const inert=this.root.inert,platform=this.platform,generation=this.vaultGeneration;this.root.inert=true;
-        try{await this.destroy();}catch(error){this.closing=false;if(this.platformDraining||this.platformDrained||this.platformReleased){try{await this.reconnectRetiredPlatform();this.root.inert=inert;}catch{this.showLifecycleRecovery();}}else this.root.inert=inert;this.resumeStatusCounts(platform,generation);throw error;}
+        try{await this.destroy();}catch(error){this.closing=false;if(this.platformDraining||this.platformDrained||this.platformReleased){try{await this.reconnectRetiredPlatform();this.root.inert=inert;}catch(recoveryError){this.showLifecycleRecovery(undefined,recoveryError);}}else this.root.inert=inert;this.resumeStatusCounts(platform,generation);if(this.lifecycleRecoveryRetry?.timer===undefined&&this.lifecycleRecoveryRetry)this.scheduleLifecycleRecoveryRetry(this.lifecycleRecoveryRetry);throw error;}
       });
     }
     try {
@@ -535,7 +558,15 @@ export class Workspace {
   private releasingPlatform?:Promise<void>;
   private choosingVault?:Promise<void>;
   private lifecycleRecovery?:Promise<void>;
+  private admissionRecoveryOwner?:{readonly platform:PlatformVault;readonly vault:Vault;readonly generation:number};
   private lifecycleRecoveryView?:HTMLElement;
+  private lifecycleRecoveryRetry?:{platform:PlatformVault;vault:Vault;generation:number;recover:()=>Promise<void>;attempt:number;timer?:ReturnType<typeof setTimeout>};
+  private admissionRawPreparations=new WeakMap<Vault,{readonly settlements:readonly {settle():Promise<void>}[];readonly ready:readonly Promise<void>[];readonly collect:()=>RetainedAdmissionRawInput[];collected:boolean}>();
+  private retainedAdmissionRawInputs:RetainedAdmissionRawInput[]=[];
+  private admissionRestoredTabIds=new WeakMap<Tab,ReadonlySet<string>>();
+  private admissionRawRestore?:Promise<void>;
+  private admissionRawRestoreAgain=false;
+  private admissionRawCandidates?:HTMLElement;
   private retiredAdmissionVaults=new WeakSet<Vault>();
   private recoveringAdmissionVaults=new WeakSet<Vault>();
   private admissionRetirement?:{platform:PlatformVault;vault:Vault;generation:number;retired:boolean;signal:Promise<void>;retire():void};
@@ -543,6 +574,8 @@ export class Workspace {
   /** A lifecycle preflight may be waiting on a write whose exact replay needs
    * this transition to unwind first. Retirement cancels only that wait. */
   private async flushAdmissionPreflight(platform:PlatformVault,vault:Vault):Promise<void>{
+    const scope=vault.adapter.durableWrites?.checkpoints.scope;
+    if(scope&&this.retainedAdmissionRawInputs.some(candidate=>candidate.scope.vaultId===scope.vaultId&&candidate.scope.clientId===scope.clientId))throw Object.assign(new Error('Unfinished input is retained here. Resolve or discard it before closing this vault.'),{code:'workspace_raw_input_retained'});
     const retirement=this.admissionRetirement;
     const reversible=()=>retirement&&this.admissionRetirement===retirement&&retirement.platform===platform&&retirement.vault===vault
       &&this.platform===platform&&this.vault===vault&&this.vaultGeneration===retirement.generation
@@ -629,43 +662,107 @@ export class Workspace {
       const transition=this.choosingVault??this.destroying??this.releasingPlatform;
       if(transition)return transition.catch(()=>{}).then(()=>{if(current())return receive();});
       if(this.closing||this.platformDraining)return;
-      return this.recoverAdmission(platform,vault,generation).catch(error=>{if(owns()){this.showLifecycleRecovery(()=>this.recoverAdmission(platform,vault,generation));this.renderStatus();}throw error;});
+      return this.recoverAdmission(platform,vault,generation).catch(error=>{if(owns()){this.showLifecycleRecovery(()=>this.recoverAdmission(platform,vault,generation),error);this.renderStatus();}throw error;});
     };
     this.disposers.push(platform.recovery.subscribe(receive));
+  }
+  private admissionRawLocation(pane:Pane,actor=pane.rawAdmissionActor):AdmissionRawLocation|undefined {
+    const tabId=pane.viewTabId??pane.active,owner=this.panes.find(candidate=>candidate.tabs.some(tab=>tab.id===tabId));
+    const tab=owner?.tabs.find(candidate=>candidate.id===tabId);
+    if(!owner||!tab||!tab.path||!actor||actor.path!==tab.path)return;
+    return{paneId:owner.id,savedTabId:tab.id,path:actor.path,entryId:actor.entryId};
+  }
+  private prepareAdmissionRawInputs(vault:Vault):NonNullable<ReturnType<Workspace['admissionRawPreparations']['get']>> {
+    const previous=this.admissionRawPreparations.get(vault);if(previous)return previous;
+    const scope=vault.adapter.durableWrites?.checkpoints.scope;if(!scope)throw new Error('The recovering note authority is unavailable.');
+    const panes=[...this.panes,...this.cachedViews.values()],bases=new Set<BaseSession|BaseEmbedSessions>();
+    const settlements:{settle():Promise<void>}[]=[],ready:Promise<void>[]=[],collect:(()=>RetainedAdmissionRawInput[])[]=[];
+    const add=(location:AdmissionRawLocation,input:AdmissionRawInput):RetainedAdmissionRawInput=>({location,scope:{vaultId:scope.vaultId,clientId:scope.clientId},input});
+    const prepareBase=(base:BaseSession|BaseEmbedSessions,location:AdmissionRawLocation|undefined)=>{
+      if(bases.has(base))return;bases.add(base);const recovery=base.prepareAdmissionRecovery?.();if(!recovery)return;settlements.push(recovery);
+      if(base instanceof BaseEmbedSessions){
+        const embedded=recovery as import('./base-embed-sessions.ts').BaseEmbedAdmissionRecovery;
+        for(const draft of embedded.rawDrafts??[])ready.push(draft.draft.raw.ready);
+        collect.push(()=>{const drafts=embedded.rawDrafts??[];if(drafts.length&&!location)throw new Error('The retained embedded input lost its owning tab.');return location?drafts.map(draft=>add(location,{kind:'embeds',draft})):[];});
+      }else{
+        const direct=recovery as BaseAdmissionRecovery;
+        for(const draft of direct.rawDrafts??[])ready.push(draft.raw.ready);
+        collect.push(()=>{const drafts=direct.rawDrafts??[];if(drafts.length&&!location)throw new Error('The retained Base input lost its owning tab.');return location?drafts.map(draft=>add(location,{kind:'base',draft})):[];});
+      }
+    };
+    for(const pane of panes){
+      const location=this.admissionRawLocation(pane);
+      if(pane.baseView)prepareBase(pane.baseView,location);if(pane.baseEmbeds)prepareBase(pane.baseEmbeds,location);
+      const properties=pane.properties?.prepareAdmissionRecovery?.();
+      if(properties){settlements.push(properties);ready.push(properties.settle());collect.push(()=>{const draft=properties.rawDrafts;if(!draft.rows.length&&!draft.addForm)return[];if(!location)throw new Error('The retained property input lost its owning note.');return[add(location,{kind:'properties',draft})];});}
+      const title=pane.noteTitle?.prepareAdmissionRecovery();
+      if(title){const titleLocation=this.admissionRawLocation(pane,pane.noteTitleActor);settlements.push(title);ready.push(title.settle());collect.push(()=>{const draft=title.rawDrafts;if(draft.value===draft.baseline)return[];if(!titleLocation)throw new Error('The retained title lost its owning note.');return[add(titleLocation,{kind:'title',draft})];});}
+    }
+    const sidebar=this.sidebarBase;if(sidebar){const path=this.sidebarBasePath,entry=path?vault.entries.get(path):undefined;prepareBase(sidebar.session,path&&entry?.entryId?{sidebar:true,path,entryId:entry.entryId}:undefined);}
+    const prepared={settlements,ready,collect:()=>collect.flatMap(read=>read()),collected:false};this.admissionRawPreparations.set(vault,prepared);return prepared;
+  }
+  /** Keep native composition alive in its original control. Submission paths
+   * are already frozen; prevent other interactions while its final input arrives. */
+  private async awaitAdmissionRawInputs(ready:readonly Promise<void>[]):Promise<void> {
+    const document=this.root.ownerDocument,focused=document.activeElement;
+    const stop=(event:Event)=>{
+      const keyboard=event as KeyboardEvent;
+      if(event.type!=='keydown'||event.target!==focused||keyboard.key==='Tab'||keyboard.metaKey||keyboard.ctrlKey)event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    for(const name of ['pointerdown','click','keydown'])document.addEventListener(name,stop,true);
+    try{await Promise.all(ready);}finally{for(const name of ['pointerdown','click','keydown'])document.removeEventListener(name,stop,true);}
   }
   /** A backend recovery ACK retires the old derived owners, but deliberately
    * does not replay editor writes. Their existing buffers must settle first. */
   private async recoverAdmission(platform:PlatformVault,vault:Vault,generation:number):Promise<void>{
-    if(this.lifecycleRecovery)return this.lifecycleRecovery;
+    if(this.lifecycleRecovery){
+      const pending=this.lifecycleRecovery,owner=this.admissionRecoveryOwner;
+      if(owner?.platform===platform&&owner.vault===vault&&owner.generation===generation)return pending;
+      await pending.catch(()=>{});
+      if(this.platform===platform&&this.vault===vault&&this.vaultGeneration===generation&&!this.platformReleased)return this.recoverAdmission(platform,vault,generation);
+      return;
+    }
     if(!platform.recovery)return;
     const current=()=>{if(this.platform!==platform||this.vault!==vault||this.vaultGeneration!==generation)throw new Error('The recovering vault changed.');};
     current();this.recoveringAdmissionVaults.add(vault);clearTimeout(this.reloadTimer);
     const panes=[...this.panes,...this.cachedViews.values()];
     const bases=new Set([this.sidebarBase?.session,...panes.flatMap(pane=>[pane.baseView,pane.baseEmbeds])].filter((base):base is BaseSession|BaseEmbedSessions=>!!base));
     const pendingViews=()=>this.hasPendingBaseCreation()||this.baseNewItemOpening||this.retiringBaseNewItems.size||this.baseNewItem?.hasPendingChanges()
-      ||panes.some(pane=>pane.properties?.hasPendingChanges()||pane.tasksView?.hasPendingChanges()||pane.calendarView?.hasPendingChanges()||pane.canvasView?.hasPendingChanges())
+      ||panes.some(pane=>(pane.properties?.prepareAdmissionRecovery?pane.properties.canRecoverAdmission?.()!==true:pane.properties?.hasPendingChanges())||pane.noteTitle?.canRecoverAdmission()===false||pane.tasksView?.hasPendingChanges()||pane.calendarView?.hasPendingChanges()||pane.canvasView?.hasPendingChanges())
       ||[...bases].some(base=>base.prepareAdmissionRecovery?base.canRecoverAdmission?.()!==true:base.hasPendingChanges());
-    if(pendingViews()){this.root.inert=true;throw new Error('Pending view changes are retained while storage reconnects.');}
+    if(!this.admissionRawPreparations.has(vault)&&pendingViews()){this.root.inert=true;throw new Error('Pending view changes are retained while storage reconnects.');}
     // Freeze every eligible widget before a backend ACK can resolve its held
     // request. Their old query owners must not refresh after that completion.
-    const baseRecoveries=[...bases].flatMap(base=>{const recovery=base.prepareAdmissionRecovery?.();return recovery?[recovery]:[];});
-    const inert=this.root.inert,owner=Symbol('admission recovery');this.root.inert=true;this.vaultLifecycleOwner=owner;
+    const prepared=this.prepareAdmissionRawInputs(vault);
+    const owner=Symbol('admission recovery'),admissionOwner={platform,vault,generation};this.vaultLifecycleOwner=owner;this.admissionRecoveryOwner=admissionOwner;
     this.documentSearchSuspended=true;this.clearDocumentSearch();this.saveSession();
     const recovery=(async()=>{
-      let failure:unknown;
+      let failure:unknown,rawReady=false;
       for(let attempt=0;attempt<3;attempt++)try{
-        current();const fresh=await platform.recovery!.recover();current();
+        current();
+        // Fence the old runtime immediately after capture, before a retained
+        // submitted command's derived follow-up can publish into the old widget.
+        // Core rebind does not tear down DOM: natural IME still finishes first.
+        let opening:Promise<{ok:true;value:PlatformVault}|{ok:false;error:unknown}>;
+        try{opening=platform.recovery!.recover().then(value=>({ok:true as const,value}),error=>({ok:false as const,error}));}
+        catch(error){opening=Promise.resolve({ok:false,error});}
+        if(!rawReady){await this.awaitAdmissionRawInputs(prepared.ready);current();this.root.inert=true;rawReady=true;}
+        const result=await opening;if(!result.ok)throw result.error;const fresh=result.value;current();
         const previous=vault.adapter.durableWrites?.checkpoints.scope,next=fresh.adapter.durableWrites?.checkpoints.scope;
         if(!previous||!next||previous.vaultId!==next.vaultId||previous.clientId!==next.clientId)throw new Error('The recovered note authority changed.');
         this.retiredAdmissionVaults.add(vault);this.releaseDocumentSearchOwner(vault);
-        const settled=await Promise.allSettled(baseRecoveries.map(recovery=>Promise.resolve().then(()=>recovery.settle())));current();
+        const settled=await Promise.allSettled(prepared.settlements.map(recovery=>Promise.resolve().then(()=>recovery.settle())));current();
         for(const result of settled)if(result.status==='rejected')throw result.reason;
+        if(!prepared.collected){this.retainedAdmissionRawInputs.push(...prepared.collect());prepared.collected=true;}
         // The proxy was rebound by the checked adapter. SAME buffers, retained
         // plans and uncertain checkpoint IDs resume through their normal queue.
         for(const buffer of this.buffers.values()){await buffer.flush({autoRetry:false});current();if(buffer.dirty||buffer.error)throw new Error('A retained note write is not settled yet.');}
         this.platformDraining=true;this.platformDrained=true;this.platformReleased=true;
         await this.disposeRetiredAdmissionViews(vault);
         await this.openVault(fresh,owner);
+        if(!this.recoveringAdmissionVaults.has(this.vault))this.root.inert=false;
+        await this.restoreAdmissionRawInputs();
         this.lifecycleRecoveryView?.remove();this.lifecycleRecoveryView=undefined;
         return;
       }catch(error){failure=error;}
@@ -675,10 +772,88 @@ export class Workspace {
     try{await recovery;}
     finally{
       if(this.lifecycleRecovery===recovery)this.lifecycleRecovery=undefined;
+      const ownsAdmission=this.admissionRecoveryOwner===admissionOwner;if(ownsAdmission)this.admissionRecoveryOwner=undefined;
       if(this.vaultLifecycleOwner===owner)this.vaultLifecycleOwner=undefined;
-      if(this.platform!==platform)this.root.inert=inert;
+      if(ownsAdmission&&this.platform!==platform&&!this.recoveringAdmissionVaults.has(this.vault))this.root.inert=false;
       this.renderStatus();
     }
+  }
+  /** RAM custody survives rebuilding the shell. A saved tab ID only locates its
+   * replacement UI; the fresh scope, entry and component baselines grant access. */
+  private restoreAdmissionRawInputs():Promise<void> {
+    if(this.admissionRawRestore){this.admissionRawRestoreAgain=true;return this.admissionRawRestore;}
+    if(this.root.inert)return Promise.resolve();
+    const vault=this.vault,generation=this.vaultGeneration,platform=this.platform;
+    const current=()=>this.vault===vault&&this.vaultGeneration===generation&&this.platform===platform&&!this.platformReleased&&!this.closing&&!this.recoveringAdmissionVaults.has(vault);
+    const awaitFresh=<T>(pending:Promise<T>):Promise<T>=>{
+      const retirement=this.admissionRetirement;
+      if(retirement?.vault!==vault||retirement.generation!==generation)return pending;
+      // The losing read remains observed. A retired provider must not hold the
+      // older lifecycle open and prevent its new exact owner from freezing UI.
+      return Promise.race([pending,retirement.signal.then(()=>{throw Object.assign(new Error('The read admission retired.'),{code:'desktop_recovery_stale_reply'});})]);
+    };
+    const restoring=(async()=>{
+      const scope=vault.adapter.durableWrites?.checkpoints.scope;if(!scope||!current())return;
+      for(const retained of [...this.retainedAdmissionRawInputs]){
+        if(!current())return;
+        if(retained.scope.vaultId!==scope.vaultId||retained.scope.clientId!==scope.clientId||retained.reason)continue;
+        const location=retained.location,entry=vault.entries.get(location.path);
+        if(!entry||entry.type!=='file'||entry.entryId&&entry.entryId!==location.entryId){retained.reason='The saved file changed. Your unfinished input is kept below.';continue;}
+        let pane:Pane|undefined,base:BaseSession|undefined;
+        if('sidebar'in location)base=this.sidebarBase?.session;
+        else{
+          const matches=this.panes.flatMap(owner=>owner.tabs.filter(tab=>this.admissionRestoredTabIds.get(tab)?.has(location.savedTabId)).map(tab=>({owner,tab})));
+          if(matches.length>1){retained.reason='The original tab is ambiguous. Your unfinished input is kept below.';continue;}
+          const binding=matches[0];if(!binding)continue;
+          if(binding.tab.path!==location.path){retained.reason='The original tab changed files. Your unfinished input is kept below.';continue;}
+          pane=binding.owner.viewTabId===binding.tab.id?binding.owner:this.cachedViews.get(binding.tab);base=pane?.baseView;
+        }
+        if(!entry.entryId){const admitted=pane?.rawAdmissionActor;if(!admitted)continue;if(admitted.path!==location.path||admitted.entryId!==location.entryId){retained.reason='The saved file changed. Your unfinished input is kept below.';continue;}}
+        const input=retained.input;let restored=false,reason:string|undefined;
+        try{
+          if(input.kind==='base'&&base?.restoreAdmissionDrafts){
+            await awaitFresh(base.ready);if(!current())return;const result=await awaitFresh(base.restoreAdmissionDrafts([input.draft]));if(!current())return;
+            restored=result.restored.includes(input.draft);reason=result.conflicts.find(conflict=>conflict.draft===input.draft)?.reason;
+          }else if(input.kind==='embeds'&&pane?.baseEmbeds){
+            const result=await awaitFresh(pane.baseEmbeds.restoreAdmissionDrafts([input.draft]));if(!current())return;
+            restored=result.restored.includes(input.draft);reason=result.conflicts.find(conflict=>conflict.draft===input.draft)?.reason;
+          }else if(input.kind==='properties'&&pane?.properties?.restoreAdmissionDrafts){
+            const properties=pane.properties,restore=properties.restoreAdmissionDrafts!;await awaitFresh(properties.prepareAdmissionRestore?.()??Promise.resolve());if(!current()||pane.properties!==properties)return;
+            const result=restore(input.draft);restored=result.restored;reason=result.conflicts[0]?.reason;
+          }else if(input.kind==='title'&&pane?.noteTitle){
+            const result=pane.noteTitle.restoreAdmissionDrafts(input.draft);restored=result.restored;reason=result.conflicts[0]?.reason;
+          }
+        }catch(error){if(!current())return;if(!transientAdmissionFailure(error))reason=error instanceof Error?error.message:'The unfinished input could not be attached to its saved file.';}
+        if(!current())return;
+        if(restored)this.retainedAdmissionRawInputs=this.retainedAdmissionRawInputs.filter(candidate=>candidate!==retained);
+        else if(reason)retained.reason=reason;
+      }
+      if(current())this.renderAdmissionRawCandidates();
+    })();
+    this.admissionRawRestore=restoring;void restoring.finally(()=>{if(this.admissionRawRestore===restoring){this.admissionRawRestore=undefined;if(this.admissionRawRestoreAgain){this.admissionRawRestoreAgain=false;queueMicrotask(()=>{void this.restoreAdmissionRawInputs().catch(()=>{});});}}}).catch(()=>{});return restoring;
+  }
+  private admissionRawText(input:AdmissionRawInput):string {
+    if(input.kind==='title')return input.draft.value;
+    if(input.kind==='properties')return[...input.draft.rows.map(row=>row.widget?this.admissionRawPropertyText(row.widget):row.controls.map(control=>control.value).join('\n')),input.draft.addForm?.name.value].filter(value=>value!==undefined).join('\n');
+    const draft=input.kind==='embeds'?input.draft.draft:input.draft;
+    return draft.kind==='table'?draft.raw.state.value:this.admissionRawPropertyText(draft.raw);
+  }
+  private admissionRawPropertyText(draft:import('../bases/property-widgets.ts').BasePropertyRawDraft):string {
+    return draft.state.multiple?[...draft.state.tokens.map(token=>token.text),draft.state.input].join('\n'):draft.state.input;
+  }
+  private renderAdmissionRawCandidates():void {
+    this.admissionRawCandidates?.remove();this.admissionRawCandidates=undefined;
+    const scope=this.vault.adapter.durableWrites?.checkpoints.scope;if(!scope)return;
+    const retained=this.retainedAdmissionRawInputs.filter(candidate=>candidate.scope.vaultId===scope.vaultId&&candidate.scope.clientId===scope.clientId);
+    if(!retained.length)return;
+    const view=el('section','workspace-retained-inputs');view.setAttribute('aria-label','Unfinished input');
+    for(const candidate of retained){
+      const item=el('details','workspace-retained-input'),summary=el('summary','',candidate.reason?'Unfinished input kept for '+candidate.location.path:'Restoring unfinished input for '+candidate.location.path);
+      item.append(summary);if(candidate.reason)item.append(el('p','',candidate.reason));
+      const raw=el('textarea','');raw.readOnly=true;raw.value=this.admissionRawText(candidate.input);raw.setAttribute('aria-label','Retained unfinished input');item.append(raw);
+      item.append(textButton('Discard this input',()=>{this.retainedAdmissionRawInputs=this.retainedAdmissionRawInputs.filter(value=>value!==candidate);this.renderAdmissionRawCandidates();}));view.append(item);
+    }
+    this.root.parentElement?.append(view);this.admissionRawCandidates=view;
   }
   private async disposeRetiredAdmissionViews(vault:Vault):Promise<void>{
     if(!this.retiredAdmissionVaults.has(vault))throw new Error('Derived ownership has not been retired.');
@@ -694,25 +869,57 @@ export class Workspace {
     }
     this.cachedViews.clear();await this.closeVaultMetadata(vault);
   }
-  private showLifecycleRecovery(recover:()=>Promise<void>=()=>this.reconnectRetiredPlatform()):void{
+  private cancelLifecycleRecoveryRetry():void {
+    if(this.lifecycleRecoveryRetry?.timer!==undefined)clearTimeout(this.lifecycleRecoveryRetry.timer);
+    this.lifecycleRecoveryRetry=undefined;
+  }
+  private pauseLifecycleRecoveryRetry():()=>void {
+    const state=this.lifecycleRecoveryRetry;
+    if(state?.timer!==undefined){clearTimeout(state.timer);state.timer=undefined;}
+    return()=>{if(state&&this.lifecycleRecoveryRetry===state&&state.timer===undefined)this.scheduleLifecycleRecoveryRetry(state);};
+  }
+  private scheduleLifecycleRecoveryRetry(state:NonNullable<Workspace['lifecycleRecoveryRetry']>):void {
+    const owns=()=>this.lifecycleRecoveryRetry===state&&this.platform===state.platform&&this.vault===state.vault&&this.vaultGeneration===state.generation&&!this.platformReleased&&!this.platformDrained;
+    const current=()=>owns()&&!this.closing&&!this.destroying&&!this.choosingVault;
+    if(!owns()){if(this.lifecycleRecoveryRetry===state)this.cancelLifecycleRecoveryRetry();return;}
+    if(!current())return;
+    state.timer=setTimeout(()=>{
+      state.timer=undefined;if(!current())return;
+      void state.recover().then(()=>{if(this.lifecycleRecoveryRetry===state)this.cancelLifecycleRecoveryRetry();},error=>{
+        if(!current())return;
+        if(transientAdmissionFailure(error)){state.attempt++;this.scheduleLifecycleRecoveryRetry(state);}
+        else{this.cancelLifecycleRecoveryRetry();this.lifecycleRecoveryView?.remove();this.lifecycleRecoveryView=undefined;this.showLifecycleRecovery(state.recover,error);}
+      });
+    },[500,1500,4000][Math.min(state.attempt,2)]);
+  }
+  private showLifecycleRecovery(recover:()=>Promise<void>=()=>this.reconnectRetiredPlatform(),error?:unknown):void{
     this.root.inert=true;
-    if(this.lifecycleRecoveryView?.isConnected)return;
+    const automatic=transientAdmissionFailure(error);
+    if(!automatic)this.cancelLifecycleRecoveryRetry();
+    if(automatic&&!this.lifecycleRecoveryRetry){
+      const state={platform:this.platform,vault:this.vault,generation:this.vaultGeneration,recover,attempt:0};
+      this.lifecycleRecoveryRetry=state;this.scheduleLifecycleRecoveryRetry(state);
+    }
+    if(this.lifecycleRecoveryView?.isConnected&&this.lifecycleRecoveryView.dataset.automatic===String(automatic))return;
+    this.lifecycleRecoveryView?.remove();
     const view=el('section','workspace-reconnect-recovery');view.setAttribute('role','status');
-    view.append(el('p','','Your notes are kept here while Zorid reconnects.'));
+    view.dataset.automatic=String(automatic);
+    view.append(el('p','',automatic?'Your drafts are kept here. Zorid is reconnecting automatically.':'Your notes are kept here while Zorid reconnects.'));
     const retry=textButton('Reconnect notes',()=>this.run(async()=>{
       retry.disabled=true;
       try{await recover();this.root.inert=false;this.lifecycleRecoveryView?.remove();this.lifecycleRecoveryView=undefined;}
       finally{retry.disabled=false;}
     }));
     const backup=textButton('Copy retained drafts',()=>this.run(async()=>{await navigator.clipboard.writeText(JSON.stringify({version:1,notes:[...this.buffers.values()].map(buffer=>({path:buffer.path,text:buffer.text,savedText:buffer.savedText,witness:buffer.savedDurableWitness}))},null,2));}));
-    view.append(retry,backup);this.root.parentElement?.append(view);this.lifecycleRecoveryView=view;
+    if(!automatic)view.append(retry);view.append(backup);this.root.parentElement?.append(view);this.lifecycleRecoveryView=view;
   }
   async chooseVault():Promise<void>{
     if(this.choosingVault)return this.choosingVault;
     if(this.closing)throw new Error('Window close is pending');
+    const resumeRecovery=this.pauseLifecycleRecoveryRetry();
     const owner=Symbol('vault selection');this.vaultLifecycleOwner=owner;
     const choosing=this.chooseVaultOnce(owner);this.choosingVault=choosing;
-    try{await choosing;}finally{if(this.choosingVault===choosing)this.choosingVault=undefined;if(this.vaultLifecycleOwner===owner)this.vaultLifecycleOwner=undefined;}
+    try{await choosing;}finally{if(this.choosingVault===choosing)this.choosingVault=undefined;if(this.vaultLifecycleOwner===owner)this.vaultLifecycleOwner=undefined;resumeRecovery();if(!this.root.inert&&this.retainedAdmissionRawInputs.length)void this.restoreAdmissionRawInputs().catch(()=>{});}
   }
   private async chooseVaultOnce(owner:symbol):Promise<void>{
     const inert=this.root.inert,platform=this.platform,vault=this.vault,generation=this.vaultGeneration;this.root.inert=true;
@@ -730,7 +937,7 @@ export class Workspace {
       if(error&&typeof error==='object'&&this.admissionPreflightCancellations.has(error)&&this.platform===platform&&this.vault===vault&&this.vaultGeneration===generation
         &&!this.platformDraining&&!this.platformDrained&&!this.platformReleased)return;
       if(this.platformDraining||this.platformDrained||this.platformReleased){
-        try{await this.reconnectRetiredPlatform(owner);}catch{this.showLifecycleRecovery();throw error;}
+        try{await this.reconnectRetiredPlatform(owner);}catch(recoveryError){this.showLifecycleRecovery(undefined,recoveryError);throw error;}
       }else throw error;
     }finally{if(!this.platformDraining&&!this.platformDrained&&!this.platformReleased)this.root.inert=inert;}
   }
@@ -991,6 +1198,7 @@ export class Workspace {
     // Migration failures must abort before teardown/save can replace legacy recovery.
     this.storageScope.migrateLegacy(localStorage, platform.id);
     const searchVault=this.vault,searchWasSuspended=this.documentSearchSuspended;
+    const previousRawTabs=new Map(this.panes.flatMap(pane=>pane.tabs.map(tab=>[tab.id,this.admissionRestoredTabIds.get(tab)] as const)));
     this.documentSearchSuspended=true;this.clearDocumentSearch();
     let cancelTasksClose:(recover?:boolean)=>void=()=>{};
     try{
@@ -1016,6 +1224,7 @@ export class Workspace {
     this.hideNativeEditorToolbar();this.nativeEditorCleanup?.();this.nativeEditorCleanup=undefined;
     cancelTasksClose(false);cancelTasksClose=()=>{};
     this.nativeDocumentCleanup?.();this.nativeDocumentCleanup=undefined;
+    this.cancelLifecycleRecoveryRetry();this.admissionRawCandidates?.remove();this.admissionRawCandidates=undefined;
     this.platform = platform; this.vault = next; this.platformReleased=false;this.platformDrained=false;this.platformDraining=false;this.buffers=recovered; this.recoveredBufferBindings=new WeakSet(recovered.values()); this.vaultGeneration++;
     this.subscribeAdmissionRecovery(platform,next);
     this.attachments=new AttachmentResources(this.vault);
@@ -1039,7 +1248,7 @@ export class Workspace {
         this.root.classList.toggle('left-hidden', saved.leftHidden === true);
         this.collapsed = new Set(saved.collapsed || []); this.bookmarks = new Set(saved.bookmarks || []);
         for (const item of (Array.isArray(saved.panes) ? saved.panes : []).slice(0, 100)) {
-          const tabs: Tab[] = (item.tabs || []).filter((tab: Tab) => tab.kind === 'graph' || tab.kind === 'calendar' || tab.kind === 'tasks' || !tab.path || this.vault.entries.has(tab.path)).map((tab: Tab) => {const history=Array.isArray(tab.history)?tab.history.filter(path=>typeof path==='string'):[];return{...tab,baseSource:tab.kind==='note'&&typeof tab.path==='string'&&/\.base$/i.test(tab.path)&&tab.baseSource===true,history,historyIndex:Number.isInteger(tab.historyIndex)?Math.max(-1,Math.min(tab.historyIndex!,history.length-1)):history.length-1,mode:tab.mode==='reading'?'reading' as const:'live' as const,id:makeId()};});
+          const tabs: Tab[] = (item.tabs || []).filter((tab: Tab) => tab.kind === 'graph' || tab.kind === 'calendar' || tab.kind === 'tasks' || !tab.path || this.vault.entries.has(tab.path)).map((tab: Tab) => {const history=Array.isArray(tab.history)?tab.history.filter(path=>typeof path==='string'):[];const restoredTab={...tab,baseSource:tab.kind==='note'&&typeof tab.path==='string'&&/\.base$/i.test(tab.path)&&tab.baseSource===true,history,historyIndex:Number.isInteger(tab.historyIndex)?Math.max(-1,Math.min(tab.historyIndex!,history.length-1)):history.length-1,mode:tab.mode==='reading'?'reading' as const:'live' as const,id:makeId()};if(typeof tab.id==='string'){const ancestors=[...(previousRawTabs.get(tab.id)??[]),tab.id].filter(id=>id===tab.id||this.retainedAdmissionRawInputs.some(candidate=>'savedTabId'in candidate.location&&candidate.location.savedTabId===id));this.admissionRestoredTabIds.set(restoredTab,new Set(ancestors));}return restoredTab;});
           const pane = this.addPane(tabs.length ? tabs : undefined, typeof item.id === 'string' && item.id && !this.panes.some(p=>p.id===item.id) ? item.id : undefined); pane.active = pane.tabs[Math.max(0,Math.min(Number.isInteger(item.active) ? item.active : 0, pane.tabs.length - 1))].id; pane.persisted = item;
         }
         restored = this.panes.length > 0;
@@ -1445,6 +1654,7 @@ export class Workspace {
   async renderPane(initialPane:Pane,options:{flush?:boolean;refresh?:boolean}={}):Promise<void>{
     const generation=this.vaultGeneration,request=(this.renderRequests.get(initialPane)??0)+1;
     await this.renderPaneContent(initialPane,options);
+    if(this.retainedAdmissionRawInputs.length&&!this.root.inert)await this.restoreAdmissionRawInputs();
     this.observeNativeNoteView(initialPane);
     this.notifyNativeNoteOpened(initialPane);
     this.flushNativePresentation(initialPane);
@@ -1472,7 +1682,7 @@ export class Workspace {
     this.renderTabBar(pane);
     if(await this.restoreCachedView(pane,tab)){this.renderStatus();return;}
     if(!current())return;
-    const version=++this.viewSequence;pane.renderVersion=version;pane.viewTabId=tab.id;pane.viewPath=tab.path;pane.viewMode=tab.mode;pane.viewKind=tab.kind;pane.viewBaseSource=!!tab.baseSource;pane.viewSettings=this.viewSettings();
+    const version=++this.viewSequence;pane.renderVersion=version;pane.viewTabId=tab.id;pane.viewPath=tab.path;pane.viewMode=tab.mode;pane.viewKind=tab.kind;pane.viewBaseSource=!!tab.baseSource;pane.viewSettings=this.viewSettings();const rawActor=this.vault.entries.get(tab.path??'');pane.rawAdmissionActor=tab.path&&rawActor?.entryId?{path:tab.path,entryId:rawActor.entryId,revision:rawActor.revision}:undefined;
     pane.history=tab.history??[];pane.historyIndex=tab.historyIndex??-1;
     const content=el('div','tab-view-content');Object.assign(content.style,{display:'flex',flexDirection:'column',flex:'1',minHeight:'0',minWidth:'0',overflow:'hidden'});pane.element.append(content);pane.content=content;
     let recoveryCleanup:(()=>void)|undefined;
@@ -1606,9 +1816,9 @@ export class Workspace {
     }
     const findHost=el('div','note-find-host');content.append(findHost);
     const scroll=el('div','note-scroll');scroll.classList.toggle('readable-width',this.settings.readableWidth);
-    const title=el('input','note-title');title.value=nameOf(path);title.setAttribute('aria-label','Note title');title.hidden=!this.settings.showInlineTitle;
+    const title=el('input','note-title');title.value=nameOf(path);title.setAttribute('aria-label','Note title');title.hidden=!this.settings.showInlineTitle;title.readOnly=!pane.rawAdmissionActor;
     const titleGeneration=this.vaultGeneration;let titleNavigation=this.noteNavigation.get(pane),titlePath=path;ownerChanged=()=>{titleNavigation=this.noteNavigation.get(pane);};
-    bindNoteTitleFocus(title,{
+    pane.noteTitleActor=pane.rawAdmissionActor;pane.noteTitle=bindNoteTitleFocus(title,{
       save:async name=>{if(titleGeneration!==this.vaultGeneration||!this.panes.includes(pane)||this.current(pane)!==tab||tab.path!==titlePath)return;if(name!==nameOf(titlePath))titlePath=await this.renamePath(titlePath,name);},
       isCurrent:()=>this.initialized&&titleGeneration===this.vaultGeneration&&this.activePane===pane&&this.current(pane)===tab&&tab.path===titlePath&&this.noteNavigation.get(pane)===titleNavigation&&pane.element.isConnected,
       focusBody:()=>pane.editor?.focus(),onError:error=>notice(error instanceof Error?error.message:String(error)),
@@ -1617,14 +1827,16 @@ export class Workspace {
     try{
       const buffer=await this.bufferFor(path,tab.expectedEntryId,()=>{if(!current()||version!==pane.renderVersion||this.current(pane)!==tab)throw new Error('The note render was superseded');});if(version!==pane.renderVersion)return;
       recoveryCleanup=this.mountNoteRecovery(content,buffer);
+      const admittedActor=buffer.savedDurableWitness;if(admittedActor){pane.rawAdmissionActor={path:admittedActor.path,entryId:admittedActor.entryId,revision:admittedActor.revision};if(!pane.noteTitleActor&&title.readOnly&&title.value===nameOf(path)){pane.noteTitleActor=pane.rawAdmissionActor;title.readOnly=false;}}
       {
         const host=el('div','properties-host');scroll.append(host);
         const vault=this.vault,fileToken=this.bufferEntries.get(buffer);
         const validateFile=()=>{if(vault!==this.vault||generation!==this.vaultGeneration||!fileToken||this.treeEntryToken(path)!==fileToken||this.buffers.get(path)!==buffer||buffer.path!==path)throw new Error('The property note was replaced or removed. Its draft is retained.');};
         const validateProperties=()=>{validateFile();if(pane.viewPath!==path||pane.renderVersion!==version||pane.runtime!==runtime||runtime.phase==='disposed')throw new Error('The property panel changed.');};
         const propertyCurrent=()=>{try{validateProperties();return true;}catch{return false;}};
-        const targets=this.notePropertyTargets(()=>path,propertyCurrent,()=>pane.properties?.refresh());
-        const properties=renderProperties(host,{vault:this.vault,path,managedOnly:true,onVisibilityChange:visible=>{host.hidden=!visible;},getDefinitions:()=>targets.getDefinitions(),isManaged:()=>!!targets.getCollection(),collectionName:()=>targets.getCollection()?.collection.name,getRelationTargets:property=>targets.get(property),getDisplayValue:(property,raw)=>targets.getDisplayValue(property,raw),isCurrent:propertyCurrent,onError:error=>notice(error instanceof Error?error.message:String(error)),getSource:()=>buffer.text,onChange:async next=>{
+        const targets=this.notePropertyTargets(()=>path,propertyCurrent,()=>{pane.properties?.refresh();if(this.retainedAdmissionRawInputs.length)queueMicrotask(()=>{void this.restoreAdmissionRawInputs().catch(()=>{});});});
+        let admissionWriterKnown=false;
+        const properties=renderProperties(host,{vault:this.vault,path,prepareAdmissionRestore:async()=>{validateProperties();await targets.prepareCollection();validateProperties();admissionWriterKnown=true;properties.refresh();},managedOnly:true,onVisibilityChange:visible=>{host.hidden=!visible;},getDefinitions:()=>targets.getDefinitions(),getAdmissionWriterIdentity:()=>targets.getCollection()?.collection.id??(admissionWriterKnown?null:undefined),isManaged:()=>!!targets.getCollection(),collectionName:()=>targets.getCollection()?.collection.name,getRelationTargets:property=>targets.get(property),getDisplayValue:(property,raw)=>targets.getDisplayValue(property,raw),isCurrent:propertyCurrent,onError:error=>notice(error instanceof Error?error.message:String(error)),getSource:()=>buffer.text,onChange:async next=>{
           validateProperties();
           if(await this.changeManagedNoteProperties(buffer,next,targets,validateProperties)){for(const other of this.loadedViews())if(this.current(other)?.path===path){other.editor?.setValue(buffer.text);other.properties?.refresh();other.refreshPreview?.();}return;}
           this.updateMarkdownBuffer(buffer,next,validateFile);runtime.touch();
@@ -1693,7 +1905,7 @@ export class Workspace {
   }
 
   private createWorkspaceBaseSession(host:HTMLElement,path:string,owner:()=>Pane,validate:()=>void,sourcePath?:string|SidebarBaseContext,viewName?:string,inline?:InlineBaseRequest,onSourceError?:(error:Error|null,unavailable?:BaseSourceUnavailable)=>void,onInlineSourceSaved?:(next:InlineBaseRequest)=>boolean,viewId?:string):BaseSession{
-    const vault=this.vault,resources=this.attachments!,platform=this.platform;
+    const vault=this.vault,resources=this.attachments!,platform=this.platform,generation=this.vaultGeneration;
     const sourceContext=typeof sourcePath==='object'?sourcePath:{path:sourcePath??path};
     const hover=createBaseFileHover({parent:host,isMac:this.hotkeys.platform==='mac',
       isCurrent:target=>{try{validate();const entry=vault.entries.get(target.path);return entry?.type==='file'&&entry.entryId===target.entryId&&entry.revision===target.revision;}catch{return false;}},
@@ -1783,7 +1995,7 @@ export class Workspace {
             claimRecoverDatabaseEntry:request=>{if(!platform.recovery?.claimCapturedSetEntry)throw new Error('This collection edit cannot be claimed for recovery.');return platform.recovery.claimCapturedSetEntry(request);},
             query:{currentFilePath:sourceContext.path,...(sourceContext.entryId?{currentFileEntryId:sourceContext.entryId}:{})},
             hoverFile:(row,event)=>{try{validate();const anchor=baseFileHoverAnchor(row,event);if(anchor)hover.hover(row,event,anchor);}catch(error){notice(error instanceof Error?error.message:String(error));}},
-            ...(onSourceError?{onState:(state,unavailable)=>onSourceError(state.error,unavailable)}:{}),
+            onState:(state,unavailable)=>{onSourceError?.(state.error,unavailable);if(vault===this.vault&&generation===this.vaultGeneration&&this.retainedAdmissionRawInputs.length)queueMicrotask(()=>{void this.restoreAdmissionRawInputs().catch(()=>{});});},
             onEditsSettled:()=>{const sidebar=this.sidebarBase;if(sidebar&&sidebar.session===composed)this.retrySidebarFollowingContext(sidebar);},
             onViewRenamed:event=>{validate();const identity=this.treeEntryToken(event.basePath);if(!identity)return;for(const sessions of new Set([this.baseNewItemEmbeds,...[...this.retiringBaseNewItems.values()].map(parent=>parent.embeds),...this.baseHoverEmbeds,...this.loadedViews().map(pane=>pane.baseEmbeds)].filter((sessions):sessions is BaseEmbedSessions=>!!sessions)))sessions.renameViewBinding(event.basePath,event.from,event.to,identity,event.viewId);},
             closeCreatedFile:()=>this.baseNewItemForHost(host)?false:this.closeBaseNewItem(),
@@ -1862,6 +2074,7 @@ export class Workspace {
     };
     return composed={get ready(){return session.ready;},get state(){return session.state;},refresh:()=>session.refresh(),selectView:index=>session.selectView(index),setCurrentFile:(target,expectedEntryId)=>session.setCurrentFile(target,expectedEntryId),get selectedViewIdentity(){return session.selectedViewIdentity;},rebindViewName:(from,to,viewId)=>session.rebindViewName(from,to,viewId),flush,close,owns:node=>!closed&&!closing&&session.owns?.(node)===true,hasPendingChanges:()=>hover.hasPendingChanges()||session.hasPendingChanges(),
       canRecoverAdmission:canRecover,
+      restoreAdmissionDrafts:drafts=>session.restoreAdmissionDrafts?session.restoreAdmissionDrafts(drafts):Promise.resolve({restored:[],pending:[],conflicts:drafts.map(draft=>({draft,reason:"The fresh Base cannot restore this input."}))}),
       prepareAdmissionRecovery:()=>{if(prepared)return prepared;if(!canRecover())throw new Error('Unfinished Base preview drafts are retained while storage reconnects.');return prepared=session.prepareAdmissionRecovery?.()??{settle:async()=>{}};}};
   }
 
@@ -2132,7 +2345,7 @@ export class Workspace {
   private embeddedBases(owner:()=>Pane,validateOwner:()=>void):BaseEmbedSessions{
     const pane=owner();if(pane.baseEmbeds)return pane.baseEmbeds;
     const vault=this.vault,generation=this.vaultGeneration;
-    const sessions=new BaseEmbedSessions({recoveryHost:pane.content!,create:async(container,target)=>{
+    const sessions=new BaseEmbedSessions({recoveryHost:pane.content!,recoveryIdentity:target=>{const source=vault.entries.get(target.sourcePath),destination=vault.entries.get(target.targetPath);if(!source?.entryId||!destination?.entryId)return;return{sourceEntryId:source.entryId,sourceRevision:source.revision,sourceText:this.buffers.get(target.sourcePath)?.text,targetEntryId:destination.entryId};},onAdmissionRestoreReady:()=>{if(vault===this.vault&&generation===this.vaultGeneration&&this.retainedAdmissionRawInputs.length)queueMicrotask(()=>{void this.restoreAdmissionRawInputs().catch(()=>{});});},create:async(container,target)=>{
       const sourceIdentity=target.sourceIdentity;
       const validate=()=>{
         validateOwner();
@@ -2329,7 +2542,7 @@ export class Workspace {
   private viewSettings():string{return JSON.stringify([this.settings.readableWidth,this.settings.showInlineTitle,this.settings.useTab,this.settings.tabSize,this.settings.smartIndentList]);}
   private clearPaneViewFields(pane:Pane):void{
     pane.viewTabId=undefined;pane.viewPath=undefined;pane.viewMode=undefined;pane.viewKind=undefined;pane.viewBaseSource=undefined;pane.viewReady=false;pane.rebindView=undefined;pane.content=undefined;pane.runtime=undefined;
-    pane.editor=undefined;pane.imageView=undefined;pane.pdfView=undefined;pane.mediaView=undefined;pane.canvasView=undefined;pane.baseView=undefined;pane.calendarView=undefined;pane.tasksView=undefined;pane.canvasSource=undefined;pane.baseEmbeds=undefined;pane.embeds=undefined;pane.properties=undefined;pane.refreshPreview=undefined;pane.readingFind=undefined;pane.propertyTimer=undefined;
+    pane.editor=undefined;pane.imageView=undefined;pane.pdfView=undefined;pane.mediaView=undefined;pane.canvasView=undefined;pane.baseView=undefined;pane.calendarView=undefined;pane.tasksView=undefined;pane.canvasSource=undefined;pane.baseEmbeds=undefined;pane.embeds=undefined;pane.properties=undefined;pane.refreshPreview=undefined;pane.readingFind=undefined;pane.propertyTimer=undefined;pane.noteTitle=undefined;pane.noteTitleActor=undefined;pane.rawAdmissionActor=undefined;
     pane.renderVersion=++this.viewSequence;
   }
   private parkPaneView(pane:Pane,keepConnected=false):void{
@@ -2347,7 +2560,7 @@ export class Workspace {
     const cached=this.cachedViews.get(tab);if(!cached?.runtime||!cached.content)return false;
     const connected=cached.content.isConnected;
     cached.runtime.attach(pane.element,this.viewOwner(pane));
-    const fields=['viewTabId','viewPath','viewMode','viewKind','viewBaseSource','viewReady','viewSettings','rebindView','editor','imageView','pdfView','mediaView','canvasView','baseView','calendarView','tasksView','canvasSource','baseEmbeds','embeds','properties','refreshPreview','readingFind','propertyTimer','renderVersion','runtime','content'] as const;
+    const fields=['viewTabId','viewPath','viewMode','viewKind','viewBaseSource','viewReady','viewSettings','rebindView','editor','imageView','pdfView','mediaView','canvasView','baseView','calendarView','tasksView','canvasSource','baseEmbeds','embeds','properties','refreshPreview','readingFind','propertyTimer','noteTitle','noteTitleActor','rawAdmissionActor','renderVersion','runtime','content'] as const;
     for(const key of fields)(pane as unknown as Record<string,unknown>)[key]=cached[key];
     pane.history=tab.history??cached.history;pane.historyIndex=tab.historyIndex??cached.historyIndex;
     pane.rebindView?.(pane);this.cachedViews.delete(tab);this.applyViewSettings(pane);pane.readingFind?.refresh();
@@ -2378,7 +2591,7 @@ export class Workspace {
   private releasePaneView(pane:Pane,content:HTMLElement):void{
     if(pane.runtime){this.nativePresentations.get(pane.runtime)?.dispose();this.nativePresentations.delete(pane.runtime);}
     this.capturePaneState(pane);pane.readingFind?.destroy();destroyMarkdown(content);
-    clearTimeout(pane.propertyTimer);pane.editor?.destroy();pane.imageView?.destroy();pane.pdfView?.destroy();pane.mediaView?.destroy();pane.canvasView?.destroy();pane.calendarView?.destroy();pane.embeds?.destroy();pane.properties?.destroy();this.clearPaneViewFields(pane);
+    clearTimeout(pane.propertyTimer);pane.noteTitle?.destroy();pane.editor?.destroy();pane.imageView?.destroy();pane.pdfView?.destroy();pane.mediaView?.destroy();pane.canvasView?.destroy();pane.calendarView?.destroy();pane.embeds?.destroy();pane.properties?.destroy();this.clearPaneViewFields(pane);
   }
   private async disposePaneViews(pane:Pane):Promise<void>{
     if(pane.runtime){await pane.canvasView?.flush();try{await pane.runtime.destroy();}catch(error){pane.tasksView?.cancelClose();throw error;}}
@@ -3777,13 +3990,14 @@ export class Workspace {
   async destroy():Promise<void>{
     if(this.destroying)return this.destroying;
     if(this.choosingVault||this.lifecycleRecovery)throw new Error('A vault transition is pending.');
+    const resumeRecovery=this.pauseLifecycleRecoveryRetry();
     const platform=this.platform,vault=this.vault,inert=this.root.inert,wasClosing=this.closing,generation=this.vaultGeneration;
     this.closing=true;this.root.inert=true;
     const current=()=>{if(this.platform!==platform||this.vault!==vault)throw new Error('The vault changed while closing.');};
     const closing=this.destroyOwnedPlatform(current,platform,vault);this.destroying=closing;
     try{await closing;}
     catch(error){if(!this.platformDraining&&!this.platformDrained&&!this.platformReleased){this.closing=wasClosing;this.root.inert=inert;this.resumeStatusCounts(platform,generation);}throw error;}
-    finally{if(this.destroying===closing)this.destroying=undefined;}
+    finally{if(this.destroying===closing)this.destroying=undefined;resumeRecovery();}
   }
   private async destroyOwnedPlatform(current:()=>void,platform:PlatformVault,vault:Vault):Promise<void>{
     let cancelTasksClose:(recover?:boolean)=>void=()=>{};
@@ -3802,7 +4016,7 @@ export class Workspace {
       // Reinstallation must restore all bindings even if a later cleanup throws.
       this.initialized=false;this.hotkeyCleanup?.();this.hotkeyCleanup=undefined;
       document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);
-      this.closeCleanup?.();this.closeCleanup=undefined;this.disposeShell();this.root.replaceChildren();cancelTasksClose(false);
+      this.closeCleanup?.();this.closeCleanup=undefined;this.admissionRawCandidates?.remove();this.admissionRawCandidates=undefined;this.disposeShell();this.root.replaceChildren();cancelTasksClose(false);
     }catch(error){cancelTasksClose();if(!this.platformDraining&&!this.platformReleased)this.documentSearchSuspended=searchWasSuspended;throw error;}
   }
 
