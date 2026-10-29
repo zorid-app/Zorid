@@ -43,6 +43,8 @@ export class BaseEmbedSessions {
   private closed = false;
   private flushing?: Promise<void>;
   private pruneQueued=false;
+  private admissionRecovery?:{settle():Promise<void>};
+  private finishingSession?:object;
 
   private readonly options: {
     recoveryHost: HTMLElement;
@@ -60,7 +62,7 @@ export class BaseEmbedSessions {
   }
 
   mount(target: BaseEmbedTarget, container: HTMLElement): BaseEmbedBinding {
-    if (this.closed || this.closing) throw new Error('Embedded Bases are closing.');
+    if (this.closed || this.closing || this.admissionRecovery) throw new Error('Embedded Bases are closing.');
     const matches = (entry: Entry) => (!entry.attached || !!entry.inlineHandoff && !!entry.lease && typeof target.occurrence === 'object' && target.occurrence !== null && entry.target.occurrence === target.occurrence)
       && !entry.retiring && !entry.error && entry.target.sourcePath === target.sourcePath
       && entry.target.sourceIdentity === target.sourceIdentity
@@ -165,21 +167,45 @@ export class BaseEmbedSessions {
 
   hasPendingChanges(): boolean { return [...this.entries].some(entry => entry.session?.hasPendingChanges()); }
 
+  canRecoverAdmission():boolean {
+    return !this.closed&&(!(this.closing||this.flushing)||!!this.finishingSession)&&[...this.entries].every(entry=>entry.settled&&!entry.retiring&&!entry.error&&!!entry.session
+      &&(entry.session.prepareAdmissionRecovery?entry.session.canRecoverAdmission?.()===true:!entry.session.hasPendingChanges()));
+  }
+
+  private continueFinish(before:BaseEmbedSessions['admissionRecovery']):void {
+    if(this.admissionRecovery!==before)throw Object.assign(new Error('Embedded Bases are reconnecting.'),{code:'base_admission_recovery_pending'});
+  }
+  private async finishSession(operation:()=>Promise<void>):Promise<void> {
+    const phase={};this.finishingSession=phase;
+    try{await operation();}finally{if(this.finishingSession===phase)this.finishingSession=undefined;}
+  }
+
+  prepareAdmissionRecovery():{settle():Promise<void>} {
+    if(this.admissionRecovery)return this.admissionRecovery;
+    if(!this.canRecoverAdmission())throw new Error('Unfinished embedded Base drafts are retained while storage reconnects.');
+    const prepared=[...this.entries].flatMap(entry=>{const recovery=entry.session?.prepareAdmissionRecovery?.();return recovery?[recovery]:[];});
+    return this.admissionRecovery={settle:async()=>{
+      const results=await Promise.allSettled(prepared.map(recovery=>Promise.resolve().then(()=>recovery.settle())));
+      for(const result of results)if(result.status==='rejected')throw result.reason;
+    }};
+  }
+
   flush(): Promise<void> {
     if (this.closed) return Promise.resolve();
     if (this.flushing) return this.flushing;
     if([...this.entries].every(entry=>entry.settled&&!entry.retiring)&&!this.hasPendingChanges())return Promise.resolve();
     // Canvas blur, explicit Save and tab close may preflight the same manager.
     // Publish before invoking sessions so they never receive competing flushes.
-    const pending=Promise.resolve().then(async()=>{
+    const before=this.admissionRecovery,pending=Promise.resolve().then(async()=>{
+      this.continueFinish(before);
       do {
         for (const entry of this.entries) {
           // A failed initial load has no mutation to save and stays closable.
-          await entry.retiring;
+          await entry.retiring;this.continueFinish(before);
           if(!this.entries.has(entry))continue;
-          await entry.ready.catch(() => {});
-          try { if(entry.session?.hasPendingChanges())await entry.session.flush(); }
-          catch (error) { if (!entry.attached) this.recover(entry); throw error; }
+          await entry.ready.catch(() => {});this.continueFinish(before);
+          try { if(entry.session?.hasPendingChanges())await this.finishSession(()=>entry.session!.flush());this.continueFinish(before); }
+          catch (error) { if (this.admissionRecovery===before&&!entry.attached) this.recover(entry); throw error; }
         }
         // An earlier view may accept another edit while a later view saves.
         // Revisit it; an unaccepted input draft rejects through session.flush.
@@ -195,12 +221,13 @@ export class BaseEmbedSessions {
     if (this.closed) return;
     if (this.closing) throw new Error('Embedded Bases are already closing.');
     this.closing = true;
+    const before=this.admissionRecovery;
     try {
-      await this.flush();
+      await this.flush();this.continueFinish(before);
       for (const entry of this.entries) {
-        await entry.retiring;if(!this.entries.has(entry))continue;
-        try { await entry.session?.close(); }
-        catch (error) { if (!entry.attached) this.recover(entry); throw error; }
+        await entry.retiring;this.continueFinish(before);if(!this.entries.has(entry))continue;
+        try { await this.finishSession(async()=>{await entry.session?.close();});this.continueFinish(before); }
+        catch (error) { if (this.admissionRecovery===before&&!entry.attached) this.recover(entry); throw error; }
         entry.root.remove(); this.entries.delete(entry);
       }
       this.closed = true; this.recovery.remove();
@@ -210,10 +237,10 @@ export class BaseEmbedSessions {
   /** Keep a small warm set for viewport remounts. Obsolete clean views must
    * not accumulate Vault listeners and thumbnails as a note is edited. */
   private pruneClean():void {
-    if(this.pruneQueued||this.closed||this.closing)return;
+    if(this.pruneQueued||this.closed||this.closing||this.admissionRecovery)return;
     this.pruneQueued=true;
     queueMicrotask(()=>{
-      this.pruneQueued=false;if(this.closed||this.closing)return;
+      this.pruneQueued=false;if(this.closed||this.closing||this.admissionRecovery)return;
       const clean=[...this.entries].filter(entry=>!entry.attached&&entry.settled&&!entry.retiring&&!entry.session?.hasPendingChanges());
       for(const entry of clean.slice(0,Math.max(0,clean.length-4))){
         const retiring=Promise.resolve().then(async()=>{

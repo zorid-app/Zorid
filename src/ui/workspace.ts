@@ -55,7 +55,7 @@ import { createPdfView } from './pdf-view.ts';
 import type { PdfView } from './pdf-view.ts';
 import { createMediaView, mediaKind } from './media-view.ts';
 import type { MediaView } from './media-view.ts';
-import {createBaseSession, type BaseSession, type BaseSourceUnavailable} from '../bases/session.ts';
+import {createBaseSession, type BaseSession, type BaseAdmissionRecovery, type BaseSourceUnavailable} from '../bases/session.ts';
 import {BaseEmbedSessions} from './base-embed-sessions.ts';
 import {openBaseNewItemPopover} from './base-new-item-popover.ts';
 import type {BaseNewItemPopoverHandle} from './base-new-item-popover.ts';
@@ -522,6 +522,23 @@ export class Workspace {
   private lifecycleRecoveryView?:HTMLElement;
   private retiredAdmissionVaults=new WeakSet<Vault>();
   private recoveringAdmissionVaults=new WeakSet<Vault>();
+  private admissionRetirement?:{platform:PlatformVault;vault:Vault;generation:number;retired:boolean;signal:Promise<void>;retire():void};
+  private admissionPreflightCancellations=new WeakSet<object>();
+  /** A lifecycle preflight may be waiting on a write whose exact replay needs
+   * this transition to unwind first. Retirement cancels only that wait. */
+  private async flushAdmissionPreflight(platform:PlatformVault,vault:Vault):Promise<void>{
+    const retirement=this.admissionRetirement;
+    const reversible=()=>retirement&&this.admissionRetirement===retirement&&retirement.platform===platform&&retirement.vault===vault
+      &&this.platform===platform&&this.vault===vault&&this.vaultGeneration===retirement.generation
+      &&!this.platformDraining&&!this.platformDrained&&!this.platformReleased;
+    const cancelled=()=>{const error=Object.assign(new Error('Notes are reconnecting.'),{code:'workspace_admission_retired'});this.admissionPreflightCancellations.add(error);return error;};
+    if(!retirement||!reversible()){await this.flush();return;}
+    if(retirement.retired)throw cancelled();
+    const saving=this.flush();
+    // Promise.race observes the original flush even after cancellation. Its
+    // Base finishing owner is separately retired before any view is rebuilt.
+    await Promise.race([saving,retirement.signal.then(()=>{if(reversible())throw cancelled();return saving;})]);
+  }
   private async releasePlatform():Promise<void>{
     if(this.releasingPlatform)return this.releasingPlatform;
     if(this.platformReleased||!this.platform?.release)return;
@@ -541,7 +558,7 @@ export class Workspace {
     try{
       this.vaultRequest++;await this.vaultTransition;current();
       if(!this.platformDrained){
-        await this.flush();await this.closeBaseNewItem();await this.sidebarBase?.session.close();this.sidebarBase=undefined;this.sidebarBaseIntent++;
+        await this.flushAdmissionPreflight(platform,vault);await this.closeBaseNewItem();await this.sidebarBase?.session.close();this.sidebarBase=undefined;this.sidebarBaseIntent++;
         cancelTasksClose=await this.prepareTasksViewsClose();current();this.saveSession();
         this.platformDraining=true;
         await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();this.platformDrained=true;
@@ -584,10 +601,15 @@ export class Workspace {
   private subscribeAdmissionRecovery(platform:PlatformVault,vault:Vault):void{
     if(!platform.recovery)return;
     const generation=this.vaultGeneration;
+    let retire!:()=>void;const signal=new Promise<void>(resolve=>{retire=resolve;});
+    this.admissionRetirement={platform,vault,generation,retired:false,signal,retire};
+    const retirement=this.admissionRetirement;
     const owns=()=>this.platform===platform&&this.vault===vault&&this.vaultGeneration===generation;
     const current=()=>owns()&&!this.platformReleased;
     const receive=()=>{
       if(!current())return;
+      this.recoveringAdmissionVaults.add(vault);clearTimeout(this.reloadTimer);
+      retirement.retired=true;retirement.retire();
       const transition=this.choosingVault??this.destroying??this.releasingPlatform;
       if(transition){void transition.catch(()=>{}).then(()=>{if(current())receive();});return;}
       if(this.closing||this.platformDraining)return;
@@ -602,9 +624,15 @@ export class Workspace {
     if(!platform.recovery)return;
     const current=()=>{if(this.platform!==platform||this.vault!==vault||this.vaultGeneration!==generation)throw new Error('The recovering vault changed.');};
     current();this.recoveringAdmissionVaults.add(vault);clearTimeout(this.reloadTimer);
-    const pendingViews=()=>this.hasPendingBaseCreation()||this.baseNewItemOpening||this.baseNewItem?.hasPendingChanges()||this.sidebarBase?.session.hasPendingChanges()
-      ||[...this.panes,...this.cachedViews.values()].some(pane=>pane.properties?.hasPendingChanges()||pane.tasksView?.hasPendingChanges()||pane.calendarView?.hasPendingChanges()||pane.canvasView?.hasPendingChanges()||pane.baseView?.hasPendingChanges()||pane.baseEmbeds?.hasPendingChanges());
+    const panes=[...this.panes,...this.cachedViews.values()];
+    const bases=new Set([this.sidebarBase?.session,...panes.flatMap(pane=>[pane.baseView,pane.baseEmbeds])].filter((base):base is BaseSession|BaseEmbedSessions=>!!base));
+    const pendingViews=()=>this.hasPendingBaseCreation()||this.baseNewItemOpening||this.baseNewItem?.hasPendingChanges()
+      ||panes.some(pane=>pane.properties?.hasPendingChanges()||pane.tasksView?.hasPendingChanges()||pane.calendarView?.hasPendingChanges()||pane.canvasView?.hasPendingChanges())
+      ||[...bases].some(base=>base.prepareAdmissionRecovery?base.canRecoverAdmission?.()!==true:base.hasPendingChanges());
     if(pendingViews()){this.root.inert=true;throw new Error('Pending view changes are retained while storage reconnects.');}
+    // Freeze every eligible widget before a backend ACK can resolve its held
+    // request. Their old query owners must not refresh after that completion.
+    const baseRecoveries=[...bases].flatMap(base=>{const recovery=base.prepareAdmissionRecovery?.();return recovery?[recovery]:[];});
     const inert=this.root.inert,owner=Symbol('admission recovery');this.root.inert=true;this.vaultLifecycleOwner=owner;
     this.documentSearchSuspended=true;this.clearDocumentSearch();this.saveSession();
     const recovery=(async()=>{
@@ -614,6 +642,8 @@ export class Workspace {
         const previous=vault.adapter.durableWrites?.checkpoints.scope,next=fresh.adapter.durableWrites?.checkpoints.scope;
         if(!previous||!next||previous.vaultId!==next.vaultId||previous.clientId!==next.clientId)throw new Error('The recovered note authority changed.');
         this.retiredAdmissionVaults.add(vault);this.releaseDocumentSearchOwner(vault);
+        const settled=await Promise.allSettled(baseRecoveries.map(recovery=>Promise.resolve().then(()=>recovery.settle())));current();
+        for(const result of settled)if(result.status==='rejected')throw result.reason;
         // The proxy was rebound by the checked adapter. SAME buffers, retained
         // plans and uncertain checkpoint IDs resume through their normal queue.
         for(const buffer of this.buffers.values()){await buffer.flush({autoRetry:false});current();if(buffer.dirty||buffer.error)throw new Error('A retained note write is not settled yet.');}
@@ -669,9 +699,9 @@ export class Workspace {
     try{await choosing;}finally{if(this.choosingVault===choosing)this.choosingVault=undefined;if(this.vaultLifecycleOwner===owner)this.vaultLifecycleOwner=undefined;}
   }
   private async chooseVaultOnce(owner:symbol):Promise<void>{
-    const inert=this.root.inert;this.root.inert=true;
+    const inert=this.root.inert,platform=this.platform,vault=this.vault,generation=this.vaultGeneration;this.root.inert=true;
     try{
-      await this.flush();this.saveSession();
+      await this.flushAdmissionPreflight(platform,vault);this.saveSession();
       const releasing=!!this.platform?.release;
       if(releasing)await this.releasePlatform();
       let next:PlatformVault|null=null,pickerError:unknown;
@@ -681,6 +711,8 @@ export class Workspace {
       else if(!window.zorid)notice('This vault is stored on this device. Folder selection requires the desktop app.');
       if(pickerError)throw pickerError;
     }catch(error){
+      if(error&&typeof error==='object'&&this.admissionPreflightCancellations.has(error)&&this.platform===platform&&this.vault===vault&&this.vaultGeneration===generation
+        &&!this.platformDraining&&!this.platformDrained&&!this.platformReleased)return;
       if(this.platformDraining||this.platformDrained||this.platformReleased){
         try{await this.reconnectRetiredPlatform(owner);}catch{this.showLifecycleRecovery();throw error;}
       }else throw error;
@@ -1621,7 +1653,7 @@ export class Workspace {
   }
 
   private createWorkspaceBaseSession(host:HTMLElement,path:string,owner:()=>Pane,validate:()=>void,sourcePath?:string|SidebarBaseContext,viewName?:string,inline?:InlineBaseRequest,onSourceError?:(error:Error|null,unavailable?:BaseSourceUnavailable)=>void,onInlineSourceSaved?:(next:InlineBaseRequest)=>boolean,viewId?:string):BaseSession{
-    const vault=this.vault,resources=this.attachments!;
+    const vault=this.vault,resources=this.attachments!,platform=this.platform;
     const sourceContext=typeof sourcePath==='object'?sourcePath:{path:sourcePath??path};
     const hover=createBaseFileHover({parent:host,isMac:this.hotkeys.platform==='mac',
       isCurrent:target=>{try{validate();const entry=vault.entries.get(target.path);return entry?.type==='file'&&entry.entryId===target.entryId&&entry.revision===target.revision;}catch{return false;}},
@@ -1705,7 +1737,11 @@ export class Workspace {
       }
     }:undefined;
     let session:BaseSession,composed:BaseSession|undefined;
-    try{session=(this.viewFactories.base??createBaseSession)(host,{vault,basePath:path,validate,viewName,viewId,inlineSource,query:{currentFilePath:sourceContext.path,...(sourceContext.entryId?{currentFileEntryId:sourceContext.entryId}:{})},
+    try{session=(this.viewFactories.base??createBaseSession)(host,{vault,basePath:path,validate,viewName,viewId,inlineSource,
+            canRecoverDatabaseEntry:request=>platform.recovery?.containsCapturedSetEntry?.(request)===true,
+            holdRecoverDatabaseEntry:request=>platform.recovery?.holdCapturedSetEntry?.(request)??(()=>{}),
+            claimRecoverDatabaseEntry:request=>{if(!platform.recovery?.claimCapturedSetEntry)throw new Error('This collection edit cannot be claimed for recovery.');return platform.recovery.claimCapturedSetEntry(request);},
+            query:{currentFilePath:sourceContext.path,...(sourceContext.entryId?{currentFileEntryId:sourceContext.entryId}:{})},
             hoverFile:(row,event)=>{try{validate();const anchor=baseFileHoverAnchor(row,event);if(anchor)hover.hover(row,event,anchor);}catch(error){notice(error instanceof Error?error.message:String(error));}},
             ...(onSourceError?{onState:(state,unavailable)=>onSourceError(state.error,unavailable)}:{}),
             onEditsSettled:()=>{const sidebar=this.sidebarBase;if(sidebar&&sidebar.session===composed)this.retrySidebarFollowingContext(sidebar);},
@@ -1760,9 +1796,28 @@ export class Workspace {
             },onError:error=>notice(error instanceof Error?error.message:String(error))});}
     catch(error){void hover.destroy().catch(()=>{});throw error;}
     let flushing:Promise<void>|undefined,closing:Promise<void>|undefined,closed=false;
-    const flush=(options?:Parameters<BaseSession['flush']>[0]):Promise<void>=>{if(closed)return Promise.resolve();if(closing)return closing;if(flushing)return options?.dismissCleanPanels?flushing.then(()=>flush(options)):flushing;const pending=Promise.resolve().then(async()=>{await this.finishInlinePublicationAt(path);await hover.flush();await session.flush(options);});flushing=pending;const clear=()=>{if(flushing===pending)flushing=undefined;};void pending.then(clear,clear);return pending;};
-    const close=()=>{if(closed)return Promise.resolve();if(closing)return closing;const pending=Promise.resolve().then(async()=>{await flushing;await this.finishInlinePublicationAt(path);await hover.close();await session.close();await hover.destroy();closed=true;});closing=pending;const clear=()=>{if(closing===pending)closing=undefined;};void pending.then(clear,clear);return pending;};
-    return composed={get ready(){return session.ready;},get state(){return session.state;},refresh:()=>session.refresh(),selectView:index=>session.selectView(index),setCurrentFile:(target,expectedEntryId)=>session.setCurrentFile(target,expectedEntryId),get selectedViewIdentity(){return session.selectedViewIdentity;},rebindViewName:(from,to,viewId)=>session.rebindViewName(from,to,viewId),flush,close,owns:node=>!closed&&!closing&&session.owns?.(node)===true,hasPendingChanges:()=>hover.hasPendingChanges()||session.hasPendingChanges()};
+    let sessionFinish:object|undefined,prepared:BaseAdmissionRecovery|undefined;
+    const continueFinish=(before:BaseAdmissionRecovery|undefined)=>{if(prepared!==before)throw Object.assign(new Error('This Base is reconnecting.'),{code:'base_admission_recovery_pending'});};
+    const finishSession=async(operation:()=>Promise<void>)=>{const phase={};sessionFinish=phase;try{await operation();}finally{if(sessionFinish===phase)sessionFinish=undefined;}};
+    const canRecover=()=>!closed&&(!(flushing||closing)||!!sessionFinish)&&!hover.hasPendingChanges()
+      &&(session.prepareAdmissionRecovery?session.canRecoverAdmission?.()===true:!session.hasPendingChanges());
+    const flush=(options?:Parameters<BaseSession['flush']>[0]):Promise<void>=>{
+      if(closed)return Promise.resolve();if(closing)return closing;if(flushing)return options?.dismissCleanPanels?flushing.then(()=>flush(options)):flushing;
+      const before=prepared,pending=Promise.resolve().then(async()=>{
+        continueFinish(before);await this.finishInlinePublicationAt(path);continueFinish(before);await hover.flush();continueFinish(before);
+        await finishSession(()=>session.flush(options));continueFinish(before);
+      });flushing=pending;const clear=()=>{if(flushing===pending)flushing=undefined;};void pending.then(clear,clear);return pending;
+    };
+    const close=()=>{
+      if(closed)return Promise.resolve();if(closing)return closing;
+      const before=prepared,pending=Promise.resolve().then(async()=>{
+        await flushing;continueFinish(before);await this.finishInlinePublicationAt(path);continueFinish(before);await hover.close();continueFinish(before);
+        await finishSession(()=>session.close());continueFinish(before);await hover.destroy();continueFinish(before);closed=true;
+      });closing=pending;const clear=()=>{if(closing===pending)closing=undefined;};void pending.then(clear,clear);return pending;
+    };
+    return composed={get ready(){return session.ready;},get state(){return session.state;},refresh:()=>session.refresh(),selectView:index=>session.selectView(index),setCurrentFile:(target,expectedEntryId)=>session.setCurrentFile(target,expectedEntryId),get selectedViewIdentity(){return session.selectedViewIdentity;},rebindViewName:(from,to,viewId)=>session.rebindViewName(from,to,viewId),flush,close,owns:node=>!closed&&!closing&&session.owns?.(node)===true,hasPendingChanges:()=>hover.hasPendingChanges()||session.hasPendingChanges(),
+      canRecoverAdmission:canRecover,
+      prepareAdmissionRecovery:()=>{if(prepared)return prepared;if(!canRecover())throw new Error('Unfinished Base preview drafts are retained while storage reconnects.');return prepared=session.prepareAdmissionRecovery?.()??{settle:async()=>{}};}};
   }
 
   /** Base hover uses the ordinary shared draft, editor and embed save boundary. */
@@ -3562,7 +3617,7 @@ export class Workspace {
     try{
       this.hideNativeEditorToolbar();this.nativeEditorCleanup?.();this.nativeEditorCleanup=undefined;this.nativeDocumentCleanup?.();this.nativeDocumentCleanup=undefined;this.mobileLifecycleCleanup?.();this.mobileLifecycleCleanup=undefined;
       this.vaultRequest++;await this.vaultTransition;current();this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);
-      await this.flush();await this.closeBaseNewItem();await this.sidebarBase?.session.close();this.sidebarBase=undefined;this.sidebarBaseIntent++;
+      await this.flushAdmissionPreflight(platform,vault);await this.closeBaseNewItem();await this.sidebarBase?.session.close();this.sidebarBase=undefined;this.sidebarBaseIntent++;
       cancelTasksClose=await this.prepareTasksViewsClose();current();this.saveSession();this.platformDraining=true;
       this.disposers.forEach(dispose=>dispose());this.disposers=[];clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;
       await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();
