@@ -3,6 +3,36 @@
 ## URGENT: real-session automatic save failure — 2026-10-28
 
 
+**CRITICAL read-only preflight: pending CAS encoding is older than RAM — 2026-10-28.**
+Maintenance owner reports protected actual authority matches scoped backup store/
+client. Both logical entry IDs/path/revisions and physical bytes equal backup BASE;
+no external advance, journal636. No actual writes or host claims performed. These
+are owner-reported read-only observations, not this thread reading the real vault.
+
+Home head revision equals uncertain.expectedRevision and backup checkpointRevision;
+head encoded state already equals uncertain encoding, but uncertain.nextRevision
+is NOT committed. Text/encoding equality must NOT skip settling the original CAS.
+Project Idea has MISSING checkpoint head with expected=null. Its pending uncertain
+CAS encodes generation1, which differs from latest retained RAM generation3 draft;
+same base, neither state has operation. **Restoring only pending encoded text loses
+newer typing.** Operational recovery must first settle EXACT generation1 CAS,
+then checkpoint LATEST generation3 retained state under the resulting revision,
+then allow planning/saving. Preserve original export/request plus latest state;
+verify this specific ordering with fixture evidence before actual recovery. Fresh
+identity/base/revision/CAS guards remain required if authority advances later.
+
+Reviewed frontend sourceaae8ef18 composed as maina87ea1da after checking all relevant
+parent sources byte-identical to current composed backend/retry. It includes the
+scoped proxy,3-line uncertain-first flush guard and6focused tests. Actual combined
+main143/143 platform recovery+NoteBuffer/durable tests pass0skip; fullTSexit0.
+Logs main-proxy-validation001.log/main-proxy-source-check001.log and composition
+receipt under tmp/save-recovery-20261028. Existing focused test proves exact CAS
+before planning on same buffer; it is not independent operational-runner proof of
+older generation1 then newer generation3 preservation. Workspace composition/review
+and actual fault-UI/restart/closure gates still pending. No build, real vault write,
+host claim, live retry/reload/quit or installation from this integration step.
+
+
 **Latest scoped preservation COMPLETE — 2026-10-28.**
 `tmp/save-recovery-20261028/private/Zorid-protected-drafts-2026-10-28-scoped.json`
 is6035bytes,mode0600,SHA256

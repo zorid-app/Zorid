@@ -3,6 +3,21 @@
 ## Execution checkpoint — shared-core coordinator
 
 
+**Critical exact-CAS/latest-RAM ordering; proxy composed — 2026-10-28.**
+Read-only maintenance preflight reports matching scope, IDs/path/revisions and
+physical BASE, journal636/no advance/no writes/nohostclaims. Home original CAS
+expected head exists/encoded equal but nextRevision uncommitted: still settle
+EXACT CAS. ProjectIdea headmissing/expectednull; pendingCAS generation1 draft is
+OLDER than retained current generation3, samebase/nooperation. Runner MUST settle
+gen1 exactCAS then persistLATESTgen3 before planning; pendingencoding-only restore
+LOSES newer typing. Keep both states and fixture ordering/byte proof; no execution
+authorized by preflight. Proxy reviewedaae8ef18 -> maina87ea1da, includes3lineguard.
+Actual main143/143 recovery+NoteBuffer/durable tests0skip,fullTSexit0. Existing
+single-draft ordering test is not operational gen1->gen3 proof. Workspace and GUI
+fault/reconnect/restart/closure gates pending. Protected old appOPEN, installHELD.
+See urgent finding and tmp/save-recovery-20261028/main-composition-checkpoint.json.
+
+
 **Scoped real-draft preservation complete; no live recovery execution yet — 2026-10-28.**
 Latest ignored private scoped export6035bytes/0600/SHAa51e9867d137d60196626b862d538312d63795d2bbef161e88085e247053c6d7
 independently metadata/hash verified; scoped-preservation-receipt.json under
