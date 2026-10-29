@@ -200,9 +200,9 @@ class CoreVaultFixtureService {
   }
   // Runtime polling follows admitted vault ownership, independently of feature
   // listeners. Unsupported/explicit legacy mode retains the old subscription gate.
-  runtimeOwner() {
+  runtimeOwner(includePaused=false) {
     for(const owner of this.documentRuntimeOwners){
-      if(owner.paused)continue;
+      if(owner.paused&&!includePaused)continue;
       try{owner.assertActive();return owner;}
       catch{void owner.handle.revoke();}
     }
@@ -214,9 +214,14 @@ class CoreVaultFixtureService {
     // Broker listeners arrive before the first renderer runtime admission. Keep
     // the already-bound startup watcher continuous during that interval: no
     // polling timer or native maintenance is admitted until an owner exists.
-    // After an actual polling lifetime, pause/removal still closes the watcher
-    // and preserves its genuine missed-observation obligation.
-    else if(this.hasStartedPolling||this.closed||this.runtimeFailed)this.stopPolling();
+    // A paused but still-authenticated owner may keep collecting bounded watch
+    // hints. Stopping native maintenance must not manufacture a coverage gap.
+    // Actual removal/failure and an unhealthy watcher retain the normal close
+    // and missed-observation duty; merely having an owner record is not proof.
+    else if(this.hasStartedPolling||this.closed||this.runtimeFailed){
+      const passiveOwner=!this.closed&&!this.runtimeFailed&&this.documentRuntimeEnabled?this.runtimeOwner(true):null;
+      this.stopPolling({keepWatcher:!!(this.familyMode&&passiveOwner&&this.watchState.active&&this.watchState.healthy&&this.watcher)});
+    }
     this.syncLocalRecovery();
   }
   cancelLocalRecoveryTimer(){
@@ -269,12 +274,15 @@ class CoreVaultFixtureService {
     this.timer.unref();
     void this.poll();
   }
-  stopPolling() {
+  stopPolling({keepWatcher=false}={}) {
     clearInterval(this.timer);this.timer=null;
     clearImmediate(this.continuation);this.continuation=null;
-    // A later admission must reconcile the interval with no active watcher.
-    if(this.watchState.active)this.needsScan=true;
-    stopWatcher(this.watchState);this.syncLocalRecovery();
+    if(!keepWatcher){
+      // A later admission must reconcile the interval with no active watcher.
+      if(this.watchState.active)this.needsScan=true;
+      stopWatcher(this.watchState);
+    }
+    this.syncLocalRecovery();
   }
   scheduleContinuation() {
     if(this.continuation||this.continuationFailed||!this.timer||this.closed||this.runtimeFailed||this.reconciliation?.work?.pending!==true)return;
@@ -292,8 +300,11 @@ class CoreVaultFixtureService {
     this.live();
     if(!this.documentRuntimeEnabled||this.runtimeFailed)throw error('unsupported_host_capability');
     this.ensureDocumentScheduler();
-    const handle=this.documentScheduler.addOwner(options),owner={host:options.host,assertActive:options.assertActive,handle,paused:false};
-    const remove=()=>{owner.paused=true;this.documentRuntimeOwners.delete(owner);this.syncPolling();};
+    let handle;
+    try{handle=this.documentScheduler.addOwner(options);}
+    catch(reason){if(!this.documentRuntimeOwners.size)this.stopPolling();throw reason;}
+    const owner={host:options.host,assertActive:options.assertActive,handle,paused:false};
+    const remove=()=>{owner.paused=true;if(!this.documentRuntimeOwners.delete(owner))return;if(!this.documentRuntimeOwners.size)this.stopPolling();this.syncPolling();};
     handle.subscribe(()=>{},remove);
     this.documentRuntimeOwners.add(owner);this.syncPolling();
     if(!this.documentRuntimeOwners.has(owner))throw error('client_ownership_lost');

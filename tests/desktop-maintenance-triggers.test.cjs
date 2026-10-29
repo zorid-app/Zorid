@@ -179,11 +179,11 @@ test('unknown reconciliation status retains thirty-second fallback with a health
 });
 
 async function startupOwnerFixture(t,{startupHint=false,rootChanged=false,exit}={}){
-  const original=RustVaultService.open,watchers=[],nativeCalls=[],notifications=[];let scans=0,identityReads=0,externalChange=false,journalChange=false;
+  const original=RustVaultService.open,watchers=[],nativeCalls=[],notifications=[];let scans=0,identityReads=0,externalChange=false,journalChange=false,blockedHint=false;
   const host={root:'/startup-owner-order',capabilities:['documents','document_runtime','read_path','list_snapshot','changes_after','rescan','prepare_intent','commit_intent','query_intent','list_intents','acknowledge_intent','local_family_status','reconciliation_status'],reconciliation:{complete:true},
     ...(exit?{exit}:{}),
     async localFamilyStatus(){},async listSnapshot(){return{entries:[],cursor:'0'};},async changesAfter(cursor){nativeCalls.push('changes');const changed=journalChange;journalChange=false;return{changes:changed?[{cursor:'1',origin:{kind:'local_command',operation_id:'external'},requires_full_reload:false,entries:[{...entry('One.md','one'),state:{...entry('One.md','one').state,revision:'fresh-revision'}}]}]:[],next_cursor:changed?'1':cursor,has_more:false};},
-    async request(command,_body,_lease,beforeDispatch){beforeDispatch?.();nativeCalls.push(command.method);if(command.method==='reconcile'){if(externalChange){journalChange=true;externalChange=false;}return{result:{imported:[],projected:[],blocked:[]}};}assert.equal(command.method,'rescan');scans++;return{result:{complete:true,reconciliation:{complete:true}}};},async close(){},
+    async request(command,_body,_lease,beforeDispatch){beforeDispatch?.();nativeCalls.push(command.method);if(command.method==='reconcile'){if(externalChange){journalChange=true;externalChange=false;}return{result:{imported:[],projected:[],blocked:blockedHint?[{path:command.paths[0],code:'reconciliation_blocked'}]:[]}};}assert.equal(command.method,'rescan');scans++;return{result:{complete:true,reconciliation:{complete:true}}};},async close(){},
   };
   RustVaultService.open=async()=>{if(startupHint)watchers[0].callback('change','During startup.md');return host;};
   t.after(()=>{RustVaultService.open=original;});
@@ -197,7 +197,7 @@ async function startupOwnerFixture(t,{startupHint=false,rootChanged=false,exit}=
   };
   t.after(()=>service.close());
   const register=(clientId='client',assertActive=()=>{})=>service.registerDocumentRuntimeOwner({host,clientId,localStoreId:'store',assertActive});
-  return{service,watchers,register,nativeCalls,notifications,changeKnownFile(){externalChange=true;},get scans(){return scans;}};
+  return{service,watchers,register,nativeCalls,notifications,changeKnownFile(){externalChange=true;},blockKnownFile(){blockedHint=true;},get scans(){return scans;}};
 }
 
 test('broker subscription before first runtime admission preserves the continuous startup watcher and performs no scan',async t=>{
@@ -233,6 +233,12 @@ test('known-file hints while paused stay metadata-only and import targeted fresh
   assert.equal(f.scans,0);assert.equal(f.watchers.length,1);assert.equal(f.service.entries.get('one').state.revision,'fresh-revision');assert.deepEqual(f.notifications,['wake']);
 });
 
+test('known-file deletion or replacement hinted while paused retains full discovery fallback',async t=>{
+  const f=await startupOwnerFixture(t),owner=f.register();f.service.entries.set('one',entry('One.md','one'));await f.service.poll();await owner.pause();
+  f.nativeCalls.length=0;f.blockKnownFile();f.watchers[0].callback('rename','One.md');await f.service.poll();assert.deepEqual(f.nativeCalls,[]);
+  owner.resume();await f.service.poll();assert.deepEqual(f.nativeCalls,['changes','reconcile','rescan','changes']);assert.equal(f.scans,1);assert.equal(f.watchers.length,1);
+});
+
 for(const reason of ['unknown-path','unknown-name','unsafe-name','overflow','watch-error','watch-close'])test(`paused watcher ${reason} still requires complete discovery on resume`,async t=>{
   const f=await startupOwnerFixture(t),owner=f.register();await f.service.poll();await owner.pause();f.nativeCalls.length=0;
   const watcher=f.watchers[0];
@@ -263,6 +269,29 @@ test('a paused owner whose grant fails cannot retain passive watcher ownership',
 test('failed first grant closes the pre-admission watcher without native polling',async t=>{
   const f=await startupOwnerFixture(t);assert.throws(()=>f.register('bad',()=>{throw Object.assign(Error('retired'),{code:'grant_retired'});}),{code:'client_ownership_lost'});
   assert.equal(f.watchers[0].closed,true);assert.equal(f.service.timer,null);assert.deepEqual(f.nativeCalls,[]);
+});
+
+test('failed first scheduler admission closes its pre-admission watcher without native work',async t=>{
+  const f=await startupOwnerFixture(t);f.service.documentScheduler.addOwner=()=>{throw Object.assign(Error('invalid'),{code:'invalid_admission'});};
+  assert.throws(()=>f.register(),{code:'invalid_admission'});assert.equal(f.watchers[0].closed,true);assert.equal(f.service.timer,null);assert.deepEqual(f.nativeCalls,[]);
+});
+
+test('failed additional admission does not detach another authenticated paused owner',async t=>{
+  const f=await startupOwnerFixture(t),owner=f.register();await f.service.poll();await owner.pause();
+  f.service.documentScheduler.addOwner=()=>{throw Object.assign(Error('invalid'),{code:'invalid_admission'});};
+  assert.throws(()=>f.register('bad'),{code:'invalid_admission'});assert.equal(f.watchers[0].closed,false);
+  owner.resume();await f.service.poll();assert.equal(f.scans,0);assert.equal(f.watchers.length,1);
+});
+
+test('removing one paused owner preserves another paused owners watcher coverage',async t=>{
+  const f=await startupOwnerFixture(t),first=f.register('first'),second=f.register('second');await f.service.poll();await first.pause();await second.pause();
+  first.release();assert.equal(f.watchers[0].closed,false);assert.equal(f.service.timer,null);
+  second.resume();await f.service.poll();assert.equal(f.scans,0);assert.equal(f.watchers.length,1);
+});
+
+test('closing while the last owner is paused retires the passive watcher',async t=>{
+  const f=await startupOwnerFixture(t),owner=f.register();await f.service.poll();await owner.pause();await f.service.close();
+  assert.equal(f.watchers[0].closed,true);assert.equal(f.service.timer,null);assert.equal(f.service.continuation,null);assert.equal(f.service.needsScan,true);
 });
 
 test('runtime failure closes a passive watcher and cancels paused maintenance',async t=>{
