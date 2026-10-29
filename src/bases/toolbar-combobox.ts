@@ -3,10 +3,24 @@ export interface BaseComboboxOptions {
   /** Keep the popup inside its owning panel for outside-click and focus handling. */
   owner?: HTMLElement;
   onOpen?(): void;
+  /** Fresh restoration only; retiring owners may still hand off raw custody. */
+  isCurrent?():boolean;
 }
 
+/** Process-local presentation custody; never a selected-option command. */
+export interface BaseComboboxAdmissionDraft {
+  readonly value:string;readonly searchable:boolean;
+  readonly state:{readonly open:boolean;readonly query:string;readonly activeValue?:string;readonly focus:'button'|'search'|null;readonly selectionStart:number|null;readonly selectionEnd:number|null;readonly selectionDirection:'forward'|'backward'|'none'|null};
+  readonly ready:Promise<void>;
+}
+const completedComboboxDrafts=new WeakSet<BaseComboboxAdmissionDraft>();
 export interface BaseCombobox {
   sync(): void;
+  /** Popup/query ownership only; this is independent of final-input readiness. */
+  hasRawInput():boolean;
+  canCaptureAdmissionDraft():boolean;
+  captureFreeze():BaseComboboxAdmissionDraft|undefined;
+  restoreAdmissionDraft(draft:BaseComboboxAdmissionDraft):boolean;
   destroy(): void;
 }
 
@@ -30,11 +44,14 @@ export function createBaseCombobox(select: HTMLSelectElement, options: BaseCombo
   const listId = `bases-toolbar-combobox-${++nextComboboxId}`;
   let destroyed = false, popup: HTMLDivElement | undefined, list: HTMLDivElement | undefined, search: HTMLInputElement | undefined;
   let visible: HTMLOptionElement[] = [], active = -1;
+  let frozen=false,restoring=false,interacted=false,capturedDraft:BaseComboboxAdmissionDraft|undefined,adoptedDraft:BaseComboboxAdmissionDraft|undefined,disabledBeforeFreeze=false;
+  let composing=false,compositionSettling=false,compositionStart='',compositionUpdate:string|undefined,compositionInput:{value:string;data:string|null;update?:string}|undefined,completeCapture:(()=>void)|undefined;
   const disabled = () => select.disabled || select.matches(':disabled');
   const selectable = (option: HTMLOptionElement) => !option.disabled && !(option.parentElement?.tagName === 'OPTGROUP' && (option.parentElement as HTMLOptGroupElement).disabled);
 
   function close(returnFocus: boolean) {
-    popup?.remove(); popup = undefined; list = undefined; search = undefined; visible = []; active = -1;
+    if(frozen&&!destroyed)return;
+    popup?.remove(); popup = undefined; list = undefined; search = undefined; visible = []; active = -1;composing=compositionSettling=false;compositionInput=undefined;compositionUpdate=undefined;
     button.setAttribute('aria-expanded', 'false'); button.removeAttribute('aria-controls'); button.removeAttribute('aria-activedescendant');
     if (returnFocus && !destroyed && button.isConnected && !button.disabled) button.focus({ preventScroll: true });
   }
@@ -57,6 +74,7 @@ export function createBaseCombobox(select: HTMLSelectElement, options: BaseCombo
   }
 
   function highlight(index: number) {
+    if(frozen&&!restoring)return;
     active = index;
     if (!list) return;
     for (const [i, row] of Array.from(list.children).entries()) row.classList.toggle('is-active', i === active);
@@ -69,6 +87,7 @@ export function createBaseCombobox(select: HTMLSelectElement, options: BaseCombo
   }
 
   function choose(index: number) {
+    if(frozen||restoring)return;
     const option = visible[index];
     if (!option || !selectable(option) || disabled()) return;
     const changed = select.selectedIndex !== option.index;
@@ -78,7 +97,7 @@ export function createBaseCombobox(select: HTMLSelectElement, options: BaseCombo
   }
 
   function render() {
-    if (!list) return;
+    if (!list||frozen&&!restoring) return;
     const previous = visible[active], query = search?.value.trim().toLocaleLowerCase() ?? '';
     visible = Array.from(select.options).filter(option => !option.hidden && !option.closest('optgroup[hidden]') && (!query || option.label.toLocaleLowerCase().includes(query)));
     list.replaceChildren(...visible.map((option, index) => {
@@ -87,8 +106,8 @@ export function createBaseCombobox(select: HTMLSelectElement, options: BaseCombo
       row.classList.toggle('is-selected', option.selected); row.classList.toggle('is-disabled', !selectable(option));
       if (!selectable(option)) row.setAttribute('aria-disabled', 'true');
       row.addEventListener('pointerdown', event => event.preventDefault());
-      row.addEventListener('pointermove', () => { if (selectable(option)) highlight(index); });
-      row.addEventListener('click', () => choose(index));
+      row.addEventListener('pointermove', () => { if (!frozen&&selectable(option)) {interacted=true;highlight(index);} });
+      row.addEventListener('click', () => {if(!frozen)interacted=true;choose(index);});
       return row;
     }));
     if (!visible.length) {
@@ -98,20 +117,29 @@ export function createBaseCombobox(select: HTMLSelectElement, options: BaseCombo
     highlight(preferred >= 0 ? preferred : visible.findIndex(selectable)); place();
   }
 
-  function open() {
-    if (destroyed || disabled() || popup) return;
-    options.onOpen?.();
+  function open(focus=true,notify=true) {
+    if (destroyed || frozen&&!restoring || disabled() || popup) return;
+    if(notify)options.onOpen?.();
     if (destroyed || disabled() || !button.isConnected) return;
     popup = doc.createElement('div'); popup.className = 'bases-toolbar-combobox-popover';
     if (options.searchable) {
       search = doc.createElement('input'); search.type = 'search'; search.className = 'bases-toolbar-combobox-search'; search.placeholder = 'Search...';
       search.setAttribute('aria-label', `Search ${button.getAttribute('aria-label') ?? 'options'}`); search.setAttribute('role', 'searchbox'); search.setAttribute('aria-controls', listId); search.autocomplete = 'off';
-      search.addEventListener('input', render); search.addEventListener('keydown', keydown); popup.append(search);
+      search.addEventListener('input', event => {
+        if(composing)compositionInput={value:search!.value,data:(event as InputEvent).data??null,update:compositionUpdate};else compositionSettling=false;
+        if(!frozen){interacted=true;render();}else completeCapture?.();
+      });
+      search.addEventListener('compositionstart',()=>{if(frozen)return;composing=true;compositionSettling=false;compositionStart=search!.value;compositionUpdate=undefined;compositionInput=undefined;});
+      search.addEventListener('compositionupdate',event=>{if(composing)compositionUpdate=event.data;});
+      search.addEventListener('compositionend',event=>{
+        composing=false;compositionSettling=!(event.data===''&&search!.value===compositionStart||compositionInput?.value===search!.value&&(compositionInput.data===event.data||compositionInput.update===event.data));completeCapture?.();
+      });
+      search.addEventListener('keydown', keydown); popup.append(search);
     }
     list = doc.createElement('div'); list.id = listId; list.className = 'bases-toolbar-combobox-options'; list.setAttribute('role', 'listbox'); list.setAttribute('aria-label', button.getAttribute('aria-label') ?? 'Options'); popup.append(list);
     (options.owner ?? select.parentElement ?? doc.body).append(popup);
     button.setAttribute('aria-expanded', 'true'); button.setAttribute('aria-controls', listId);
-    render(); search?.focus({ preventScroll: true });
+    render(); if(focus)search?.focus({ preventScroll: true });
   }
 
   function move(step: number) {
@@ -124,6 +152,8 @@ export function createBaseCombobox(select: HTMLSelectElement, options: BaseCombo
   }
 
   function keydown(event: KeyboardEvent) {
+    if(frozen){if(composing&&event.target===search){event.stopImmediatePropagation();return;}event.preventDefault();event.stopImmediatePropagation();return;}
+    interacted=true;
     if (event.isComposing || event.ctrlKey || event.metaKey) return;
     if (event.key === 'Escape' && popup) { event.preventDefault(); event.stopPropagation(); close(true); return; }
     if (event.key === 'Tab' && popup) { close(true); return; }
@@ -143,7 +173,7 @@ export function createBaseCombobox(select: HTMLSelectElement, options: BaseCombo
   }
 
   function sync() {
-    if (destroyed) return;
+    if (destroyed||frozen) return;
     label.textContent = select.options[select.selectedIndex]?.label ?? select.getAttribute('placeholder') ?? '';
     button.disabled = disabled();
     for (const name of ['aria-label', 'aria-labelledby', 'aria-describedby', 'title']) {
@@ -152,21 +182,57 @@ export function createBaseCombobox(select: HTMLSelectElement, options: BaseCombo
     }
     if (button.disabled) close(false); else render();
   }
-  const click = () => { if (popup) close(true); else open(); };
-  const pointerdown = (event: Event) => { if (popup && event.target !== button && !button.contains(event.target as Node) && !popup.contains(event.target as Node)) close(false); };
-  const focusin = (event: Event) => { if (popup && event.target !== button && !popup.contains(event.target as Node)) close(false); };
+  const click = () => {if(frozen)return;interacted=true;if (popup) close(true); else open(); };
+  const pointerdown = (event: Event) => { if (!frozen&&popup && event.target !== button && !button.contains(event.target as Node) && !popup.contains(event.target as Node)) close(false); };
+  const focusin = (event: Event) => { if (!frozen&&popup && event.target !== button && !popup.contains(event.target as Node)) close(false); };
   const observer = win ? new win.MutationObserver(sync) : undefined;
   observer?.observe(select, { subtree: true, childList: true, characterData: true, attributes: true });
   button.addEventListener('click', click); button.addEventListener('keydown', keydown); select.addEventListener('change', sync);
   doc.addEventListener('pointerdown', pointerdown, true); doc.addEventListener('focusin', focusin);
   win?.addEventListener('resize', place); doc.addEventListener('scroll', place, true);
   sync();
-  return { sync, destroy() {
+  const canCaptureAdmissionDraft=()=>!!capturedDraft||!destroyed;
+  function captureFreeze():BaseComboboxAdmissionDraft|undefined {
+    if(capturedDraft)return capturedDraft;if(!canCaptureAdmissionDraft())return;
+    const snapshot=():BaseComboboxAdmissionDraft['state']=>({open:!!popup,query:search?.value??'',activeValue:visible[active]?.value,focus:doc.hasFocus()&&doc.activeElement===button?'button':doc.hasFocus()&&search&&doc.activeElement===search?'search':null,selectionStart:search?.selectionStart??null,selectionEnd:search?.selectionEnd??null,selectionDirection:search?.selectionDirection??null});
+    const optionsAtCapture=Array.from(select.options,option=>({value:option.value,label:option.label,visible:!option.hidden&&!option.closest('optgroup[hidden]'),selectable:selectable(option),selected:option.selected}));
+    let state=snapshot(),resolve!:()=>void,finished=false;const ready=new Promise<void>(yes=>{resolve=yes;});
+    frozen=true;disabledBeforeFreeze=select.disabled;select.disabled=true;button.disabled=true;if(search&&!composing&&!compositionSettling)search.readOnly=true;
+    capturedDraft={value:select.value,searchable:options.searchable===true,get state(){return state;},ready};
+    completeCapture=()=>{
+      if(finished||composing||compositionSettling)return;
+      // Final native input may finish after capture. Derive its highlighted
+      // presentation from the original copied option facts, never a retired
+      // source mutation or a native selected-option/change command.
+      const focus=state.focus,final=snapshot(),query=final.query.trim().toLocaleLowerCase();
+      const matches=optionsAtCapture.filter(option=>option.visible&&(!query||option.label.toLocaleLowerCase().includes(query)));
+      const highlighted=matches.find(option=>option.value===state.activeValue&&option.selectable)??matches.find(option=>option.selected&&option.selectable)??matches.find(option=>option.selectable);
+      state={...final,activeValue:final.open?(state.query===final.query?state.activeValue:highlighted?.value):undefined,focus};if(search)search.readOnly=true;finished=true;completedComboboxDrafts.add(capturedDraft!);completeCapture=undefined;resolve();
+    };
+    completeCapture();return capturedDraft;
+  }
+  function restoreAdmissionDraft(draft:BaseComboboxAdmissionDraft):boolean {
+    if(destroyed||frozen||!select.isConnected||!button.isConnected||select.parentElement!==button.parentElement||options.isCurrent?.()===false)return false;
+    if(adoptedDraft===draft)return true;
+    if(interacted||adoptedDraft||!completedComboboxDrafts.has(draft)||select.value!==draft.value||(options.searchable===true)!==draft.searchable)return false;
+    const snapshot=draft.state,query=snapshot.query.trim().toLocaleLowerCase();
+    const choices=Array.from(select.options).filter(option=>!option.hidden&&!option.closest('optgroup[hidden]')&&(!query||option.label.toLocaleLowerCase().includes(query)));
+    if(snapshot.open&&disabled()||snapshot.activeValue!==undefined&&choices.filter(option=>option.value===snapshot.activeValue&&selectable(option)).length!==1)return false;
+    restoring=true;
+    try{
+      if(snapshot.open){open(false,false);if(!popup)return false;if(search)search.value=snapshot.query;render();highlight(snapshot.activeValue===undefined?-1:visible.findIndex(option=>option.value===snapshot.activeValue));
+        if(search&&snapshot.selectionStart!==null&&snapshot.selectionEnd!==null)search.setSelectionRange(snapshot.selectionStart,snapshot.selectionEnd,snapshot.selectionDirection??undefined);
+      }
+      if(snapshot.focus==='button')button.focus({preventScroll:true});else if(snapshot.focus==='search')search?.focus({preventScroll:true});
+      adoptedDraft=draft;return true;
+    }finally{restoring=false;}
+  }
+  return { sync,hasRawInput:()=>!destroyed&&!!popup,canCaptureAdmissionDraft,captureFreeze,restoreAdmissionDraft,destroy() {
     if (destroyed) return;
     destroyed = true; close(false); observer?.disconnect();
     button.removeEventListener('click', click); button.removeEventListener('keydown', keydown); select.removeEventListener('change', sync);
     doc.removeEventListener('pointerdown', pointerdown, true); doc.removeEventListener('focusin', focusin); win?.removeEventListener('resize', place); doc.removeEventListener('scroll', place, true);
-    button.remove(); select.hidden = original.hidden;
+    button.remove();if(frozen)select.disabled=disabledBeforeFreeze; select.hidden = original.hidden;
     if (original.tabIndex === null) select.removeAttribute('tabindex'); else select.setAttribute('tabindex', original.tabIndex);
     if (original.ariaHidden === null) select.removeAttribute('aria-hidden'); else select.setAttribute('aria-hidden', original.ariaHidden);
   } };
