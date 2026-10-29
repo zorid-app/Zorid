@@ -149,6 +149,10 @@ test('staging never overwrites a symlinked input manifest or reads symlinked Ele
   await assert.rejects(stageDesktop(f.root), /input manifest must be a regular file/);
   assert.equal(await fs.readFile(path.join(f.root, 'vault/private.md'), 'utf8'), 'vault/private.md');
   await fs.rm(path.join(f.root, '.release/inputs.json'));
+  await fs.symlink(path.join(f.root, 'vault/private.md'), path.join(f.root, '.release/pnpm-workspace.yaml'));
+  await assert.rejects(stageDesktop(f.root), /workspace manifest must be a regular file/);
+  assert.equal(await fs.readFile(path.join(f.root, 'vault/private.md'), 'utf8'), 'vault/private.md');
+  await fs.rm(path.join(f.root, '.release/pnpm-workspace.yaml'));
   await fs.rm(path.join(f.root, 'node_modules/electron/dist/version'));
   await fs.symlink(path.join(f.root, 'vault/private.md'), path.join(f.root, 'node_modules/electron/dist/version'));
   await assert.rejects(stageDesktop(f.root), /must be a regular file/);
@@ -348,4 +352,27 @@ test('signed native host preserves source provenance and requires verified final
   const tampered = Buffer.from(signedBytes); tampered[tampered.length - 1] ^= 1;
   await fs.writeFile(filename, tampered);
   await assert.rejects(verifyDesktopArchive(archive, staged.inputManifest), /content mismatch/);
+});
+
+test('staged dependency collection is isolated from an ancestor pnpm workspace and multi-document lock', async t => {
+  const f = await fixture(t);
+  const workspace = "packages:\n  - '.'\n";
+  const lock = "---\nlockfileVersion: '9.0'\nimporters:\n  .: {}\n---\nlockfileVersion: '9.0'\nimporters:\n  .: {}\n";
+  await f.write('pnpm-workspace.yaml', workspace); await f.write('pnpm-lock.yaml', lock);
+  const staged = await stageDesktop(f.root);
+  const require = createRequire(import.meta.url);
+  const builderRequire = createRequire(require.resolve('electron-builder/package.json'));
+  const { getCollectorByPackageManager, PM } = builderRequire('app-builder-lib/out/node-module-collector');
+  let sequence = 0;
+  const collector = getCollectorByPackageManager(PM.PNPM, staged.appDirectory, {
+    async getTempFile() { return path.join(f.root, '.release', `collector-${sequence++}.json`); },
+  });
+  const tree = await collector.getDependenciesTree(PM.PNPM);
+  assert.equal(await fs.realpath(tree.path), await fs.realpath(staged.appDirectory), 'the collector must inspect the generated app, not its development workspace');
+  const result = await collector.getNodeModules({ packageName: f.metadata.name });
+  assert.deepEqual(result.nodeModules, []);
+  assert.equal(await fs.readFile(path.join(f.root, 'pnpm-workspace.yaml'), 'utf8'), workspace);
+  assert.equal(await fs.readFile(path.join(f.root, 'pnpm-lock.yaml'), 'utf8'), lock);
+  const inputs = JSON.parse(await fs.readFile(staged.inputManifest));
+  assert.equal(inputs.files['pnpm-workspace.yaml'], undefined, 'collector metadata stays outside the runtime archive');
 });

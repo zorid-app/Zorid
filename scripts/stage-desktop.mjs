@@ -136,6 +136,11 @@ export async function stageDesktop(root = projectRoot, options = {}) {
   catch (error) { if (error.code !== 'ENOENT') throw error; }
   await fs.mkdir(staging, { recursive: true });
   const inputManifest = path.join(staging, 'inputs.json');
+  const workspaceManifest = path.join(staging, 'pnpm-workspace.yaml');
+  try {
+    const existing = await fs.lstat(workspaceManifest);
+    if (!existing.isFile() || existing.isSymbolicLink()) throw new Error('Release workspace manifest must be a regular file');
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
   try {
     const existing = await fs.lstat(inputManifest);
     if (!existing.isFile() || existing.isSymbolicLink()) throw new Error('Release input manifest must be a regular file');
@@ -173,6 +178,14 @@ export async function stageDesktop(root = projectRoot, options = {}) {
   await fs.writeFile(path.join(appDirectory, 'package.json'), packageBytes);
   inputs.files['package.json'] = sha256(packageBytes);
   inputs.package = appPackage;
+  // The staged runtime has no external Node dependencies. Give pnpm's collector
+  // its own workspace boundary so it cannot read the development workspace's
+  // lockfile or collect its dependencies. This metadata stays outside the ASAR.
+  const temporaryWorkspace = path.join(staging, `workspace-${randomUUID()}.yaml`);
+  try {
+    await fs.writeFile(temporaryWorkspace, 'packages:\n  - app\n', { flag: 'wx' });
+    await fs.rename(temporaryWorkspace, workspaceManifest);
+  } finally { await fs.rm(temporaryWorkspace, { force: true }); }
   const temporaryManifest = path.join(staging, `inputs-${randomUUID()}.json`);
   try {
     await fs.writeFile(temporaryManifest, `${JSON.stringify(inputs, null, 2)}\n`, { flag: 'wx' });
