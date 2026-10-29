@@ -1,0 +1,15 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {assessFloor,fixtureText} from './oracle.mjs';
+
+function receipt(){return{floorOnly:true,clockVerified:true,viewportMatches:true,mode:'normal-reopen',deadlineMs:800,spawnEpoch:1000,selectionEpoch:null,packaged:true,electronVersion:'44.9.1',expectedElectronVersion:'44.9.1',fixtureId:'fixture',expectedBytes:524288,initialDocumentLength:524288,initialPrefixMatches:true,firstViewportEpoch:1500,editableAtReady:true,readyIdentity:'fixture',probes:[{name:'ready',insert:'x',trusted:true,identity:'fixture',guard:true,appliedEpoch:1600,caret:33,expectedCaret:33,caretAfterPaint:33,expectedCaretAfterPaint:33,journal:{ack:true,fsynced:true,readback:true,ackEpoch:1700}},{name:'deadline',insert:'y',trusted:true,identity:'fixture',guard:true,appliedEpoch:1810,caret:34,expectedCaret:34,caretAfterPaint:34,expectedCaretAfterPaint:34,journal:{ack:true,fsynced:true,readback:true,ackEpoch:1900}}],body:{checkedEpoch:2000,sourceMatches:true,editedMatches:true},normalExit:true,exitCode:0,signal:null,forced:false,ownedProcessesGone:true,errors:[]};}
+
+test('floor target is actual trusted applied input, separate from later body verification and journal acknowledgment',()=>{
+ const value=receipt();value.probes[0].journal.ackEpoch=3000;const result=assessFloor(value);assert.equal(result.usableByDeadline,true);assert.equal(result.valid,true);assert.equal(result.readyInputMs,600);assert.equal(result.deadlineInputMs,810);assert.equal(result.productionAuthorityProven,false);
+});
+test('late input cannot pass by having an early window, editor DOM, or journal',()=>{const value=receipt();value.probes[0].appliedEpoch=1801;assert.equal(assessFloor(value).usableByDeadline,false);});
+test('first selection uses its explicit acknowledgment clock and retains spawn timing',()=>{const value=receipt();value.mode='first-folder-selection';value.selectionEpoch=1500;value.firstViewportEpoch=2000;value.probes[0].appliedEpoch=2100;value.probes[0].journal.ackEpoch=2200;const result=assessFloor(value);assert.equal(result.readyInputMs,600);assert.equal(result.spawnToReadyInputMs,1100);assert.equal(result.usableByDeadline,true);});
+for(const [label,change]of [
+ ['untrusted event',v=>{v.probes[0].trusted=false;}],['wrong document',v=>{v.readyIdentity='other';}],['read-only editor',v=>{v.editableAtReady=false;}],['wrong caret',v=>{v.probes[0].caret++;}],['missing journal fsync',v=>{v.probes[0].journal.fsynced=false;}],['incomplete later document',v=>{v.body.editedMatches=false;}],['forced shutdown',v=>{v.forced=true;}],['wrong runtime',v=>{v.electronVersion='44.8.0';}],['missing deadline probe',v=>{v.probes.pop();}],
+])test(`${label} cannot produce accepted floor proof`,()=>{const value=receipt();change(value);assert.equal(assessFloor(value).valid,false);});
+test('owned fixtures have exact ASCII byte length and stable representative first viewport',()=>{for(const bytes of [8192,524288,5242880]){const text=fixtureText(bytes);assert.equal(Buffer.byteLength(text),bytes);assert.ok(text.startsWith('# Startup editor floor\n\nVisible first paragraph.'));assert.ok(!text.includes('```'));}});
