@@ -24,7 +24,7 @@ test('saved durable witnesses are immutable detached snapshots of the actual loa
       compareAndSwap: async change => {
         assert.equal(change.expectedRevision, head?.revision ?? null);
         head = { version: 1, ...scope, key: change.key, revision: change.nextRevision, encodedState: change.encodedState,
-          sequence: '1', deleted: false, byteLength: 0 }; return head;
+          sequence: String(Number(head?.sequence??0)+1), deleted: change.encodedState===null, byteLength: Buffer.byteLength(change.encodedState??'') }; return head;
       }, list: unused, changes: unused },
     readText: async () => structuredClone(current), readTextById: async id => id === current.entryId ? structuredClone(current) : null,
     planWrite: async () => { plans++; throw new Error('Getter/reload must never plan a write'); },

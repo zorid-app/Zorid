@@ -18,25 +18,25 @@ function fixture() {
       if(failBeforeCommit){failBeforeCommit=false;throw Error('Checkpoint unavailable');}
       if(head?.revision===change.nextRevision){assert.equal(head.encodedState,change.encodedState);return structuredClone(head);}
       if((head?.revision??null)!==change.expectedRevision)throw Error('Checkpoint ownership conflict');
-      head={version:1,...scope,key:change.key,revision:change.nextRevision,encodedState:change.encodedState,sequence:String(++sequence),deleted:false,byteLength:change.encodedState?.length??0};
+      head={version:1,...scope,key:change.key,revision:change.nextRevision,encodedState:change.encodedState,sequence:String(++sequence),deleted:change.encodedState===null,byteLength:Buffer.byteLength(change.encodedState??'')};
       if(loseReply){loseReply=false;throw Error('Lost checkpoint reply');}
       return structuredClone(head);
     },list:async()=>({items:head?[head]:[],cursor:null,highWater:String(sequence)}),changes:async()=>({items:[],cursor:null,highWater:String(sequence)})},
     readText:async()=>structuredClone(observed),readTextById:async()=>structuredClone(observed),
     planWrite:unavailable,prepare:unavailable,commit:unavailable,query:unavailable,listUnacknowledged:async()=>[],acknowledge:unavailable,
   } satisfies DurableWrites;
-  const vault={readDurableText:writes.readText,readDurableTextById:writes.readTextById} as unknown as Vault;
+  const vault={adapter:{},readDurableText:writes.readText,readDurableTextById:writes.readTextById} as unknown as Vault;
   const state=new DurableNoteState(vault,writes,()=>{});
   return {state,vault,writes,calls,get head(){return head;},
-    seedClean(){head={version:1,...scope,key:'note/v1/one',revision:'checkpoint-existing',sequence:'1',deleted:false,byteLength:0,encodedState:JSON.stringify({version:1,writer:'existing-writer',generation:0,base:observed,draft:observed.content,conflict:false})};sequence=1;},
+    seedClean(){const encodedState=JSON.stringify({version:1,writer:'existing-writer',generation:0,base:observed,draft:observed.content,conflict:false});head={version:1,...scope,key:'note/v1/one',revision:'11111111-1111-1111-1111-111111111111',sequence:'1',deleted:false,byteLength:Buffer.byteLength(encodedState),encodedState};sequence=1;},
     retainOperation(){
       const raw=JSON.parse(head!.encodedState!),plan={version:1,...scope,entryId:'one',operationId:'operation-one',encodedPlan:'opaque retained plan'};
       const ref={...scope,entryId:'one',operationId:plan.operationId,token:'retained-intent'};
-      raw.operation={plan,ref,content:observed.content};head={...head!,encodedState:JSON.stringify(raw)};return ref;
+      raw.operation={plan,ref,content:observed.content};const encodedState=JSON.stringify(raw);head={...head!,encodedState,byteLength:Buffer.byteLength(encodedState)};return ref;
     },
     advanceSource(){observed={...observed,revision:'source-2',content:'External body'};},
     loseReply(){loseReply=true;},failBeforeCommit(){failBeforeCommit=true;},hold(value:Promise<void>){gate=value;},
-    changeOwner(){head={...head!,revision:'foreign-revision'};},
+    changeOwner(){head={...head!,revision:'22222222-2222-2222-2222-222222222222'};},
   };
 }
 
@@ -64,7 +64,7 @@ test('preserving the same dirty generation joins its confirmed recovery state',a
   await f.state.preserveDraft();await f.state.preserveDraft();
   assert.equal(f.calls.length,1);assert.equal(JSON.parse(f.head!.encodedState!).draft,'Unsaved body');
   f.state.update('Unsaved body');await f.state.preserveDraft();
-  assert.equal(f.calls.length,2,'a new generation is a distinct recovery state even with equal text');
+  assert.equal(f.calls.length,1,'unchanged delivery must not mint another edit generation or checkpoint');
 });
 
 for(const outcome of ['lost-reply','not-committed'] as const)test(`uncertain ${outcome} retries its exact checkpoint identity without an extra successor`,async()=>{

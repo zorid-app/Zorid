@@ -149,7 +149,7 @@ test('malformed saved conditional input or an explicit lost plan fails closed be
   for(const corrupt of [(op:any)=>{op.input.conditionalSavedSource.logicalWitness.revision='other';},(op:any)=>{op.plan=null;}]){
     const f=await fixture(),capture=(await f.buffer.captureConditionalSavedSource(witness))!;
     f.setPlan(async()=>{throw new Error('planning unavailable');});f.buffer.update('retained original',{conditionalSavedSource:capture});await assert.rejects(f.buffer.flush());
-    const checkpoint=f.checkpoints.get('note/v1/entry')!,saved=JSON.parse(checkpoint.encodedState!);corrupt(saved.operation);checkpoint.encodedState=JSON.stringify(saved);
+    const checkpoint=f.checkpoints.get('note/v1/entry')!,saved=JSON.parse(checkpoint.encodedState!);corrupt(saved.operation);const encodedState=JSON.stringify(saved);f.checkpoints.set(checkpoint.key,{...checkpoint,encodedState,byteLength:Buffer.byteLength(encodedState)});
     await assert.rejects(f.reopen(),/invalid saved/);assert.equal(f.planned.length,1);assert.equal(f.prepared.length,0);
   }
 });
@@ -192,7 +192,7 @@ test('retained conditional input must match its saved baseline before any provid
   for(const corrupt of [(op:any)=>{op.input.expectedContent='Invented baseline';},(op:any)=>{op.input.path='Elsewhere.md';op.input.conditionalSavedSource.logicalWitness.path='Elsewhere.md';},(op:any)=>{op.input.expectedRevision='other';op.input.conditionalSavedSource.logicalWitness.revision='other';}]){
     const f=await fixture(),capture=(await f.buffer.captureConditionalSavedSource(witness))!;
     f.setPlan(async()=>{throw new Error('planning reply lost');});f.buffer.update('retained draft',{conditionalSavedSource:capture});await assert.rejects(f.buffer.flush());
-    const checkpoint=f.checkpoints.get('note/v1/entry')!,saved=JSON.parse(checkpoint.encodedState!);corrupt(saved.operation);checkpoint.encodedState=JSON.stringify(saved);
+    const checkpoint=f.checkpoints.get('note/v1/entry')!,saved=JSON.parse(checkpoint.encodedState!);corrupt(saved.operation);const encodedState=JSON.stringify(saved);f.checkpoints.set(checkpoint.key,{...checkpoint,encodedState,byteLength:Buffer.byteLength(encodedState)});
     await assert.rejects(f.reopen(),/retained baseline/);assert.equal(f.planned.length,1);assert.equal(f.prepared.length,0);
   }
 });
