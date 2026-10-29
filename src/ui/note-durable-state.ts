@@ -160,6 +160,9 @@ export class DurableNoteState {
     this.state!.draft=text;this.state!.generation++;void this.queue(()=>this.persist()).catch(()=>{});
   }
   flush(validate:()=>void):Promise<void>{return this.queue(async()=>{
+    // A retained uncertain checkpoint must settle under its original identity
+    // before a recovered admission may plan any new source mutation.
+    if(this.uncertain)await this.persist();
     if(this.state!.operation)await this.resume(validate);
     if(this.state!.conflict)throw failure('file advanced or write rejected; draft preserved');
     while(this.text!==this.base.content){

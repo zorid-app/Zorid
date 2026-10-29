@@ -12,9 +12,11 @@ import { decodeTextCreateReceipt } from '../core/text-create.ts';
 import { normalizePath } from '../core/types.ts';
 import type { TextCreateReceipt } from '../core/types.ts';
 import type { VaultAdapter } from '../core/types';
-import type { DesktopBridge, DesktopVault, DesktopReconciliation } from './bridge';
+import type { DesktopBridge, DesktopVault, DesktopReconciliation, DesktopDurableContext } from './bridge';
 
 export interface PlatformVault {
+  /** Recovery preserves retained durable write identities; derived owners are rebuilt. */
+  readonly recovery?:{subscribe(listener:()=>void):()=>void;recover():Promise<PlatformVault>};
   readonly recoveryHistory?:import('./bridge').RecoveryHistory;
   readonly workBlocks?:import('../core/workblocks.ts').WorkBlockService;
   readonly documentSemantics?:DocumentService;
@@ -38,7 +40,7 @@ export interface PlatformVault {
   /** Reveal ready content or actionable UI; password/error never acknowledge a successful open. */
   presentationSettled?(input:{path:string;entryId:string;state:'ready'|'password'|'error'}):Promise<void>;
   mobileLifecycle?:import('./mobile-native.ts').MobileLifecycle; adapter: VaultAdapter; label: string; id: string; /** Await final consumer checkpoint/flush before release. */ release?(): Promise<void>; recoverCommands?():Promise<boolean>; legacyExport?():void; reconciliation?: {getStatus():DesktopReconciliation|null;subscribe(listener:(status:DesktopReconciliation)=>void):()=>void;retry():Promise<void>} }
-async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<PlatformVault> {
+async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recoveredBinding?:DesktopDurableContext): Promise<PlatformVault> {
   let reconciliationStatus=info.reconciliation??null;
   const reconciliation=info.reconciliation&&bridge.retryReconciliation?{
     getStatus:()=>reconciliationStatus,
@@ -53,9 +55,10 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
     },
     retry:async()=>{reconciliationStatus=await bridge.retryReconciliation!(info.path);},
   }:undefined;
-  const binding = await bridge.getDurableContext?.(info.path);
+  const binding = recoveredBinding??await bridge.getDurableContext?.(info.path);
   let durableWrites: DurableWrites | undefined;
   let release: (() => Promise<void>) | undefined;
+  let recovery:PlatformVault['recovery'];
   let createText: ((path:string,content:string)=>Promise<void>) | undefined;
   let commands:Partial<VaultAdapter>={};
   let binary:ReturnType<typeof createDesktopBinaryStreams>|undefined;
@@ -68,7 +71,26 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
     if (!bridge.durableInvoke || !bridge.releaseDurableContext || !binding.admissionId || !binding.scope?.vaultId || !binding.scope.clientId) throw new Error('Incomplete durable desktop capability');
     const invoke = bridge.durableInvoke.bind(bridge), releaseContext = bridge.releaseDurableContext.bind(bridge);
     const admissionId = binding.admissionId, scope = Object.freeze({...binding.scope});
-    let released = false;
+    let released = false,releasePending:Promise<void>|undefined,recovering:Promise<PlatformVault>|undefined,recovered:PlatformVault|undefined;
+    let durableEpoch=0,retainedTarget:DurableWrites,recoveryNeeded=false,recoveryStop:(()=>void)|undefined;
+    const recoveryListeners=new Set<()=>void>();
+    const stopRecoveryReceiver=()=>{const stop=recoveryStop;recoveryStop=undefined;try{stop?.();}catch{/* A retired receiver cannot undo the backend acknowledgment. */}};
+    const unavailable=(code:string,message:string)=>Object.assign(new Error(message),{code,source:'host',commitUncertain:true});
+    const retainedCall=async<T>(method:keyof DurableWrites,args:unknown[]):Promise<T>=>{
+      if(recovering)throw unavailable('desktop_recovery_pending','The desktop context is being recovered.');
+      const target=retainedTarget,epoch=durableEpoch,action=target[method];
+      if(typeof action!=='function')throw unavailable('unsupported_host_capability','The recovered capability is unavailable.');
+      const value=await(action as (...args:unknown[])=>Promise<T>).apply(target,args);
+      if(epoch!==durableEpoch)throw unavailable('desktop_recovery_stale_reply','The desktop context changed while this request was pending.');
+      return value;
+    };
+    const retainedCheckpoint=async<T>(method:keyof Omit<DurableWrites['checkpoints'],'scope'>,args:unknown[]):Promise<T>=>{
+      if(recovering)throw unavailable('desktop_recovery_pending','The desktop context is being recovered.');
+      const target=retainedTarget,epoch=durableEpoch;
+      const value=await(target.checkpoints[method] as (...args:unknown[])=>Promise<T>).apply(target.checkpoints,args);
+      if(epoch!==durableEpoch)throw unavailable('desktop_recovery_stale_reply','The desktop context changed while this request was pending.');
+      return value;
+    };
     const call = <T>(method: string, ...args: unknown[]): Promise<T> => {
       if (released) return Promise.reject(Object.assign(new Error('Durable desktop context released'), {code:'client_not_admitted',source:'host'}));
       return invoke(info.path, admissionId, method, args) as Promise<T>;
@@ -117,7 +139,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
       mkdir:path=>execute({kind:'mkdir',path}),rename:(path,destination,expectedIdentity)=>execute({kind:'move',path,destination,...(expectedIdentity!==undefined?{expectedEntryId:expectedIdentity.entryId,expectedRevision:expectedIdentity.revision}:{})}),
       trash:path=>execute({kind:'trash',path}),remove:(path,force)=>execute({kind:'delete',path,force}),
     };
-    durableWrites = Object.freeze<DurableWrites>({
+    const originalWrites = Object.freeze<DurableWrites>({
       ...createDesktopConditionalSavedSources(async(method,input)=>{const value=await call(method,input);if(released)throw Object.assign(new Error('Durable desktop context released'),{code:'client_not_admitted',source:'host'});return value;},binding.conditionalSavedSourceAvailable===true),
       readText: path => call('readText',path), readTextById: id => call('readTextById',id),
       ...(binding.databases===true?{composeNote:(input:import('../core/durable-writes.ts').DurableNoteCompositionInput)=>call<import('../core/durable-writes.ts').DurableNoteComposition|null>('composeNote',input)}:{}),
@@ -127,6 +149,15 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
       checkpoints: Object.freeze<DurableWrites['checkpoints']>({scope,load: key => call('checkpoints.load',key),
         compareAndSwap: change => call('checkpoints.compareAndSwap',change),
         list: options => call('checkpoints.list',options), changes: options => call('checkpoints.changes',options)}),
+    });
+    retainedTarget=originalWrites;
+    durableWrites=Object.freeze<DurableWrites>({
+      readText:path=>retainedCall('readText',[path]),readTextById:id=>retainedCall('readTextById',[id]),
+      ...(originalWrites.composeNote?{composeNote:(input:import('../core/durable-writes.ts').DurableNoteCompositionInput)=>retainedCall<import('../core/durable-writes.ts').DurableNoteComposition|null>('composeNote',[input])}:{}),
+      planWrite:input=>retainedCall('planWrite',[input]),prepare:plan=>retainedCall('prepare',[plan]),commit:ref=>retainedCall('commit',[ref]),query:ref=>retainedCall('query',[ref]),
+      listUnacknowledged:()=>retainedCall('listUnacknowledged',[]),acknowledge:(ref,outcome)=>retainedCall('acknowledge',[ref,outcome]),
+      captureSavedSource:input=>retainedCall('captureSavedSource',[input]),releaseSavedSource:input=>retainedCall('releaseSavedSource',[input]),
+      checkpoints:Object.freeze<DurableWrites['checkpoints']>({scope,load:key=>retainedCheckpoint('load',[key]),compareAndSwap:change=>retainedCheckpoint('compareAndSwap',[change]),list:options=>retainedCheckpoint('list',[options]),changes:options=>retainedCheckpoint('changes',[options])}),
     });
     let binaryDrained=false,documentsDrained=false,draftsDrained=false;
     if(binding.databases===true)databases=createDatabaseService(request=>call('databaseCommand',request));
@@ -147,10 +178,61 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
     }
     if(binding.documentSemantics)documents=createDesktopDocumentService(request=>call('documentCommand',request),documentRuntime?.transport,{metadataRowsAvailable:binding.metadataRowsAvailable===true,propertyTargetsAvailable:binding.propertyTargetsAvailable===true,basePreviewAvailable:binding.basePreviewAvailable===true,draftsAvailable:binding.draftsAvailable===true,drafts:drafts?.transport});
     if(binding.binaryLimits)binary=createDesktopBinaryStreams({scope,checkpoints:durableWrites.checkpoints,limits:binding.binaryLimits,assertActive:()=>{if(released||binaryDrained)throw new Error('Desktop binary context released');},invoke:bytes=>call<Uint8Array>('binaryCommand',bytes)});
-    release = async () => { if (!released) { if(drafts&&!draftsDrained){await drafts.release();draftsDrained=true;} if(workBlocks)await workBlocks.release(); if(binary&&!binaryDrained){await scheduleBinaryTransfer(binary.streams,()=>binary!.release());binaryDrained=true;} if(documents&&!documentsDrained){await documents.release();documentsDrained=true;} await releaseContext(info.path, admissionId); documentRuntime?.retire();released = true; } };
+    const recoveryBridge=bridge as DesktopBridge&{recoverDurableContext?:(root:string,priorAdmissionId:string)=>Promise<DesktopDurableContext>};
+    if(recoveryBridge.recoverDurableContext){
+      const markRetired=()=>{if(released||recovered)return;recoveryNeeded=true;for(const listener of [...recoveryListeners])try{listener();}catch{/* One view cannot block recovery delivery. */}};
+      recoveryStop=bridge.onDocumentRuntimeNudge?.(info.path,admissionId,()=>{},markRetired);
+      recovery=Object.freeze({
+        subscribe(listener:()=>void){
+          if(typeof listener!=='function')throw new Error('Recovery listener required');
+          if(released)return()=>{};
+          recoveryListeners.add(listener);
+          if(recoveryNeeded)queueMicrotask(()=>{if(!released&&recoveryListeners.has(listener))try{listener();}catch{/* Observation cannot undo recovery. */}});
+          return()=>{recoveryListeners.delete(listener);};
+        },
+        recover(){
+          if(recovered)return Promise.resolve(recovered);if(recovering)return recovering;
+          if(released)return Promise.reject(unavailable('client_not_admitted','This desktop context has already been released.'));
+          durableEpoch++;
+          const repair=(async()=>{
+            // A concurrent ordinary release finishes under its original identity.
+            if(releasePending)try{await releasePending;}catch{/* Exact backend recovery adjudicates an uncertain release. */}
+            const next=await recoveryBridge.recoverDurableContext!(info.path,admissionId);
+            if(!next||typeof next.admissionId!=='string'||!next.admissionId||next.admissionId===admissionId||next.admissionId.length>128
+              ||!next.scope||next.scope.vaultId!==scope.vaultId||next.scope.clientId!==scope.clientId
+              ||Object.keys(next.scope).length!==2)throw unavailable('durable_recovery_scope_changed','The recovered desktop context has another identity or scope.');
+            for(const capability of ['conditionalSavedSourceAvailable','databases','documentSemantics','documentMaintenance','metadataRowsAvailable','propertyTargetsAvailable','basePreviewAvailable','draftsAvailable'] as const)
+              if(binding[capability]===true&&next[capability]!==true)throw unavailable('durable_recovery_scope_changed','The recovered desktop context is missing an admitted capability.');
+            const fresh=await desktopVault(bridge,info,next),target=fresh.adapter.durableWrites;
+            if(!target||target.checkpoints.scope.vaultId!==scope.vaultId||target.checkpoints.scope.clientId!==scope.clientId)throw unavailable('durable_recovery_scope_changed','The recovered desktop context has another durable scope.');
+            // Only the source-write proxy crosses this boundary. Native recovery
+            // positively retired old derived owners; their closures never adopt
+            // the replacement admission or its pin/runtime identifiers.
+            retainedTarget=target;recovered=fresh;released=true;recoveryNeeded=false;
+            stopRecoveryReceiver();recoveryListeners.clear();
+            documentRuntime?.retire();drafts?.retire();
+            return fresh;
+          })();
+          recovering=repair;
+          void repair.finally(()=>{if(recovering===repair)recovering=undefined;}).catch(()=>{});
+          return repair;
+        },
+      });
+    }
+    release=async()=>{
+      if(recovering){await recovering;return;}if(released)return;if(releasePending)return releasePending;
+      const retiring=(async()=>{
+        if(drafts&&!draftsDrained){await drafts.release();draftsDrained=true;}if(workBlocks)await workBlocks.release();
+        if(binary&&!binaryDrained){await scheduleBinaryTransfer(binary.streams,()=>binary!.release());binaryDrained=true;}
+        if(documents&&!documentsDrained){await documents.release();documentsDrained=true;}
+        await releaseContext(info.path,admissionId);released=true;durableEpoch++;stopRecoveryReceiver();recoveryListeners.clear();documentRuntime?.retire();
+      })();releasePending=retiring;
+      try{await retiring;}finally{if(releasePending===retiring)releasePending=undefined;}
+    };
   }
   return {
     ...(release ? {release} : {}),
+    ...(recovery?{recovery}:{}),
     ...(bridge.recoveryList&&bridge.recoveryRead?{recoveryHistory:{list:(entryId,options)=>bridge.recoveryList!(info.path,entryId,options),read:(entryId,snapshotId)=>bridge.recoveryRead!(info.path,entryId,snapshotId)}}:{}),
     ...(workBlocks?{workBlocks:workBlocks.service}:{}),
     ...(documents?{documentSemantics:documents.service}:{}),
