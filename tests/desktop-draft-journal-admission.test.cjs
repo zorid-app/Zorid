@@ -139,7 +139,7 @@ function heldFiles(stage){
 
 for(const stage of ['before','after'])test(`revocation denies queued storage and final publication ${stage} head-rename authorization`,{timeout:15000},async t=>{
   const held=heldFiles(stage);t.after(held.release);const f=await fixture(t,held.io);
-  const pending=f.send('compareAndSwap',[change()]),rejected=assert.rejects(pending,error=>error.code==='draft_lease_revoked');await held.entered;
+  const pending=f.send('compareAndSwap',[change()]),rejected=assert.rejects(pending,error=>error.code==='draft_lease_revoked'&&(stage!=='after'||error.commitUncertain===true));await held.entered;
   const queued=f.send('compareAndSwap',[change({entryId:'entry-two',baseline:{...change().baseline,entryId:'entry-two'}})]),queuedRejected=assert.rejects(queued,{code:'draft_lease_revoked'});
   f.manager.revoke(f.record);held.release();await rejected;await queuedRejected;
   const fresh=f.manager.attach(f.record,f.context),list=await f.send('list',[],fresh.token);
