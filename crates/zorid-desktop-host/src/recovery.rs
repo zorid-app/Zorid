@@ -146,6 +146,15 @@ mod tests {
         std::fs::write(root.path().join("Note.md"), b"current\r\n").unwrap();
         std::fs::write(root.path().join("Other.md"), b"other secret").unwrap();
         let mut host = EmbeddedHost::open_local_with_data_root(root.path(), data.path()).unwrap();
+        // This pagination fixture needs both sources admitted; startup itself
+        // intentionally performs only bounded import work.
+        for _ in 0..64 {
+            let status = host.reconciliation();
+            if status["complete"] == true { break; }
+            assert_eq!(status["work"]["pending"], true, "{status}");
+            host.refresh_local().unwrap();
+        }
+        assert_eq!(host.reconciliation()["complete"], true);
         // Explicit legacy fixture seeding preserves history-read pagination coverage.
         host.vault.snapshot_local_recovery(now_ms()).unwrap();
         let entry = host
