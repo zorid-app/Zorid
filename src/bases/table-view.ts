@@ -2,7 +2,7 @@ import { showContextMenu } from '../platform/context-menu.ts';
 import type { ContextMenuItem } from '../platform/context-menu.ts';
 import { Text, Binary, SquareCheck, Calendar, CalendarClock, List, Tags, Link, CodeXml, ListFilter, CircleDot, Star, Calculator, Trash2, Search, File, ArrowUpRight, Plus } from 'lucide';
 import type { IconNode } from 'lucide';
-import { parseBaseTableTSV } from './table-clipboard.ts';
+import { BASE_TABLE_CLIPBOARD_LIMIT, baseTableClipboardHTML, baseTableCellsFromHTML, parseBaseTableTSV } from './table-clipboard.ts';
 import type { BaseViewPatch, BaseValue } from './document.ts';
 import type { BasePropertyPresentation } from './presentation-common.ts';
 import type { BasePropertyEditorCompletionIntent } from './property-widgets.ts';
@@ -286,6 +286,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
   function showMenu(event: MouseEvent, entries: readonly TableMenuEntry[], returnFocus: HTMLElement) {
     event.preventDefault(); event.stopPropagation(); closeMenu?.(); closePicker?.();
     const token = revision, controller = new AbortController(); closeMenu = () => controller.abort();
+    const menuSelection = JSON.stringify(selectedBounds());
     const actions = new Map<string, () => void>(); let next = 0;
     const map = (entries: readonly TableMenuEntry[]): ContextMenuItem[] => entries.flatMap(entry => {
       const id = String(next++); if (entry.action) actions.set(id, entry.action);
@@ -294,7 +295,8 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
       return ['Sort A → Z', 'Edit property...', 'Edit formula...', 'Property type', 'Clear selection'].includes(entry.label) ? [{ type: 'separator' } as ContextMenuItem, item] : [item];
     });
     const rect = returnFocus.getBoundingClientRect();
-    const current = () => !destroyed && token === revision && returnFocus.isConnected && !controller.signal.aborted && !hasActiveEdits();
+    const current = () => !destroyed && token === revision && returnFocus.isConnected && !controller.signal.aborted && !hasActiveEdits()
+      && menuSelection === JSON.stringify(selectedBounds());
     void showContextMenu({ clientX: event.clientX || rect.left, clientY: event.clientY || rect.bottom, preventDefault() {}, stopPropagation() {} }, map(entries), { document: doc, signal: controller.signal, isCurrent: current }).then(id => {
       if (!current() || id === null) return; closeMenu = undefined; actions.get(id)?.();
     }).catch(report);
@@ -803,8 +805,8 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
         return;
       }
       showMenu(event, [
-        { label: 'Copy', action: () => { void copySelection(); } },
-        { label: 'Paste', disabled: !options.editProperties || !win?.navigator.clipboard?.readText, action: () => { void pasteFromClipboard(); } },
+        { label: 'Copy', disabled: !canWriteClipboard(), action: () => { void copySelection(); } },
+        { label: 'Paste', disabled: !options.editProperties || !canReadClipboard(), action: () => { void pasteFromClipboard(); } },
         { label: 'Clear selection', disabled: !options.editProperties, action: () => { void clearSelection(); } },
         { label: 'Delete', disabled: !options.deleteFiles, action: () => { const rows = result.groups[bounds.group].rows.slice(bounds.top, bounds.bottom + 1); void options.deleteFiles?.(rows).catch(report); } },
         { label: 'Select row', action: () => { range = { ...bounds, start: 0, end: result.properties.length - 1 }; paintRange(); } },
@@ -946,34 +948,77 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
       const saved = type === 'note' ? editableRaw(row, property) : undefined;
       return { type, ...(saved === undefined ? {} : { data: rawProperty(saved) }) };
     })));
+    formats['text/html'] = baseTableClipboardHTML(doc, header, rows, formats['obsidian/bases-cells']);
     return formats;
   }
-  function textOwnsClipboard(event: Event): boolean {
+  function textOwnsClipboard(event: Pick<Event, 'target'>): boolean {
     const target = event.target as Element | null;
     if (target?.closest?.('input,textarea,[contenteditable="true"]')) return true;
     const selected = doc.getSelection();
     return !!selected && !selected.isCollapsed && !!selected.anchorNode && root.contains(selected.anchorNode);
   }
+  function canWriteClipboard(): boolean {
+    const Item = win?.ClipboardItem;
+    try { return typeof win?.navigator.clipboard?.write === 'function' && typeof Item === 'function'
+      && (!Item.supports || Item.supports('text/html') && Item.supports('text/plain')); }
+    catch { return false; }
+  }
+  function canReadClipboard(): boolean { return typeof win?.navigator.clipboard?.read === 'function'; }
+  function clipboardOwner(): (() => boolean) | undefined {
+    const token = revision, epoch = focusEpoch, bounds = JSON.stringify(selectedBounds()), owner = doc.activeElement;
+    if (!selectedBounds() || !owner || !body.contains(owner) || textOwnsClipboard({ target: owner })) return;
+    return () => !destroyed && token === revision && epoch === focusEpoch && owner.isConnected && doc.activeElement === owner
+      && bounds === JSON.stringify(selectedBounds()) && !hasActiveEdits();
+  }
   async function copySelection() {
-    const data = selectionClipboard(); if (!data) return;
-    try { if (!win?.navigator.clipboard?.writeText) throw new Error('Clipboard access is unavailable. Use the copy keyboard shortcut.'); await win.navigator.clipboard.writeText(data['text/plain']); }
-    catch (error) { if (!destroyed) report(error); }
+    const current = clipboardOwner(); if (!current || !canWriteClipboard()) return;
+    try {
+      const data = selectionClipboard(); if (!data || !current()) return;
+      const item = new win!.ClipboardItem({
+        'text/plain': new win!.Blob([data['text/plain']], { type: 'text/plain' }),
+        'text/html': new win!.Blob([data['text/html']], { type: 'text/html' }),
+      });
+      if (!current()) return;
+      await win!.navigator.clipboard.write([item]);
+    } catch (error) { if (current()) report(error); }
   }
   async function pasteFromClipboard() {
-    const token = revision, bounds = selectedBounds(); if (!bounds || !win?.navigator.clipboard?.readText) return;
+    const owned = clipboardOwner(); if (!owned || !canReadClipboard()) return;
+    const current = () => owned() && !propertyAdmissionBlocked();
+    const text = async (item: ClipboardItem, type: string): Promise<string | undefined> => {
+      const blob = await item.getType(type); if (!current()) return;
+      if (blob.size > BASE_TABLE_CLIPBOARD_LIMIT) throw new Error('The pasted table is too large.');
+      const value = await blob.text(); if (!current()) return;
+      if (value.length > BASE_TABLE_CLIPBOARD_LIMIT) throw new Error('The pasted table is too large.');
+      return value;
+    };
     try {
-      const text = await win.navigator.clipboard.readText();
-      if (destroyed || token !== revision || hasActiveEdits() || propertyAdmissionBlocked()) return;
-      // Keep the original selection: focus changes while clipboard permission is pending must not retarget a paste.
-      if (JSON.stringify(selectedBounds()) !== JSON.stringify(bounds)) return;
-      pasteValues({ getData: type => type === 'text/plain' ? text : '' });
-    } catch (error) { if (!destroyed && token === revision) report(error); }
+      if (!current()) return;
+      const items = await win!.navigator.clipboard.read(); if (!current()) return;
+      const item = items.find(item => item.types.includes('text/html') || item.types.includes('text/plain')); if (!item) return;
+      const formats: Record<string, string> = {};
+      if (item.types.includes('text/html')) {
+        const html = await text(item, 'text/html'); if (html === undefined || !current()) return;
+        const cells = baseTableCellsFromHTML(doc, html);
+        if (cells !== undefined) formats['obsidian/bases-cells'] = cells;
+      }
+      // Only an absent own marker permits ordinary external text semantics.
+      // A malformed own payload throws above instead of losing its raw types.
+      if (!formats['obsidian/bases-cells'] && item.types.includes('text/plain')) {
+        const plain = await text(item, 'text/plain'); if (plain === undefined || !current()) return;
+        formats['text/plain'] = plain;
+      }
+      if (!current()) return;
+      pasteValues({ getData: type => formats[type] ?? '' });
+    } catch (error) { if (current()) report(error); }
   }
   function onCopy(event: ClipboardEvent) {
     if (destroyed || event.defaultPrevented || !event.clipboardData || hasActiveEdits() || textOwnsClipboard(event)) return;
-    const formats = selectionClipboard(); if (!formats) return;
-    for (const [type, text] of Object.entries(formats)) event.clipboardData.setData(type, text);
-    event.preventDefault();
+    try {
+      const formats = selectionClipboard(); if (!formats) return;
+      for (const [type, text] of Object.entries(formats)) event.clipboardData.setData(type, text);
+      event.preventDefault();
+    } catch (error) { report(error); }
   }
   async function commitBatch(edits: readonly BaseTableEdit[]) {
     if (!edits.length || !options.editProperties || hasActiveEdits() || propertyAdmissionBlocked()) return;
@@ -1004,7 +1049,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     try {
       const bounds = selectedBounds(); if (!bounds || hasActiveEdits() || propertyAdmissionBlocked() || !options.editProperties) return;
       let rows: string[][], plainScalar: string | undefined, rawRows: { type: string; data?: unknown }[][] | undefined;
-      const cells = clipboard.getData('obsidian/bases-cells');
+      const cells = clipboard.getData('obsidian/bases-cells') || baseTableCellsFromHTML(doc, clipboard.getData('text/html'));
       if (cells) {
         if (cells.length > 8_000_000) throw new Error('The pasted table is too large.');
         const parsed: unknown = JSON.parse(cells);
