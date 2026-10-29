@@ -9,6 +9,16 @@ coordination returns to the recovery/shared-core session with the main-lane rele
 in the roadmap. Protected app/draft/install holds remain in force. UI work stays
 isolated and avoids active recovery-owned files.
 
+Follow-up: [Notion Bases fidelity](plans/notion-bases-fidelity.md), isolated
+`codex/notion-bases-fidelity` from `de72ad3f`, frozen runtime `ce974470`.
+Nineteen reviewed commits improve Table navigation/group state/typed clipboard,
+List/Board density, settings/filter summaries, creation/cancellation, property
+ordering/anchored compact editor and page-peek focus. Root408/408 focused checks,
+full TypeScript/native frontend build and final REA Electron44.9.1 component and
+10-value clipboard transfers PASS. Both owned windows exited normally.
+Whole-app save/restart, sole-owner main integration and protected-session install
+holds remain. Separate Base post-edit latency stays OPEN.
+
 ## URGENT: real-session automatic save failure — 2026-10-28
 
 
