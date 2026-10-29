@@ -3,6 +3,19 @@
 ## Execution checkpoint — shared-core coordinator
 
 
+**Scoped real-draft preservation complete; no live recovery execution yet — 2026-10-28.**
+Latest ignored private scoped export6035bytes/0600/SHAa51e9867d137d60196626b862d538312d63795d2bbef161e88085e247053c6d7
+independently metadata/hash verified; scoped-preservation-receipt.json under
+tmp/save-recovery-20261028. Live owner verifies persistent vault/client scope,
+both original uncertainCAS/revisions/state/base/text, notes unchanged and exact
+visible ProjectIdea. Other pending flags false at capture; DevTools closed,
+unpaused/no flush/retry/quit. Home text==savedText but CAS uncertain; ProjectIdea
+text!=savedbase. Never presume clean or overwrite from text comparison. Earlier
+3851/6272 exports retained/reverified. Recovery runner must revalidate freshness
+and matching scope, resume EXACT retained requests after composed review/UI gates,
+prove bytes/revisions/checkpoints before any protected closure. Install HELD.
+
+
 **Main retry/backend composed; full live-save recovery unaccepted — 2026-10-28.**
 Reviewed autoretry1c85/f7bf/8da6 -> main7f4a/8ed5/d474; reviewedbackend992c ->2a2905ed.
 Actual main137/137NoteBuffer+durable selections,53/53desktop backend,zeroSkip,

@@ -3,6 +3,33 @@
 ## URGENT: real-session automatic save failure — 2026-10-28
 
 
+**Latest scoped preservation COMPLETE — 2026-10-28.**
+`tmp/save-recovery-20261028/private/Zorid-protected-drafts-2026-10-28-scoped.json`
+is6035bytes,mode0600,SHA256
+`a51e9867d137d60196626b862d538312d63795d2bbef161e88085e247053c6d7`;
+this main owner independently verified metadata/hash and ignored status. Receipt:
+`tmp/save-recovery-20261028/scoped-preservation-receipt.json`. Live owner reports
+captured persistent vaultId/clientId matches platform identity, both exact uncertain
+CAS records +revisions/state/base/text, notes unchanged from prior copies and
+visible editor exact ProjectIdea. Earlier3851/full6272 copies remain and hashes
+were independently reverified. No private scope IDs or contents enter tracked docs.
+
+At capture, all other pending flags were false: creation/opening/newitem/sidebar
+Base/cached-pane properties/tasks/calendar/canvas/Base/embed. DevTools closed and
+app unpaused; no live flush/retry/quit. This is a capture-time witness, not authority
+to discard later typing. Before a recovery runner acts, revalidate latest pending
+state against the preserved capture and matching persistent scope.
+
+Critical distinction: Home current text equals savedText but remains dirty because
+of uncertain CAS; ProjectIdea current text differs from saved base. Neither may be
+flattened to an unconditional overwrite or presumed clean from text equality.
+Only resume exact retained CAS/intent with original identity/base guards and
+verify resulting physical bytes, revisions and retained checkpoints. Scope is now
+available for an actual matching-host recovery runner **after** review/native-UI
+acceptance gates, not authorization to run it now. Installation/normal Quit stay
+held until full live pending-state recovery and closure proof.
+
+
 **Reviewed retry/backend integrated; frontend/end-to-end still pending — 2026-10-28.**
 Main autoretry source1c85e026/f7bff9f0/8da6ebd7 composed as
 7f4a6863/8ed5fd2a/d4745094; backend reviewed992c81dd composed2a2905ed.
