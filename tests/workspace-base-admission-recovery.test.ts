@@ -100,10 +100,18 @@ test('a clean cached Base receives a fresh database service after another note r
  const mutations=f.databaseRequests.filter(call=>call.command.op==='set_entry');assert.equal(mutations.length,1);assert.equal(mutations[0].admission,'admission-2');assert.equal(f.member().values[propertyId],9);assert.equal(f.records.get('One.md')!.content,'Latest note beside the cached Base');assert.deepEqual(f.notices,[]);assert.notEqual(f.root.inert,true);
 });
 
-test('an unsubmitted Base cell draft remains mounted and cannot authorize admission replay',async t=>{
- const f=await fixture(t),old=f.workspace.platform,session=f.workspace.activePane.baseView!,input=ratingDraft(f.root,'9');f.signalRetirement();
- try{await until(()=>!!f.root.parentElement?.querySelector('.workspace-reconnect-recovery'));assert.equal(f.recoveries,0);assert.equal(f.workspace.platform,old);assert.equal(f.workspace.activePane.baseView,session);assert.equal(input.isConnected,true);assert.equal(input.value,'9');assert.equal(f.databaseRequests.filter(call=>call.command.op==='set_entry').length,0);assert.equal(f.member().values[propertyId],1);}
- finally{key(input,'Escape');const retry=[...f.root.parentElement!.querySelectorAll<HTMLButtonElement>('.workspace-reconnect-recovery button')].find(button=>button.textContent==='Reconnect notes');retry?.click();await until(()=>f.workspace.platform!==old&&!f.internal.lifecycleRecovery);}
+test('an unsubmitted Base cell automatically survives a healthy host restart without submitting its raw value',async t=>{
+ const f=await fixture(t),old=f.workspace.platform,session=f.workspace.activePane.baseView!,input=ratingDraft(f.root,'9.'),recover=gate();input.setSelectionRange(1,2,'backward');f.holdRecovery(recover.promise);f.signalRetirement();
+ try{
+  await until(()=>f.recoveries===1,'raw input must allow automatic host recovery');
+  input.dispatchEvent(new window.FocusEvent('blur'));assert.equal(f.databaseRequests.filter(call=>call.command.op==='set_entry').length,0,'freezing does not submit through blur');
+  recover.resolve();await until(()=>f.workspace.platform!==old&&!f.internal.lifecycleRecovery);
+  assert.notEqual(f.workspace.activePane.baseView,session);const fresh=f.root.querySelector<HTMLInputElement>(`[data-property="note.${propertyId}"] input`)!;assert.ok(fresh,'fresh owner restores the raw editor');assert.equal(fresh.value,'9.');assert.equal(fresh.selectionStart,1);assert.equal(fresh.selectionEnd,2);assert.equal(fresh.selectionDirection,'backward');
+  assert.equal(f.member().values[propertyId],1);assert.equal(f.databaseRequests.filter(call=>call.command.op==='set_entry').length,0);assert.deepEqual(f.notices,[]);assert.notEqual(f.root.inert,true);assert.equal(f.root.parentElement?.querySelector('.workspace-reconnect-recovery'),null);
+  input.value='77';key(input,'Enter');input.dispatchEvent(new window.FocusEvent('blur'));assert.equal(f.databaseRequests.filter(call=>call.command.op==='set_entry').length,0,'late old events cannot submit');
+  fresh.value='9';fresh.dispatchEvent(new window.Event('input',{bubbles:true}));key(fresh,'Enter');await until(()=>f.member().values[propertyId]===9);
+  const writes=f.databaseRequests.filter(call=>call.command.op==='set_entry');assert.equal(writes.length,1);assert.equal(writes[0].admission,'admission-2');assert.equal(f.applied.size,1);
+ }finally{recover.resolve();const mounted=f.root.querySelector<HTMLInputElement>('[data-base-editing] input');if(mounted)key(mounted,'Escape');}
 });
 
 test('a verified collection acknowledgment survives an old follow-up inventory failure without replaying the mutation',async t=>{
