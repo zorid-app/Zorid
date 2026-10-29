@@ -145,6 +145,24 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
   let activeViewDrag: { source: HTMLElement; from: number; version: BaseQueryResult['version']; token: string } | undefined;
   const report = (error: unknown) => { try { options.onError(error); } catch { /* Error rendering cannot mutate configuration. */ } };
   const hasDraft = () => !!panel && (panel.dirty || panel.innerDraft || panel.saving || !!panel.failure);
+  function refreshFilterSummary(next:BaseToolbarState):void {
+    const trigger=actions.querySelector<HTMLButtonElement>('[aria-label="Filter"]');if(!trigger)return;
+    // Match the filter sections' top-level rule/group count. A persisted empty
+    // group is still configured (an empty OR can hide every row).
+    const count=(source:BaseValue|undefined)=>!source?0:typeof source==='string'?1
+      :mapping(source)&&Array.isArray(Object.values(source)[0])?Math.max(1,baseFilterCount(source as FilterNode)):1;
+    const view=next.views[next.selectedIndex]??next.result.view;
+    const all=view.source===undefined?count(next.rootFilters):0,local=count(next.result.view.filters),total=all+local;
+    const description=all&&local?`${total} filters: ${all} for all views, ${local} for this view.`
+      :total?`${total} ${total===1?'filter':'filters'} for ${all?'all views':'this view'}.`:'No filters.';
+    trigger.classList.toggle('is-active',total>0);
+    trigger.setAttribute('aria-description',description);trigger.dataset.baseTooltip=`Filter: ${description}`;
+    let badge=trigger.querySelector<HTMLElement>('.bases-toolbar-filter-count');
+    if(total){
+      if(!badge){badge=doc.createElement('span');badge.className='bases-toolbar-filter-count';badge.setAttribute('aria-hidden','true');trigger.append(badge);}
+      badge.textContent=String(total);
+    }else badge?.remove();
+  }
   function selectView(index: number) {
     if (!state || destroyed || index < 0 || index >= state.views.length) return;
     const previous = state.selectedIndex;
@@ -908,6 +926,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
             own.failure = {}; footer.hidden = false; error.textContent = 'This view changed or moved while saving. Your queued changes are still here. Cancel and reopen the view before continuing.'; options.onDraftChange(); return;
           }
           state = refreshed;
+          refreshFilterSummary(refreshed);
         }
         error.textContent = ''; footer.hidden = true; attempt.acknowledge?.(); options.onDraftChange();
         if (own.dirty) submit(closeWhenSettled);
@@ -963,6 +982,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       if (!panel.rebase?.(next)) { panel.close(false); update(next); return; }
       state = next;
       updateTabs(next);
+      refreshFilterSummary(next);
       return;
     }
     const focusedLabel = actions.contains(doc.activeElement) ? doc.activeElement?.getAttribute('aria-label') : panel?.node.contains(doc.activeElement) ? panel.trigger.getAttribute('aria-label') : undefined;
@@ -976,9 +996,10 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       const node = button(doc, '', () => open(name, node), name); node.className = 'bases-toolbar-action'; node.dataset.baseTooltip = name; node.setAttribute('aria-haspopup','dialog');
       const label = doc.createElement('span'); label.className = 'bases-toolbar-label'; label.textContent = name;
       node.append(icon(glyph,16,doc),label);
-      if (name === 'Filter' && next.result.view.filters !== undefined || name === 'Sort' && Array.isArray(next.result.view.sort) && next.result.view.sort.length) node.classList.add('is-active');
+      if (name === 'Sort' && Array.isArray(next.result.view.sort) && next.result.view.sort.length) node.classList.add('is-active');
       actions.append(node);
     }
+    refreshFilterSummary(next);
     if (options.onSearch) { const node = button(doc, '', () => { if (!searchRow.hidden) { closeSearch(); return; } searchRow.hidden = false; searchInput.value = state?.search ?? ''; node.classList.add('is-active'); searchInput.focus(); searchInput.select(); }, 'Search'); node.className = 'bases-toolbar-action'; node.dataset.baseTooltip = 'Search'; node.append(icon('search',16,doc)); node.classList.toggle('is-active',!searchRow.hidden); actions.append(node); }
     if (!next.readOnly) { const node = button(doc, '', () => open('View settings',node), 'Settings'); node.className = 'bases-toolbar-action bases-toolbar-settings'; node.dataset.baseTooltip = 'Settings'; node.dataset.toolbarAction='settings'; node.setAttribute('aria-haspopup','dialog'); node.append(icon('sliders-horizontal',16,doc)); actions.append(node); }
     if (!next.readOnly && options.onNew) { const node = button(doc, '', () => { try { options.preflight('new'); if (hasDraft()) throw new Error('Finish the current changes first.'); node.disabled = true; void options.onNew!().catch(report).finally(() => { if (!destroyed) node.disabled = false; }); } catch (error) { report(error); } }, 'New'); node.className = 'bases-toolbar-action bases-toolbar-new'; node.textContent='New'; actions.append(node);
