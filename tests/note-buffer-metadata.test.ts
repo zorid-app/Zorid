@@ -44,3 +44,10 @@ test('failed facts close stays retry-owned without becoming a durable save error
 test('save status listeners never receive metadata errors and actual provider retirement does not block disposal',async t=>{
   let updates=0;const {note,core}=await setup(t,{onMetadata:()=>{updates++;}}),gate=core.holdRequest();note.update('draft');note.getMetadata();await until(()=>core.events.some(e=>e.op==='request'));core.retire();gate.resolve();await note.dispose();assert.equal(note.error,null);assert.equal(core.subscriptions,0);assert.equal(core.transportSubscriptions,0);const before=updates;await new Promise(resolve=>setTimeout(resolve,5));assert.equal(updates,before);
 });
+
+test('new typing after failed facts retirement still autosaves in the retained buffer',async t=>{
+  const {note,core,adapter}=await setup(t);note.update('draft');note.getMetadata();await until(()=>note.metadataState?.status==='current');core.failRelease();core.failRelease();
+  const gate=core.holdRelease(),closing=note.dispose();await until(()=>core.events.some(e=>e.op==='release_buffer'));gate.resolve();await assert.rejects(closing);
+  t.mock.timers.enable({apis:['setTimeout']});note.update('Typing after cancelled close');t.mock.timers.tick(60_000);await new Promise<void>(resolve=>setImmediate(resolve));
+  assert.equal(await adapter.read('One.md'),'Typing after cancelled close');assert.equal(note.dirty,false);assert.equal(note.error,null);await note.dispose();
+});
