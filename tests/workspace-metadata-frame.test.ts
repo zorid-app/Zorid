@@ -76,6 +76,28 @@ test('workspace can open and edit the selected note while committed metadata is 
   page.resolve();
 });
 
+test('restored active pane becomes editable before another restored pane finishes reading',async t=>{
+  const ui=await setup(t,{wait:Promise.resolve(),entered(){}}),other=deferred<void>();
+  const read=ui.adapter.read.bind(ui.adapter);let otherEntered=false;
+  ui.adapter.read=async path=>{if(path==='Current.md'){otherEntered=true;await other.promise;}return read(path);};
+  const id='test:active-pane-priority';
+  localStorage.setItem(`zorid:workspace:${id}`,JSON.stringify({activePaneId:'selected',panes:[
+    {id:'other',active:0,tabs:[{kind:'note',path:'Current.md',mode:'live'}]},
+    {id:'selected',active:0,tabs:[{kind:'note',path:'Target.md',mode:'live'}]},
+  ]}));
+  const opening=ui.workspace.openVault({adapter:ui.adapter,id,label:'Restore priority'});
+  try{
+    await until(()=>otherEntered);
+    assert.equal(ui.workspace.activePane.id,'selected');
+    const editor=ui.workspace.activePane.editor;
+    assert.ok(editor,'the selected pane must not wait behind an unrelated note read');
+    editor.insert('\nEarly edit');
+    assert.match(ui.workspace.buffers.get('Target.md')!.text,/Early edit/);
+  }finally{other.resolve();await opening;}
+  await ui.workspace.flush();
+  assert.match(await read('Target.md'),/Early edit/);
+});
+
 test('tags and graph use one committed namespace and resolver despite unrelated live entries',async t=>{
   const ui=await setup(t),saved=frame(['Saved.md','OldTarget.md']);ui.project({status:'current',frame:saved});
   ui.workspace.vault.metadata.get=()=>assert.fail('Capable display must not mix live metadata with the frame');

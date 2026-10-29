@@ -1032,7 +1032,10 @@ export class Workspace {
     this.splitLayout!.setPanes(new Map(this.panes.map(pane=>[pane.id,pane.element])),this.sessionState.layout);
     this.activate(this.panes.find(pane=>pane.id===this.sessionState.activePaneId)??this.panes[0]);
     this.restoringLayout=false;
-    for (const pane of this.panes) await this.renderPane(pane,{flush:false});
+    // Restore the selected document before spending I/O on other split panes.
+    // Their completion must not be a prerequisite for editing this one.
+    const restorationOrder=[this.activePane,...this.panes.filter(pane=>pane!==this.activePane)];
+    for (const pane of restorationOrder) await this.renderPane(pane,{flush:false});
     if(!platform.editorOnly&&this.sessionState.rightTab==='base'&&this.sidebarBasePath)await this.openBaseSidebar(this.sidebarBasePath,{reveal:false,persist:false});
     this.subscribeVaultMetadata(next);
     if(!platform.editorOnly)this.tabDocking=createTabDocking({root:this.root,getPanes:()=>this.dockPanes(),dock:intent=>this.dockTab(intent),enabled:()=>!matchMedia('(max-width: 700px)').matches,onError:error=>notice(error instanceof Error?error.message:String(error))});
