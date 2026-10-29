@@ -3,6 +3,28 @@
 ## Execution checkpoint — shared-core coordinator
 
 
+**Explicit user Base inactive-session defect; effective3-owner split — 2026-10-28.**
+Verified screenshot-matching owned main14465 via Inspector/profile/executable/
+package/vault/slot, pending UI+exact b778 command privately captured0600/SHA b4c56be1.
+Normal Quit+TERM stuck; userauthorized ONLY exactowned forceKILL14465 afterguards.
+No owned app/helper PID remains; protected71549present/untouched. Forcedcleanup,
+not accepted normalexit. Base004nativepublicationcomplete/lostrendererACK produces
+mod-error+retry/inactive UI despitephysicalRating9; overallFAIL. MD exactCAS replay
+observed, but earlier quiet oracle excluded inert/ariahidden, so strict rerunrequired.
+Visualpredicate nowcorrected/reviewed: neither inert norariahidden hidespixels.
+Named implementation ACK effective: checkpoint_dedup session+property-widgets/
+minimaldatabase contract/tests; save_platform_rebind platformindex capturedpending/
+rejectedset_entryproxy/tests; checkpoint_review Workspace +base-embed-sessions
+narroweligibility/prepareaggregation/tests. Exact capturedcanonicalcapsule membership,
+raw/value/owner fingerprint, sameclient/store +positiveACK, publicationcomplete and
+originalwidgetsettlement beforederivedrebuild. No new IDs/doubleparse/oldderived
+retarget/conditionalproof replan. Unsupporteddrafts preserved/blocked. Root's own
+Baseworker stopped beforeedits, no conflict; main+GUI exclusive here. Reviewed
+scheduler7cb ->main272274b0, root17/17exit0/equalrelevanttree/globalrununchanged.
+No further build/GUI until coherent Basecomposition; realfreeze/apply/installheld.
+See urgentqueue/owned004 preservation+forcedcleanup receipts for exact evidence.
+
+
 **Actual GUI003 no-flash failure; narrow scheduler ownership ACK — 2026-10-28.**
 Real native CAS success +renderer ACK withheld/typed uncertain on own fixture;
 notice3003.6/3015.4ms, manualRetry0,0acceptedpasses. LaterMDbytes recovered/UIclean

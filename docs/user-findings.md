@@ -3,6 +3,72 @@
 ## URGENT: real-session automatic save failure — 2026-10-28
 
 
+**NEW direct user Base finding + effective implementation split — 2026-10-28.**
+User screenshot shows Recovery table/collection/record Rating9 and toast plus inline
+“This vault session is no longer active. Reopen the vault before making another
+change.” User explicitly requires reliable automatic Base saving; do not narrow
+the live-save scope to Markdown. Verified through existing owned Inspector, package
+hash, exact executable, userData flag/profile, vault.json, client slot and fixture:
+matching current window is disposable main14465/renderer14476, not default71549.
+Private owned pending UI +canonical submitted command/store response/physical bytes
+captured before cleanup: owned-private/fault004-pending.json,0600,3695bytes,SHA256
+b4c56be14507dbbb486db3b39e4102359b98404d188e0bb28f68b1e52066f63d.
+Exact original operationb778bd1b, typedRating9 and physical9 confirmed. Do not expose
+private capture content in tracked docs. Normal Quit/drain and SIGTERM remained
+stuck; user explicitly authorized exact-owned-process force cleanup. After identity/
+capture rechecks SIGKILL sent ONLY14465. No owned package/helper PIDs remain;
+protected default71549 remains present and untouched. Forced cleanup is NOT normal
+exit, passing smoke or authorization to close the real app. Receipts retained.
+
+Actual004: original uncertain Markdown CAS359fffc5/full body digest replayed and
+accepted on newhost14484; physical typed bytes and clean UI observed. But prior
+visual predicate excluded inert/aria-hidden, so “quiet” phase acceptance must be
+rerun with corrected strict pixel oracle. Base native set_entryb778bd1b committed
+with publicationComplete=true; rendererACK deliberately withheld, nativehostaborted.
+Base showed mod-error/status + “The collection change could not be confirmed. Keep
+your draft and retry this change rather than submitting a new one.” No exact Base
+replay/newadmission before failure; physicalRating9/body preserved. Overall004FAIL,
+Base/restart/normalexit gates unaccepted; never skip Base. Fixture owner cleanup
+frees memory while isolated source work proceeds; no real freeze/apply/install.
+
+Effective named production ownership ACK (no further permission needed inside
+these scopes; coordinate common API before changes):
+- checkpoint_dedup: src/bases/session.ts +src/bases/property-widgets.ts narrow
+  retained-edit retry/ack handle, minimal src/core/databases.ts contract if needed,
+  focused tests; .worktrees/base-session-recovery. Fingerprint unchanged original
+  raw/value/owner; parse once, retry EXACT captured command. Retain already-rejected
+  eligible commands as well as in-flight; new post-retire IDs stay revoked.
+- save_platform_rebind: src/platform/index.ts exact captured pending/rejected
+  set_entry proxy +separate focused tests. Positive same-store/client admission
+  before exact replay; containsCapturedSetEntry(command) must prove actual captured
+  canonical capsule membership. Old read/query/runtime/conditional handles revoked.
+- checkpoint_review: src/ui/workspace.ts eligibility/coordination/scheduler and
+  src/ui/base-embed-sessions.ts narrow canRecoverAdmission/prepareAdmissionRecovery
+  aggregation +focused mounted Base integration tests. Allow ONLY eligible submitted
+  property commands; raw/schema/New/Restore/conditional/other feature drafts remain
+  preserved and blocked. Known publicationComplete=false cannot settle/rebuild.
+Root's competing notion_table_interactions worker stopped BEFORE source/type/test
+edits; created only clean codex/save-base-property-recovery checkout434923e1, no
+commits/checks/apps, now independent-review-only. Root keeps sole main +nativeGUI.
+No Rust or broader source-framework changes. Store checks exact operationId+request
+before revisions; never regenerate IDs/body/revisions from fresh widget/schema.
+Retire/rebuild only after original command/widget promises safely settle, avoiding
+old loadDefinitions/controller refresh through dead service. Root independently
+mounted Base RED proves apply9 once +heldACK+retirement yields0recovery attempts.
+
+Mandatory oracle correction reviewed: inert and aria-hidden disable interaction/
+accessibility, not pixel painting. Neither suppresses visible-error observation.
+True hidden/layout/display/visibility checks remain, noFlash/Basefreeze categories
+unchanged. Current rendererSHA33bf6fbdfe60c1b959bbad8fbeb6852c8a0a519efef06a5f0d03d48cac1017ae,
+README3c26fd77; earlier quiet evidence limited, no receipt upgraded. Sanitized
+trusted-input and driver-action evidence plus bounded notice text remain enabled.
+
+Scheduler reviewed7cb59d8d -> main272274b0 after root17/17 terminal exit0; exact
+relevant runtime/test tree equality verified, global run unchanged. No new GUI or
+build while Base source composition/review pending. Real Home/ProjectIdea copies,
+latest scoped state and explicit install/real-apply hold remain unchanged.
+
+
 **Actual lost-renderer-ACK GUI failure; refresh-scheduler owner ACK — 2026-10-28.**
 Attempt003 on reviewed packageee4d297d/ASARee2efe86/hosta1c actually committed native
 CAS, validated native response and withheld renderer ACK before typed uncertain
