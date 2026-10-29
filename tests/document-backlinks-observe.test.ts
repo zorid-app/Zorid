@@ -29,7 +29,7 @@ function fixture(){
         backlinks:async()=>{calls.push('backlinks');if(readError)throw new DocumentSemanticsError(readError);return page(generation,selected,covered);},metadata:unused,search:unused,base:unused};
       pins.push(owner);return owner.pin;
     },maintenance:{observeAndSubscribe:unexpected('observeAndSubscribe'),requestFreshness(){calls.push('requestFreshness');throw Error('Unexpected freshness demand');}}};
-  return{service,calls,pins,publish(generation:string,rows:readonly DocumentEntry[]){current=generation;sources=rows;},incomplete(){coverage=false;sources=[];},empty(){sources=[];},failOpen(code:string){openError=code;},failRead(code:string){readError=code;},holdOpen(gate:()=>Promise<void>){opening=gate;},holdClose(gate:()=>Promise<void>){closing=gate;}};
+  return{service,calls,pins,publish(generation:string,rows:readonly DocumentEntry[]){current=generation;sources=rows;},incomplete(){coverage=false;sources=[];},empty(){sources=[];},failOpen(code:string){openError=code;},failRead(code?:string){readError=code;},holdOpen(gate:()=>Promise<void>){opening=gate;},holdClose(gate:()=>Promise<void>){closing=gate;}};
 }
 function mount(t:TestContext,f:ReturnType<typeof fixture>,options:Partial<DocumentBacklinksOptions>={}){
   const dom=new JSDOM('<main></main>'),container=dom.window.document.querySelector<HTMLElement>('main')!;
@@ -75,4 +75,22 @@ test('a cancelled passive open closes its late pin without installing stale rows
   const f=fixture();Object.assign(f.service,{maintenance:undefined});let release!:()=>void,entered!:()=>void;const started=new Promise<void>(resolve=>{entered=resolve;}),gate=new Promise<void>(resolve=>{release=resolve;});
   f.holdOpen(async()=>{entered();await gate;});const ui=mount(t,f),ready=ui.view.ready;await started;ui.view.dispose();release();await ready;
   assert.deepEqual(f.calls,['open','close']);assert.equal(f.pins[0].closes,1);assert.equal(ui.container.children.length,0);
+});
+for(const mismatch of ['scope','snapshot'] as const)test(`passive ${mismatch} mismatch rejects the report without installing its rows`,async t=>{
+  const f=fixture(),open=f.service.open;
+  f.service.open=async()=>{const pin=await open();return mismatch==='scope'?{...pin,source:{...source,localStoreId:'foreign'}}:{...pin,backlinks:async()=>page('2')};};
+  const ui=mount(t,f);await ui.view.ready;assert.equal(ui.view.element.dataset.state,'unavailable');assert.equal(ui.container.querySelector('[data-entry-id]'),null);
+  assert.equal(f.pins[0].closes,1);assert.deepEqual(maintenanceCalls(f.calls),[]);
+});
+test('passive refresh retries its retained close before another pin can open',async t=>{
+  const f=fixture();let attempts=0;f.holdClose(async()=>{if(++attempts===1)throw Error('Transient close failure');});
+  const ui=mount(t,f);await ui.view.ready;assert.equal(ui.view.element.dataset.state,'unavailable');
+  await ui.view.refresh();assert.deepEqual(f.calls,['open','backlinks','close','close','open','backlinks','close']);assert.equal(ui.view.element.dataset.state,'historical');assert.deepEqual(f.pins.map(owner=>owner.closes),[2,1]);
+});
+test('only an explicit corruption rebuild action overrides passive observation with foreground maintenance',async t=>{
+  const f=fixture();Object.assign(f.service,{maintenance:undefined});f.failRead('rebuild_required');
+  const ui=mount(t,f);await ui.view.ready;assert.deepEqual(maintenanceCalls(f.calls),[]);
+  f.failRead();f.service.rebuild=async()=>{f.calls.push('rebuild');};
+  const rebuild=[...ui.container.querySelectorAll('button')].find(button=>button.textContent==='Rebuild index');assert.ok(rebuild);rebuild.click();await ui.view.ready;
+  assert.equal(f.calls.filter(call=>call==='rebuild').length,1);assert.equal(ui.view.element.dataset.state,'ready');
 });

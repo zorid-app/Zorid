@@ -1,7 +1,7 @@
 import { catchUpDocumentIndex, DocumentSemanticsError } from '../core/document-semantics.ts';
 import type {
   DocumentCursor, DocumentEntry, DocumentPin, DocumentRelationshipPage,
-  DocumentPage, DocumentService, DocumentSnapshotId, DocumentSourceId,
+  DocumentPage, DocumentService, DocumentSnapshotId, DocumentSourceId, DocumentStatus,
 } from '../core/document-semantics.ts';
 import { icon } from './icons.ts';
 
@@ -14,6 +14,9 @@ export interface DocumentBacklinksOptions {
   /** Must check active pane/tab, target ID/path and vault instance together. */
   readonly isCurrent: (vaultIdentity: unknown, target: DocumentBacklinksTarget | null) => boolean;
   readonly onOpenStableEntry: (id: string, oldPath: string) => void | Promise<void>;
+  /** Observe reads a saved pin without index demand or a current-source claim.
+   * An explicit Rebuild index action remains a foreground request. */
+  readonly freshness?: 'request' | 'observe';
   readonly maxPumps?: number;
   readonly maxRestarts?: number;
   readonly maxPages?: number;
@@ -128,16 +131,16 @@ export function mountDocumentBacklinks(container: HTMLElement, options: Document
       throw new DocumentSemanticsError('document_invalid_response');
     }
   };
-  const failed = (run: Run, error: unknown): void => {
+  const failed = (run: Run, error: unknown, requesting: boolean): void => {
     if (!live(run)) return;
     const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
     if (code === 'rebuild_required' || code === 'index_rebuild_required') {
       show(run, 'unavailable', 'The note index needs to be rebuilt before linked mentions are available.', false, true);
       action(run, 'Rebuild index', true); return;
     }
-    if (code === 'stale_source' || code === 'stale_index' || code === 'index_not_ready' || code === 'document_request_cancelled') {
-      show(run, 'indexing', 'The note index is still updating. Continue indexing to refresh linked mentions.');
-      action(run, 'Continue indexing'); return;
+    if (code === 'stale_source' || code === 'stale_index' || code === 'index_not_ready' || code === 'document_request_cancelled' || !requesting && code === 'not_ready') {
+      show(run, 'indexing', requesting ? 'The note index is still updating. Continue indexing to refresh linked mentions.' : 'The note index is still updating. Linked mentions will refresh when a saved snapshot is available.');
+      if (requesting) action(run, 'Continue indexing'); return;
     }
     const message = code === 'snapshot_expired'
       ? 'Linked mentions changed while loading. Refresh to load a saved snapshot.'
@@ -147,6 +150,7 @@ export function mountDocumentBacklinks(container: HTMLElement, options: Document
     show(run, 'unavailable', message, false, true); action(run, 'Refresh linked mentions');
   };
   async function perform(run: Run, rebuild: boolean): Promise<void> {
+    const requesting = options.freshness !== 'observe' || rebuild;
     try {
       if (!live(run)) return;
       if (!run.target) { show(run, 'unavailable', 'Open a saved note to see linked mentions.'); return; }
@@ -154,24 +158,27 @@ export function mountDocumentBacklinks(container: HTMLElement, options: Document
       // Retry failed retired closes before acquiring another quota-limited pin.
       await Promise.all([...runs].filter(previous => previous !== run).map(closeOwned));
       if (!live(run)) return;
-      const maintained = await catchUpDocumentIndex(service, {
-        isCurrent: () => live(run), signal: run.freshness.signal, rebuild, maxPumps: options.maxPumps, maxRestarts: options.maxRestarts,
-        onProgress(progress) {
-          const message = progress.phase === 'rebuild' ? 'Rebuilding the note index…'
-            : progress.phase === 'indexing' && progress.prepared !== undefined && progress.total !== undefined
-              ? `Indexing saved notes… ${progress.prepared} of ${progress.total}` : 'Updating the note index…';
-          show(run, 'indexing', message, true);
-        },
-      });
-      if (!live(run)) return;
-      if (maintained.rebuildRequired) throw new DocumentSemanticsError('rebuild_required');
-      if (!maintained.snapshot) {
-        show(run, 'indexing', 'The note index is still updating. Continue indexing to load linked mentions.');
-        action(run, 'Continue indexing'); return;
+      let maintained: DocumentStatus | undefined;
+      if (requesting) {
+        maintained = await catchUpDocumentIndex(service, {
+          isCurrent: () => live(run), signal: run.freshness.signal, rebuild, maxPumps: options.maxPumps, maxRestarts: options.maxRestarts,
+          onProgress(progress) {
+            const message = progress.phase === 'rebuild' ? 'Rebuilding the note index…'
+              : progress.phase === 'indexing' && progress.prepared !== undefined && progress.total !== undefined
+                ? `Indexing saved notes… ${progress.prepared} of ${progress.total}` : 'Updating the note index…';
+            show(run, 'indexing', message, true);
+          },
+        });
+        if (!live(run)) return;
+        if (maintained.rebuildRequired) throw new DocumentSemanticsError('rebuild_required');
+        if (!maintained.snapshot) {
+          show(run, 'indexing', 'The note index is still updating. Continue indexing to load linked mentions.');
+          action(run, 'Continue indexing'); return;
+        }
       }
       const pin = await service.open(); run.pin = pin;
       if (!live(run)) return;
-      if (pin.snapshot.localStoreId !== maintained.source.localStoreId || pin.source.localStoreId !== pin.snapshot.localStoreId) {
+      if (maintained && pin.snapshot.localStoreId !== maintained.source.localStoreId || pin.source.localStoreId !== pin.snapshot.localStoreId) {
         throw new DocumentSemanticsError('document_invalid_response');
       }
       show(run, 'loading', 'Finding linked mentions…', true);
@@ -195,6 +202,16 @@ export function mountDocumentBacklinks(container: HTMLElement, options: Document
         if (!cursor || cursors.has(cursor)) throw new DocumentSemanticsError('document_invalid_cursor');
         cursors.add(cursor);
       }
+      if (!requesting) {
+        // Coverage belongs to this pin, not to the latest source. No observation
+        // or maintenance request was made to prove currentness for a passive view.
+        const messages = ['Linked mentions from a saved snapshot. Recent changes may not be included.'];
+        if (!seen.size) messages.push('No linked notes in this saved snapshot.');
+        if (!coverageComplete) messages.push('Some saved files could not be indexed. Linked mentions may be missing.');
+        if (!scanComplete) messages.push('Some linked mentions are not shown.');
+        show(run, !scanComplete || !coverageComplete ? 'incomplete' : 'historical', messages.join(' '));
+        return;
+      }
       const observed = await service.status(); if (!live(run)) return;
       if (observed.source.localStoreId !== pin.source.localStoreId) throw new DocumentSemanticsError('document_invalid_response');
       if (observed.rebuildRequired) throw new DocumentSemanticsError('rebuild_required');
@@ -208,7 +225,7 @@ export function mountDocumentBacklinks(container: HTMLElement, options: Document
         if (lagged) action(run, 'Continue indexing');
       } else if (!seen.size) show(run, 'empty', 'No backlinks found.');
       else show(run, 'ready', `${seen.size} linked ${seen.size === 1 ? 'note' : 'notes'}.`);
-    } catch (error) { failed(run, error); }
+    } catch (error) { failed(run, error, requesting); }
     finally {
       try { await closeOwned(run); }
       catch {
