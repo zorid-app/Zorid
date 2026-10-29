@@ -33,6 +33,19 @@ export interface BasePropertyWidgetAcknowledgement {
   readonly row: BasePropertyPresentation['row'];
   readonly value?: BaseExpressionValue;
 }
+/** The exact submitted editor generation, never an unsubmitted replacement. */
+export interface BasePropertyEditRecovery {
+  readonly element: HTMLElement;
+  readonly edit: BasePropertyWidgetEdit;
+  readonly pending: boolean;
+  isCurrent(): boolean;
+  acknowledge(): boolean;
+}
+const propertyEditRecoveries=new WeakMap<HTMLElement,BasePropertyEditRecovery>();
+export function basePropertyEditRecovery(element:HTMLElement):BasePropertyEditRecovery|undefined {
+  const retained=propertyEditRecoveries.get(element);
+  return retained?.isCurrent()?retained:undefined;
+}
 export type BasePropertyEditorCompletionIntent =
   | { readonly reason: 'enter'; readonly key: 'Enter'; readonly shiftKey: boolean }
   | { readonly reason: 'tab'; readonly key: 'Tab'; readonly direction: 1 | -1 }
@@ -204,6 +217,11 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     displayValue = options.getDisplayValue?.(acceptedPresentation) ?? acceptedPresentation.value; value = options.getEditableValue?.(acceptedPresentation) ?? next; pairTargets();
     return true;
   };
+  const acceptSaved=(next:BaseExpressionValue,acknowledgement:BasePropertyWidgetAcknowledgement|void,keepOpen:boolean)=>{
+    const rebased=acknowledge(acknowledgement,next);propertyEditRecoveries.delete(element);
+    value=next;if(!acknowledgement)displayValue=next;pairTargets();
+    if(!disposed){element.classList.remove('mod-error');if(keepOpen&&rebased&&current()){draftChanged=false;mark('draft');input?.removeAttribute('aria-invalid');}else{editing=false;closePopup();draw();}}
+  };
   const commit = async (next: BaseExpressionValue, keepOpen = false, restoreFailureFocus = true, intent?: BasePropertyEditorCompletionIntent): Promise<boolean> => {
     if (!editable || !current() || pending) return false;
     const focusInput = !picker && restoreFailureFocus ? input : undefined;
@@ -226,15 +244,16 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     }
     pendingCompletionIntent = intent;
     pending = true; let accepted = false; mark('pending'); if (input) input.disabled = true;
+    const submittedPresentation=acceptedPresentation,edit={...acceptedPresentation,path:acceptedPresentation.row.path,value:next};
+    const inputState=()=>JSON.stringify([input?.value,draft.map(item=>[item.text,item.value]),[...element.querySelectorAll('input')].map(item=>[item.type,item.value,item.checked,item.indeterminate])]);
+    const submittedInput=inputState();
+    const retained:BasePropertyEditRecovery={element,edit,get pending(){return pending;},
+      isCurrent:()=>propertyEditRecoveries.get(element)===retained&&current()&&element.isConnected&&element.hasAttribute('data-base-editing')&&!composing&&acceptedPresentation===submittedPresentation&&inputState()===submittedInput,
+      acknowledge(){if(pending||!this.isCurrent())return false;pendingCompletionIntent=undefined;finishAfterPending=false;acceptSaved(next,undefined,false);return true;}};
+    propertyEditRecoveries.set(element,retained);
     try {
-      const acknowledgement = await options.commit({ ...acceptedPresentation, path: acceptedPresentation.row.path, value: next });
-      const rebased = acknowledge(acknowledgement, next);
-      value = next; if (!acknowledgement) displayValue = next; pairTargets(); accepted = true;
-      if (!disposed) {
-        element.classList.remove('mod-error');
-        if (keepOpen && rebased && current()) { draftChanged = false; mark('draft'); input?.removeAttribute('aria-invalid'); }
-        else { editing = false; closePopup(); draw(); }
-      }
+      const acknowledgement = await options.commit(edit);
+      acceptSaved(next,acknowledgement,keepOpen);accepted = true;
       return true;
     } catch (failure) { error(failure); return false; }
     finally {
@@ -293,6 +312,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   }
   function draw() {
     if (disposed) return;
+    propertyEditRecoveries.delete(element);
     disposeRich?.(); disposeRich = undefined;
     input = undefined; mark(); element.replaceChildren();
     element.classList.add('bases-metadata-value', 'metadata-property-value'); element.dataset.propertyType = type;

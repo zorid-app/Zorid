@@ -8,7 +8,7 @@ import {planCollectionEntryCreation} from '../databases/creation.ts';
 import {collectionClipboardValue} from '../databases/collection-clipboard.ts';
 import {prepareCollectionOptionCreation} from '../databases/collection-option-creation.ts';
 import type {CollectionOptionCreation} from '../databases/collection-option-creation.ts';
-import type { DatabaseCollection, DatabaseEntry, DatabaseRequest } from '../core/databases.ts';
+import type { DatabaseCollection, DatabaseEntry, DatabaseRequest, DatabaseResponse } from '../core/databases.ts';
 import { sharedBaseCoverage, sharedBasePreview, sharedBaseWitness } from './shared-query.ts';
 import { createBaseClockHost } from './clock.ts';
 import type { BaseClockHost } from './clock.ts';
@@ -34,8 +34,8 @@ import type { BaseCreationOperation } from './creation.ts';
 import { baseEditablePropertyValue, baseImageSourceValue, baseEditValue, baseGroupWriteValue } from './view-actions.ts';
 import type { BaseValue, BaseViewPatch } from './document.ts';
 import type { BasePresentationOptions, BasePropertyPresentation } from './presentation-common.ts';
-import { createBasePropertyRenderer } from './property-widgets.ts';
-import type { BasePropertyWidgetEdit, BasePropertyWidgetAcknowledgement, BasePropertyEditorCompletionIntent } from './property-widgets.ts';
+import { createBasePropertyRenderer, basePropertyEditRecovery } from './property-widgets.ts';
+import type { BasePropertyWidgetEdit, BasePropertyWidgetAcknowledgement, BasePropertyEditorCompletionIntent, BasePropertyEditRecovery } from './property-widgets.ts';
 import { baseValuesEqual, baseExpressionValue } from './expression.ts';
 import { icon } from '../ui/icons.ts';
 import { enhanceBaseSummaryEditor } from './toolbar-formula-editor.ts';
@@ -225,7 +225,11 @@ export interface BaseSessionOptions {
   /** A local draft or accepted edit finished; query refreshes alone do not emit this. */
   readonly onEditsSettled?: () => void;
   readonly onError?: (error: unknown) => void;
+  readonly canRecoverDatabaseEntry?: (request: DatabaseRequest & {op:'set_entry'}) => boolean;
+  readonly holdRecoverDatabaseEntry?: (request: DatabaseRequest & {op:'set_entry'}) => () => void;
+  readonly claimRecoverDatabaseEntry?: (request: DatabaseRequest & {op:'set_entry'}) => () => void;
 }
+export interface BaseAdmissionRecovery {settle():Promise<void>}
 export interface BaseSession {
   readonly ready: Promise<void>;
   readonly state: BaseControllerState;
@@ -238,6 +242,8 @@ export interface BaseSession {
   /** Workspace preflight: retain the mounted view while settling accepted edits. */
   flush(options?: { dismissCleanPanels?: boolean }): Promise<void>;
   hasPendingChanges(): boolean;
+  canRecoverAdmission?(): boolean;
+  prepareAdmissionRecovery?(): BaseAdmissionRecovery;
   /** Lifecycle-owned portals may be outside the session's DOM root. */
   owns?(node: Node): boolean;
   /** Retains UI/controller on failure; callers must not silently discard this rejection. */
@@ -292,6 +298,12 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   const sourceContext=()=>JSON.stringify([configurationSource(),configurationIndex(),controller.selectedViewIdentity,controller.configurationRead?.entryId,controller.configurationRead?.revision]);
   let chooser: SourceChooser | undefined, collectionEditor: CollectionEditor | undefined;
   const collectionMutations = new Map<string, DatabaseRequest>();
+  type SetEntry=DatabaseRequest & {op:'set_entry'};
+  type CollectionAttempt={signature:string;request:SetEntry;collectionId:string;widget?:BasePropertyEditRecovery;release?:()=>void;response?:DatabaseResponse};
+  const collectionAttempts=new Map<string,CollectionAttempt>();
+  let admissionRecovery:{capsule:BaseAdmissionRecovery;edits:CollectionAttempt[];settled:boolean;settling?:Promise<void>}|undefined;
+  let retireDerived!:()=>void;
+  const derivedRetirement=new Promise<void>(resolve=>{retireDerived=resolve;});
   const optionCreations = new Map<string,CollectionOptionCreation>();
   const collectionVersions = new Map<string|number,{collection:DatabaseCollection;entries:Map<string,DatabaseEntry>}>();
   let pendingCollectionCreate: DatabaseRequest | undefined;
@@ -338,6 +350,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   let definitionsLoad:{context:string;read:BaseConfigurationRead|undefined;promise:Promise<void>}|undefined;
   const publishDefinitions = () => {const presentation=collectionPresentation();if(presentation!==definitionsPresentation){definitionsPresentation=presentation;definitionsRevision++;}};
   const readDefinitions = async () => {
+    if(admissionRecovery)return;
     const source = currentViewSource(), epoch = ++collectionLoad, context=sourceContext();
     loadedSourceContext=context;loadedConfigurationRead=controller.configurationRead;deletedSourceContext=undefined;deletedConfigurationRead=undefined;
     if (source.kind === 'untyped') {
@@ -351,7 +364,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     try {
       if (!databaseService) throw new Error('Collections are unavailable in this vault.');
       const response = await databaseService.request({op:'get',collectionId:source.id});
-      if (disposed || epoch !== collectionLoad || context!==sourceContext()) return;
+      if (disposed || admissionRecovery || epoch !== collectionLoad || context!==sourceContext()) return;
       collection = response.collections.find(item=>item.id===source.id);
       collectionEntries = new Map(response.entries.map(item=>[item.entryId,item]));
       if (!collection) throw new Error('The selected collection is unavailable.');
@@ -367,7 +380,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       }
       definitions = {properties:collection.deleted?{}:collectionPropertyDefinitions(collection),diagnostics:[]}; definitionsError = undefined;
     } catch (failure) {
-      if (disposed || epoch !== collectionLoad) return;
+      if (disposed || admissionRecovery || epoch !== collectionLoad) return;
       definitions = {properties:{},diagnostics:[]}; definitionsError = failure instanceof Error ? failure.message : String(failure);
     }
     definitionsLoading = false; publishDefinitions();
@@ -391,7 +404,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   const canBeginPropertyEdit = () => propertyEditReady() && !mounted?.hasActiveEdits?.();
   const canRetryPropertyEdit = () => propertyEditReady()&&!toolbarUI.hasDraft()&&!settings.hasDraft()&&!summaryDraft&&!chooser?.hasPendingChanges()&&!collectionEditor?.hasPendingChanges();
   const alive = () => { options.validate(); if (disposed) throw new Error('This base view is closed'); };
-  const action = () => { alive(); if (closing) throw new Error('This base view is closing'); notice = undefined;actionMessage=undefined; };
+  const action = () => { alive(); if (closing) throw new Error('This base view is closing');if(admissionRecovery)throw new Error('This Base is reconnecting; its submitted edits are retained.'); notice = undefined;actionMessage=undefined; };
   const report = (error: unknown) => {
     if (!disposed) {
       actionMessage=error instanceof Error ? error.message : String(error);status.textContent = actionMessage;
@@ -409,8 +422,9 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     if (scheduled !== undefined) return;
     scheduled = setTimeout(() => {
       scheduled = undefined;
+      if(!admissionRecovery)releaseUnownedCollectionAttempts();
       if (deferred && !pending.size && !activeDraft()) { deferred = undefined; render(controller.state); }
-      if (!closing && editsWerePending && !editsPending()) { editsWerePending = false; try { options.onEditsSettled?.(); } catch (error) { report(error); } }
+      if (!closing && !admissionRecovery && editsWerePending && !editsPending()) { editsWerePending = false; try { options.onEditsSettled?.(); } catch (error) { report(error); } }
     }, 0);
   };
   const releaseCleanBuffers = () => { for (const buffer of changedBuffers) if (!buffer.dirty && !buffer.error) changedBuffers.delete(buffer); };
@@ -455,7 +469,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   });
   const settings = { hasDraft: () => false, destroy() {} };
   const filterOwnerCurrent = () => {
-    if (disposed || closing) return false;
+    if (disposed || closing || admissionRecovery) return false;
     try { options.validate(); return true; } catch { return false; }
   };
   const layoutDefaults=(patch:BaseViewPatch,existing?:BaseViewConfig):BaseViewPatch=>{
@@ -560,16 +574,85 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       const next=collectionValue(baseEditValue(edit.value));let batch=batches.get(entry.entryId);
       if(!batch){batch={entry,values:{}};batches.set(entry.entryId,batch);}batch.values[fieldId]=next;
     }
-    const completed:string[]=[];
     for(const {entry,values}of batches.values()){
       const signature=JSON.stringify([entry.entryId,version,values]);let request=collectionMutations.get(signature);
       if(!request){request={op:'set_entry',operationId:crypto.randomUUID(),entryId:entry.entryId,expectedRevision:entry.revision,expectedCollectionRevision:captured.collection.revision,values};collectionMutations.set(signature,request);}
-      const response=await databaseService.request(request),saved=response.entries.find(item=>item.entryId===entry.entryId);
+      let attempt=collectionAttempts.get(signature);
+      if(!attempt){
+        const edit=edits.find(edit=>edit.path===entry.path&&Object.keys(values).length===1&&Object.hasOwn(values,basePropertyName(edit.property)));
+        const widget=edit&&[...content.querySelectorAll<HTMLElement>('[data-base-editing]')].map(basePropertyEditRecovery).find(widget=>widget&&widget.edit.version===edit.version&&widget.edit.path===edit.path&&widget.edit.property===edit.property&&baseValuesEqual(widget.edit.value,edit.value));
+        const selected=request as SetEntry,release=options.holdRecoverDatabaseEntry?.(selected);
+        attempt={signature,request:selected,collectionId:captured.collection.id,widget,release};collectionAttempts.set(signature,attempt);
+      }
+      const response=await databaseService.request(request),saved=response.entries.find(item=>item.entryId===entry.entryId);attempt.response=response;
       if(!saved||saved.pendingProjection)throw new Error('The property is committed locally but its note still needs publication. Retry this edit.');
-      completed.push(signature);
+      if(admissionRecovery)verifyRecoveredCollectionAttempt(attempt,response);
     }
-    for(const signature of completed)collectionMutations.delete(signature);
-    await options.vault.reload();await loadDefinitions();await controller.refresh();await loadDefinitions();
+    if(admissionRecovery)return;
+    const refresh=(async()=>{
+      await options.vault.reload();if(admissionRecovery)return;
+      await loadDefinitions();if(admissionRecovery)return;
+      await controller.refresh();if(admissionRecovery)return;
+      await loadDefinitions();
+    })().catch(error=>{if(!admissionRecovery)throw error;});
+    await Promise.race([refresh,derivedRetirement]);
+  }
+  function releaseUnownedCollectionAttempts():void {
+    for(const [signature,attempt]of collectionAttempts){
+      const element=attempt.widget?.element;
+      if(element?.isConnected&&element.hasAttribute('data-base-editing')||!element&&pending.size)continue;
+      attempt.release?.();collectionAttempts.delete(signature);collectionMutations.delete(signature);
+    }
+  }
+  function verifyRecoveredCollectionAttempt(attempt:CollectionAttempt,response:DatabaseResponse):void {
+    const saved=response.entries.find(entry=>entry.entryId===attempt.request.entryId),collection=response.collections.find(collection=>collection.id===attempt.collectionId);
+    if(!saved||saved.deleted||saved.pendingProjection||!saved.fileRevision||saved.collectionId!==attempt.collectionId||!collection||collection.deleted
+      ||Object.entries(attempt.request.values).some(([field,value])=>JSON.stringify(saved.values[field])!==JSON.stringify(value)))throw new Error('The submitted collection edit is not confirmed. Its original draft is retained.');
+  }
+  function recoverableCollectionAttempts():CollectionAttempt[]|undefined {
+    try{alive();}catch{return;}
+    if(disposed||closing||!options.canRecoverDatabaseEntry||!options.claimRecoverDatabaseEntry||!options.holdRecoverDatabaseEntry
+      ||pendingCollectionRestore||pendingCollectionCreate||optionCreations.size||configurationLifecycle||controller.hasPendingViewReferences
+      ||mounted?.hasQueuedConfiguration?.()||toolbarUI.hasDraft()||settings.hasDraft()||summaryDraft||summaryHasRawDraft?.()
+      ||chooser?.hasPendingChanges()||collectionEditor?.hasPendingChanges()||creation?.status==='uncertain'
+      ||[...changedBuffers].some(buffer=>buffer.dirty||!!buffer.error))return;
+    const elements=[...content.querySelectorAll<HTMLElement>('[data-base-editing]')];
+    if(!elements.length||content.querySelector('.zorid-bases-table-input')||pending.size>elements.length)return;
+    const selected:CollectionAttempt[]=[];
+    for(const element of elements){
+      const widget=basePropertyEditRecovery(element);if(!widget)return;
+      const attempt=[...collectionAttempts.values()].find(attempt=>attempt.widget===widget&&collectionMutations.get(attempt.signature)===attempt.request);
+      if(!attempt?.release||!options.canRecoverDatabaseEntry(attempt.request))return;
+      selected.push(attempt);
+    }
+    return selected.length?selected:undefined;
+  }
+  function prepareAdmissionRecovery():BaseAdmissionRecovery {
+    if(admissionRecovery)return admissionRecovery.capsule;
+    const edits=recoverableCollectionAttempts();if(!edits)throw new Error('Unsubmitted Base changes must be retained before reconnecting.');
+    const releases:(()=>void)[]=[];
+    try{for(const edit of edits)releases.push(options.claimRecoverDatabaseEntry!(edit.request));}catch(error){for(const release of releases)release();throw error;}
+    const recovery:{capsule:BaseAdmissionRecovery;edits:CollectionAttempt[];settled:boolean;settling?:Promise<void>}={edits,settled:false,capsule:{settle(){
+      if(recovery.settled)return Promise.resolve();if(recovery.settling)return recovery.settling;
+      const settling=(async()=>{
+        alive();await Promise.allSettled([...pending]);await Promise.resolve();alive();
+        for(const attempt of edits){
+          const widget=attempt.widget!;
+          if(widget.isCurrent()){
+            if(widget.pending)throw new Error('The original collection edit is still pending.');
+            const response=await databaseService!.request(attempt.request);alive();verifyRecoveredCollectionAttempt(attempt,response);
+            if(!widget.acknowledge())throw new Error('The property draft changed while reconnecting; it is retained.');attempt.response=response;
+          }else{
+            if(widget.element.hasAttribute('data-base-editing')||!attempt.response)throw new Error('The property draft changed while reconnecting; it is retained.');
+            verifyRecoveredCollectionAttempt(attempt,attempt.response);
+          }
+        }
+        for(const attempt of edits){attempt.release?.();attempt.release=undefined;collectionAttempts.delete(attempt.signature);collectionMutations.delete(attempt.signature);}
+        for(const release of releases)release();recovery.settled=true;actionMessage=undefined;notice=undefined;renderStatus(controller.state);
+      })();recovery.settling=settling;void settling.finally(()=>{if(recovery.settling===settling)recovery.settling=undefined;}).catch(()=>{});return settling;
+    }}};
+    admissionRecovery=recovery;collectionLoad++;if(collectionRefreshTimer!==undefined){clearTimeout(collectionRefreshTimer);collectionRefreshTimer=undefined;}
+    controller.dispose();retireDerived();return recovery.capsule;
   }
   const editCollectionProperty=(edit:Parameters<typeof actions.editProperty>[0])=>editCollectionProperties([edit]);
   async function createCollectionOption(property:string,label:string,presentation:BasePropertyPresentation):Promise<void>{
@@ -918,7 +1001,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   }
 
   function render(state: BaseControllerState): void {
-    if (disposed) return;
+    if (disposed || admissionRecovery) return;
     // Status changes never replace rows or a focused local property/config draft.
     const unavailable=sourceUnavailable();unavailableCard.hidden=!unavailable;
     renderStatus(state);
@@ -1031,7 +1114,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         })}:{}),
         loadImage: options.loadThumbnail ? (source, signal, presentation) => options.loadThumbnail!({ row: presentation.row, property: presentation.property, value: baseImageSourceValue(presentation.value, source), version: presentation.version, signal }) : undefined,
         openFile: openResultFile, onError: report,
-        ...(result.view.type==='table'?{onEditorComplete:(element:HTMLElement,presentation:BasePropertyPresentation,intent:BasePropertyEditorCompletionIntent)=>mounted?.completePropertyEdit?.(element,presentation,intent)}:{}),
+        ...(result.view.type==='table'?{onEditorComplete:(element:HTMLElement,presentation:BasePropertyPresentation,intent:BasePropertyEditorCompletionIntent)=>{if(!admissionRecovery)mounted?.completePropertyEdit?.(element,presentation,intent);}}:{}),
       }),
       getSummary: (property: string, groupIndex: number | null) => {
         const active = renderingResult ?? mountedResult ?? result;
@@ -1213,6 +1296,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       if (dismissCleanPanels && summaryHasRawDraft?.()) throw new Error('Finish or cancel the summary edit before changing context');
       if (dismissCleanPanels) { mounted?.dismissCleanPanels?.(); toolbarUI.dismissCleanPanel(); settings.destroy(); destroySummaryEditor?.(); }
       if (close) {
+        for(const attempt of collectionAttempts.values())attempt.release?.();collectionAttempts.clear();collectionMutations.clear();
         closeSourceChooser();collectionEditor?.destroy();collectionEditor=undefined;if(collectionRefreshTimer!==undefined)clearTimeout(collectionRefreshTimer);
         tooltips.destroy(); toolbarUI.destroy(); settings.destroy(); destroySummaryEditor?.(); stopDefinitions.forEach(stop => stop()); stopFilterMetadata(); mounted?.destroy(); mounted = undefined; observer?.disconnect();
         if (scheduled !== undefined) clearTimeout(scheduled);
@@ -1247,6 +1331,8 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     get selectedViewIdentity(){return controller.selectedViewIdentity;},
     rebindViewName: (from, to, viewId) => { alive(); return controller.rebindViewName(from, to,viewId); },
     hasPendingChanges: () => !disposed && (!!pending.size || !!mounted?.hasQueuedConfiguration?.() || controller.hasPendingViewReferences || creation?.status === 'uncertain' || !!pendingCollectionCreate || activeDraft() || [...changedBuffers].some(buffer => buffer.dirty || !!buffer.error)),
+    canRecoverAdmission:()=>admissionRecovery?!disposed&&!closing:!!recoverableCollectionAttempts(),
+    prepareAdmissionRecovery,
     owns: node => { try { alive(); return !closing && root.isConnected && toolbarUI.owns(node); } catch { return false; } },
     flush: options => finish(false, options?.dismissCleanPanels),
     close: () => finish(true),
