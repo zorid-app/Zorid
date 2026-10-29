@@ -271,7 +271,7 @@ fn persisted_count_or_byte_overcommit_is_corruption_not_a_fresh_admission_budget
         for number in 0..count {
             let value = HostSourceCapture { client_id: uuid(1), lease_token: uuid(10), guard: sized(&template, 100 + number, length) };
             db.execute("INSERT INTO host_source_captures(capture_id,client_id,lease_token,source_length,record) VALUES(?1,?2,?3,?4,?5)",
-                params![value.guard.capture_id.as_str(), value.client_id.as_str(), value.lease_token.as_str(), value.guard.length, serde_json::to_string(&value).unwrap()]).unwrap();
+                params![value.guard.capture_id.as_str(), value.client_id.as_str(), value.lease_token.as_str(), i64::try_from(value.guard.length).unwrap(), serde_json::to_string(&value).unwrap()]).unwrap();
         }
         assert!(store.host_source_capture_usage().is_err());
         assert!(store.register_host_source_capture(&uuid(2), &uuid(20), &sized(&template, 999, 0)).is_err());
