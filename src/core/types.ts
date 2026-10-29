@@ -1,6 +1,7 @@
 import type {DocumentService} from './document-semantics.ts';
 import type {BinaryStreams} from './binary-streams.ts';
 import type { DurableWrites } from './durable-writes.ts';
+import type { IndependentDraftProvider } from './independent-drafts.ts';
 
 export interface VaultEntry {
   path: string;
@@ -42,6 +43,8 @@ export interface VaultAdapter {
   readonly binaryStreams?: BinaryStreams;
   /** Optional durable text-save protocol; commit/publication run through Vault. */
   readonly durableWrites?: DurableWrites;
+  /** Independent local draft protection; this never acknowledges a core save. */
+  readonly independentDrafts?: IndependentDraftProvider;
   /** Namespace commits are durable independently of optional backlink rewrites. */
   readonly durableNamespace?: boolean;
   list(): Promise<VaultEntry[]>;
