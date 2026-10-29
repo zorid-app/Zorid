@@ -301,7 +301,7 @@ impl NativeVault {
     pub fn database_request(&mut self, _: &DatabaseRequest) -> Result<DatabaseReply> { unsupported() }
     pub fn capture_conditional_saved_source(&mut self, _: &ClientLease, _: &ConditionalSavedSourceWitness) -> Result<ConditionalSavedSourceCapture> { unsupported() }
     pub fn release_conditional_saved_source(&mut self, _: &ClientLease, _: &OperationId) -> Result<()> { unsupported() }
-    pub fn retire_conditional_saved_sources(&mut self, _: &ClientLeaseRef) {}
+    pub fn retire_conditional_saved_sources(&mut self, _: &ClientLease) -> Result<()> { unsupported() }
     pub fn prepare_guarded_host_intent(&mut self, _: &ClientLease, _: &MutationRequest, _: &OperationId) -> Result<HostIntentView> { unsupported() }
     pub fn list_local_recovery(&self, _: &EntryId, _: Option<LocalRecoveryCursor>, _: usize) -> Result<Vec<LocalRecoveryVersion>> { unsupported() }
     pub fn read_local_recovery(&self, _: &EntryId, _: i64) -> Result<Option<LocalRecoverySnapshot>> { unsupported() }

@@ -95,6 +95,11 @@ fn drop_graph_schema(connection: &Connection) {
 fn downgrade(database: &std::path::Path, version: i64) {
     let mut connection = Connection::open(database).unwrap();
     connection.execute_batch("DROP TABLE host_intent_sources").unwrap();
+    // Reconstruct the declared12–15 schema, excluding both database metadata
+    // introduced in18 and the native pending-capture table introduced in19.
+    let newer: Vec<(String, String)> = connection.prepare("SELECT type,name FROM sqlite_master WHERE name='host_source_captures' OR name LIKE 'local_database_%' OR name LIKE 'local_collection%' ORDER BY type,name").unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+    for (kind, name) in newer { connection.execute_batch(&format!("DROP {kind} \"{name}\";")).unwrap(); }
     drop_graph_schema(&connection);
     // Reconstruct the exact old payload constraint, preserving all fixture rows.
     // Version15 already owns the expanded Text constraint; versions12–14 do not.
@@ -192,7 +197,7 @@ fn known_twelve_through_fifteen_migrate_preserving_pending_proof_history() {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            17
+            19
         );
         let index: String = connection
             .query_row(

@@ -103,6 +103,55 @@ fn capture(
     serde_json::from_value(reply["capture"]["capture_id"].clone()).unwrap()
 }
 
+#[test]
+fn conditional_wire_preprepare_host_loss_keeps_original_capture_and_operation() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut vault, mut leases, lease, witness) = fixture(dir.path());
+    let capture_id = capture(&mut vault, &mut leases, &lease, &witness);
+    drop(leases);
+    drop(vault);
+    let mut vault = NativeVault::open_existing(dir.path()).unwrap();
+    let mut leases = ClientLeases::default();
+    let current = claim(&vault, &mut leases, CLIENT);
+    assert_ne!(current.token, lease.token);
+    let (reply, body) = request(
+        &mut vault, &mut leases, Some(&current),
+        prepare_command(&current, &witness, "original-preprepare-write", Some(&capture_id)),
+        AFTER.as_bytes().to_vec(),
+    ).unwrap();
+    let prepared = intent(reply, body);
+    assert_eq!(prepared.state, HostIntentState::Prepared);
+    assert_eq!(prepared.operation_id.as_str(), "original-preprepare-write");
+    let committed = vault.commit_host_intent(&intent_reference(&prepared)).unwrap();
+    assert_eq!(committed.state, HostIntentState::Committed);
+    assert_eq!(std::fs::read_to_string(dir.path().join("A.md")).unwrap(), AFTER);
+}
+
+#[test]
+fn conditional_wire_failed_durable_revoke_keeps_kernel_owner_until_retry() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut vault, mut leases, lease, witness) = fixture(dir.path());
+    let capture_id = capture(&mut vault, &mut leases, &lease, &witness);
+    let db = rusqlite::Connection::open(dir.path().join(".zorid/vault.sqlite")).unwrap();
+    db.execute_batch("CREATE TRIGGER block_capture_revoke BEFORE DELETE ON host_source_captures BEGIN SELECT RAISE(ABORT,'fixture revoke failure'); END;").unwrap();
+    assert!(request(&mut vault, &mut leases, None, Command::ReleaseClient {reference:lease.clone()}, vec![]).is_err());
+    assert!(leases.active.contains_key(lease.token.as_str()));
+    assert!(matches!(vault.claim_client(&lease.client_id), Err(zorid_native::ClientAdmissionError::InUse)));
+    db.execute_batch("DROP TRIGGER block_capture_revoke").unwrap();
+    request(&mut vault, &mut leases, None, Command::ReleaseClient {reference:lease.clone()}, vec![]).unwrap();
+    assert!(!leases.active.contains_key(lease.token.as_str()));
+    let current = claim(&vault, &mut leases, CLIENT);
+    let (reply, body) = request(
+        &mut vault, &mut leases, Some(&current),
+        prepare_command(&current, &witness, "released-preprepare-write", Some(&capture_id)),
+        AFTER.as_bytes().to_vec(),
+    ).unwrap();
+    let rejected = intent(reply, body);
+    assert_eq!(rejected.state, HostIntentState::Rejected);
+    assert_eq!(rejected.error.unwrap().code, HostRejectionCode::SourceCaptureExpired);
+    assert_eq!(std::fs::read_to_string(dir.path().join("A.md")).unwrap(), BEFORE);
+}
+
 fn prepare_command(
     lease: &ClientLeaseRef,
     witness: &ConditionalSavedSourceWitness,

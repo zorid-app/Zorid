@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 pub const MAX_CONDITIONAL_SOURCE_BYTES: usize = zorid_store::MAX_HOST_SOURCE_BYTES as usize;
-pub const MAX_CONDITIONAL_SOURCE_CAPTURES: usize = 8;
-pub const MAX_CONDITIONAL_SOURCE_TOTAL_BYTES: u64 = 32 * 1024 * 1024;
+pub const MAX_CONDITIONAL_SOURCE_CAPTURES: usize = zorid_store::MAX_HOST_SOURCE_CAPTURES as usize;
+pub const MAX_CONDITIONAL_SOURCE_TOTAL_BYTES: u64 = zorid_store::MAX_HOST_SOURCE_TOTAL_BYTES;
 pub const MAX_CONDITIONAL_SOURCE_PATH_BYTES: usize = zorid_store::MAX_HOST_SOURCE_PATH_BYTES;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,6 +1,6 @@
 //! Durable host-to-core handoff, separate from synchronization outbox/receipts.
 use super::*;
-use super::host_source_guards::HostSourceBinding;
+use super::host_source_guards::{HostSourceBinding, HostSourceCapture};
 use zorid_core::OperationId;
 pub(crate) const SCHEMA: &[(&str,&str)] = &[
     ("host_intents", "CREATE TABLE host_intents (intent_order INTEGER PRIMARY KEY AUTOINCREMENT, client_id TEXT NOT NULL, token TEXT NOT NULL UNIQUE, operation_id TEXT NOT NULL UNIQUE, entry_id TEXT NOT NULL, request TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('prepared','commit_requested','committed','rejected')), acknowledged INTEGER NOT NULL CHECK(acknowledged IN (0,1)), rejection TEXT, UNIQUE(client_id,token))"),
@@ -283,7 +283,7 @@ impl Store {
         client: &OperationId,
         command: &MutationRequest,
     ) -> Result<HostIntentView> {
-        self.prepare_host_intent_with_source(client, command, None)
+        self.prepare_host_intent_with_source(client, command, None, None)
     }
     pub fn prepare_guarded_host_intent(
         &mut self,
@@ -291,7 +291,19 @@ impl Store {
         command: &MutationRequest,
         source: &HostSourceGuard,
     ) -> Result<HostIntentView> {
-        self.prepare_host_intent_with_source(client, command, Some(HostSourceBinding::Verified(source.clone())))
+        self.prepare_host_intent_with_source(client, command, Some(HostSourceBinding::Verified(source.clone())), None)
+    }
+    /// Native reverified this exact pending capture under a positively admitted
+    /// current lease. Attaching evidence and consuming admission are atomic.
+    pub fn prepare_captured_host_intent(&mut self, client:&OperationId, owner_token:&OperationId, command:&MutationRequest, source:&HostSourceGuard) -> Result<HostIntentView> {
+        let capture=HostSourceCapture {client_id:client.clone(),lease_token:owner_token.clone(),guard:source.clone()};
+        self.prepare_host_intent_with_source(client,command,Some(HostSourceBinding::Verified(source.clone())),Some(capture))
+    }
+    pub fn prepare_rejected_captured_host_intent(&mut self, client:&OperationId, owner_token:&OperationId, command:&MutationRequest, source:&HostSourceGuard, code:HostRejectionCode) -> Result<HostIntentView> {
+        if !host_source_guards::rejection_code(code) { return Err(invalid("invalid conditional source rejection")); }
+        let capture=HostSourceCapture {client_id:client.clone(),lease_token:owner_token.clone(),guard:source.clone()};
+        let rejected=HostSourceBinding::Rejected {capture_id:source.capture_id.clone(),local_store_id:source.local_store_id.clone(),code};
+        self.prepare_host_intent_with_source(client,command,Some(rejected),Some(capture))
     }
     pub fn prepare_rejected_guarded_host_intent(
         &mut self,
@@ -306,13 +318,14 @@ impl Store {
         let binding = HostSourceBinding::Rejected {
             capture_id: capture.clone(), local_store_id: self.identity()?.local_store_id, code,
         };
-        self.prepare_host_intent_with_source(client, command, Some(binding))
+        self.prepare_host_intent_with_source(client, command, Some(binding), None)
     }
     fn prepare_host_intent_with_source(
         &mut self,
         client: &OperationId,
         command: &MutationRequest,
         source: Option<HostSourceBinding>,
+        capture: Option<HostSourceCapture>,
     ) -> Result<HostIntentView> {
         command.validate()?;
         let tx = self
@@ -320,6 +333,10 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         if let Some(source) = &source {
             source.validate(&tx, command)?;
+        }
+        if let Some(capture)=&capture {
+            capture.guard.validate(&tx,command)?;
+            if capture.client_id!=*client { return Err(invalid("conditional capture owner mismatch")); }
         }
         if source.is_none() { admit_inline_intent(&tx, command)?; }
         let existing = tx
@@ -358,6 +375,14 @@ impl Store {
             }
             reference
         } else {
+            // Revocation/consumption and prepare cannot race a loaded guard.
+            // Missing or changed pending evidence never falls back to generic
+            // guarded preparation, even if a caller retained its old bytes.
+            if let Some(capture)=&capture {
+                if host_source_guards::pending(&tx,&capture.guard.capture_id)?.as_ref()!=Some(capture) {
+                    return Err(ContractError::IdempotencyConflict {operation_id:command.operation_id.clone()}.into());
+                }
+            }
             if source.is_some() { admit_inline_intent(&tx, command)?; }
             if super::blob_stage::operation_reserved(&tx, &command.operation_id)? {
                 return Err(ContractError::IdempotencyConflict {
@@ -380,6 +405,7 @@ impl Store {
             if let Some(source) = &source {
                 host_source_guards::insert(&tx, command, source)?;
             }
+            if let Some(capture)=&capture { host_source_guards::consume(&tx,capture)?; }
             reference
         };
         let outcome = view(&tx, &reference)?.unwrap();

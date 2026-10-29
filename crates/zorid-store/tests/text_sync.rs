@@ -11,7 +11,7 @@ use zorid_sync_protocol::{ExpectedContext, LogPosition, RealmId, ServerEpoch, Up
 fn downgrade_current_to_twelve(db: &mut rusqlite::Connection) {
     assert_eq!(db.query_row("SELECT count(*) FROM text_bindings", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
     assert_eq!(db.query_row("SELECT count(*) FROM namespace_successions", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
-    let tables: Vec<String> = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND (name NOT GLOB 'sqlite_*' OR name='sqlite_sequence') AND (name NOT GLOB 'family_graph_*' OR name='family_graph_heads') AND name!='namespace_successions' AND name!='host_intent_sources' ORDER BY name").unwrap()
+    let tables: Vec<String> = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND (name NOT GLOB 'sqlite_*' OR name='sqlite_sequence') AND (name NOT GLOB 'family_graph_*' OR name='family_graph_heads') AND name!='namespace_successions' AND name!='host_intent_sources' AND name!='host_source_captures' AND name NOT LIKE 'local_database_%' AND name NOT LIKE 'local_collection%' ORDER BY name").unwrap()
         .query_map([], |row| row.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
     let retained = |db: &rusqlite::Connection| -> Vec<Vec<Vec<rusqlite::types::Value>>> {
         tables.iter().map(|table| {
@@ -23,6 +23,11 @@ fn downgrade_current_to_twelve(db: &mut rusqlite::Connection) {
         }).collect()
     };
     let before = retained(db);
+    // These objects did not exist in schema12: database metadata arrived in18,
+    // and pending native captures in19. Neither belongs in a legacy fixture.
+    let newer: Vec<(String, String)> = db.prepare("SELECT type,name FROM sqlite_master WHERE name='host_source_captures' OR name LIKE 'local_database_%' OR name LIKE 'local_collection%' ORDER BY type,name").unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+    for (kind, name) in newer { db.execute_batch(&format!("DROP {kind} \"{name}\";")).unwrap(); }
     let objects: Vec<(String, String)> = db.prepare("SELECT type,name FROM sqlite_master WHERE name GLOB 'family_graph_*' AND name!='family_graph_heads' ORDER BY CASE type WHEN 'trigger' THEN 0 WHEN 'index' THEN 1 ELSE 2 END,rowid DESC").unwrap()
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap();
     for (kind, name) in objects {

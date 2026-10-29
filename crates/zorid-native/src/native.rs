@@ -95,7 +95,6 @@ pub use workblocks::*;
 mod local_recovery;
 
 pub struct NativeVault {
-    conditional_sources: conditional_source::ConditionalSources,
     paths: Paths,
     store: Store,
     options: Options,
@@ -153,7 +152,6 @@ impl NativeVault {
         );
         paths.private.sync_all()?;
         Ok(Self {
-            conditional_sources: conditional_source::ConditionalSources::default(),
             paths,
             store,
             options,

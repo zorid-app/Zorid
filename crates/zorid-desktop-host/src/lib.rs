@@ -782,7 +782,11 @@ fn execute(
                     .retain(|(client, _), _| client != &reference.client_id);
                 leases.documents.release(&reference.client_id);
                 leases.workblocks.release(&reference.client_id);
-                vault.retire_conditional_saved_sources(&reference);
+                // Durable revocation must succeed before the kernel lease is
+                // dropped. A failure keeps this exact live owner retryable.
+                vault.retire_conditional_saved_sources(
+                    leases.active.get(reference.token.as_str()).expect("verified active lease"),
+                ).map_err(native_fault)?;
                 leases.active.remove(reference.token.as_str()); // Drop releases kernel ownership; NEVER unlink.
                 leases.revoking.remove(reference.token.as_str());
                 leases

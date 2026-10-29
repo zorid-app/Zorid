@@ -4,18 +4,8 @@
 //! remains mandatory and retains those later changes.
 use super::*;
 use crate::fs_stream;
-use std::collections::BTreeMap;
 use zorid_store::HostSourceGuard;
 
-#[derive(Default)]
-pub(super) struct ConditionalSources {
-    captures: BTreeMap<OperationId, Capture>,
-}
-#[derive(Clone)]
-struct Capture {
-    owner: ClientLeaseRef,
-    guard: HostSourceGuard,
-}
 fn changed() -> Error {
     Error::ConditionalSource(ConditionalSourceError::Changed)
 }
@@ -44,10 +34,9 @@ fn public_path_error(error: Error) -> Error {
 }
 
 impl NativeVault {
-    /// Capture under the exact live lease. A caller retaining this vault must
-    /// call `retire_conditional_saved_sources` before dropping that lease:
-    /// ClientLease RAII releases the kernel lock only. Otherwise inaccessible
-    /// old-token captures remain charged to the bounded registry until vault drop.
+    /// Persist inert evidence before returning its identity. An exact same-client
+    /// current lease can resume it after host loss; explicit release durably
+    /// retires only the named lease's unattached captures before kernel unlock.
     pub fn capture_conditional_saved_source(
         &mut self,
         lease: &ClientLease,
@@ -56,17 +45,12 @@ impl NativeVault {
         let _lock = self.paths.lock(self.options.lock_timeout)?;
         self.verify_client_lease(lease).map_err(lease_error)?;
         self.paths.verify()?;
+        let (count, used) = self.store.host_source_capture_usage()?;
         if witness.path.as_str().len() > MAX_CONDITIONAL_SOURCE_PATH_BYTES
-            || self.conditional_sources.captures.len() >= MAX_CONDITIONAL_SOURCE_CAPTURES
+            || count >= MAX_CONDITIONAL_SOURCE_CAPTURES as u64
         {
             return Err(Error::ConditionalSource(ConditionalSourceError::Limit));
         }
-        let used: u64 = self
-            .conditional_sources
-            .captures
-            .values()
-            .map(|capture| capture.guard.length)
-            .sum();
         let available = MAX_CONDITIONAL_SOURCE_TOTAL_BYTES.saturating_sub(used);
         let limit =
             (MAX_CONDITIONAL_SOURCE_BYTES.min(self.options.max_file_bytes) as u64).min(available);
@@ -144,13 +128,9 @@ impl NativeVault {
             length: snapshot.length,
             digest: zorid_store::Sha256Digest(snapshot.digest),
         };
-        self.conditional_sources.captures.insert(
-            capture_id.clone(),
-            Capture {
-                owner: lease.reference().clone(),
-                guard,
-            },
-        );
+        if !self.store.register_host_source_capture(
+            &lease.reference().client_id, &lease.reference().token, &guard,
+        )? { return Err(Error::ConditionalSource(ConditionalSourceError::Limit)); }
         Ok(ConditionalSavedSourceCapture {
             capture_id,
             logical_witness: witness.clone(),
@@ -163,27 +143,22 @@ impl NativeVault {
         lease: &ClientLease,
         capture_id: &OperationId,
     ) -> Result<()> {
+        let _lock = self.paths.lock(self.options.lock_timeout)?;
         self.verify_client_lease(lease).map_err(lease_error)?;
-        if self
-            .conditional_sources
-            .captures
-            .get(capture_id)
-            .is_some_and(|capture| &capture.owner != lease.reference())
-        {
+        if !self.store.release_host_source_capture(&lease.reference().client_id, capture_id)? {
             return Err(Error::ConditionalSource(ConditionalSourceError::Owner));
         }
-        self.conditional_sources.captures.remove(capture_id);
         Ok(())
     }
 
-    /// Retire only unattached captures of the exact released lease. Prepared
-    /// guards already live with their durable intent and must survive release.
-    /// Call before dropping ClientLease when retaining this NativeVault; the
-    /// desktop host's ReleaseClient path performs this step explicitly.
-    pub fn retire_conditional_saved_sources(&mut self, owner: &ClientLeaseRef) {
-        self.conditional_sources
-            .captures
-            .retain(|_, capture| &capture.owner != owner);
+    /// Persist exact-token revocation before dropping the authenticated kernel
+    /// lease. Prepared guards belong to their durable intent and survive this.
+    /// A failed storage write leaves ownership held so release may retry.
+    pub fn retire_conditional_saved_sources(&mut self, lease: &ClientLease) -> Result<()> {
+        let _lock = self.paths.lock(self.options.lock_timeout)?;
+        self.verify_client_lease(lease).map_err(lease_error)?;
+        self.store.retire_host_source_captures(&lease.reference().client_id, &lease.reference().token)?;
+        Ok(())
     }
 
     pub fn prepare_guarded_host_intent(
@@ -210,7 +185,7 @@ impl NativeVault {
                 "guarded host intent requires a bounded Write",
             ));
         }
-        let Some(capture) = self.conditional_sources.captures.get(capture_id).cloned() else {
+        let Some(capture) = self.store.host_source_capture(capture_id)? else {
             return Ok(self.store.prepare_rejected_guarded_host_intent(
                 &lease.reference().client_id,
                 request,
@@ -218,7 +193,7 @@ impl NativeVault {
                 HostRejectionCode::SourceCaptureExpired,
             )?);
         };
-        if &capture.owner != lease.reference() {
+        if capture.client_id != lease.reference().client_id {
             return Err(Error::ConditionalSource(ConditionalSourceError::Owner));
         }
         if !matches!(&request.mutation, Mutation::Write { id, expected, .. }
@@ -234,24 +209,24 @@ impl NativeVault {
                 error,
                 Error::ConditionalSource(ConditionalSourceError::Changed)
             ) {
-                let rejected = self.store.prepare_rejected_guarded_host_intent(
+                let rejected = self.store.prepare_rejected_captured_host_intent(
                     &lease.reference().client_id,
+                    &capture.lease_token,
                     request,
-                    capture_id,
+                    &capture.guard,
                     HostRejectionCode::ConditionalSourceChanged,
                 )?;
-                self.conditional_sources.captures.remove(capture_id);
                 return Ok(rejected);
             }
             return Err(error);
         }
-        let result = self.store.prepare_guarded_host_intent(
+        let result = self.store.prepare_captured_host_intent(
             &lease.reference().client_id,
+            &capture.lease_token,
             request,
             &capture.guard,
         )?;
         self.point("conditional_intent_prepared");
-        self.conditional_sources.captures.remove(capture_id);
         Ok(result)
     }
 

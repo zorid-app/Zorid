@@ -825,6 +825,7 @@ fn old_schema17_migrates_once_without_modifying_existing_files_or_receipts() {
     let receipts = store.operations_after(0, 20).unwrap();
     drop(store);
     let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch("DROP TABLE host_source_captures").unwrap();
     let objects=db.prepare("SELECT type,name FROM sqlite_master WHERE name LIKE 'local_database_%' OR name LIKE 'local_collection%' ORDER BY type").unwrap().query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
     for (kind, name) in objects {
         db.execute_batch(&format!("DROP {kind} \"{name}\";"))
