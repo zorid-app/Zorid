@@ -5,9 +5,25 @@ use super::content_stream::{core_client, file_snapshot, snapshot_matches_content
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 use zorid_store::{
-    namespace_content_evidence_bytes, NamespaceEvidence, ObservationPhysical, PhysicalBinding,
-    ProjectionJob, MAX_NAMESPACE_EVIDENCE_BYTES, MAX_NAMESPACE_MEMBERS,
+    namespace_content_evidence_bytes, DirectoryAttempt, NamespaceEvidence, ObservationPhysical,
+    PhysicalBinding, ProjectionJob, MAX_NAMESPACE_EVIDENCE_BYTES, MAX_NAMESPACE_MEMBERS,
 };
+
+#[derive(Debug, Default)]
+pub(super) struct FamilyNamespaceRecoveryCursor {
+    directories: BTreeMap<OperationId, DirectoryAttempt>,
+    failed_directories: BTreeSet<OperationId>,
+    publications: BTreeSet<OperationId>,
+    failed_publications: BTreeSet<OperationId>,
+    groups: BTreeMap<Vec<OperationId>, FamilyNamespaceGroupStamp>,
+    oversized: Option<Vec<ProjectionJob>>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct FamilyNamespaceGroupStamp {
+    jobs: Vec<ProjectionJob>,
+    bindings: BTreeMap<EntryId, Option<PhysicalBinding>>,
+}
 
 fn root(parents: &mut [usize], mut index: usize) -> usize {
     while parents[index] != index {
@@ -83,6 +99,172 @@ fn connected_jobs(
 }
 
 impl NativeVault {
+    /// Preserve settlement-before-grouping ordering: a settled historical
+    /// publication can change the physical path used to connect namespace jobs.
+    /// Each settlement and each complete connected component is one atomic unit.
+    pub(super) fn attach_family_namespaces_quantum(
+        &mut self,
+        cursor: &mut FamilyNamespaceRecoveryCursor,
+        budget: &mut super::external_scan_quantum::ExternalWorkBudget,
+        report: &mut ReconcileReport,
+    ) -> Result<bool> {
+        if !self.store.family_is_enrolled()? {
+            return Ok(true);
+        }
+        let attempts: BTreeSet<_> = self
+            .store
+            .namespace_attempt_metadata(true)?
+            .into_iter()
+            .map(|a| a.job.job_id)
+            .collect();
+        let jobs: Vec<_> = self
+            .store
+            .pending_namespace_jobs()?
+            .into_iter()
+            .filter(|job| !attempts.contains(&job.job_id))
+            .collect();
+        if jobs.is_empty() {
+            return Ok(true);
+        }
+        let references = jobs
+            .iter()
+            .try_fold(0usize, |count, job| count.checked_add(job.affected.len()));
+        if jobs.len() > MAX_NAMESPACE_MEMBERS
+            || references.is_none_or(|n| n > MAX_NAMESPACE_MEMBERS)
+        {
+            if cursor.oversized.as_ref() != Some(&jobs) {
+                if !budget.try_unit("namespace:family:oversized".into()) {
+                    return Ok(false);
+                }
+                report.blocked.push((
+                    jobs[0].target.path.clone(),
+                    "family namespace attachment bound exceeded; all jobs retained".into(),
+                ));
+                cursor.oversized = Some(jobs);
+            }
+            return Ok(true);
+        }
+        let member_ids: BTreeSet<_> = jobs
+            .iter()
+            .flat_map(|job| job.affected.iter().map(|c| c.after.id.clone()))
+            .collect();
+        let mut unsettled = BTreeSet::new();
+        for metadata in self.store.directory_attempts(false)? {
+            if !member_ids.contains(&metadata.target.id) {
+                continue;
+            }
+            let id = &metadata.attempt_id;
+            if cursor.directories.get(id) != Some(&metadata) {
+                if !budget.try_unit(format!("namespace:directory-settle:{}", id.as_str())) {
+                    return Ok(false);
+                }
+                // Directory attempts contain only metadata. Reread after
+                // admission so settlement never acts on a cached attempt.
+                if let Some(attempt) = self
+                    .store
+                    .directory_attempts(false)?
+                    .into_iter()
+                    .find(|a| a.attempt_id == *id)
+                {
+                    if let Err(error) = self.settle_namespace_directory(&attempt) {
+                        cursor.failed_directories.insert(id.clone());
+                        report
+                            .blocked
+                            .push((attempt.target.path, error.to_string()));
+                    } else {
+                        cursor.failed_directories.remove(id);
+                    }
+                } else {
+                    cursor.failed_directories.remove(id);
+                }
+                cursor.directories.insert(id.clone(), metadata.clone());
+            }
+            if cursor.failed_directories.contains(id) {
+                unsettled.insert(metadata.target.id);
+            }
+        }
+        for entry in &member_ids {
+            // Metadata-only selection. In particular, ordinary file history
+            // unrelated to a namespace component is never decoded here.
+            for id in self.store.projection_attempt_ids_for_entry(entry)? {
+                if !cursor.publications.contains(&id) {
+                    if !budget.try_unit(format!("namespace:file-settle:{}", id.as_str())) {
+                        return Ok(false);
+                    }
+                    let attempt = self.store.projection_attempt(&id)?;
+                    if attempt.target.state.id != *entry {
+                        return Err(zorid_store::StoreError::Corrupt(
+                            "namespace publication entry selection differs".into(),
+                        )
+                        .into());
+                    }
+                    if !attempt.completed() {
+                        if let Err(error) = self.settle_namespace_publication(&attempt) {
+                            cursor.failed_publications.insert(id.clone());
+                            report
+                                .blocked
+                                .push((attempt.target.state.path, error.to_string()));
+                        } else {
+                            cursor.failed_publications.remove(&id);
+                        }
+                    } else {
+                        cursor.failed_publications.remove(&id);
+                    }
+                    cursor.publications.insert(id.clone());
+                }
+                if cursor.failed_publications.contains(&id) {
+                    unsettled.insert(entry.clone());
+                }
+            }
+        }
+        let mut bindings = BTreeMap::new();
+        for id in &member_ids {
+            bindings.insert(id.clone(), self.store.physical_binding(id)?);
+        }
+        for indexes in connected_jobs(&jobs, &bindings) {
+            let group: Vec<_> = indexes.iter().map(|index| jobs[*index].clone()).collect();
+            let ids: Vec<_> = group.iter().map(|job| job.job_id.clone()).collect();
+            let group_ids: BTreeSet<_> = group
+                .iter()
+                .flat_map(|job| job.affected.iter().map(|c| c.after.id.clone()))
+                .collect();
+            if group_ids.iter().any(|id| unsettled.contains(id)) {
+                // Its failed settlement already contributed a blocked result.
+                continue;
+            }
+            let mut stamp = FamilyNamespaceGroupStamp {
+                jobs: group.clone(),
+                bindings: group_ids
+                    .iter()
+                    .map(|id| (id.clone(), bindings.get(id).cloned().flatten()))
+                    .collect(),
+            };
+            if cursor.groups.get(&ids) == Some(&stamp) {
+                continue;
+            }
+            if !budget.try_unit(format!("namespace:family-group:{ids:?}")) {
+                return Ok(false);
+            }
+            match self.attach_family_namespace_group(&group) {
+                Err(error) => report
+                    .blocked
+                    .push((group[0].target.path.clone(), error.to_string())),
+                Ok(()) => {
+                    // A successful group exhausted its exact unclaimed members.
+                    // Remember its post-publication bindings to avoid admitting
+                    // a second no-op unit just because our own work moved them.
+                    for id in &group_ids {
+                        stamp
+                            .bindings
+                            .insert(id.clone(), self.store.physical_binding(id)?);
+                    }
+                }
+            }
+            cursor.groups.insert(ids, stamp);
+        }
+        Ok(true)
+    }
+
     /// Caller holds the vault lock. Call before legacy namespace diagnostics and
     /// normal materialization; existing attempts are resumed by recover_namespaces.
     pub(super) fn attach_family_namespaces(&mut self, report: &mut ReconcileReport) -> Result<()> {
