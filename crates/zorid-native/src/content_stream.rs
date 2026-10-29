@@ -14,6 +14,10 @@ pub(super) fn core_client() -> Result<OperationId> {
     Ok(OperationId::new(CORE_CONTENT_CLIENT)?)
 }
 
+#[cfg(test)]
+#[path = "content_stream_capture_tests.rs"]
+mod capture_tests;
+
 pub(super) fn file_snapshot(parent: &File, name: &str) -> Result<Option<StreamSnapshot>> {
     fs_stream::stream_snapshot(parent, name, fs_stream::MAX_STREAM_BYTES, |_| Ok(()))
 }
