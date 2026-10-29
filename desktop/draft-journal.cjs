@@ -7,6 +7,7 @@ const {createHash, randomUUID} = require('node:crypto');
 const TEXT_BYTES = 64 * 1024 * 1024, HEAD_BYTES = 64 * 1024;
 const QUEUED_BYTES = 128 * 1024 * 1024, MAX_PENDING = 8, MAX_BRANCHES = 4096;
 const maximum = (1n << 64n) - 1n;
+const FORMAT='zorid-independent-drafts\n2\n';
 const fail = (code, uncertain=false) => Object.assign(new Error('Independent draft protection is unavailable.'), {code, commitUncertain:uncertain});
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
@@ -33,6 +34,7 @@ const scopePrefix = value => hash(JSON.stringify([value.vaultId,value.clientId])
 const entryPrefix = value => scopePrefix(value)+hash(JSON.stringify([value.vaultId,value.clientId,value.entryId]))+'-';
 const branchKey = value => entryPrefix(value)+hash(JSON.stringify([value.vaultId,value.clientId,value.incarnationId,value.entryId,value.writer]));
 const branchName = value => typeof value==='string'&&/^[a-f0-9]{64}-[a-f0-9]{64}-[a-f0-9]{64}$/.test(value);
+const incarnationKey = value => JSON.stringify([value.vaultId,value.clientId,value.incarnationId]);
 const receipt = head => Object.freeze({...head.identity,revision:head.revision,generation:head.generation,deleted:head.deleted});
 
 /** Independent, inert desktop draft storage. Never plans, commits or replays a
@@ -59,15 +61,29 @@ const receipt = head => Object.freeze({...head.identity,revision:head.revision,g
  * Unshipped layout v2 embeds hashed scope and entry prefixes in branch names.
  * list({entryId}) filters names BEFORE reading heads; prefixes never authorize a
  * candidate. Every selected head must recompute to its entire directory name.
- * The flat v1 prototype is explicitly unsupported, never silently migrated.
+ * A bounded FORMAT marker identifies this unshipped layout. Unmarked nonempty
+ * prototypes are explicitly unsupported, never silently migrated.
  *
- * fileSystem is a private filesystem-boundary fault-injection seam for tests.
+ * maintain({maxUnits:1}) is MAIN-ONLY idle work, not a renderer capability or a
+ * foreground operation. Each call examines at most one entry/head or unlinks one
+ * unreachable trash file. An inactive validated tombstone is atomically moved
+ * out of inventory before incremental trash cleanup. No live candidate is
+ * deleted and source bodies are never read. Active incarnations and retirement targets
+ * claimed by ANY live issuing lease remain protected until that lease revokes.
+ * After main exits, old tokens cannot retry; a new renderer has a fresh
+ * incarnation and inventory already omits deleted heads. This is why old dead
+ * incarnation tombstones may be reclaimed, not an operation replay authority.
+ *
+ * fileSystem and testHeadLimit are private bounded-test seams, never IPC input.
  */
-async function openDraftJournal(directory, {fileSystem=fs}={}) {
+async function openDraftJournal(directory, {fileSystem=fs,testHeadLimit=MAX_BRANCHES}={}) {
   const io=fileSystem;
   if(typeof directory!=='string'||!path.isAbsolute(directory)||directory.includes('\0'))throw fail('invalid_draft_directory');
+  if(!Number.isSafeInteger(testHeadLimit)||testHeadLimit<1||testHeadLimit>MAX_BRANCHES)throw fail('invalid_draft_limit');
   let tail=Promise.resolve(), closed=false, queuedBytes=0, pending=0;
-  const incarnations=new Set(), leases=new Set();
+  const incarnations=new Set(), activeIncarnations=new Set(), retirementTargets=new Map(), leases=new Set();
+  let maintenanceCursor,maintenancePhase='branches',maintenanceTarget;
+  const maintenanceSkipped=new Set();
   async function syncDirectory(name) {
     if(process.platform==='win32')return;
     const handle=await io.open(name,constants.O_RDONLY|(constants.O_NOFOLLOW||0));
@@ -82,19 +98,25 @@ async function openDraftJournal(directory, {fileSystem=fs}={}) {
   }
   await ensureDirectory(directory);
   const branches=path.join(directory,'branches');await ensureDirectory(branches);
+  const marker=path.join(directory,'FORMAT');
+  let format;
+  try{format=await readFile(marker,64,true);}catch{throw fail('draft_storage_corrupt');}
+  if(format===null){
+    const entries=await io.opendir(branches);
+    try{if(await entries.read())throw fail('draft_layout_unsupported');}finally{await entries.close();}
+    await atomicFile(marker,Buffer.from(FORMAT));
+  }else if(format.toString('utf8')!==FORMAT)throw fail('draft_layout_unsupported');
+  const trash=path.join(directory,'retired-trash');await ensureDirectory(trash);
   async function* names() {
-    const entries=await io.opendir(branches);let count=0;
+    const entries=await io.opendir(branches);
     for await(const entry of entries){
-      if(++count>MAX_BRANCHES)throw fail('draft_inventory_limit');
       if(digest(entry.name))throw fail('draft_layout_unsupported');
       if(!branchName(entry.name))throw fail('draft_storage_corrupt');
       yield entry.name;
     }
   }
-  // No head reads or in-memory catalogue: opening rejects an old/invalid layout,
-  // and every later inventory enumerates and validates current names afresh.
-  for await(const name of names())void name;
-  const locations=key=>({branch:path.join(branches,key),blobs:path.join(branches,key,'blobs'),head:path.join(branches,key,'head.json')});
+  // No startup name/head scan or catalogue; inventory streams current names.
+  const locations=(key,retired=false)=>{const branch=path.join(retired?trash:branches,key);return{branch,blobs:path.join(branch,'blobs'),head:path.join(branch,'head.json')};};
   async function existingDirectory(name, missing=false) {
     try {const info=await io.lstat(name);if(!info.isDirectory()||info.isSymbolicLink())throw fail('draft_storage_corrupt');return true;}
     catch(error){if(missing&&error.code==='ENOENT')return false;throw error;}
@@ -110,9 +132,9 @@ async function openDraftJournal(directory, {fileSystem=fs}={}) {
       return bytes;
     }catch(error){if(missing&&error.code==='ENOENT')return null;throw error;}finally{await handle?.close();}
   }
-  async function readHead(key) {
-    if(!await existingDirectory(locations(key).branch,true))return null;
-    const bytes=await readFile(locations(key).head,HEAD_BYTES,true);if(bytes===null)return null;
+  async function readHead(key,retired=false) {
+    if(!await existingDirectory(locations(key,retired).branch,true))return null;
+    const bytes=await readFile(locations(key,retired).head,HEAD_BYTES,true);if(bytes===null)return null;
     let head;
     try {
       head=JSON.parse(bytes.toString('utf8'));
@@ -180,7 +202,101 @@ async function openDraftJournal(directory, {fileSystem=fs}={}) {
     });
     const done=result.finally(()=>{pending--;queuedBytes-=bytes;});tail=done.catch(()=>{});return done;
   }
+  const ownerCheck=()=>{if(closed)throw fail('draft_lease_revoked');};
+  const protectedHead=head=>activeIncarnations.has(incarnationKey(head.identity))||retirementTargets.has(branchKey(head.identity));
+  async function closeMaintenanceCursor(){
+    const cursor=maintenanceCursor;maintenanceCursor=undefined;
+    if(cursor)try{await cursor.close();}catch(error){if(error.code!=='ERR_DIR_CLOSED')throw error;}
+  }
+  const diagnostic=error=>error?.code==='draft_layout_unsupported'?'draft_layout_unsupported':error?.code==='draft_storage_corrupt'?'draft_storage_corrupt':'draft_storage_failure';
+  function skipMaintenanceTarget(result){
+    if(maintenanceTarget){
+      if(maintenanceSkipped.size<MAX_BRANCHES)maintenanceSkipped.add(maintenanceTarget.key);
+      else{maintenancePhase='branches';maintenanceSkipped.clear();result.done=true;result.errors.push('draft_inventory_limit');}
+    }
+    maintenanceTarget=undefined;
+  }
+  async function maintenanceUnit(){
+    const result={examined:0,removed:0,done:false,errors:[]};
+    const error=value=>result.errors.push(diagnostic(value));
+    try{
+      if(maintenanceTarget){
+        const target=maintenanceTarget,place=locations(target.key,true);
+        if(!maintenanceCursor){
+          const folder=target.phase==='blobs'?place.blobs:place.branch;
+          if(!await existingDirectory(folder,true)){
+            if(target.phase==='blobs'){target.phase='branch';return result;}
+            maintenanceTarget=undefined;return result;
+          }
+          maintenanceCursor=await io.opendir(folder);
+        }
+        const entry=await maintenanceCursor.read();
+        if(entry){
+          result.examined=1;
+          const temporary=/^\.draft-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\.tmp$/.test(entry.name);
+          if(target.phase==='branch'&&entry.name==='head.json')return result;
+          if(!entry.isFile()||!(temporary||target.phase==='blobs'&&digest(entry.name))){target.unknown=true;error(fail('draft_storage_corrupt'));return result;}
+          ownerCheck();await io.unlink(path.join(target.phase==='blobs'?place.blobs:place.branch,entry.name));
+          await syncDirectory(target.phase==='blobs'?place.blobs:place.branch);return result;
+        }
+        await closeMaintenanceCursor();
+        if(target.unknown){skipMaintenanceTarget(result);return result;}
+        if(target.phase==='blobs'){
+          ownerCheck();await io.rmdir(place.blobs);await syncDirectory(place.branch);target.phase='branch';return result;
+        }
+        const head=await readHead(target.key,true);
+        if(head&&!head.deleted){error(fail('draft_storage_corrupt'));skipMaintenanceTarget(result);return result;}
+        ownerCheck();
+        if(head){await io.unlink(place.head);await syncDirectory(place.branch);}
+        // A crash after unlink leaves an EMPTY trash directory, never source.
+        await io.rmdir(place.branch);await syncDirectory(trash);
+        result.removed=1;maintenanceTarget=undefined;return result;
+      }
+      if(!maintenanceCursor)maintenanceCursor=await io.opendir(maintenancePhase==='branches'?branches:trash);
+      const entry=await maintenanceCursor.read();
+      if(!entry){
+        await closeMaintenanceCursor();
+        if(maintenancePhase==='branches'){maintenancePhase='trash';maintenanceSkipped.clear();}
+        else{maintenancePhase='branches';maintenanceSkipped.clear();result.done=true;}
+        return result;
+      }
+      result.examined=1;
+      if(!branchName(entry.name)){error(fail(digest(entry.name)?'draft_layout_unsupported':'draft_storage_corrupt'));return result;}
+      if(!entry.isDirectory()){error(fail('draft_storage_corrupt'));return result;}
+      const retired=maintenancePhase==='trash';
+      if(retired&&maintenanceSkipped.has(entry.name))return result;
+      let head;
+      try{head=await readHead(entry.name,retired);}catch(errorValue){error(errorValue);return result;}
+      if(!head){
+        if(retired){
+          // rmdir cannot remove a nonempty headless/unknown trash item.
+          try{ownerCheck();await io.rmdir(locations(entry.name,true).branch);await syncDirectory(trash);result.removed=1;}catch(errorValue){error(errorValue.code==='ENOTEMPTY'?fail('draft_storage_corrupt'):errorValue);}
+        }else error(fail('draft_storage_corrupt'));
+        return result;
+      }
+      if(!head.deleted){if(retired)error(fail('draft_storage_corrupt'));return result;}
+      if(retired){
+        await closeMaintenanceCursor();maintenanceTarget={key:entry.name,phase:'blobs',unknown:false};return result;
+      }
+      if(protectedHead(head))return result;
+      const place=locations(entry.name),destination=locations(entry.name,true);
+      try{await io.lstat(destination.branch);error(fail('draft_storage_corrupt'));return result;}catch(errorValue){if(errorValue.code!=='ENOENT')throw errorValue;}
+      ownerCheck();if(protectedHead(head))return result;
+      await io.rename(place.branch,destination.branch);
+      await syncDirectory(branches);await syncDirectory(trash);return result;
+    }catch(errorValue){
+      // One bad entry is retained and reported without poisoning the owner.
+      // Cursor/IO failures close the current pass so its handle never leaks.
+      await closeMaintenanceCursor().catch(()=>{});skipMaintenanceTarget(result);
+      if(errorValue.code==='draft_lease_revoked')throw errorValue;
+      error(errorValue);return result;
+    }
+  }
   return Object.freeze({
+    maintain(options={maxUnits:1}){
+      if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).length!==1||options.maxUnits!==1)return Promise.reject(fail('invalid_draft_limit'));
+      return enqueue(ownerCheck,0,maintenanceUnit);
+    },
     bind(scope, assertOwner=()=>{}) {
       const bound={vaultId:id(scope.vaultId),clientId:id(scope.clientId),incarnationId:id(scope.incarnationId)};
       const leaseKey=JSON.stringify(bound);let revoked=false;
@@ -195,7 +311,11 @@ async function openDraftJournal(directory, {fileSystem=fs}={}) {
         if(result===false)throw fail('draft_lease_revoked');
       };check();
       if(incarnations.has(leaseKey))throw fail('draft_incarnation_reused');incarnations.add(leaseKey);
-      const revoke=()=>{revoked=true;leases.delete(revoke);};leases.add(revoke);
+      const claims=new Set();activeIncarnations.add(incarnationKey(bound));
+      const revoke=()=>{
+        revoked=true;leases.delete(revoke);activeIncarnations.delete(incarnationKey(bound));
+        for(const key of claims){const count=retirementTargets.get(key);if(count===1)retirementTargets.delete(key);else retirementTargets.set(key,count-1);}claims.clear();
+      };leases.add(revoke);
       function capture(value, retiring) {
         const own=identity(bound,value);
         if(!retiring&&own.incarnationId!==bound.incarnationId)throw fail('invalid_draft_identity');
@@ -215,7 +335,14 @@ async function openDraftJournal(directory, {fileSystem=fs}={}) {
       }
       function publish(value, retiring) {
         let captured, expected;
-        try {({captured,expected}=capture(value,retiring));}catch(error){return Promise.reject(error);}
+        try {check();({captured,expected}=capture(value,retiring));}catch(error){return Promise.reject(error);}
+        if(retiring){
+          const key=branchKey(captured.identity);
+          if(!claims.has(key)){
+            if(!retirementTargets.has(key)&&retirementTargets.size>=MAX_BRANCHES)return Promise.reject(fail('draft_retirement_capacity'));
+            claims.add(key);retirementTargets.set(key,(retirementTargets.get(key)??0)+1);
+          }
+        }
         const bytes=retiring?0:(captured.baseline.content.length+captured.draft.length+(captured.pendingOperation?.length??0))*2;
         return enqueue(check,bytes,async()=>{
           let mutation=false;
@@ -276,9 +403,10 @@ async function openDraftJournal(directory, {fileSystem=fs}={}) {
             selected=Object.hasOwn(options,'entryId')?id(options.entryId):undefined;
           }catch(error){return Promise.reject(error);}
           return enqueue(check,0,async()=>{
-          const found=[],prefix=selected===undefined?scopePrefix(bound):entryPrefix({...bound,entryId:selected});
+          const found=[],prefix=selected===undefined?scopePrefix(bound):entryPrefix({...bound,entryId:selected});let matched=0;
           for await(const name of names()){
             if(!name.startsWith(prefix))continue;
+            if(++matched>testHeadLimit)throw fail('draft_inventory_limit');
             const head=await readHead(name);
             if(head&&(head.identity.vaultId!==bound.vaultId||head.identity.clientId!==bound.clientId||selected!==undefined&&head.identity.entryId!==selected))throw fail('draft_storage_corrupt');
             if(head&&!head.deleted)found.push(receipt(head));
@@ -287,7 +415,7 @@ async function openDraftJournal(directory, {fileSystem=fs}={}) {
         });},
       });
     },
-    async close(){closed=true;for(const revoke of leases)revoke();await tail;},
+    async close(){closed=true;for(const revoke of leases)revoke();await tail;await closeMaintenanceCursor();},
   });
 }
 module.exports={openDraftJournal};

@@ -225,7 +225,7 @@ test('selected entry inventory opens no unrelated heads or bodies, including aft
   const foreign=journal.bind({...scope,vaultId:'foreign-vault'});await foreign.compareAndSwap(change());
   await journal.close();
   const reopened=await openDraftJournal(directory,{fileSystem:counted}),recovery=reopened.bind({...scope,incarnationId:'recovery'});
-  assert.equal(headReads,0,'opening the owner only validates directory names');
+  assert.equal(headReads,0,'opening the owner only validates the format marker');
   const selected=await recovery.list({entryId:'entry-one'});
   assert.equal(selected.length,2);assert.equal(headReads,2);assert.equal(blobReads,0);
   headReads=0;
@@ -266,7 +266,7 @@ test('flat prototype names and version-one heads fail explicitly without migrati
   await fs.writeFile(file,original);
   await fs.mkdir(path.join(folder,'a'.repeat(64)));
   await assert.rejects(lease.list({entryId:'entry-one'}),{code:'draft_layout_unsupported'});
-  await assert.rejects(openDraftJournal(directory),{code:'draft_layout_unsupported'});
+  const marked=await openDraftJournal(directory);await assert.rejects(marked.bind({...scope,incarnationId:'marked-reopen'}).list(),{code:'draft_layout_unsupported'});await marked.close();
   assert.equal(await fs.readFile(file,'utf8'),original);
 });
 
@@ -276,7 +276,7 @@ test('malformed directory names reject inventory while invalid list options neve
   await assert.rejects(lease.list({entryId:'entry-one',unknown:true}),{code:'invalid_draft_identity'});
   await fs.mkdir(path.join(directory,'branches','not-a-branch'));
   await assert.rejects(lease.list({entryId:'missing-entry'}),{code:'draft_storage_corrupt'});
-  await assert.rejects(openDraftJournal(directory),{code:'draft_storage_corrupt'});
+  const marked=await openDraftJournal(directory);await assert.rejects(marked.bind({...scope,incarnationId:'marked-reopen'}).list(),{code:'draft_storage_corrupt'});await marked.close();
 });
 
 async function maintainPass(journal) {
@@ -327,4 +327,124 @@ test('inactive live candidates and other scopes survive maintenance without body
   const recovery=journal.bind({...scope,incarnationId:'recovery'}),foreignRecovery=journal.bind({...scope,vaultId:'foreign-vault',incarnationId:'recovery'});
   assert.equal((await recovery.read({...change(),incarnationId:scope.incarnationId})).draft,'Retained one');
   assert.equal((await foreignRecovery.read({...change(),incarnationId:scope.incarnationId})).draft,'Retained foreign');
+});
+
+function observedFiles(stats, {rename}={}) {
+  return new Proxy(fs,{get(target,key){
+    if(key==='open')return async(file,...args)=>{if(path.basename(file)==='head.json')stats.heads++;if(path.basename(path.dirname(file))==='blobs')stats.bodies++;return fs.open(file,...args);};
+    if(key==='unlink')return async(...args)=>{stats.unlinks++;return fs.unlink(...args);};
+    if(key==='rename'&&rename)return rename;
+    if(key==='opendir')return async(...args)=>{
+      stats.opens++;stats.handles++;stats.maxHandles=Math.max(stats.maxHandles,stats.handles);
+      const dir=await fs.opendir(...args);let ended=false;
+      const end=()=>{if(!ended){ended=true;stats.handles--;}};
+      return new Proxy(dir,{get(owner,method){
+        if(method==='read')return async()=>{stats.names++;return owner.read();};
+        if(method==='close')return async()=>{try{return await owner.close();}finally{end();}};
+        if(method===Symbol.asyncIterator)return async function*(){try{for await(const entry of owner){stats.names++;yield entry;}}finally{end();}};
+        const value=Reflect.get(owner,method);return typeof value==='function'?value.bind(owner):value;
+      }});
+    };
+    const value=target[key];return typeof value==='function'?value.bind(target):value;
+  }});
+}
+const observations=()=>({heads:0,bodies:0,names:0,opens:0,handles:0,maxHandles:0,unlinks:0});
+
+test('reopening reads only the bounded format marker; missing-marker prototype checks at most one name',async t=>{
+  const directory=await fixture(t),journal=await openDraftJournal(directory),lease=journal.bind(scope);await lease.compareAndSwap(change());await journal.close();
+  const stats=observations(),reopened=await openDraftJournal(directory,{fileSystem:observedFiles(stats)});
+  assert.equal(stats.opens,0);assert.equal(stats.names,0);assert.equal(stats.heads,0);assert.equal(stats.bodies,0);await reopened.close();
+  await fs.unlink(path.join(directory,'FORMAT'));
+  await assert.rejects(openDraftJournal(directory,{fileSystem:observedFiles(stats)}),{code:'draft_layout_unsupported'});
+  assert.equal(stats.opens,1);assert.equal(stats.names,1);assert.equal(stats.handles,0);assert.equal(stats.heads,0);
+  await assert.rejects(fs.stat(path.join(directory,'FORMAT')),{code:'ENOENT'},'nonempty prototype was not silently blessed');
+});
+
+test('format marker rejects symlink, oversize and unsupported data without inspecting branch heads',async t=>{
+  const directory=await fixture(t),journal=await openDraftJournal(directory);await journal.close();
+  const marker=path.join(directory,'FORMAT'),saved=await fs.readFile(marker),other=path.join(path.dirname(directory),'marker-copy');
+  await fs.writeFile(other,saved);await fs.unlink(marker);await fs.symlink(other,marker);
+  await assert.rejects(openDraftJournal(directory),{code:'draft_storage_corrupt'});await fs.unlink(marker);
+  await fs.writeFile(marker,'x'.repeat(65));await assert.rejects(openDraftJournal(directory),{code:'draft_storage_corrupt'});
+  await fs.writeFile(marker,'zorid-independent-drafts\n99\n');await assert.rejects(openDraftJournal(directory),{code:'draft_layout_unsupported'});
+});
+
+test('historical tombstones beyond the matched-head ceiling do not prevent reopen, targeted recovery or bounded cleanup',async t=>{
+  const directory=await fixture(t),journal=await openDraftJournal(directory,{testHeadLimit:3}),active=journal.bind(scope);await active.compareAndSwap(change());
+  for(let i=0;i<4;i++){
+    const lease=journal.bind({...scope,incarnationId:`retired-${i}`}),entryId=`old-entry-${i}`;
+    const saved=await lease.compareAndSwap(change({entryId,baseline:{...change().baseline,entryId}}));
+    await lease.retire({entryId,writer:saved.writer,generation:1,expectedRevision:'1',nextRevision:'2'});lease.revoke();
+  }
+  await assert.rejects(active.list(),{code:'draft_inventory_limit'});await journal.close();
+  const stats=observations(),reopened=await openDraftJournal(directory,{testHeadLimit:3,fileSystem:observedFiles(stats)}),recovery=reopened.bind({...scope,incarnationId:'recovery'});
+  assert.equal(stats.names,0);assert.equal(stats.heads,0);assert.equal((await recovery.list({entryId:'entry-one'})).length,1);
+  const result=await maintainPass(reopened);assert.equal(result.removed,4);assert.deepEqual(result.errors,[]);
+  assert.equal((await recovery.list()).length,1);await reopened.close();assert.equal(stats.handles,0);
+});
+
+test('quarantine survives an interrupted rename reply; cleanup resumes one file/head per unit after restart',async t=>{
+  const directory=await fixture(t);let loseRetire=false,loseMove=true;
+  const wrapped=faultFiles({renameHead:async(from,to)=>{await fs.rename(from,to);if(loseRetire){loseRetire=false;throw Object.assign(new Error('Lost retirement'),{code:'EIO'});}}});
+  const files=new Proxy(wrapped,{get(target,key){if(key==='rename')return async(from,to)=>{await target.rename(from,to);if(path.basename(path.dirname(to))==='retired-trash'&&loseMove){loseMove=false;throw Object.assign(new Error('Interrupted quarantine'),{code:'EIO'});}};return target[key];}});
+  const journal=await openDraftJournal(directory,{fileSystem:files}),lease=journal.bind(scope);await lease.compareAndSwap(change());loseRetire=true;
+  await assert.rejects(lease.retire({entryId:'entry-one',writer:'checkpoint-writer',generation:1,expectedRevision:'1',nextRevision:'2'}));lease.revoke();
+  const moved=await journal.maintain({maxUnits:1});assert.deepEqual(moved.errors,['draft_storage_failure']);await journal.close();
+  const stats=observations(),reopened=await openDraftJournal(directory,{fileSystem:observedFiles(stats)}),recovery=reopened.bind({...scope,incarnationId:'recovery'});
+  assert.deepEqual(await recovery.list(),[],'quarantined tombstone cannot block active inventory');
+  let done=false,removed=0;
+  for(let unit=0;!done&&unit<40;unit++){
+    const before={heads:stats.heads,bodies:stats.bodies,unlinks:stats.unlinks};
+    const result=await reopened.maintain({maxUnits:1});done=result.done;removed+=result.removed;
+    assert.ok(stats.heads-before.heads<=1);assert.equal(stats.bodies-before.bodies,0);assert.ok(stats.unlinks-before.unlinks<=1);
+  }
+  assert.equal(done,true);assert.equal(removed,1);assert.equal(stats.maxHandles,1);assert.equal(stats.handles,0);await reopened.close();
+});
+
+test('corrupt heads and unknown trash data are preserved with bounded diagnostics and do not loop the pass',async t=>{
+  const directory=await fixture(t),journal=await openDraftJournal(directory),lease=journal.bind(scope);await lease.compareAndSwap(change());
+  await lease.retire({entryId:'entry-one',writer:'checkpoint-writer',generation:1,expectedRevision:'1',nextRevision:'2'});lease.revoke();
+  await journal.maintain({maxUnits:1});
+  const trash=path.join(directory,'retired-trash'),[name]=await fs.readdir(trash),unknown=path.join(trash,name,'blobs','unknown-recovery-data');await fs.writeFile(unknown,'Keep this evidence');
+  await fs.mkdir(path.join(trash,'malformed-item'));await fs.writeFile(path.join(trash,'malformed-item','candidate'),'Keep this too');
+  const result=await maintainPass(journal);assert.equal(result.removed,0);assert.ok(result.errors.every(code=>code==='draft_storage_corrupt'));
+  assert.equal(await fs.readFile(unknown,'utf8'),'Keep this evidence');
+  const originalHead=path.join(trash,name,'head.json');await fs.writeFile(originalHead,'Corrupt tombstone metadata');
+  const corrupt=await maintainPass(journal);assert.ok(corrupt.errors.includes('draft_storage_corrupt'));assert.equal(await fs.readFile(originalHead,'utf8'),'Corrupt tombstone metadata');
+  await journal.close();
+});
+
+test('close joins a paused maintenance cursor and rejects later work',async t=>{
+  const directory=await fixture(t),stats=observations(),journal=await openDraftJournal(directory,{fileSystem:observedFiles(stats)}),lease=journal.bind(scope);await lease.compareAndSwap(change());
+  await journal.maintain({maxUnits:1});assert.equal(stats.handles,1);await journal.close();assert.equal(stats.handles,0);
+  await assert.rejects(journal.maintain({maxUnits:1}),{code:'draft_lease_revoked'});await assert.rejects(journal.maintain({maxUnits:2}),{code:'invalid_draft_limit'});
+});
+
+test('a retirement claims its old target before waiting behind maintenance on the storage queue',async t=>{
+  const directory=await fixture(t);let armed=false,release,started;
+  const gate=new Promise(resolve=>{release=resolve;}),waiting=new Promise(resolve=>{started=resolve;});
+  const files=new Proxy(fs,{get(target,key){
+    if(key==='open')return async(file,...args)=>{
+      const handle=await fs.open(file,...args);
+      if(!armed||path.basename(file)!=='head.json')return handle;
+      return new Proxy(handle,{get(owner,method){if(method==='readFile')return async(...values)=>{armed=false;started();await gate;return owner.readFile(...values);};const value=Reflect.get(owner,method);return typeof value==='function'?value.bind(owner):value;}});
+    };
+    const value=target[key];return typeof value==='function'?value.bind(target):value;
+  }});
+  const journal=await openDraftJournal(directory,{fileSystem:files}),old=journal.bind(scope);await old.compareAndSwap(change());
+  const retire={entryId:'entry-one',writer:'checkpoint-writer',incarnationId:scope.incarnationId,generation:1,expectedRevision:'1',nextRevision:'2'};await old.retire(retire);old.revoke();
+  const current=journal.bind({...scope,incarnationId:'current'});armed=true;
+  const maintenance=journal.maintain({maxUnits:1});await waiting;
+  const retry=current.retire(retire);release();await maintenance;assert.equal((await retry).revision,'2');
+  assert.equal((await maintainPass(journal)).removed,0);current.revoke();assert.equal((await maintainPass(journal)).removed,1);await journal.close();
+});
+
+test('retirement protection metadata is bounded without evicting old claims, and revoke releases capacity',async t=>{
+  const journal=await openDraftJournal(await fixture(t)),lease=journal.bind(scope);
+  const retire=entryId=>({entryId,writer:'writer',generation:1,expectedRevision:'1',nextRevision:'2'});
+  for(let i=0;i<4096;i++)await assert.rejects(lease.retire(retire(`missing-${i}`)),{code:'draft_revision_conflict'});
+  await assert.rejects(lease.retire(retire('exceeds-capacity')),{code:'draft_retirement_capacity'});
+  await assert.rejects(lease.retire(retire('missing-0')),{code:'draft_revision_conflict'},'existing protected key was not evicted');
+  lease.revoke();await assert.rejects(lease.retire(retire('after-revoke')),{code:'draft_lease_revoked'});
+  const next=journal.bind({...scope,incarnationId:'next'});await assert.rejects(next.retire(retire('exceeds-capacity')),{code:'draft_revision_conflict'});await journal.close();
 });
