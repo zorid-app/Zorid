@@ -168,6 +168,7 @@ export class Workspace {
   private sidebarPinnedContext?:SidebarBaseContext;
   private sidebarBasePinButton?:HTMLButtonElement;
   private baseNewItem?:BaseNewItemPopoverHandle;
+  private retiringBaseNewItems=new Map<BaseNewItemPopoverHandle,{anchor?:HTMLElement;embeds?:BaseEmbedSessions}>();
   /** Stable initiating host; popover positioning keeps its separate button anchor. */
   private baseNewItemAnchor?:HTMLElement;
   private baseNewItemOpening?:Promise<boolean>;
@@ -198,7 +199,7 @@ export class Workspace {
   private keyListener = (event: KeyboardEvent) => this.onKey(event);
   private unloadListener = (event: BeforeUnloadEvent) => {
     try{this.saveSession();}catch{/* Storage failure must not bypass the dirty-document unload guard. */}
-    if (this.hasPendingBaseCreation() || this.baseNewItemOpening || this.baseNewItem?.hasPendingChanges() || this.sidebarBase?.session.hasPendingChanges() || [...this.buffers.values()].some(buffer => buffer.dirty) || [...this.panes,...this.cachedViews.values()].some(pane => pane.properties?.hasPendingChanges() || pane.tasksView?.hasPendingChanges() || pane.calendarView?.hasPendingChanges() || pane.canvasView?.hasPendingChanges() || pane.baseView?.hasPendingChanges() || pane.baseEmbeds?.hasPendingChanges())) { event.preventDefault(); event.returnValue = ''; }
+    if (this.hasPendingBaseCreation() || this.baseNewItemOpening || this.retiringBaseNewItems.size || this.baseNewItem?.hasPendingChanges() || this.sidebarBase?.session.hasPendingChanges() || [...this.buffers.values()].some(buffer => buffer.dirty) || [...this.panes,...this.cachedViews.values()].some(pane => pane.properties?.hasPendingChanges() || pane.tasksView?.hasPendingChanges() || pane.calendarView?.hasPendingChanges() || pane.canvasView?.hasPendingChanges() || pane.baseView?.hasPendingChanges() || pane.baseEmbeds?.hasPendingChanges())) { event.preventDefault(); event.returnValue = ''; }
   };
   private menuSerial = 0;
   private inputContextListener=(event:MouseEvent)=>{
@@ -626,7 +627,7 @@ export class Workspace {
     current();this.recoveringAdmissionVaults.add(vault);clearTimeout(this.reloadTimer);
     const panes=[...this.panes,...this.cachedViews.values()];
     const bases=new Set([this.sidebarBase?.session,...panes.flatMap(pane=>[pane.baseView,pane.baseEmbeds])].filter((base):base is BaseSession|BaseEmbedSessions=>!!base));
-    const pendingViews=()=>this.hasPendingBaseCreation()||this.baseNewItemOpening||this.baseNewItem?.hasPendingChanges()
+    const pendingViews=()=>this.hasPendingBaseCreation()||this.baseNewItemOpening||this.retiringBaseNewItems.size||this.baseNewItem?.hasPendingChanges()
       ||panes.some(pane=>pane.properties?.hasPendingChanges()||pane.tasksView?.hasPendingChanges()||pane.calendarView?.hasPendingChanges()||pane.canvasView?.hasPendingChanges())
       ||[...bases].some(base=>base.prepareAdmissionRecovery?base.canRecoverAdmission?.()!==true:base.hasPendingChanges());
     if(pendingViews()){this.root.inert=true;throw new Error('Pending view changes are retained while storage reconnects.');}
@@ -1748,13 +1749,18 @@ export class Workspace {
             hoverFile:(row,event)=>{try{validate();const anchor=baseFileHoverAnchor(row,event);if(anchor)hover.hover(row,event,anchor);}catch(error){notice(error instanceof Error?error.message:String(error));}},
             ...(onSourceError?{onState:(state,unavailable)=>onSourceError(state.error,unavailable)}:{}),
             onEditsSettled:()=>{const sidebar=this.sidebarBase;if(sidebar&&sidebar.session===composed)this.retrySidebarFollowingContext(sidebar);},
-            onViewRenamed:event=>{validate();const identity=this.treeEntryToken(event.basePath);if(!identity)return;for(const sessions of new Set([this.baseNewItemEmbeds,...this.baseHoverEmbeds,...this.loadedViews().map(pane=>pane.baseEmbeds)].filter((sessions):sessions is BaseEmbedSessions=>!!sessions)))sessions.renameViewBinding(event.basePath,event.from,event.to,identity,event.viewId);},
-            closeCreatedFile:()=>this.baseNewItem?.element.contains(host)?false:this.closeBaseNewItem(),
+            onViewRenamed:event=>{validate();const identity=this.treeEntryToken(event.basePath);if(!identity)return;for(const sessions of new Set([this.baseNewItemEmbeds,...[...this.retiringBaseNewItems.values()].map(parent=>parent.embeds),...this.baseHoverEmbeds,...this.loadedViews().map(pane=>pane.baseEmbeds)].filter((sessions):sessions is BaseEmbedSessions=>!!sessions)))sessions.renameViewBinding(event.basePath,event.from,event.to,identity,event.viewId);},
+            closeCreatedFile:()=>this.baseNewItemForHost(host)?false:this.closeBaseNewItem(),
             openCreatedFile:async(target,_event,anchor,expectedEntryId)=>{
               validate();
-              // A nested Base's own New operation is still tracked by its
-              // session. Release that operation before draining its parent.
-              if(this.baseNewItem?.element.contains(host)){this.run(async()=>{await this.closeBaseNewItem();await this.openBaseNewItem(target,this.root,this.root,false,expectedEntryId?{entryId:expectedEntryId}:undefined);});return;}
+              const parent=this.baseNewItemForHost(host);
+              if(parent){
+                // Present before draining the parent: its embedded Session is
+                // awaiting this very promise and must retain failed creation.
+                const presented=await this.openBaseNewItem(target,anchor??host,host,false,expectedEntryId?{entryId:expectedEntryId}:undefined,undefined,parent);
+                if(presented)this.run(()=>this.closeRetiringBaseNewItems());
+                return presented;
+              }
               return this.openBaseNewItem(target,anchor??host,host,false,expectedEntryId?{entryId:expectedEntryId}:undefined);
             },
             buffers:{getBuffer:target=>this.baseBufferFor(target,validate),validate,
@@ -1928,17 +1934,24 @@ export class Workspace {
     return{isCurrent:available,hasPendingChanges:()=>false,flush:async()=>{},owns:node=>host.contains(node)||[...layers].some(layer=>layer.isConnected&&layer.contains(node)),dispose:()=>{if(disposed)return;disposed=true;signal.removeEventListener('abort',release);child?.destroy();release();for(const layer of layers)layer.remove();layers.clear();}};
   }
 
-  private async flushBaseNewItem():Promise<void>{await this.baseNewItemOpening;await this.finishInlinePublicationAt(this.baseNewItem?.path);await this.baseNewItem?.flush();}
+  private baseNewItemForHost(host:HTMLElement):BaseNewItemPopoverHandle|undefined{
+    return this.baseNewItem?.element.contains(host)?this.baseNewItem:[...this.retiringBaseNewItems.keys()].find(parent=>parent.element.contains(host));
+  }
+  private async closeRetiringBaseNewItems():Promise<void>{
+    for(const parent of this.retiringBaseNewItems.keys()){await this.finishInlinePublicationAt(parent.path);await parent.close();this.retiringBaseNewItems.delete(parent);}
+  }
+  private async flushBaseNewItem():Promise<void>{await this.baseNewItemOpening;await this.closeRetiringBaseNewItems();await this.finishInlinePublicationAt(this.baseNewItem?.path);await this.baseNewItem?.flush();}
   private notePropertyTargets(getPath:()=>string,isCurrent:()=>boolean,onChange:()=>void):NotePropertyTargets{
     const vault=this.vault,session=createNotePropertyTargets({vault,getPath,isCurrent,onChange}),owner={vault,session};this.notePropertyQueries.add(owner);
     return{...session,destroy:()=>{session.destroy();void session.close().then(()=>this.notePropertyQueries.delete(owner),()=>{});},close:async()=>{await session.close();this.notePropertyQueries.delete(owner);}};
   }
   private async closeBaseNewItem():Promise<boolean>{
     await this.baseNewItemOpening;
+    await this.closeRetiringBaseNewItems();
     const current=this.baseNewItem;if(!current)return false;
     await current.close();return true;
   }
-  private openBaseNewItem(path:string,anchor:HTMLElement,ownershipHost:HTMLElement=anchor,existing=false,expectedWitness?:{entryId:string;revision?:string},openingOwner?:{current():boolean;contextCurrent():boolean;canceled?():boolean;release():void}):Promise<boolean>{
+  private openBaseNewItem(path:string,anchor:HTMLElement,ownershipHost:HTMLElement=anchor,existing=false,expectedWitness?:{entryId:string;revision?:string},openingOwner?:{current():boolean;contextCurrent():boolean;canceled?():boolean;release():void},replacingParent?:BaseNewItemPopoverHandle):Promise<boolean>{
     if(!openingOwner){
       const pane=this.activePane,activation=this.paneActivationRevision,navigation=this.navigationIntent.get(pane),version=pane.renderVersion;
       const doc=anchor.ownerDocument,win=doc.defaultView,focused=doc.activeElement;let retired=false,canceled=false;
@@ -1951,7 +1964,10 @@ export class Workspace {
     }
     const owner=openingOwner;
     const canceled=()=>{if(existing||owner.canceled?.())return false;throw new Error('The created note preview owner changed. Its original creation is retained.');};
-    if(this.baseNewItemOpening)return this.baseNewItemOpening.then(()=>this.openBaseNewItem(path,anchor,ownershipHost,existing,expectedWitness,owner)).finally(owner.release);
+    if(this.baseNewItemOpening)return this.baseNewItemOpening.then(()=>this.openBaseNewItem(path,anchor,ownershipHost,existing,expectedWitness,owner,replacingParent)).finally(owner.release);
+    const parentState=replacingParent&&(this.retiringBaseNewItems.get(replacingParent)??{anchor:this.baseNewItemAnchor,embeds:this.baseNewItemEmbeds});
+    const retainParent=()=>{if(replacingParent?.element.isConnected&&parentState)this.retiringBaseNewItems.set(replacingParent,parentState);};
+    const restoreParent=()=>{if(replacingParent?.element.isConnected&&parentState&&(!this.baseNewItem||this.baseNewItem===replacingParent)){this.baseNewItem=replacingParent;this.baseNewItemAnchor=parentState.anchor;this.baseNewItemEmbeds=parentState.embeds;this.retiringBaseNewItems.delete(replacingParent);}};
     const vault=this.vault,generation=this.vaultGeneration;
     const opening=Promise.resolve().then(async()=>{
       if(!owner.current())return canceled();
@@ -1962,7 +1978,7 @@ export class Workspace {
         validateOpening();if(vault.adapter!==adapter||entry?.type!=='file'||entry.entryId!==expectedWitness.entryId||expectedWitness.revision!==undefined&&entry.revision!==expectedWitness.revision)throw new Error('The page changed before its preview could open.');
       };
       validateOpening();
-      await this.baseNewItem?.close();
+      if(this.baseNewItem!==replacingParent)await this.baseNewItem?.close();
       if(!owner.current())return canceled();
       await verifyOpening();
       let disposed=false,buffer:NoteBuffer|undefined;
@@ -2000,7 +2016,7 @@ export class Workspace {
         mount();remounts.add(mount);
         return{dom:host,destroy:()=>{if(closed)return;closed=true;remounts.delete(mount);if(node)embeds.releaseEmbed(node);}};
       };
-      const cleanup=()=>{disposed=true;propertyPicker?.destroy();propertyPicker=undefined;if(this.baseNewItemEmbeds===sessions)this.baseNewItemEmbeds=undefined;targets.destroy();embeds.destroy();this.canvasMarkdownEmbeds.delete(embeds);remounts.clear();if(this.baseNewItem===popup){this.baseNewItem=undefined;this.baseNewItemAnchor=undefined;}};
+      const cleanup=()=>{disposed=true;if(popup)this.retiringBaseNewItems.delete(popup);propertyPicker?.destroy();propertyPicker=undefined;if(this.baseNewItemEmbeds===sessions)this.baseNewItemEmbeds=undefined;targets.destroy();embeds.destroy();this.canvasMarkdownEmbeds.delete(embeds);remounts.clear();if(this.baseNewItem===popup){this.baseNewItem=undefined;this.baseNewItemAnchor=undefined;}};
       const addPageProperty=async(anchor:HTMLElement)=>{
         validateFile();if(propertyPicker){propertyPicker.element.querySelector<HTMLInputElement>('input')?.focus();return;}
         await shared.flush();validateFile();const selected=await targets.prepareCollection();validateFile();
@@ -2062,14 +2078,14 @@ export class Workspace {
         validateFile();
         if(!owner.contextCurrent()){preparing=false;await popup.close();throw new Error('The created note preview owner changed. Its original creation is retained.');}
         if(owner.canceled?.())throw presentationCanceled;
-        preparing=false;popup.element.append(recovery);this.baseNewItem=popup;this.baseNewItemAnchor=ownershipHost;return true;
+        preparing=false;popup.element.append(recovery);retainParent();this.baseNewItem=popup;this.baseNewItemAnchor=replacingParent?this.root:ownershipHost;return true;
       }catch(error){
         preparing=false;
         if(error===presentationCanceled&&popup?.element.isConnected){
-          try{await popup.close();}catch(failure){this.baseNewItem=popup;this.baseNewItemAnchor=ownershipHost;throw failure;}
+          try{await popup.close();}catch(failure){retainParent();this.baseNewItem=popup;this.baseNewItemAnchor=replacingParent?this.root:ownershipHost;throw failure;}
         }
-        if(popup?.element.isConnected){this.baseNewItem=popup;this.baseNewItemAnchor=ownershipHost;throw error;}
-        cleanup();await sessions.close();if(error===presentationCanceled)return false;throw error;
+        if(popup?.element.isConnected){retainParent();this.baseNewItem=popup;this.baseNewItemAnchor=replacingParent?this.root:ownershipHost;throw error;}
+        cleanup();restoreParent();await sessions.close();if(error===presentationCanceled)return false;throw error;
       }
     });
     this.baseNewItemOpening=opening;

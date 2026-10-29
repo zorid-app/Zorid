@@ -133,7 +133,8 @@ async function workspaceFixture(t:test.TestContext){
   const matchMedia=(media:string)=>({matches:false,media,addListener(){},removeListener(){},addEventListener(){},removeEventListener(){}});
   for(const[key,value]of Object.entries({window:dom.window,document:dom.window.document,localStorage:dom.window.localStorage,navigator:dom.window.navigator,HTMLElement:dom.window.HTMLElement,Node:dom.window.Node,Text:dom.window.Text,Window:dom.window.Window,MutationObserver:dom.window.MutationObserver,getComputedStyle:dom.window.getComputedStyle.bind(dom.window),requestAnimationFrame:dom.window.requestAnimationFrame.bind(dom.window),cancelAnimationFrame:dom.window.cancelAnimationFrame.bind(dom.window),matchMedia})){saved.set(key,Object.getOwnPropertyDescriptor(globalThis,key));Object.defineProperty(globalThis,key,{configurable:true,writable:true,value});}
   dom.window.matchMedia=matchMedia as typeof window.matchMedia;
-  const adapter=new MemoryAdapter({'Start.md':'Start','ZCreated.md':'Created exact body'}),ids=new Map([['Start.md','start-entry'],['ZCreated.md','created-entry']]),heads=new Map<string,any>(),checkpointLoads:string[]=[],list=adapter.list.bind(adapter);
+  const adapter=new MemoryAdapter({'Start.md':'Start','ZCreated.md':'Created exact body','Nested.base':'views: [{id: aaaaaaaaaaaa, type: table, name: Nested}]\n'}),ids=new Map([['Start.md','start-entry'],['ZCreated.md','created-entry'],['Nested.base','nested-base']]),heads=new Map<string,any>(),checkpointLoads:string[]=[],list=adapter.list.bind(adapter),writes:string[]=[],write=adapter.write.bind(adapter);
+  adapter.write=async(path,text)=>{if(!ids.has(path))ids.set(path,`created-${ids.size}`);writes.push(path);await write(path,text);};
   adapter.list=async()=>(await list()).map(entry=>({...entry,entryId:ids.get(entry.path),revision:'r1'}));
   adapter.stat=async path=>(await adapter.list()).find(entry=>entry.path===path)??null;
   let release!:()=>void,started=false,hold=false;const gate=new Promise<void>(resolve=>{release=resolve;});
@@ -141,11 +142,11 @@ async function workspaceFixture(t:test.TestContext){
   const durable:DurableWrites={checkpoints:{scope:{vaultId:'creation-vault',clientId:'creation-client'},load:async key=>{checkpointLoads.push(key);return heads.get(key)??null;},list:async()=>({items:[],cursor:null,highWater:'0'}),changes:async()=>({items:[],cursor:null,highWater:'0'}),compareAndSwap:async change=>{const next={version:1,...durable.checkpoints.scope,...change,sequence:'1',deleted:false,byteLength:change.encodedState.length,revision:change.nextRevision};heads.set(change.key,next);return next;}},
     readText:async path=>{if(hold&&path==='ZCreated.md'){started=true;await gate;}return{entryId:ids.get(path)!,revision:'r1',path,content:await adapter.read(path),stat:{ctime:1,mtime:1,size:1}};},readTextById:async id=>{const path=[...ids].find(([,value])=>value===id)?.[0];return path?durable.readText(path):null;},planWrite:unsupported,prepare:unsupported,commit:unsupported,query:unsupported,listUnacknowledged:async()=>[],acknowledge:unsupported};
   Object.assign(adapter,{durableWrites:durable});
-  const root=dom.window.document.querySelector('main')!,workspace=new Workspace(root,(parent,options)=>{const input=parent.ownerDocument.createElement('textarea');parent.append(input);return{getValue:()=>options.value,setValue(){},focus(){},destroy(){input.remove();},insert(){}};});
+  const errors:unknown[]=[],root=dom.window.document.querySelector('main')!,workspace=new Workspace(root,(parent,options)=>{const input=parent.ownerDocument.createElement('textarea');parent.append(input);return{getValue:()=>options.value,setValue(){},focus(){},destroy(){input.remove();},insert(){}};},{base:(host,options)=>createBaseSession(host,{...options,onError:error=>{errors.push(error);options.onError?.(error);}})});
   t.after(async()=>{release();try{await workspace.destroy();}finally{dom.window.close();for(const[key,descriptor]of saved){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else Reflect.deleteProperty(globalThis,key);}}});
   await workspace.start({adapter,id:'test:creation-continuation',label:'Creation'});await workspace.openNote('Start.md');
   const anchor=dom.window.document.createElement('button');root.append(anchor);anchor.focus();
-  return{dom,root,workspace,adapter,ids,checkpointLoads,anchor,holdRead(){hold=true;return{release,get started(){return started;}};}};
+  return{dom,root,workspace,adapter,ids,checkpointLoads,anchor,writes,errors,holdRead(){hold=true;return{release,get started(){return started;}};}};
 }
 
 test('Workspace admits the captured creation actor through a delayed buffer load without adopting a replacement',async t=>{
@@ -160,6 +161,56 @@ test('Workspace admits the captured creation actor through a delayed buffer load
   const retired=(workspace as any).openBaseNewItem('ZCreated.md',anchor,root,false,{entryId:'created-entry'});
   workspace.activePane.renderVersion++;
   await assert.rejects(retired,/preview owner changed/,'a runtime owner replacement is not evidence of user cancellation');
+});
+
+async function nestedFixture(t:test.TestContext){
+  const f=await workspaceFixture(t),internal=f.workspace as any;
+  assert.equal(await internal.openBaseNewItem('ZCreated.md',f.anchor,f.root,false,{entryId:'created-entry'}),true);
+  const parent=internal.baseNewItem,embeds=internal.baseNewItemEmbeds,host=f.root.ownerDocument.createElement('section');parent.element.append(host);
+  const binding=embeds.mount({sourcePath:'ZCreated.md',targetPath:'Nested.base',viewName:'',sourceIdentity:internal.treeEntryToken('ZCreated.md'),targetIdentity:internal.treeEntryToken('Nested.base')},host);await binding.ready;
+  const session=[...(embeds as any).entries][0].session;
+  return{...f,internal,parent,host,session,create(){host.querySelector<HTMLButtonElement>('[aria-label="New"]')!.click();}};
+}
+
+test('nested New waits for actual child presentation and closes its parent without awaiting itself',async t=>{
+  const f=await nestedFixture(t),load=f.internal.baseBufferFor.bind(f.internal);let entered=false,release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
+  f.internal.baseBufferFor=async(...args:unknown[])=>{const shared=await load(...args);if(args[0]==='Untitled.md'){const initial=shared.load.bind(shared);shared.load=async(...input:unknown[])=>{entered=true;await gate;return initial(...input);};}return shared;};
+  f.create();await until(()=>entered);assert.equal(f.parent.element.isConnected,true);assert.equal(f.session.hasPendingChanges(),true,'nested creation cannot acknowledge before its actual child load');
+  let drained=false;const drain=f.workspace.flush().then(()=>{drained=true;});release();
+  await until(()=>f.internal.baseNewItem?.path==='Untitled.md'&&!f.parent.element.isConnected&&drained);await drain;
+  assert.equal(f.writes.filter(path=>path==='Untitled.md').length,1);assert.deepEqual(f.errors,[]);
+});
+
+test('a nested parent close cannot discard its raw title draft after presenting the child',async t=>{
+  const f=await nestedFixture(t),title=f.parent.element.querySelector('[aria-label="Note title"]')!;
+  title.textContent='Retained / title';title.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));f.create();
+  await until(()=>f.internal.baseNewItem?.path==='Untitled.md'&&f.internal.retiringBaseNewItems.has(f.parent));
+  await assert.rejects(f.workspace.flush());assert.equal(f.parent.element.isConnected,true);assert.equal(title.textContent,'Retained / title');
+  title.textContent='ZCreated';title.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));await f.workspace.flush();
+  assert.equal(f.parent.element.isConnected,false);assert.equal(f.internal.baseNewItem?.path,'Untitled.md');assert.equal(f.writes.filter(path=>path==='Untitled.md').length,1);
+});
+
+test('a nested late child-load failure retains its live parent and exact committed creation for retry',async t=>{
+  const f=await nestedFixture(t),load=f.internal.baseBufferFor.bind(f.internal);let fail=true;
+  f.internal.baseBufferFor=async(...args:unknown[])=>{
+    const shared=await load(...args);if(args[0]==='Untitled.md'){const initial=shared.load.bind(shared);shared.load=async(...input:unknown[])=>{if(fail){fail=false;throw new Error('Nested child preparation failed');}return initial(...input);};}return shared;
+  };
+  f.create();await until(()=>f.errors.length>0||!f.parent.element.isConnected);
+  assert.equal(f.parent.element.isConnected,true,'the failed child must not destroy the original creation owner');
+  assert.equal(f.session.hasPendingChanges(),true);assert.equal(f.writes.filter(path=>path==='Untitled.md').length,1);
+  f.create();await until(()=>f.internal.baseNewItem?.path==='Untitled.md'&&!f.parent.element.isConnected);
+  assert.equal(f.writes.filter(path=>path==='Untitled.md').length,1);assert.equal(f.writes.filter(path=>path==='Untitled 1.md').length,0);
+});
+
+test('a presented nested child retains an accessible failed parent close and lifecycle flush retries that same parent',async t=>{
+  const f=await nestedFixture(t),embeds=f.internal.baseNewItemEmbeds,close=embeds.close.bind(embeds);let failed=false;
+  embeds.close=async()=>{if(!failed){failed=true;throw new Error('Parent embedded close failed');}return close();};
+  f.create();await until(()=>f.internal.baseNewItem?.path==='Untitled.md'&&failed);
+  assert.equal(f.parent.element.isConnected,true);assert.equal(f.internal.retiringBaseNewItems.has(f.parent),true);
+  assert.equal(f.parent.element.querySelector('[aria-label="Note title"]')?.textContent,'ZCreated');
+  const beforeUnload=new f.dom.window.Event('beforeunload',{cancelable:true});f.dom.window.dispatchEvent(beforeUnload);assert.equal(beforeUnload.defaultPrevented,true,'a failed parent remains unload-owned');
+  await f.workspace.flush();assert.equal(f.parent.element.isConnected,false);assert.equal(f.internal.retiringBaseNewItems.has(f.parent),false);
+  assert.equal(f.internal.baseNewItem?.path,'Untitled.md');assert.equal(f.writes.filter(path=>path==='Untitled.md').length,1);
 });
 
 for(const retirement of ['pane','host','blur','pointer','healthy'] as const)test(`final popup preparation validates its structural owner while allowing its own focus: ${retirement}`,async t=>{
