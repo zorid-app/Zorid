@@ -12,6 +12,98 @@ const completed=()=>report({complete:true,scanComplete:true,finished:true,issueC
 function setup(){const dom=new JSDOM('<main></main>');const previous=Object.getOwnPropertyDescriptor(globalThis,'document');Object.defineProperty(globalThis,'document',{configurable:true,value:dom.window.document});return{dom,host:document.querySelector('main')!,close(){dom.window.close();if(previous)Object.defineProperty(globalThis,'document',previous);else Reflect.deleteProperty(globalThis,'document');}};}
 const settle=()=>new Promise<void>(resolve=>setImmediate(resolve));
 const delays=[1_000,3_000,10_000,30_000];
+const pending=()=>report({scanComplete:true,finished:true,work:{phase:'publication',pending:true,workUnits:16}});
+
+test('backend publication stays pending through every retry delay without duplicate UI recovery',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const f=setup();try{
+    let calls=0;
+    const view=mountImportStatus(f.host,{status:pending(),entryCount:0,retry:async()=>{calls++;}});
+    for(const delay of delays){
+      view.update(pending(),0);t.mock.timers.tick(delay);await settle();
+      assert.equal(calls,0);assert.equal(view.element.dataset.state,'checking');
+      assert.equal(view.element.getAttribute('aria-busy'),'true');
+      assert.equal(view.element.querySelector('button')!.hidden,true);
+    }
+    view.update(pending(),3);t.mock.timers.tick(1_000_000);await settle();
+    assert.equal(calls,0);assert.equal(view.element.hidden,true);
+    assert.equal(view.element.querySelector<HTMLButtonElement>('.import-status-details')!.hidden,true);
+    view.destroy();
+  }finally{f.close();}
+});
+
+test('backend pending cancels a scheduled legacy retry and closes settled attention',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const f=setup();try{
+    let calls=0;
+    const view=mountImportStatus(f.host,{status:report(),entryCount:2,retry:async()=>{calls++;}});
+    t.mock.timers.tick(999);view.update(pending(),2);
+    t.mock.timers.tick(1_000_000);await settle();assert.equal(calls,0);
+    view.update(report(),2);
+    for(const delay of delays){t.mock.timers.tick(delay);await settle();}
+    assert.equal(calls,4);assert.equal(view.element.dataset.state,'incomplete');
+    view.element.querySelector<HTMLButtonElement>('.import-status-details')!.click();
+    assert.ok(document.querySelector('[role="dialog"]'));
+    view.update(pending(),2);
+    assert.equal(document.querySelector('[role="dialog"]'),null);
+    assert.equal(view.element.hidden,true);assert.equal(view.element.dataset.state,'checking');
+    t.mock.timers.tick(1_000_000);await settle();assert.equal(calls,4);view.destroy();
+  }finally{f.close();}
+});
+
+test('pending backend work arriving during a UI retry prevents its finally block scheduling another',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const f=setup();try{
+    let calls=0,release!:()=>void;const wait=new Promise<void>(resolve=>{release=resolve;});
+    const view=mountImportStatus(f.host,{status:report(),entryCount:1,retry:async()=>{calls++;await wait;}});
+    t.mock.timers.tick(1_000);assert.equal(calls,1);
+    view.update(pending(),1);release();await settle();
+    for(const delay of delays){t.mock.timers.tick(delay);await settle();}
+    assert.equal(calls,1);assert.equal(view.element.dataset.state,'checking');
+    assert.equal(view.element.hidden,true);view.destroy();
+  }finally{f.close();}
+});
+
+for(const [name,stopped] of [
+  ['blocked',()=>report({work:{phase:'blocked',pending:false,workUnits:0}})],
+  ['failure with stale pending metadata',()=>report({failure:'scan_failed',work:{phase:'publication',pending:true,workUnits:16}})],
+] as const){
+  test(`backend pending to ${name} starts one bounded retry episode`,async t=>{
+    t.mock.timers.enable({apis:['setTimeout']});
+    const f=setup();try{
+      let calls=0;
+      const view=mountImportStatus(f.host,{status:report(),entryCount:1,retry:async()=>{calls++;}});
+      for(const delay of delays){t.mock.timers.tick(delay);await settle();}
+      assert.equal(calls,4);assert.equal(view.element.dataset.state,'incomplete');
+      view.update(pending(),1);t.mock.timers.tick(1_000_000);await settle();assert.equal(calls,4);
+      view.update(stopped(),1);assert.equal(view.element.hidden,true);
+      for(const [index,delay] of delays.entries()){
+        view.update(stopped(),1);t.mock.timers.tick(delay-1);assert.equal(calls,4+index);
+        t.mock.timers.tick(1);await settle();assert.equal(calls,5+index);
+      }
+      assert.equal(view.element.dataset.state,'incomplete');
+      t.mock.timers.tick(1_000_000);await settle();assert.equal(calls,8);view.destroy();
+    }finally{f.close();}
+  });
+}
+
+test('pending work counters and new scan baselines do not replenish a later stalled episode',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const f=setup();try{
+    let calls=0;
+    const view=mountImportStatus(f.host,{status:pending(),entryCount:1,retry:async()=>{calls++;}});
+    for(let index=0;index<delays.length;index++){
+      view.update(report({scanId:`pending-${index}`,observed:100,work:{phase:'publication',pending:true,workUnits:index+1}}),1);
+      t.mock.timers.tick(delays[index]);await settle();assert.equal(calls,0);
+    }
+    view.update(report({scanId:'stalled',observed:100}),1);
+    for(const [index,delay] of delays.entries()){
+      view.update(report({scanId:`new-stalled-${index}`,observed:100+index,imported:index+1}),index+1);
+      t.mock.timers.tick(delay);await settle();assert.equal(calls,index+1);
+    }
+    assert.equal(view.element.dataset.state,'incomplete');view.destroy();
+  }finally{f.close();}
+});
 
 test('routine checks are quiet for available notes and never imply an unchecked vault is empty',t=>{
   t.mock.timers.enable({apis:['setTimeout']});

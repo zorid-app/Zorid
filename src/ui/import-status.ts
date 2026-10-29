@@ -16,7 +16,7 @@ export interface ImportStatusView {
 }
 
 // Bound consecutive stalled retries, rather than total pages in a large vault.
-// Only monotonic progress within one scan replenishes this budget.
+// Only monotonic progress within one scan replenishes a stalled episode.
 const retryDelays=[1_000,3_000,10_000,30_000] as const;
 
 /** Recover transient interruptions quietly. Only a settled, unresolved episode
@@ -71,17 +71,20 @@ export function mountImportStatus(host:HTMLElement,options:ImportStatusOptions):
   row.append(copy,retry);element.append(row,details);host.append(element);
 
   const complete=()=>!!status?.complete&&!status.failure;
+  // The backend owns continuation while an admitted work quantum is pending.
+  // A failed check must still recover even if its last work snapshot was pending.
+  const backendPending=()=>!!status?.work?.pending&&status.work.phase!=='blocked'&&!status.failure;
   const cancelTimer=()=>{if(timer!==null){clearTimeout(timer);timer=null;}};
   const refresh=()=>{
     if(destroyed)return;
-    const needsAttention=!complete()&&!busy&&attempts===retryDelays.length&&timer===null;
+    const needsAttention=!complete()&&!backendPending()&&!busy&&attempts===retryDelays.length&&timer===null;
     const compact=entryCount>0;
     const parent=compact&&options.statusHost?options.statusHost:host;
     if(element.parentElement!==parent)parent.append(element);
     element.hidden=complete()||(!needsAttention&&entryCount>0);
     element.classList.toggle('mod-compact',compact);
     row.hidden=compact;details.hidden=!compact||!needsAttention;
-    if(complete())closeDetails();
+    if(complete()||backendPending())closeDetails();
     element.dataset.state=needsAttention?'incomplete':'checking';
     element.setAttribute('aria-busy',String(!complete()&&!needsAttention));
     retry.hidden=!needsAttention;retry.disabled=busy;
@@ -91,11 +94,11 @@ export function mountImportStatus(host:HTMLElement,options:ImportStatusOptions):
       :'Your notes will appear here as they become available.';
   };
   const schedule=()=>{
-    if(destroyed||complete()||busy||timer!==null||attempts===retryDelays.length)return;
+    if(destroyed||complete()||backendPending()||busy||timer!==null||attempts===retryDelays.length)return;
     timer=setTimeout(()=>{timer=null;attempts++;void runRetry();},retryDelays[attempts]);
   };
   async function runRetry():Promise<void>{
-    if(busy||destroyed||complete())return;
+    if(busy||destroyed||complete()||backendPending())return;
     busy=true;refresh();
     try{await options.retry();}
     catch{
@@ -112,9 +115,11 @@ export function mountImportStatus(host:HTMLElement,options:ImportStatusOptions):
     element,
     update(next,count){
       if(destroyed)return;
-      const wasComplete=complete(),advanced=observeProgress(next,count);status=next;entryCount=count;
-      if(complete())cancelTimer();
-      else if(wasComplete||advanced){attempts=0;schedule();}
+      const wasComplete=complete(),wasPending=backendPending(),advanced=observeProgress(next,count);status=next;entryCount=count;
+      if(complete()||backendPending())cancelTimer();
+      // A backend-owned episode gets its own bounded recovery budget only when
+      // it settles or fails. Repeated stalled reports never replenish it.
+      else if(wasComplete||wasPending||advanced){attempts=0;schedule();}
       refresh();
     },
     destroy(){if(destroyed)return;destroyed=true;cancelTimer();closeDetails();element.remove();},
