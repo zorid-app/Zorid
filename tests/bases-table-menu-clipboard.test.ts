@@ -7,6 +7,7 @@ import type { BaseQueryResult } from '../src/bases/query.ts';
 import { baseExpressionValue } from '../src/bases/expression.ts';
 import type { DatabaseCollection, DatabaseProperty, DatabaseValue } from '../src/core/databases.ts';
 import { collectionClipboardValue } from '../src/databases/collection-clipboard.ts';
+import { parseBaseTableTSV } from '../src/bases/table-clipboard.ts';
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 const choices = [{ id: 'choice-red', name: 'Red, warm' }, { id: 'choice-blue', name: 'Blue' }];
@@ -25,8 +26,8 @@ const fields: DatabaseProperty[] = [
 const collection: DatabaseCollection = { id: 'collection', name: 'Menu test', revision: 'schema-r1', deleted: false, properties: fields };
 const saved: DatabaseValue[] = ['Exact\ntext\t"quoted"', -12.5, false, '2028-02-29', '2026-10-28T12:34:56.123456789+05:30', 'choice-red', ['choice-red', 'choice-blue'], 'working', null, []];
 
-function fixture() {
-  const dom = new JSDOM('<main></main><button id="outside">Outside</button>', { pretendToBeVisual: true });
+function fixture(embedded = false) {
+  const dom = new JSDOM(`${embedded ? '<div contenteditable="true"><div contenteditable="false">' : ''}<main></main>${embedded ? '</div></div>' : ''}<button id="outside">Outside</button>`, { pretendToBeVisual: true });
   const doc = dom.window.document, main = doc.querySelector('main')!;
   const properties = fields.map(field => `note.${field.id}`);
   const sourceRaw = Object.fromEntries(properties.map((property, index) => [property, baseExpressionValue(saved[index])]));
@@ -109,6 +110,71 @@ test('menu Copy and Paste use the keyboard rich formats for all eight types, nul
     f.clipboard = new Map([...keyboard].filter(([type]) => ['text/html', 'text/plain'].includes(type)));
     f.dispatch(f.cell(1), 'paste'); await tick(); assert.deepEqual(f.batches[1], expected);
     assert.deepEqual(f.textCalls, [0, 0]); assert.deepEqual(f.errors, []);
+  } finally { f.close(); }
+});
+
+test('an inline Base contenteditable=false boundary preserves keyboard and menu typed clipboard parity', async () => {
+  const f = fixture(true); try {
+    assert.equal(f.main.parentElement!.getAttribute('contenteditable'), 'false');
+    assert.equal(f.main.parentElement!.parentElement!.getAttribute('contenteditable'), 'true');
+    f.selectSource(); assert.equal(f.dispatch(f.doc.activeElement!, 'copy').defaultPrevented, true);
+    const keyboard = new Map(f.clipboard);
+    assert.ok(keyboard.get('text/html')?.includes('data-zorid-bases-clipboard'));
+    f.menu(f.cell(0), 'Copy').click(); await tick(); assert.deepEqual(f.executions, ['write']);
+    assert.equal(f.clipboard.get('text/html'), keyboard.get('text/html'));
+    f.cell(1).focus(); f.menu(f.cell(1), 'Paste').click(); await tick();
+    const expected = f.properties.map(property => ({ version: 7, path: '1.md', property, value: f.sourceRaw[property] }));
+    assert.deepEqual(f.executions, ['write', 'read']); assert.deepEqual(f.batches, [expected]);
+    f.dispatch(f.cell(1), 'paste'); await tick(); assert.deepEqual(f.batches, [expected, expected]);
+    assert.deepEqual(f.errors, []); assert.deepEqual(f.textCalls, [0, 0]);
+  } finally { f.close(); }
+});
+
+test('public HTML copy contains exactly the selected data rows with no property-label row', async () => {
+  for (const fullRow of [false, true]) {
+    const f = fixture(); try {
+      if (fullRow) f.selectSource(); else f.cell(0).focus();
+      f.menu(f.cell(0), 'Copy').click(); await tick();
+      const template = f.doc.createElement('template'); template.innerHTML = f.clipboard.get('text/html')!;
+      const table = template.content.querySelector('table')!;
+      assert.equal(table.querySelectorAll('thead,th').length, 0);
+      const externalRows = [...table.rows].map(row => [...row.cells].map(cell => cell.textContent));
+      assert.deepEqual(externalRows, parseBaseTableTSV(f.clipboard.get('text/plain')!));
+      assert.equal(externalRows.length, 1); assert.equal(externalRows[0].length, fullRow ? fields.length : 1);
+    } finally { f.close(); }
+  }
+});
+
+test('native inputs and inner editable text still own clipboard events within an inline Base', async () => {
+  for (const kind of ['input', 'textarea', 'true', 'empty', 'plaintext-only'] as const) {
+    const f = fixture(true); try {
+      const target = f.doc.createElement(kind === 'input' || kind === 'textarea' ? kind : 'div');
+      if (kind !== 'input' && kind !== 'textarea') { target.setAttribute('contenteditable', kind === 'empty' ? '' : kind); target.tabIndex = 0; }
+      f.cell(0).append(target); target.focus();
+      f.clipboard = new Map([['text/plain', 'native text']]);
+      assert.equal(f.dispatch(target, 'copy').defaultPrevented, false, kind);
+      assert.equal(f.clipboard.size, 0, kind);
+      f.clipboard = new Map([['text/plain', 'native text']]);
+      assert.equal(f.dispatch(target, 'paste').defaultPrevented, false, kind);
+      const context = new f.dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+      target.dispatchEvent(context); await tick();
+      assert.equal(context.defaultPrevented, false, kind); assert.equal(f.doc.querySelector('[role="menu"]'), null, kind);
+      assert.deepEqual(f.executions, [], kind); assert.equal(f.batches.length, 0, kind);
+    } finally { f.close(); }
+  }
+});
+
+test('selected rendered text keeps native clipboard ownership inside an inline Base', async () => {
+  const f = fixture(true); try {
+    f.cell(0).focus(); const text = f.doc.createTextNode('selected native text'); f.cell(0).append(text);
+    const range = f.doc.createRange(); range.selectNodeContents(text);
+    const selection = f.doc.getSelection()!; selection.removeAllRanges(); selection.addRange(range);
+    assert.equal(selection.toString(), 'selected native text');
+    assert.equal(f.dispatch(f.cell(0), 'copy').defaultPrevented, false);
+    const context = new f.dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    f.cell(0).dispatchEvent(context); await tick();
+    assert.equal(context.defaultPrevented, false); assert.equal(f.doc.querySelector('[role="menu"]'), null);
+    assert.deepEqual(f.executions, []); assert.deepEqual(f.errors, []);
   } finally { f.close(); }
 });
 

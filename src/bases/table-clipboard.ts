@@ -59,8 +59,8 @@ export function baseTableClipboardHTML(document: Document, header: readonly stri
   if (rows.length !== raw.length || rows.some(row => row.length !== header.length) || raw[0].length !== header.length) throw new Error('Invalid Bases clipboard.');
   const inert = document.implementation.createHTMLDocument(''), table = inert.createElement('table');
   table.setAttribute(ownMarker, '1'); table.setAttribute(ownCells, cells);
-  const head = table.createTHead().insertRow();
-  for (const label of header) { const cell = inert.createElement('th'); cell.textContent = label; head.append(cell); }
+  // Public HTML matches the selected data rectangle, like text/plain. Labels
+  // remain in the existing application table envelope, never an extra row.
   const body = table.createTBody();
   for (const row of rows) { const line = body.insertRow(); for (const text of row) line.insertCell().textContent = text; }
   const html = table.outerHTML;

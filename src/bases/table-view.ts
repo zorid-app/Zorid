@@ -793,7 +793,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
       }
     });
     cell.addEventListener('contextmenu', event => {
-      if (!current() || hasActiveEdits()) return;
+      if (!current() || hasActiveEdits() || textOwnsClipboard(event)) return;
       if (!range || point.group !== range.group || point.row < range.top || point.row > range.bottom || point.column < range.start || point.column > range.end) { range = undefined; cell.focus(); }
       const bounds = range ?? cellBounds(point);
       if (!range && (property === 'file.name' || property === 'file.file')) {
@@ -953,7 +953,16 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
   }
   function textOwnsClipboard(event: Pick<Event, 'target'>): boolean {
     const target = event.target as Element | null;
-    if (target?.closest?.('input,textarea,[contenteditable="true"]')) return true;
+    if (target?.closest?.('input,textarea')) return true;
+    // Inline Bases live inside a noneditable widget in CodeMirror's editable
+    // document. The nearest valid keyword owns inheritance, including false.
+    let editable = target?.closest?.('[contenteditable]');
+    while (editable) {
+      const keyword = editable.getAttribute('contenteditable')!.toLowerCase();
+      if (keyword === 'false') break;
+      if (keyword === '' || keyword === 'true' || keyword === 'plaintext-only') return true;
+      editable = editable.parentElement?.closest('[contenteditable]');
+    }
     const selected = doc.getSelection();
     return !!selected && !selected.isCollapsed && !!selected.anchorNode && root.contains(selected.anchorNode);
   }

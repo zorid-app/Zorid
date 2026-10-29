@@ -15,12 +15,12 @@ function fixture() {
   return { dom, doc, cells, html, close() { dom.window.close(); } };
 }
 
-test('HTML transport safely escapes headers, display text and exact typed metadata', () => {
+test('HTML transport safely escapes display text and exact typed metadata without adding headers', () => {
   const f = fixture(); try {
     assert.equal(baseTableCellsFromHTML(f.doc, f.html), f.cells);
     const template = f.doc.createElement('template'); template.innerHTML = f.html;
     assert.equal(template.content.querySelectorAll('script,img,b').length, 0);
-    assert.equal(template.content.querySelector('th')!.textContent, '<b>Header</b>');
+    assert.equal(template.content.querySelectorAll('thead,th').length, 0);
     assert.equal(template.content.querySelector('td')!.textContent, '<script>window.executed=true</script>');
     assert.equal(f.doc.querySelector('main')!.childNodes.length, 0);
     assert.equal(Reflect.get(f.dom.window, 'executed'), undefined);
