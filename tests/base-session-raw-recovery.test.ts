@@ -104,6 +104,59 @@ test('a composing Base title retains its final raw input before old editor teard
  const commands:unknown[]=[],table=createBaseTableView(dom.window.document.querySelector('main')!,{result,openFile(){},async renameFile(command){commands.push(command);}});
  try{
   table.editFileTitle('One.md','note-id');const input=dom.window.document.querySelector<HTMLInputElement>('.zorid-bases-table-input')!;input.dispatchEvent(new dom.window.CompositionEvent('compositionstart',{bubbles:true}));input.value='未';const draft=table.captureRawDraft()!;let ready=false;void draft.ready.then(()=>{ready=true;});await Promise.resolve();assert.equal(ready,false);assert.equal(input.readOnly,false,'the OS composition still owns its original control');input.dispatchEvent(new dom.window.Event('blur'));assert.deepEqual(commands,[]);
-  input.dispatchEvent(new dom.window.CompositionEvent('compositionend',{bubbles:true}));input.value='未確定';input.dispatchEvent(new dom.window.InputEvent('input',{bubbles:true,inputType:'insertCompositionText',data:'定'}));await draft.ready;assert.equal(draft.state.value,'未確定');assert.equal(input.readOnly,true);assert.deepEqual(commands,[]);
+  input.dispatchEvent(new dom.window.CompositionEvent('compositionend',{bubbles:true,data:'未確定'}));await new Promise(resolve=>setTimeout(resolve,5));assert.equal(ready,false,'compositionend or a timer cannot confirm a delayed final input');input.value='未確定';input.dispatchEvent(new dom.window.InputEvent('input',{bubbles:true,inputType:'insertCompositionText',data:'定'}));await draft.ready;assert.equal(draft.state.value,'未確定');assert.equal(input.readOnly,true);assert.deepEqual(commands,[]);
  }finally{table.destroy();dom.window.close();}
+});
+
+test('restoring a background raw Base cell does not move focus from its fresh foreground owner',async()=>{
+ const old=await fixture(),fresh=await fixture();try{
+  const input=old.edit(score,'not yet a number');const outside=old.doc.createElement('button');old.doc.body.append(outside);outside.focus();
+  const capsule=old.session.prepareAdmissionRecovery!();await capsule.settle();const foreground=fresh.doc.createElement('button');fresh.doc.body.append(foreground);foreground.focus();
+  const result=await fresh.session.restoreAdmissionDrafts!(capsule.rawDrafts!);assert.equal(result.restored.length,1);assert.equal(fresh.doc.activeElement,foreground,'a saved background draft cannot steal focus');assert.equal(fresh.requests.filter(request=>request.op==='set_entry').length,0);assert.equal(old.requests.filter(request=>request.op==='set_entry').length,0);assert.equal(input.value,'not yet a number');
+ }finally{old.restoreForCleanup();fresh.restoreForCleanup();await old.close();await fresh.close();}
+});
+
+test('a fresh session with a superseded Base configuration read waits for its new authority before restoring raw input',async()=>{
+ const old=await fixture(),fresh=await fixture();try{
+  old.edit(score,'9.');const capsule=old.session.prepareAdmissionRecovery!();await capsule.settle();
+  const saved=JSON.parse(await fresh.adapter.read('Work.base'));saved.views[0].name='Changed view';await fresh.adapter.write('Work.base',JSON.stringify(saved));
+  // The namespace authority may advance before its derived controller refresh.
+  fresh.vault.entries.set('Work.base',(await fresh.adapter.stat('Work.base'))!);
+  const result=await fresh.session.restoreAdmissionDrafts!(capsule.rawDrafts!);assert.equal(result.restored.length,0,'stale controller source is not a fresh configuration proof');assert.equal(result.pending.length,1);assert.equal(fresh.requests.filter(request=>request.op==='set_entry').length,0);
+  await fresh.session.refresh();const current=await fresh.session.restoreAdmissionDrafts!(capsule.rawDrafts!);assert.equal(current.restored.length,0);assert.equal(current.conflicts.length,1);assert.equal(current.conflicts[0].draft,capsule.rawDrafts![0]);
+ }finally{old.restoreForCleanup();fresh.restoreForCleanup();await old.close();await fresh.close();}
+});
+
+for(const canceled of [false,true])test(`Base title composition ${canceled?'unchanged cancellation':'final input before end'} completes from actual DOM evidence`,async()=>{
+ const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),row={entryId:'note-id',path:'One.md',revision:'r1',values:{'file.name':{type:'string' as const,value:'One'}}};
+ const result={version:1,view:{type:'table',name:'Table'},rows:[row],groups:[{key:null,rows:[row]}],properties:['file.name'],availableProperties:[],groupOptions:[],diagnostics:[],counts:{scanned:1,matched:1,afterGroupOrder:1,afterSearch:1,returned:1}} as BaseQueryResult;
+ const commands:unknown[]=[],table=createBaseTableView(dom.window.document.querySelector('main')!,{result,openFile(){},async renameFile(command){commands.push(command);}});
+ try{
+  table.editFileTitle('One.md','note-id');const input=dom.window.document.querySelector<HTMLInputElement>('.zorid-bases-table-input')!;input.dispatchEvent(new dom.window.CompositionEvent('compositionstart',{bubbles:true}));const draft=table.captureRawDraft()!;
+  if(!canceled){input.dispatchEvent(new dom.window.CompositionEvent('compositionupdate',{bubbles:true,data:'文'}));input.value='文';input.dispatchEvent(new dom.window.InputEvent('input',{bubbles:true,data:'文',isComposing:true}));}
+  input.dispatchEvent(new dom.window.CompositionEvent('compositionend',{bubbles:true,data:canceled?'':'文'}));let ready=false;void draft.ready.then(()=>{ready=true;});await Promise.resolve();assert.equal(ready,true,'normal completion cannot require another input event');assert.equal(draft.state.value,canceled?'One':'文');assert.deepEqual(commands,[]);
+ }finally{table.destroy();dom.window.close();}
+});
+
+test('a raw draft whose original Base configuration is already superseded still transfers custody into a conflict candidate',async()=>{
+ const old=await fixture(),fresh=await fixture();try{
+  old.edit(score,'9.');const changed=JSON.parse(await old.adapter.read('Work.base'));changed.views[0].name='Changed view';await old.adapter.write('Work.base',JSON.stringify(changed));old.vault.entries.set('Work.base',(await old.adapter.stat('Work.base'))!);
+  assert.equal(old.session.canRecoverAdmission!(),true,'capturing raw custody must not need old configuration write authority');const capsule=old.session.prepareAdmissionRecovery!();await capsule.settle();
+  await fresh.adapter.write('Work.base',JSON.stringify(changed));await fresh.vault.reload();await fresh.session.refresh();const result=await fresh.session.restoreAdmissionDrafts!(capsule.rawDrafts!);assert.equal(result.restored.length,0);assert.equal(result.conflicts.length,1);assert.equal(result.conflicts[0].draft,capsule.rawDrafts![0]);assert.equal(old.requests.filter(request=>request.op==='set_entry').length,0);assert.equal(fresh.requests.filter(request=>request.op==='set_entry').length,0);
+ }finally{old.restoreForCleanup();fresh.restoreForCleanup();await old.close();await fresh.close();}
+});
+
+test('capturing a Base title after compositionend still waits for the actual delayed final input',async()=>{
+ const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),row={entryId:'note-id',path:'One.md',revision:'r1',values:{'file.name':{type:'string' as const,value:'One'}}};
+ const result={version:1,view:{type:'table',name:'Table'},rows:[row],groups:[{key:null,rows:[row]}],properties:['file.name'],availableProperties:[],groupOptions:[],diagnostics:[],counts:{scanned:1,matched:1,afterGroupOrder:1,afterSearch:1,returned:1}} as BaseQueryResult;
+ const commands:unknown[]=[],table=createBaseTableView(dom.window.document.querySelector('main')!,{result,openFile(){},async renameFile(command){commands.push(command);}});
+ try{table.editFileTitle('One.md','note-id');const input=dom.window.document.querySelector<HTMLInputElement>('.zorid-bases-table-input')!;input.dispatchEvent(new dom.window.CompositionEvent('compositionstart',{bubbles:true}));input.value='未';input.dispatchEvent(new dom.window.CompositionEvent('compositionend',{bubbles:true,data:'未確定'}));const draft=table.captureRawDraft()!;let ready=false;void draft.ready.then(()=>{ready=true;});await new Promise(resolve=>setTimeout(resolve,5));assert.equal(ready,false,'end-before-capture is still an unfinished DOM composition');assert.equal(input.readOnly,false);input.value='未確定';input.dispatchEvent(new dom.window.InputEvent('input',{bubbles:true,data:'未確定'}));await draft.ready;assert.equal(draft.state.value,'未確定');assert.deepEqual(commands,[]);
+ }finally{table.destroy();dom.window.close();}
+});
+
+test('raw custody retains its admitted schema while a replacement schema read is still pending',async()=>{
+ const old=await fixture(),fresh=await fixture(),entered=deferred(),finish=deferred();let refreshing:Promise<void>|undefined;try{
+  old.edit(score,'9.');const request=old.adapter.databases!.request.bind(old.adapter.databases!);old.adapter.databases!.request=async command=>{if(command.op==='get'){entered.resolve();await finish.promise;}return request(command);};refreshing=old.session.refresh();await entered.promise;
+  const capsule=old.session.prepareAdmissionRecovery!();await capsule.settle();const result=await fresh.session.restoreAdmissionDrafts!(capsule.rawDrafts!);assert.equal(result.restored.length,1,'a pending schema RPC must not erase the mounted editor schema witness');assert.equal(result.conflicts.length,0);assert.equal(fresh.cell(score).querySelector<HTMLInputElement>('input')!.value,'9.');assert.equal(old.requests.filter(request=>request.op==='set_entry').length,0);assert.equal(fresh.requests.filter(request=>request.op==='set_entry').length,0);
+ }finally{finish.resolve();await refreshing?.catch(()=>{});old.restoreForCleanup();fresh.restoreForCleanup();await old.close();await fresh.close();}
 });

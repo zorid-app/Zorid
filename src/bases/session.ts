@@ -296,11 +296,12 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   let disposed = false, closing = false, mounted: MountedView | undefined, mountedType: string | undefined;
   let mountedResult: BaseQueryResult | undefined, renderingResult: BaseQueryResult | undefined, deferred: BaseControllerState | undefined;
   let mountedIndex = -1, mountedMove = false, mountedWritable = false;
-  const widgetResults = new Map<string | number, BaseQueryResult>(), widgetSources = new Map<string | number, string>();
+  const widgetResults = new Map<string | number, BaseQueryResult>(), widgetSources = new Map<string | number, string>(),widgetConfigurations=new Map<string|number,BaseConfigurationRead>();
   const rememberWidgetResult = (result: BaseQueryResult, source: string) => {
     widgetResults.set(result.version, result); widgetSources.set(result.version, source);
+    const configuration=controller.configurationRead;if(configuration?.source===source&&!widgetConfigurations.has(result.version))widgetConfigurations.set(result.version,configuration);
     if(collection&&!collectionVersions.has(result.version))collectionVersions.set(result.version,{collection,entries:new Map(collectionEntries)});
-    while (widgetResults.size > 4) { const key = [...widgetResults.keys()].find(key => key !== mountedResult?.version); if (key === undefined) break; widgetResults.delete(key); widgetSources.delete(key);collectionVersions.delete(key); }
+    while (widgetResults.size > 4) { const key = [...widgetResults.keys()].find(key => key !== mountedResult?.version); if (key === undefined) break; widgetResults.delete(key); widgetSources.delete(key);widgetConfigurations.delete(key);collectionVersions.delete(key); }
   };
   let propertyLabels:unknown;
   let collection: DatabaseCollection | undefined, collectionEntries = new Map<string, DatabaseEntry>();
@@ -636,11 +637,14 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     if(!saved||saved.deleted||saved.pendingProjection||!saved.fileRevision||saved.collectionId!==attempt.collectionId||!collection||collection.deleted
       ||Object.entries(attempt.request.values).some(([field,value])=>JSON.stringify(saved.values[field])!==JSON.stringify(value)))throw new Error('The submitted collection edit is not confirmed. Its original draft is retained.');
   }
-  function rawDraftOrigin():BaseSessionDraftOrigin|undefined {
-    const read=controller.configurationRead;if(!read)return;
-    const actor=options.vault.entries.get(read.path);if(actor?.entryId!==read.entryId)return;
+  // Capture retains the originally admitted presentation even after its saved
+  // source changes. Only restoration requires a current configuration proof.
+  function rawDraftOrigin(requireCurrent=true):BaseSessionDraftOrigin|undefined {
+    const read=requireCurrent?controller.configurationRead:(mountedResult&&widgetConfigurations.get(mountedResult.version))||controller.configurationRead;if(!read)return;
+    const actor=options.vault.entries.get(read.path);if(requireCurrent&&(actor?.entryId!==read.entryId||actor.revision!==read.revision))return;
+    const presentedCollection=!requireCurrent&&mountedResult?collectionVersions.get(mountedResult.version)?.collection??collection:collection;
     return{entryId:read.entryId,path:read.path,revision:read.revision,source:read.source,viewId:read.viewId,viewIndex:read.viewIndex,
-      ...(collection?{collectionId:collection.id,schemaFingerprint:JSON.stringify(collection.properties)}:{})};
+      ...(presentedCollection?{collectionId:presentedCollection.id,schemaFingerprint:JSON.stringify(presentedCollection.properties)}:{})};
   }
   function recoverableCollectionAttempts():{edits:CollectionAttempt[];rawElements:HTMLElement[];table:boolean}|undefined {
     try{alive();}catch{return;}
@@ -661,13 +665,13 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       if(!attempt?.release||!options.canRecoverDatabaseEntry(attempt.request))return;
       selected.push(attempt);
     }
-    if(pending.size>selected.length||((rawElements.length||table)&&!rawDraftOrigin()))return;
+    if(pending.size>selected.length||((rawElements.length||table)&&!rawDraftOrigin(false)))return;
     return{edits:selected,rawElements,table};
   }
   function prepareAdmissionRecovery():BaseAdmissionRecovery {
     if(admissionRecovery)return admissionRecovery.capsule;
     const selected=recoverableCollectionAttempts();if(!selected)throw new Error('Unsubmitted Base changes must be retained before reconnecting.');
-    const {edits,rawElements,table}=selected,origin=rawDraftOrigin(),rawDrafts:BaseSessionRawDraft[]=[];
+    const {edits,rawElements,table}=selected,origin=rawDraftOrigin(false),rawDrafts:BaseSessionRawDraft[]=[];
     const releases:(()=>void)[]=[];
     try{
       for(const edit of edits)releases.push(options.claimRecoverDatabaseEntry!(edit.request));
