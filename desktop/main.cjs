@@ -224,7 +224,9 @@ async function createWindow({ source, primary = false, initialState = 'empty', r
   try {
     // Start Chromium navigation before waiting for Rust/import/recovery. IPC
     // above still admits all vault operations only after opening succeeds.
-    const loading = devUrl ? window.loadURL(devUrl) : window.loadFile(path.join(__dirname, '../dist/index.html'));
+    // Convert a synchronous navigation exception into a joined rejection too;
+    // opening must remain observed if Chromium rejects navigation immediately.
+    const loading = (async () => devUrl ? window.loadURL(devUrl) : window.loadFile(path.join(__dirname, '../dist/index.html')))();
     await Promise.all([opening, loading]);
     if (recoveryCheck) { await recoveryCheck(record); recoveryAssert(record); }
     return record;

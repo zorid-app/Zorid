@@ -11,7 +11,7 @@ const turn = () => new Promise(resolve => setImmediate(resolve));
 
 // Execute actual main wiring with native open held, rather than measuring a
 // substitute startup implementation. Packaged timing remains a separate gate.
-async function fixture({persistFailure = false} = {}) {
+async function fixture({persistFailure = false, navigationFailure = false, lateOpeningFailure = false} = {}) {
   const gate = deferred(), opened = deferred(), windows = [], handlers = new Map(), errors = [];
   let reads = 0, contexts = 0;
   class FakeWindow extends EventEmitter {
@@ -23,7 +23,11 @@ async function fixture({persistFailure = false} = {}) {
       windows.push(this);
     }
     isDestroyed() { return this.destroyed; }
-    async loadFile(file) { this.loaded = true; this.webContents.mainFrame.url = require('node:url').pathToFileURL(file).href; }
+    loadFile(file) {
+      if (navigationFailure) throw new Error('navigation failed synchronously');
+      this.loaded = true; this.webContents.mainFrame.url = require('node:url').pathToFileURL(file).href;
+      return Promise.resolve();
+    }
     destroy() { this.destroyed = true; this.emit('closed'); }
     static getFocusedWindow() { return windows.find(w => !w.destroyed); }
     static getAllWindows() { return windows.filter(w => !w.destroyed); }
@@ -34,7 +38,10 @@ async function fixture({persistFailure = false} = {}) {
   const mainPath = path.resolve(__dirname, '../desktop/main.cjs');
   const nativeRequire = name => {
     if (name === 'electron') return {app, BrowserWindow:FakeWindow, ipcMain:{handle:(key, callback) => handlers.set(key, callback)},
-      dialog:{showErrorBox:(...args) => errors.push(args)}, Menu:{buildFromTemplate:x => x, setApplicationMenu() {}}, shell:{}};
+      dialog:{showErrorBox:(...args) => {
+        errors.push(args);
+        if (lateOpeningFailure && args[0] === 'Could not open Rust vault') throw new Error('late opening failure');
+      }}, Menu:{buildFromTemplate:x => x, setApplicationMenu() {}}, shell:{}};
     if (name === 'node:fs/promises') return {readFile:async () => '{"path":"/fixture"}'};
     if (name === './editor-core.cjs') return {createEditorCoreManager:() => ({
       async open() { opened.resolve(); await gate.promise; return service; }, owns:() => false,
@@ -92,4 +99,13 @@ test('failed opening cannot expose a partially bound vault or admit queued opera
   const readFailure = assert.rejects(read, /slot write failed/);
   f.gate.resolve(); await Promise.all([selectedFailure, readFailure]); await turn();
   assert.equal(f.reads, 0); assert.equal(f.contexts, 0); assert.equal(f.window.destroyed, true);
+});
+
+test('synchronous navigation failure still joins a late opening rejection', async () => {
+  const f = await fixture({navigationFailure:true,lateOpeningFailure:true});
+  assert.equal(f.window.destroyed, true);
+  f.gate.resolve(); await turn(); await turn();
+  assert.equal(f.reads, 0); assert.equal(f.contexts, 0);
+  assert.ok(f.errors.some(([title]) => title === 'Could not start Zorid'));
+  // node:test also treats any unhandled late rejection as a failing test.
 });
