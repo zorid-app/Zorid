@@ -90,3 +90,13 @@ test('a canceled rejected edit is not selected when a different current widget r
   f.retire();const recovery=f.session.prepareAdmissionRecovery!();release();await recovery.settle();assert.equal(f.session.hasPendingChanges(),false);assert.deepEqual(f.claimHistory,[(current as any).operationId]);assert.ok(!f.claimHistory.includes((canceled as any).operationId));assert.match(await f.adapter.read('One.md'),/Score: 10/);
  }finally{f.restoreForCleanup();await f.close();}
 });
+
+test('a clean Base can retire its derived owners through an empty recovery capsule',async()=>{
+ const f=await fixture();try{f.retire();assert.equal(f.session.canRecoverAdmission!(),true);const capsule=f.session.prepareAdmissionRecovery!();assert.equal(f.session.prepareAdmissionRecovery!(),capsule);await capsule.settle();assert.equal(f.session.hasPendingChanges(),false);assert.deepEqual(f.claimHistory,[]);assert.equal(f.requests.filter(request=>request.op==='set_entry').length,0);assert.deepEqual(f.derivedAfterRetirement,[]);
+ }finally{f.restoreForCleanup();await f.close();}
+});
+
+test('a new unsubmitted numeric draft cannot masquerade as a clean recovery capsule',async()=>{
+ const f=await fixture();try{const input=f.edit(score,'9');f.retire();assert.equal(f.session.canRecoverAdmission!(),false);assert.throws(()=>f.session.prepareAdmissionRecovery!(),/Unsubmitted/);assert.equal(input.value,'9');assert.equal(f.session.hasPendingChanges(),true);assert.deepEqual(f.claimHistory,[]);
+ }finally{f.restoreForCleanup();await f.close();}
+});

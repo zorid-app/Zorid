@@ -611,13 +611,14 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   }
   function recoverableCollectionAttempts():CollectionAttempt[]|undefined {
     try{alive();}catch{return;}
-    if(disposed||closing||!options.canRecoverDatabaseEntry||!options.claimRecoverDatabaseEntry||!options.holdRecoverDatabaseEntry
-      ||pendingCollectionRestore||pendingCollectionCreate||optionCreations.size||configurationLifecycle||controller.hasPendingViewReferences
+    if(disposed||closing||pendingCollectionRestore||pendingCollectionCreate||optionCreations.size||configurationLifecycle||controller.hasPendingViewReferences
       ||mounted?.hasQueuedConfiguration?.()||toolbarUI.hasDraft()||settings.hasDraft()||summaryDraft||summaryHasRawDraft?.()
       ||chooser?.hasPendingChanges()||collectionEditor?.hasPendingChanges()||creation?.status==='uncertain'
       ||[...changedBuffers].some(buffer=>buffer.dirty||!!buffer.error))return;
     const elements=[...content.querySelectorAll<HTMLElement>('[data-base-editing]')];
-    if(!elements.length||content.querySelector('.zorid-bases-table-input')||pending.size>elements.length)return;
+    if(content.querySelector('.zorid-bases-table-input')||pending.size>elements.length)return;
+    if(!elements.length)return activeDraft()?undefined:[];
+    if(!options.canRecoverDatabaseEntry||!options.claimRecoverDatabaseEntry||!options.holdRecoverDatabaseEntry)return;
     const selected:CollectionAttempt[]=[];
     for(const element of elements){
       const widget=basePropertyEditRecovery(element);if(!widget)return;
@@ -625,7 +626,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       if(!attempt?.release||!options.canRecoverDatabaseEntry(attempt.request))return;
       selected.push(attempt);
     }
-    return selected.length?selected:undefined;
+    return selected;
   }
   function prepareAdmissionRecovery():BaseAdmissionRecovery {
     if(admissionRecovery)return admissionRecovery.capsule;
