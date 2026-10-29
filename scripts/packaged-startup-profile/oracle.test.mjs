@@ -15,7 +15,7 @@ test('monotonic handshake is an interval independent of wall timeOrigin arithmet
 });
 test('trusted exact packaged input by800ms establishes the target',()=>{const value=assessNote(receipt());assert.equal(value.valid,true);assert.equal(value.outcome,'target-met');assert.deepEqual(value.inputMs,{lower:229,upper:231});});
 test('continuously observed not-ready deadline plus later trusted input proves a target miss',()=>{
-  const r=receipt();r.observed.ready.at=1000;r.observed.probes=[{...r.observed.probes[0],appliedAt:1010}];r.dispatches[1]={name:'deadline',status:'observed-not-ready',observation:{at:800,ready:null}};
+  const r=receipt();r.observed.ready.at=1000;r.observed.probes=[{...r.observed.probes[0],appliedAt:1010}];r.dispatches[1]={name:'deadline',status:'observed-not-ready',observation:{at:800,ready:null,readinessCheck:{eligible:false,framesPending:false}}};
   assert.equal(assessNote(r).outcome,'target-missed');
 });
 test('late debugger attachment cannot manufacture a valid miss or a valid success',()=>{
@@ -47,4 +47,12 @@ test('a failed first-import Base navigation never grants a reopen expectation fo
   const launch={returnToStartupNoteVerified:true,errors:[],cleanup:{normal:true,gone:true},fixturesRestored:true,sourcePathsExact:true,artifactsUnchanged:true};
   assert.equal(reopenPrepared(launch),true);
   for(const change of [{errors:['Base row not mounted']},{returnToStartupNoteVerified:false},{fixturesRestored:false},{cleanup:{normal:false,gone:true}},{cleanupErrors:['PID proof failed']}])assert.equal(reopenPrepared({...launch,...change}),false);
+});
+
+test('a silent eligibility change first sampled at the deadline cannot manufacture a target miss',()=>{
+  for(const readinessCheck of [{eligible:true,framesPending:true},{eligible:false,framesPending:true},undefined]){
+    const r=receipt();r.observed.ready.at=1000;r.observed.probes=[{...r.observed.probes[0],appliedAt:1010}];
+    r.dispatches[1]={name:'deadline',status:'observed-not-ready',observation:{at:800,ready:null,readinessCheck}};
+    assert.equal(assessNote(r).outcome,'indeterminate');assert.equal(assessNote(r).valid,false);
+  }
 });
