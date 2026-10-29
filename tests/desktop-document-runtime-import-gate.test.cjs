@@ -27,7 +27,7 @@ function fixture({initial=state(),steps=[],ownerReplies=[],composite=false,workR
   const host={
     async documentRuntime(clientId,op,args){
       calls.push({op,clientId,args:clone(args)});
-      if(op==='runtime_snapshot'){if(readGate)await readGate;if(readFailure)throw readFailure;return {snapshot:clone(current)};}
+      if(op==='runtime_snapshot'){const value=clone(current);if(readGate)await readGate;if(readFailure)throw readFailure;return {snapshot:value};}
       if(op==='runtime_owner'){
         if(args.command.kind==='retire')current=clone(retire);
         else if(ownerReplies.length)current=clone(ownerReplies.shift());
@@ -195,6 +195,22 @@ test('descriptor lookup rechecks the draft owner after an asynchronous read befo
   assert.equal(checks,3,'notify, before read, after read');assert.equal(workSteps(f).length,0);
   assert.equal(f.scheduler.current,null);assert.deepEqual(f.scheduler.work.selected,selected);
   assert.equal(f.scheduler.needsRetry(),false);owner.revoke();
+});
+
+test('a progress hint during descriptor lookup prevents an older background observation from hiding foreground demand',async()=>{
+  let releaseRead;const read=new Promise(resolve=>{releaseRead=resolve;}),selected=ticket();
+  const f=fixture({composite:true,initial:state('pump'),workReplies:[
+    {op:'next_turn',value:reply(work(selected),'ready')},
+    {op:'step',ticket:selected,value:reply(work(null,{settled:selected}))},
+    {op:'next_turn',value:reply(work(),'waiting')},
+  ]});f.holdRead(read);const owner=activateDraft(f);
+  await f.turn();await f.turn();
+  assert.equal(f.calls.filter(call=>call.op==='runtime_snapshot').length,1);
+  f.setState(state('pump',{foreground:true}));f.scheduler.sourceImportProgress();
+  releaseRead();await f.settled();await f.drain();
+  assert.equal(f.calls.filter(call=>call.op==='runtime_snapshot').length,2);
+  assert.deepEqual(workSteps(f).map(call=>call.ticket),[selected]);
+  assert.deepEqual(f.errors,[]);owner.revoke();
 });
 
 test('failed composite descriptor read holds the exact ticket without poisoning transport retry or spinning',async()=>{
