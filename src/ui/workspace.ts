@@ -319,8 +319,8 @@ export class Workspace {
       this.initialized = true;
       this.closeCleanup=window.zorid?.onBeforeClose?.(async()=>{
         if(this.closing||this.choosingVault||this.lifecycleRecovery)throw new Error('Window close already pending');
-        this.closing=true;const inert=this.root.inert;this.root.inert=true;
-        try{await this.destroy();}catch(error){this.closing=false;if(this.platformDraining||this.platformDrained||this.platformReleased){try{await this.reconnectRetiredPlatform();this.root.inert=inert;}catch{this.showLifecycleRecovery();}}else this.root.inert=inert;throw error;}
+        this.closing=true;const inert=this.root.inert,platform=this.platform,generation=this.vaultGeneration;this.root.inert=true;
+        try{await this.destroy();}catch(error){this.closing=false;if(this.platformDraining||this.platformDrained||this.platformReleased){try{await this.reconnectRetiredPlatform();this.root.inert=inert;}catch{this.showLifecycleRecovery();}}else this.root.inert=inert;this.resumeStatusCounts(platform,generation);throw error;}
       });
     }
     try {
@@ -520,7 +520,7 @@ export class Workspace {
         // destroy/release before ACK or after a timeout which retained this view.
       } finally {
         const sameOwner=this.platform===platform&&this.vaultGeneration===generation;
-        if(sameOwner&&(reason==='background'||!accepted)){this.closing=wasClosing;this.root.inert=wasInert;}
+        if(sameOwner&&(reason==='background'||!accepted)){this.closing=wasClosing;this.root.inert=wasInert;this.resumeStatusCounts(platform,generation);}
         pending=false;
         if(sameOwner&&(reason==='background'||!accepted)){const state=this.activePane?.editor?.nativeState?.();if(state)this.sendNativeEditorState(state,platform);}
       }
@@ -3104,6 +3104,9 @@ export class Workspace {
     status.hidden=!status.childElementCount;
   }
 
+  private resumeStatusCounts(platform:PlatformVault,generation:number):void{
+    if(this.platform===platform&&this.vaultGeneration===generation&&!this.closing&&!this.platformReleased&&!this.platformDraining&&!this.platformDrained&&this.activePane)this.renderStatus();
+  }
   private cancelStatusCounts():void{
     const job=this.statusCountJob;this.statusCountJob=undefined;job?.cancel?.();
   }
@@ -3774,12 +3777,12 @@ export class Workspace {
   async destroy():Promise<void>{
     if(this.destroying)return this.destroying;
     if(this.choosingVault||this.lifecycleRecovery)throw new Error('A vault transition is pending.');
-    const platform=this.platform,vault=this.vault,inert=this.root.inert,wasClosing=this.closing;
+    const platform=this.platform,vault=this.vault,inert=this.root.inert,wasClosing=this.closing,generation=this.vaultGeneration;
     this.closing=true;this.root.inert=true;
     const current=()=>{if(this.platform!==platform||this.vault!==vault)throw new Error('The vault changed while closing.');};
     const closing=this.destroyOwnedPlatform(current,platform,vault);this.destroying=closing;
     try{await closing;}
-    catch(error){if(!this.platformDraining&&!this.platformDrained&&!this.platformReleased){this.closing=wasClosing;this.root.inert=inert;}throw error;}
+    catch(error){if(!this.platformDraining&&!this.platformDrained&&!this.platformReleased){this.closing=wasClosing;this.root.inert=inert;this.resumeStatusCounts(platform,generation);}throw error;}
     finally{if(this.destroying===closing)this.destroying=undefined;}
   }
   private async destroyOwnedPlatform(current:()=>void,platform:PlatformVault,vault:Vault):Promise<void>{

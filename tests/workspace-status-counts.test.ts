@@ -150,3 +150,14 @@ for(const mode of ['direct','desktop'] as const)test(`failed pre-drain ${mode} c
     assert.notEqual(ui.root.inert,true);ui.frame();ui.frame();ui.drain();assert.match(ui.status(),/4 words/);assert.match(ui.status(),/28 characters/);
   }finally{held.resolve();armed=false;await rejected.catch(()=>{});}
 });
+
+test('a successful native vault-switch ACK keeps canceled counts quiescent',async t=>{
+  let lifecycle!:Parameters<MobileLifecycle['subscribe']>[0];
+  const ui=await setup(t,{'Note.md':'Quiescent switch'},{mobileLifecycle:{subscribe(handler){lifecycle=handler;return()=>{};}}});await ui.workspace.openNote('Note.md');
+  const entered=gate(),held=gate(),pending=lifecycle('switchVault',async()=>{entered.resolve();await held.promise;});
+  try{
+    await entered.promise;ui.frame();ui.frame();assert.equal(ui.idle.size,0);
+    held.resolve();await pending;assert.equal(ui.root.inert,true);ui.frame();ui.frame();
+    assert.equal(ui.idle.size,0);assert.equal(ui.frames.size,0);assert.match(ui.status(),/… words/);
+  }finally{held.resolve();await pending;}
+});
