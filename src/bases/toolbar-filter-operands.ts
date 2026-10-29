@@ -17,7 +17,16 @@ export interface BaseFilterOperandOptions {
   alive?(): boolean;
 }
 
+export interface BaseFilterOperandAdmissionDraft {
+  readonly kind:BaseFilterOperandKind;readonly initialValues:readonly string[];
+  readonly state:{readonly values:readonly string[];readonly input:string;readonly selectionStart:number|null;readonly selectionEnd:number|null;readonly selectionDirection:'forward'|'backward'|'none'|null;readonly focusKey?:string;readonly popupOpen:boolean;readonly activeValue?:string};
+  readonly ready:Promise<void>;
+}
+const completedOperandDrafts=new WeakSet<BaseFilterOperandAdmissionDraft>();
 export interface BaseFilterOperand {
+  canCaptureAdmissionDraft():boolean;
+  captureFreeze():BaseFilterOperandAdmissionDraft|undefined;
+  restoreAdmissionDraft(draft:BaseFilterOperandAdmissionDraft):boolean;
   read(): readonly string[];
   hasDraft(): boolean;
   focus(): void;
@@ -35,12 +44,13 @@ export function createBaseFilterOperand(doc: Document, container: HTMLElement, o
   input.setAttribute('role', 'combobox'); input.setAttribute('aria-autocomplete', 'list'); input.setAttribute('aria-expanded', 'false'); input.autocomplete = 'off';
   input.placeholder = { file: 'File', folder: 'Folder', tag: 'Tag', property: 'Property' }[options.kind];
   const id = `bases-filter-operands-${++nextOperandId}`;
+  let frozen=false,restoring=false,restoredFocusPassive=false,interacted=false,capturedDraft:BaseFilterOperandAdmissionDraft|undefined;
   let values = [...options.values], destroyed = false, popup: HTMLDivElement | undefined, list: HTMLDivElement | undefined;
   let visible: string[] = [], active = -1;
   if (!multiple) input.value = values[0] ?? '';
   if (multiple) root.append(chips);
   root.append(input); container.append(root);
-  const usable = () => !destroyed && root.isConnected && container.contains(root) && (options.alive?.() ?? true);
+  const usable = () => !frozen&&!destroyed && root.isConnected && container.contains(root) && (options.alive?.() ?? true);
   const hasDraft = () => multiple && input.value.length > 0;
   const read = (): readonly string[] => multiple ? [...values, ...(hasDraft() ? [input.value] : [])] : input.value === '' ? [] : [input.value];
   const source = options.snapshot?.[({ file: 'files', folder: 'folders', tag: 'tags', property: 'properties' } as const)[options.kind]] ?? [];
@@ -53,7 +63,7 @@ export function createBaseFilterOperand(doc: Document, container: HTMLElement, o
   }
 
   function place() {
-    if (!popup) return;
+    if (!popup||frozen) return;
     if (!usable()) { close(); return; }
     const anchor = input.getBoundingClientRect(), viewportWidth = win?.innerWidth ?? doc.documentElement.clientWidth, viewportHeight = win?.innerHeight ?? doc.documentElement.clientHeight;
     const width = Math.min(Math.max(anchor.width, 220), Math.max(0, viewportWidth - 16));
@@ -126,8 +136,8 @@ export function createBaseFilterOperand(doc: Document, container: HTMLElement, o
     renderSuggestions();
   }
 
-  function outside(event: Event) { if (!usable() || !root.contains(event.target as Node)) close(); }
-  function focusout(event: FocusEvent) { if (!root.contains(event.relatedTarget as Node | null)) close(); }
+  function outside(event: Event) { if(frozen)return;if (!usable() || !root.contains(event.target as Node)) close(); }
+  function focusout(event: FocusEvent) { if(frozen)return;if (!root.contains(event.relatedTarget as Node | null)) close(); }
   function optionTarget(event: Event) {
     const target = event.target as Element | null;
     const row = target?.nodeType === 1 ? target.closest<HTMLElement>('.bases-filter-operand-option') : null;
@@ -136,7 +146,7 @@ export function createBaseFilterOperand(doc: Document, container: HTMLElement, o
   function pointerdown(event: Event) { if (optionTarget(event)) event.preventDefault(); }
   function pointermove(event: Event) { const row = optionTarget(event); if (row) highlight(Number(row.dataset.index)); }
   function clicked(event: Event) {
-    if (!usable()) return;
+    if (!usable()) return;interacted=true;restoredFocusPassive=false;
     const row = optionTarget(event);
     if (row) { const value = visible[Number(row.dataset.index)]; if (value !== undefined) accept(value); return; }
     const target = event.target as Element | null;
@@ -146,13 +156,13 @@ export function createBaseFilterOperand(doc: Document, container: HTMLElement, o
     if (usable()) input.focus({ preventScroll: true }); publish();
   }
   function changed() {
-    if (!usable()) return;
+    if (!usable()) return;interacted=true;restoredFocusPassive=false;
     open(); renderSuggestions();
     if (multiple) options.onDraftChange?.();
     else { values = input.value === '' ? [] : [input.value]; publish(); }
   }
   function keydown(event: KeyboardEvent) {
-    if (!usable() || event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (!usable() || event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return;interacted=true;restoredFocusPassive=false;
     if (event.key === 'Escape' && popup) { event.preventDefault(); event.stopPropagation(); close(); }
     else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault(); event.stopPropagation(); open();
@@ -167,13 +177,38 @@ export function createBaseFilterOperand(doc: Document, container: HTMLElement, o
     } else if (event.key === 'Tab') close();
   }
 
-  input.addEventListener('input', changed); input.addEventListener('focus', open); input.addEventListener('click', open); input.addEventListener('keydown', keydown); root.addEventListener('focusout', focusout);
+  const focused=()=>{if(!restoring&&!restoredFocusPassive)open();};
+  input.addEventListener('input', changed); input.addEventListener('focus', focused); input.addEventListener('click', open); input.addEventListener('keydown', keydown); root.addEventListener('focusout', focusout);
   root.addEventListener('pointerdown', pointerdown); root.addEventListener('pointermove', pointermove); root.addEventListener('click', clicked);
   if (multiple) renderChips();
-  return { read, hasDraft, focus() { if (usable()) input.focus({ preventScroll: true }); }, destroy() {
+  let composing=false,settling=false,compositionStartValue='',compositionUpdateValue:string|undefined,compositionInputValue:{value:string;data:string|null;update?:string}|undefined,finishCapture:(()=>void)|undefined;
+  const compositionStart=(event:CompositionEvent)=>{if(frozen)return;composing=true;settling=false;compositionStartValue=input.value;compositionUpdateValue=undefined;compositionInputValue=undefined;};
+  const compositionUpdate=(event:CompositionEvent)=>{if(composing)compositionUpdateValue=event.data;};
+  const compositionInput=(event:Event)=>{if(composing)compositionInputValue={value:input.value,data:(event as InputEvent).data??null,update:compositionUpdateValue};else{settling=false;finishCapture?.();}};
+  const compositionEnd=(event:CompositionEvent)=>{composing=false;settling=!(event.data===''&&input.value===compositionStartValue||compositionInputValue?.value===input.value&&(compositionInputValue.data===event.data||compositionInputValue.update===event.data));finishCapture?.();};
+  input.addEventListener('compositionstart',compositionStart,true);input.addEventListener('compositionupdate',compositionUpdate,true);input.addEventListener('input',compositionInput,true);input.addEventListener('compositionend',compositionEnd,true);
+  const freezeNative=()=>{for(const button of chips.querySelectorAll<HTMLButtonElement>('button'))button.disabled=true;if(!composing&&!settling)input.readOnly=true;};
+  const focusKey=()=>doc.activeElement===input?'input':doc.activeElement instanceof doc.defaultView!.HTMLElement&&chips.contains(doc.activeElement)?`chip:${doc.activeElement.dataset.index}`:undefined;
+  const canCaptureAdmissionDraft=()=>!!capturedDraft||!destroyed&&root.isConnected;
+  function captureFreeze():BaseFilterOperandAdmissionDraft|undefined{
+    if(capturedDraft)return capturedDraft;if(!canCaptureAdmissionDraft())return;const focused=focusKey(),wasOpen=!!popup,activeValue=active>=0?visible[active]:undefined;frozen=true;
+    const snapshot=()=>({values:[...values],input:input.value,selectionStart:input.selectionStart,selectionEnd:input.selectionEnd,selectionDirection:input.selectionDirection,focusKey:focused,popupOpen:wasOpen,activeValue});let state=snapshot(),resolve!:()=>void;const ready=new Promise<void>(yes=>{resolve=yes;});
+    const captured:BaseFilterOperandAdmissionDraft={kind:options.kind,initialValues:[...options.values],get state(){return state;},ready};capturedDraft=captured;freezeNative();finishCapture=()=>{if(composing||settling||completedOperandDrafts.has(captured))return;state=snapshot();freezeNative();completedOperandDrafts.add(captured);resolve();finishCapture=undefined;};finishCapture();return captured;
+  }
+  function restoreAdmissionDraft(captured:BaseFilterOperandAdmissionDraft):boolean{
+    if(frozen||destroyed||interacted||composing||settling||!usable()||!completedOperandDrafts.has(captured)||captured.kind!==options.kind||JSON.stringify(options.values)!==JSON.stringify(captured.initialValues))return false;
+    const state=captured.state,query=state.input.toLocaleLowerCase(),matches=[...new Set(source)].filter(value=>(!multiple||!state.values.includes(value))&&value.toLocaleLowerCase().includes(query)).slice(0,100);
+    if(state.activeValue!==undefined&&(!state.popupOpen||!matches.includes(state.activeValue)))return false;
+    restoring=true;try{values=[...state.values];input.value=state.input;if(multiple)renderChips();input.setSelectionRange(state.selectionStart,state.selectionEnd,state.selectionDirection??undefined);
+    if(state.popupOpen){open();highlight(state.activeValue===undefined?-1:visible.indexOf(state.activeValue));}
+    restoredFocusPassive=true;if(state.focusKey==='input')input.focus({preventScroll:true});else if(state.focusKey?.startsWith('chip:'))[...chips.querySelectorAll<HTMLButtonElement>('button[data-index]')].find(button=>button.dataset.index===state.focusKey!.slice(5))?.focus({preventScroll:true});
+    return true;}finally{restoring=false;}
+  }
+  return {canCaptureAdmissionDraft,captureFreeze,restoreAdmissionDraft, read, hasDraft, focus() { if (usable()) input.focus({ preventScroll: true }); }, destroy() {
     if (destroyed) return;
     destroyed = true; close();
-    input.removeEventListener('input', changed); input.removeEventListener('focus', open); input.removeEventListener('click', open); input.removeEventListener('keydown', keydown); root.removeEventListener('focusout', focusout);
+    input.removeEventListener('compositionstart',compositionStart,true);input.removeEventListener('compositionupdate',compositionUpdate,true);input.removeEventListener('input',compositionInput,true);input.removeEventListener('compositionend',compositionEnd,true);
+    input.removeEventListener('input', changed); input.removeEventListener('focus', focused); input.removeEventListener('click', open); input.removeEventListener('keydown', keydown); root.removeEventListener('focusout', focusout);
     root.removeEventListener('pointerdown', pointerdown); root.removeEventListener('pointermove', pointermove); root.removeEventListener('click', clicked);
     root.remove();
   } };

@@ -1,4 +1,4 @@
-import { Compartment, EditorState, Transaction } from '@codemirror/state';
+import { Compartment, EditorState, EditorSelection, Transaction } from '@codemirror/state';
 import { EditorView, keymap, placeholder } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { autocompletion, completionKeymap, snippetCompletion } from '@codemirror/autocomplete';
@@ -20,7 +20,18 @@ export interface BaseFormulaEditorOptions {
   /** Syntax diagnostics only: editing never evaluates an expression. */
   onDiagnostics?(message: string | undefined): void;
 }
+export interface BaseFormulaAdmissionDraft {
+  /** Native/CodeMirror construction baseline; the outer saved-configuration
+   * owner must independently admit its fresh actor/source before reconstructing. */
+  readonly initial:string;
+  readonly state:{readonly text:string;readonly selection:readonly {readonly anchor:number;readonly head:number}[];readonly mainIndex:number;readonly scrollTop:number;readonly scrollLeft:number;readonly focus:boolean};
+  readonly ready:Promise<void>;
+}
+const completedFormulaDrafts=new WeakSet<BaseFormulaAdmissionDraft>();
 export interface BaseFormulaEditor {
+  canCaptureAdmissionDraft():boolean;
+  captureFreeze():BaseFormulaAdmissionDraft|undefined;
+  restoreAdmissionDraft(draft:BaseFormulaAdmissionDraft):boolean;
   sync(): void;
   focus(): void;
   hasFocus(): boolean;
@@ -160,6 +171,31 @@ function syntaxDiagnostic(value: string): string | undefined {
   return undefined;
 }
 
+/** Formula-local custody. Final input is confirmed by actual composition/input
+ * events; CodeMirror then supplies a snapshot after its own DOM flush. */
+function formulaAdmissionOwner(surface:HTMLElement,initial:string,options:{alive():boolean;read():BaseFormulaAdmissionDraft['state'];restore(state:BaseFormulaAdmissionDraft['state']):void;lockNative():void;freeze():void;settle(done:(state:BaseFormulaAdmissionDraft['state'])=>void):void}) {
+  let frozen=false,restoring=false,interacted=false,composing=false,settling=false,captured:BaseFormulaAdmissionDraft|undefined,finish:(()=>void)|undefined;
+  let startDOM='',updateData:string|undefined,lastInput:{dom:string;data:string|null;update?:string}|undefined;
+  const dom=()=>surface instanceof surface.ownerDocument.defaultView!.HTMLTextAreaElement?surface.value:surface.textContent??'';
+  const start=(event:CompositionEvent)=>{if(frozen)return;composing=true;settling=false;startDOM=dom();updateData=undefined;lastInput=undefined;};
+  const update=(event:CompositionEvent)=>{if(composing)updateData=event.data;};
+  const input=(event:Event)=>{if(!frozen&&!restoring)interacted=true;if(composing)lastInput={dom:dom(),data:(event as InputEvent).data??null,update:updateData};else{settling=false;finish?.();}};
+  const end=(event:CompositionEvent)=>{composing=false;settling=!(event.data===''&&dom()===startDOM||lastInput?.dom===dom()&&(lastInput.data===event.data||lastInput.update===event.data));finish?.();};
+  const interaction=()=>{if(!frozen&&!restoring)interacted=true;};
+  surface.addEventListener('compositionstart',start,true);surface.addEventListener('compositionupdate',update,true);surface.addEventListener('compositionend',end,true);surface.addEventListener('input',input,true);surface.addEventListener('keydown',interaction,true);surface.addEventListener('pointerdown',interaction,true);
+  const canCaptureAdmissionDraft=()=>!!captured||options.alive();
+  function captureFreeze():BaseFormulaAdmissionDraft|undefined {
+    if(captured)return captured;if(!canCaptureAdmissionDraft())return;frozen=true;const focused=options.read().focus;let state=options.read(),resolve!:()=>void,pending=false;const ready=new Promise<void>(yes=>{resolve=yes;});
+    const draft:BaseFormulaAdmissionDraft={initial,get state(){return state;},ready};captured=draft;
+    finish=()=>{if(composing||settling||pending||completedFormulaDrafts.has(draft))return;pending=true;options.lockNative();options.settle(snapshot=>{pending=false;if(composing||settling||completedFormulaDrafts.has(draft)||!options.alive())return;state={...snapshot,focus:focused};options.freeze();completedFormulaDrafts.add(draft);resolve();finish=undefined;});};finish();return draft;
+  }
+  function restoreAdmissionDraft(draft:BaseFormulaAdmissionDraft):boolean {
+    if(frozen||interacted||composing||settling||!options.alive()||options.read().text!==initial||initial!==draft.initial||!completedFormulaDrafts.has(draft))return false;
+    restoring=true;try{options.restore(draft.state);return true;}finally{restoring=false;}
+  }
+  return{canCaptureAdmissionDraft,captureFreeze,restoreAdmissionDraft,frozen:()=>frozen,changed(){if(!frozen&&!restoring)interacted=true;finish?.();},destroy(){surface.removeEventListener('compositionstart',start,true);surface.removeEventListener('compositionupdate',update,true);surface.removeEventListener('compositionend',end,true);surface.removeEventListener('input',input,true);surface.removeEventListener('keydown',interaction,true);surface.removeEventListener('pointerdown',interaction,true);}};
+}
+
 // Owner-document-only hosts (for example inert DOM previews) cannot construct
 // CodeMirror, which requires browser globals. Keep their native draft usable.
 function nativeFormulaEditor(textarea: HTMLTextAreaElement, options: BaseFormulaEditorOptions): BaseFormulaEditor {
@@ -167,22 +203,25 @@ function nativeFormulaEditor(textarea: HTMLTextAreaElement, options: BaseFormula
   wrapper.className = 'bases-formula-editor'; error.className = 'bases-formula-editor-error';
   error.setAttribute('role', 'status'); error.setAttribute('aria-live', 'polite');
   textarea.insertAdjacentElement('afterend', wrapper); wrapper.append(textarea, error);
-  let destroyed = false, lastDiagnostic: string | undefined;
+  let destroyed = false, lastDiagnostic: string | undefined;const initial=textarea.value;let admission:ReturnType<typeof formulaAdmissionOwner>|undefined;
   const sync = () => {
     if (destroyed) return;
     const message = syntaxDiagnostic(textarea.value); error.hidden = !message; error.textContent = message ?? '';
     if (message !== lastDiagnostic) { lastDiagnostic = message; options.onDiagnostics?.(message); }
   };
   const keydown = (event: KeyboardEvent) => {
+    if(admission?.frozen()){if(!event.isComposing&&event.keyCode!==229&&(event.key==='Escape'||event.key==='Tab'))event.preventDefault();return;}
     if (event.key === 'Escape' && !event.defaultPrevented && !event.isComposing && options.onEscape) { event.preventDefault(); options.onEscape(); }
     else if (event.key === 'Tab' && !event.defaultPrevented && !event.isComposing && event.keyCode !== 229
       && !event.altKey && !event.ctrlKey && !event.metaKey && !destroyed && textarea.isConnected
       && doc.activeElement === textarea && !textarea.disabled && !textarea.readOnly && !textarea.closest('[inert]')) options.onCommit?.();
   };
   textarea.addEventListener('input', sync); textarea.addEventListener('keydown', keydown); sync();
-  return { sync, focus() { if (!destroyed) textarea.focus(); }, hasFocus: () => !destroyed && doc.activeElement === textarea, destroy() {
+  admission=formulaAdmissionOwner(textarea,initial,{alive:()=>!destroyed&&textarea.isConnected,read:()=>{const start=textarea.selectionStart??0,end=textarea.selectionEnd??start,backward=textarea.selectionDirection==='backward';return{text:textarea.value,selection:[{anchor:backward?end:start,head:backward?start:end}],mainIndex:0,scrollTop:textarea.scrollTop,scrollLeft:textarea.scrollLeft,focus:doc.activeElement===textarea};},restore:state=>{textarea.value=state.text;const selected=state.selection[state.mainIndex]??{anchor:0,head:0};textarea.setSelectionRange(Math.min(selected.anchor,selected.head),Math.max(selected.anchor,selected.head),selected.head<selected.anchor?'backward':'forward');textarea.scrollTop=state.scrollTop;textarea.scrollLeft=state.scrollLeft;sync();if(state.focus)textarea.focus({preventScroll:true});},lockNative:()=>{textarea.readOnly=true;},freeze:()=>{textarea.readOnly=true;},settle:done=>done(admissionState())});
+  function admissionState():BaseFormulaAdmissionDraft['state']{const start=textarea.selectionStart??0,end=textarea.selectionEnd??start,backward=textarea.selectionDirection==='backward';return{text:textarea.value,selection:[{anchor:backward?end:start,head:backward?start:end}],mainIndex:0,scrollTop:textarea.scrollTop,scrollLeft:textarea.scrollLeft,focus:doc.activeElement===textarea};}
+  return {canCaptureAdmissionDraft:admission.canCaptureAdmissionDraft,captureFreeze:admission.captureFreeze,restoreAdmissionDraft:admission.restoreAdmissionDraft, sync, focus() { if (!destroyed) textarea.focus(); }, hasFocus: () => !destroyed && doc.activeElement === textarea, destroy() {
     if (destroyed) return;
-    destroyed = true; textarea.removeEventListener('input', sync); textarea.removeEventListener('keydown', keydown);
+    destroyed = true;admission?.destroy(); textarea.removeEventListener('input', sync); textarea.removeEventListener('keydown', keydown);
     if (wrapper.contains(textarea)) wrapper.replaceWith(textarea); else wrapper.remove();
   } };
 }
@@ -212,7 +251,7 @@ function enhanceFormulaEditor(textarea: HTMLTextAreaElement, options: BaseFormul
   error.setAttribute('role', 'status'); error.setAttribute('aria-live', 'polite');
   textarea.insertAdjacentElement('afterend', wrapper);
   textarea.hidden = true; textarea.tabIndex = -1; textarea.setAttribute('aria-hidden', 'true');
-  let destroyed = false, synchronizing = false, publishing = false, composingKey = false, lastDiagnostic: string | undefined;
+  let destroyed = false, synchronizing = false, publishing = false, composingKey = false, lastDiagnostic: string | undefined;const initial=textarea.value;let admission:ReturnType<typeof formulaAdmissionOwner>|undefined;
   const attributes = new Compartment(), editability = new Compartment();
   const contentAttributes = () => [EditorView.contentAttributes.of({
     'aria-label': textarea.getAttribute('aria-label') ?? 'Formula',
@@ -229,7 +268,7 @@ function enhanceFormulaEditor(textarea: HTMLTextAreaElement, options: BaseFormul
   };
   let view: EditorView;
   const commit = () => {
-    if (!destroyed && !synchronizing && !composingKey && !view.composing && !textarea.disabled && !textarea.readOnly
+    if (!admission?.frozen()&&!destroyed && !synchronizing && !composingKey && !view.composing && !textarea.disabled && !textarea.readOnly
       && !view.state.readOnly && view.hasFocus && view.contentDOM.isConnected && !wrapper.closest('[inert]')) options.onCommit?.();
     return false; // Completion/snippet keymaps run first; unhandled Tab still moves focus.
   };
@@ -239,7 +278,7 @@ function enhanceFormulaEditor(textarea: HTMLTextAreaElement, options: BaseFormul
       formulaLanguage, syntaxHighlighting(formulaHighlight), EditorView.lineWrapping,
       EditorView.domEventObservers({keydown(event) { composingKey = event.isComposing || event.keyCode === 229; }}),
       history(), keymap.of([...completionKeymap, ...defaultKeymap, ...historyKeymap,
-        { key: 'Escape', run: view => { if (!options.onEscape || composingKey || view.composing) return false; options.onEscape(); return true; } },
+        { key: 'Escape', run: view => {if(admission?.frozen())return !(composingKey||view.composing); if (!options.onEscape || composingKey || view.composing) return false; options.onEscape(); return true; } },
         { key: 'Tab', run: commit, shift: commit },
       ]),
       autocompletion({ override: [completions(options,summary)], defaultKeymap: false }),
@@ -254,7 +293,7 @@ function enhanceFormulaEditor(textarea: HTMLTextAreaElement, options: BaseFormul
       }),
       EditorView.updateListener.of(update => {
         if (!update.docChanged || synchronizing || destroyed) return;
-        textarea.value = update.state.doc.toString(); diagnose();
+        textarea.value = update.state.doc.toString();admission?.changed();if(admission?.frozen())return; diagnose();
         if (win) {
           publishing = true;
           try { textarea.dispatchEvent(new win.Event('input', { bubbles: true })); }
@@ -291,13 +330,18 @@ function enhanceFormulaEditor(textarea: HTMLTextAreaElement, options: BaseFormul
   const observer = win?.MutationObserver ? new win.MutationObserver(sync) : undefined;
   observer?.observe(textarea, { attributes: true, attributeFilter: ['disabled', 'readonly', 'aria-label', 'aria-describedby', 'placeholder'] });
   diagnose();
+  const readDraft=():BaseFormulaAdmissionDraft['state']=>({text:view.state.doc.toString(),selection:view.state.selection.ranges.map(range=>({anchor:range.anchor,head:range.head})),mainIndex:view.state.selection.mainIndex,scrollTop:view.scrollDOM.scrollTop,scrollLeft:view.scrollDOM.scrollLeft,focus:view.hasFocus});
+  admission=formulaAdmissionOwner(view.contentDOM,initial,{alive:()=>!destroyed&&view.contentDOM.isConnected,read:readDraft,restore:state=>{
+    synchronizing=true;try{const current=view.state.doc.toString();textarea.value=state.text;view.dispatch({...(current!==state.text?{changes:{from:0,to:current.length,insert:state.text}}:{}),selection:EditorSelection.create(state.selection.map(range=>EditorSelection.range(range.anchor,range.head)),state.mainIndex),annotations:Transaction.addToHistory.of(false)});diagnose();view.scrollDOM.scrollTop=state.scrollTop;view.scrollDOM.scrollLeft=state.scrollLeft;if(state.focus)view.focus();}finally{synchronizing=false;}
+  },lockNative:()=>{view.contentDOM.contentEditable='false';},freeze:()=>{textarea.readOnly=true;view.dispatch({effects:[attributes.reconfigure(contentAttributes()),editability.reconfigure(editable())],annotations:Transaction.addToHistory.of(false)});},settle:done=>view.requestMeasure({read:()=>readDraft(),write:snapshot=>queueMicrotask(()=>done(snapshot))})});
   return {
+    canCaptureAdmissionDraft:admission.canCaptureAdmissionDraft,captureFreeze:admission.captureFreeze,restoreAdmissionDraft:admission.restoreAdmissionDraft,
     sync,
     focus() { if (!destroyed) view.focus(); },
     hasFocus() { return !destroyed && view.hasFocus; },
     destroy() {
       if (destroyed) return;
-      destroyed = true; observer?.disconnect(); textarea.removeEventListener('input', sync); view.destroy(); wrapper.remove();
+      destroyed = true;admission?.destroy(); observer?.disconnect(); textarea.removeEventListener('input', sync); view.destroy(); wrapper.remove();
       restoreNative();
     },
   };
