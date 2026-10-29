@@ -98,6 +98,37 @@ test('restored active pane becomes editable before another restored pane finishe
   assert.match(await read('Target.md'),/Early edit/);
 });
 
+test('passive backlinks wait for the selected document instead of requesting identity before its body loads',async t=>{
+  const ui=await setup(t,{wait:Promise.resolve(),entered(){}}),body=deferred<void>();
+  const read=ui.adapter.read.bind(ui.adapter),stat=ui.adapter.stat.bind(ui.adapter);
+  let reading=false,lookups=0;
+  ui.adapter.read=async path=>{if(path==='Current.md'){reading=true;await body.promise;}return read(path);};
+  ui.adapter.stat=async path=>{lookups++;return stat(path);};
+  ui.root.classList.remove('right-hidden');
+  const opening=ui.workspace.openNote('Current.md');
+  try{
+    await until(()=>reading);
+    assert.equal(lookups,0,'secondary sidebar work must not enter the native queue ahead of the selected note');
+  }finally{body.resolve();await opening;}
+  assert.ok(ui.workspace.activePane.editor);
+  await until(()=>lookups>0);
+});
+
+test('retired document presentation callbacks cannot start secondary sidebar IO',async t=>{
+  const ui=await setup(t,{wait:Promise.resolve(),entered(){}}),frames:FrameRequestCallback[]=[];
+  const view=ui.root.ownerDocument.defaultView!;
+  view.requestAnimationFrame=callback=>{frames.push(callback);return frames.length;};
+  const stat=ui.adapter.stat.bind(ui.adapter);let lookups=0;
+  ui.adapter.stat=async path=>{lookups++;return stat(path);};
+  ui.root.classList.remove('right-hidden');
+  await ui.workspace.openNote('Current.md');
+  assert.ok(frames.length>0);
+  assert.equal(lookups,0);
+  await ui.workspace.destroy();
+  while(frames.length)frames.shift()!(0);
+  assert.equal(lookups,0,'a completed old frame cannot reacquire IO after retirement');
+});
+
 test('tags and graph use one committed namespace and resolver despite unrelated live entries',async t=>{
   const ui=await setup(t),saved=frame(['Saved.md','OldTarget.md']);ui.project({status:'current',frame:saved});
   ui.workspace.vault.metadata.get=()=>assert.fail('Capable display must not mix live metadata with the frame');

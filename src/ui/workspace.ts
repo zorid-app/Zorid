@@ -152,6 +152,8 @@ export class Workspace {
   private right = el('aside', 'right-sidebar');
   private rightContent = el('div', 'right-content');
   private documentBacklinks?: ReturnType<typeof mountDocumentBacklinks>;
+  private backlinksPresentedContents=new WeakSet<HTMLElement>();
+  private backlinksPendingPresentation=new WeakSet<HTMLElement>();
   private documentBacklinksGeneration = 0;
   private metadataSubscription?: {vault:Vault;stop:()=>void};
   private retiredMetadataVaults = new Set<Vault>();
@@ -2688,6 +2690,29 @@ export class Workspace {
     this.documentBacklinks?.dispose();this.documentBacklinks=undefined;
   }
 
+  /** Passive sidebar demand must follow the selected document's first paint,
+   * rather than putting identity/index requests ahead of its own source read. */
+  private deferBacklinksUntilPresented():boolean{
+    const pane=this.activePane,tab=this.current(pane),content=pane.content;
+    if(!tab.path)return false;
+    if(!pane.viewReady||pane.viewTabId!==tab.id||pane.viewPath!==tab.path||!content)return true;
+    if(this.backlinksPresentedContents.has(content))return false;
+    if(this.backlinksPendingPresentation.has(content))return true;
+    const generation=this.vaultGeneration,version=pane.renderVersion,vault=this.vault;
+    const current=()=>this.vault===vault&&this.vaultGeneration===generation&&this.panes.includes(pane)
+      &&pane.content===content&&pane.renderVersion===version&&content.isConnected&&!this.closing&&!this.platformReleased;
+    const view=content.ownerDocument.defaultView;
+    if(!view)return true;
+    this.backlinksPendingPresentation.add(content);
+    view.requestAnimationFrame(()=>view.requestAnimationFrame(()=>{
+      this.backlinksPendingPresentation.delete(content);
+      if(!current())return;
+      this.backlinksPresentedContents.add(content);
+      if(this.activePane===pane&&this.current(pane)===tab&&this.rightTab==='backlinks'&&!this.root.classList.contains('right-hidden'))this.renderRight();
+    }));
+    return true;
+  }
+
   private async renderSharedBacklinks(path:string|null|undefined):Promise<void> {
     const vault=this.vault,pane=this.activePane,tab=this.current(pane),generation=this.documentBacklinksGeneration;
     const service=vault.adapter.documentSemantics;
@@ -2947,7 +2972,10 @@ export class Workspace {
     this.rightContent.replaceChildren();delete this.rightContent.dataset.metadataStatus;const path=this.current()?.path;
     if(this.rightTab==='backlinks'){
       if(this.vault.adapter.documentSemantics){
-        if(!this.root.classList.contains('right-hidden'))void this.renderSharedBacklinks(path);
+        if(!this.root.classList.contains('right-hidden')){
+          if(this.deferBacklinksUntilPresented())this.rightContent.append(el('h3','right-heading','Linked mentions'),el('p','sidebar-empty','Linked mentions will update when this note opens.'));
+          else void this.renderSharedBacklinks(path);
+        }
         return;
       }
       this.rightContent.append(el('h3','right-heading','Linked mentions'));const links=path?this.vault.metadata.backlinks(path):[];
