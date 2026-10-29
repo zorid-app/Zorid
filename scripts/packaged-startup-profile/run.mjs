@@ -10,6 +10,7 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 import {CDP} from '../../tests/tasks-electron-integration/cdp.mjs';
 import {assessNote,baseFixtureSource,clockInterval,DEADLINE_MS,fixtureText,planCampaign,reopenPrepared} from './oracle.mjs';
 import {navigateFileTree} from './file-navigation.mjs';
+import {foregroundSource} from './foreground.mjs';
 import {captureObserverFailure,observerSource,sampleObserverSource} from './observer.mjs';
 import {installMainObserver} from './main-observer.mjs';
 import {stopOwned} from './cleanup.mjs';
@@ -45,7 +46,13 @@ export async function main(args=process.argv.slice(2)){
   async function bounded(action,record,ms=timeoutMs){const end=performance.now()+ms;let last;do{if(record?.exitCode!==undefined||record?.launchError)throw Error('Owned app exited before evidence: '+record.stderr);try{return await action();}catch(error){last=error;}await sleep(10);}while(performance.now()<end);throw last??Error('Packaged profiling deadline');}
   async function clock(cdp,record){const before=record.elapsed(),sample=await cdp.evaluate('({remoteNow:performance.now(),timeOrigin:performance.timeOrigin})'),after=record.elapsed();return {...sample,before,after};}
   const remaining=(launch,record)=>{const value=record.originMs+timeoutMs-launch.elapsed();assert.ok(value>0,'Original navigation/readiness deadline expired');return value;};
-  async function selectFile(launch,record,name){record.navigation={};return navigateFileTree(active.renderer,name,{now:launch.elapsed,timeoutMs:remaining(launch,record),receipt:record.navigation});}
+  function foregroundConfig(launch,activate){const pinned=report.apps[launch.label].pinned;return {pid:launch.pid,executable:pinned.executable,appPath:pinned.archive,profile:launch.profile,localDataDirectory:launch.localDataDirectory,url:pathToFileURL(path.join(pinned.archive,'dist/index.html')).href,activate};}
+  async function foreground(launch,record){
+    const receipt={calledAtMs:launch.elapsed()};(record.foregroundActivations??=[]).push(receipt);
+    try{receipt.window=await active.main.evaluate(foregroundSource(foregroundConfig(launch,true)));return receipt;}
+    catch(error){receipt.error=String(error);throw error;}finally{receipt.completedAtMs=launch.elapsed();}
+  }
+  async function selectFile(launch,record,name){await foreground(launch,record);record.navigation={};return navigateFileTree(active.renderer,name,{now:launch.elapsed,timeoutMs:remaining(launch,record),receipt:record.navigation});}
   async function press(renderer,key,code,commands){await renderer.call('Input.dispatchKeyEvent',{type:'keyDown',key,code,modifiers:4,...(commands?.length?{commands}:{})});await renderer.call('Input.dispatchKeyEvent',{type:'keyUp',key,code,modifiers:4});}
   async function coreRead(renderer,vault,name){return renderer.evaluate(`(async()=>{const context=await window.zorid.getDurableContext(${JSON.stringify(vault)});const value=await window.zorid.durableInvoke(${JSON.stringify(vault)},context.admissionId,'readText',[${JSON.stringify(name)}]);return{entryId:value.entryId,revision:value.revision,content:value.content};})()`);}
   async function stop(launch){
@@ -166,6 +173,7 @@ export async function main(args=process.argv.slice(2)){
         const mainURL=await bounded(()=>{const url=/Debugger listening on (ws:\/\/127\.0\.0\.1:\d+\/[^\s]+)/.exec(launch.stderr)?.[1];assert.ok(url,'Packaged main inspector not observable');return url;},launch);
         active.main=new CDP(mainURL);await active.main.call('Runtime.enable');launch.mainAttachedMs=launch.elapsed();launch.mainClockSamples=[await clock(active.main,launch)];
         launch.mainScope=await active.main.evaluate(`(${installMainObserver.toString()})(${JSON.stringify({expectedAppPath:pinned.archive,profile:pair.profile,localDataDirectory:pair.data,outputFile:launch.mainFinalFile})})`);
+        await bounded(()=>foreground(launch,startup),launch,remaining(launch,startup));
         const endpoint=await bounded(()=>currentBrowserEndpoint(launch.stderr),launch);launch.browserEndpoint=endpoint;
         active.browser=new CDP(endpoint.url);await active.browser.opened;
         const expectedURL=pathToFileURL(path.join(pinned.archive,'dist/index.html')).href;
@@ -195,11 +203,11 @@ export async function main(args=process.argv.slice(2)){
           const record=noteCase(launch,name,kind,0);launch.cases.push(record);await configure(launch,record);record.configured=true;record.originMs=launch.elapsed();arm(launch,record);await selectFile(launch,record,name);await finishNote(launch,record);
         }
         await baseCase(launch,pair);
-        launch.returnNavigation={};await navigateFileTree(active.renderer,'Note 0000.md',{now:launch.elapsed,timeoutMs,receipt:launch.returnNavigation});
+        const returnCase={originMs:launch.elapsed()};await selectFile(launch,returnCase,'Note 0000.md');launch.returnNavigation=returnCase;
         await bounded(async()=>assert.equal(await active.renderer.evaluate("(()=>{const n=document.querySelector('.pane.is-active .cm-content');return(n?.cmTile?.root?.view??n?.cmView?.view)?.state.doc.toString();})()"),pair.sources.get('Note 0000.md')),launch);
         launch.returnToStartupNoteVerified=true;
         launch.mainClockSamples.push(await clock(active.main,launch));
-      }catch(error){launch.errors.push(error.stack??String(error));report.errors.push({pairId:scheduled.pairId,mode:scheduled.mode,error:String(error)});await captureObserverFailure(active.renderer,launch);try{if(active.renderer){const image=await active.renderer.call('Page.captureScreenshot',{format:'png'});await fs.writeFile(path.join(directory,'failure.png'),Buffer.from(image.data,'base64'));}}catch{}}
+      }catch(error){launch.errors.push(error.stack??String(error));report.errors.push({pairId:scheduled.pairId,mode:scheduled.mode,error:String(error)});await captureObserverFailure(active.renderer,launch);try{launch.failureWindow=active.main?await active.main.evaluate(foregroundSource(foregroundConfig(launch,false))):{unavailable:'Main inspector not attached'};}catch(windowError){launch.failureWindow={error:String(windowError)};}try{if(active.renderer){const image=await active.renderer.call('Page.captureScreenshot',{format:'png'});await fs.writeFile(path.join(directory,'failure.png'),Buffer.from(image.data,'base64'));}}catch{}}
       finally{
         for(const record of launch.cases){
           record.cancelled=true;

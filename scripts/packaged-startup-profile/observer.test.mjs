@@ -9,7 +9,7 @@ function fixture({deferredEligibility=false}={}){
   const title={value:deferredEligibility?'':'Note'};
   const line={textContent:'Fixture body',outerHTML:'<div class="cm-line">Fixture body</div>',getBoundingClientRect:()=>node.getBoundingClientRect()};node.children=[line];
   const pane={querySelector:selector=>selector==='.cm-content'?node:title,querySelectorAll:()=>[line]};
-  const document={readyState:'loading',documentElement:{},querySelector:()=>pane,
+  const document={readyState:'loading',visibilityState:'hidden',hidden:true,hasFocus:()=>false,documentElement:{},querySelector:()=>pane,
     addEventListener:(key,handler)=>listeners.set(key,handler),removeEventListener:key=>listeners.delete(key)};
   const window={addEventListener(){},removeEventListener(){}};
   const context={window,document,performance:{now:()=>now++},innerHeight:800,
@@ -48,7 +48,7 @@ test('two-frame acceptance rechecks source, editability, inert and viewport guar
 test('failure capture preserves observer and actual selected editor diagnostics even without ready',async()=>{
   const f=fixture({deferredEligibility:true}),launch={errors:['original readiness failure'],cases:[{identity:'case'}]};
   await captureObserverFailure({evaluate:async source=>f.evaluate(source)},launch);
-  assert.equal(launch.failureObservation.probe.ready,null);assert.equal(launch.failureObservation.contentDOMMatches,true);assert.equal(launch.failureObservation.prefix,'Fixture body');
+  assert.equal(launch.failureObservation.visibilityState,'hidden');assert.equal(launch.failureObservation.hidden,true);assert.equal(launch.failureObservation.documentHasFocus,false);assert.equal(launch.failureObservation.probe.ready,null);assert.equal(launch.failureObservation.contentDOMMatches,true);assert.equal(launch.failureObservation.prefix,'Fixture body');
   assert.equal(launch.failureObservation.firstLines[0].text,'Fixture body');assert.equal(launch.failureObservation.visibleContent[0].text,'Fixture body');
   assert.equal(launch.cases[0].failureObservation,launch.failureObservation);assert.deepEqual(launch.errors,['original readiness failure']);
   assert.equal(Object.values(launch.failureObservation.probe).some(value=>typeof value==='function'),false);
