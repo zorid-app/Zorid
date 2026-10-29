@@ -1935,13 +1935,14 @@ export class Workspace {
     const current=this.baseNewItem;if(!current)return false;
     await current.close();return true;
   }
-  private openBaseNewItem(path:string,anchor:HTMLElement,ownershipHost:HTMLElement=anchor,existing=false,expectedWitness?:{entryId:string;revision?:string},openingOwner?:{current():boolean;canceled?():boolean;release():void}):Promise<boolean>{
+  private openBaseNewItem(path:string,anchor:HTMLElement,ownershipHost:HTMLElement=anchor,existing=false,expectedWitness?:{entryId:string;revision?:string},openingOwner?:{current():boolean;contextCurrent():boolean;canceled?():boolean;release():void}):Promise<boolean>{
     if(!openingOwner){
       const pane=this.activePane,activation=this.paneActivationRevision,navigation=this.navigationIntent.get(pane),version=pane.renderVersion;
       const doc=anchor.ownerDocument,win=doc.defaultView,focused=doc.activeElement;let retired=false,canceled=false;
       const retire=()=>{retired=true;canceled=true;},focus=(event:FocusEvent)=>{if(event.target!==focused)retired=true;};
       doc.addEventListener('pointerdown',retire,true);doc.addEventListener('focusin',focus,true);win?.addEventListener('blur',retire);
-      openingOwner={current:()=>!retired&&ownershipHost.isConnected&&this.activePane===pane&&this.panes.includes(pane)&&this.paneActivationRevision===activation&&this.navigationIntent.get(pane)===navigation&&pane.renderVersion===version,
+      const contextCurrent=()=>ownershipHost.isConnected&&this.activePane===pane&&this.panes.includes(pane)&&this.paneActivationRevision===activation&&this.navigationIntent.get(pane)===navigation&&pane.renderVersion===version;
+      openingOwner={current:()=>!retired&&contextCurrent(),contextCurrent,
         canceled:()=>canceled,
         release:()=>{doc.removeEventListener('pointerdown',retire,true);doc.removeEventListener('focusin',focus,true);win?.removeEventListener('blur',retire);}};
     }
@@ -2017,8 +2018,12 @@ export class Workspace {
         if(!operation){operation=prepareCollectionOptionCreation({service,collection:selected.collection,propertyId:field.id,label,validate});optionCreations.set(key,operation);}
         await operation.run();await vault.reload();await targets.prepareCollection();validate();popup?.refresh();optionCreations.delete(key);
       };
+      // The popup focuses its own title before resolving. Its preparation must
+      // retain the structural opener without treating that focus as retirement.
+      let preparing=true;
+      const validatePresentation=()=>{validateFile();if(preparing&&!owner.contextCurrent())throw new Error('The created note preview owner changed. Its original creation is retained.');};
       try{
-        popup=await openBaseNewItemPopover({anchor,vault,path,presentation:'side-peek',focusTitle:!existing,bodyExpanded:existing,propertiesExpanded:true,getBuffer:async target=>{validateFile();if(target!==shared.path)throw new Error('The new note moved before opening.');return shared;},validate:validateFile,
+        popup=await openBaseNewItemPopover({anchor,vault,path,presentation:'side-peek',focusTitle:!existing,bodyExpanded:existing,propertiesExpanded:true,getBuffer:async target=>{validatePresentation();if(target!==shared.path)throw new Error('The new note moved before opening.');return shared;},validate:validatePresentation,
           rename:async(source,destination,validateSelection,witness)=>{
             validateFile();validateSelection();await sessions.flush();const token=this.treeEntryToken(source);await shared.flush();
             await vault.rename(source,destination,()=>{validateFile();validateSelection();if(!token||this.treeEntryToken(source)!==token||shared.path!==source)throw new Error('The renamed note is no longer current.');this.requireAvailableTreePath(vault,destination,source);},witness);
@@ -2046,8 +2051,10 @@ export class Workspace {
             transfers:{autoConvertHtml:()=>this.settings.autoConvertHtml,importFile:async file=>{validateFile();const result=await this.importAttachment(file,shared.path,generation);validateFile();return result;},nativePath:file=>window.zorid?.getPathForFile?.(file)??'',onError:error=>notice(error instanceof Error?error.message:String(error))},
           },onError:error=>notice(error instanceof Error?error.message:String(error)),onClose:cleanup,
         });
-        validateFile();popup.element.append(recovery);this.baseNewItem=popup;this.baseNewItemAnchor=ownershipHost;return true;
-      }catch(error){if(popup?.element.isConnected){this.baseNewItem=popup;this.baseNewItemAnchor=ownershipHost;throw error;}cleanup();await sessions.close();throw error;}
+        validateFile();
+        if(!owner.contextCurrent()){preparing=false;await popup.close();throw new Error('The created note preview owner changed. Its original creation is retained.');}
+        preparing=false;popup.element.append(recovery);this.baseNewItem=popup;this.baseNewItemAnchor=ownershipHost;return true;
+      }catch(error){preparing=false;if(popup?.element.isConnected){this.baseNewItem=popup;this.baseNewItemAnchor=ownershipHost;throw error;}cleanup();await sessions.close();throw error;}
     });
     this.baseNewItemOpening=opening;
     const clear=()=>{owner.release();if(this.baseNewItemOpening===opening)this.baseNewItemOpening=undefined;};void opening.then(clear,clear);

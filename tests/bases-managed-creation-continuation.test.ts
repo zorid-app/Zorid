@@ -128,7 +128,7 @@ for(const managed of [true,false])test(`${managed?'managed':'note'} committed Ne
   assert.equal(f.opened[0],f.opened[1]);await until(()=>!f.session.hasPendingChanges());await f.close();
 });
 
-test('Workspace admits the captured creation actor through a delayed buffer load without adopting a replacement',async t=>{
+async function workspaceFixture(t:test.TestContext){
   const dom=new JSDOM('<main></main>',{url:'https://creation.test/',pretendToBeVisual:true}),saved=new Map<string,PropertyDescriptor|undefined>();
   const matchMedia=(media:string)=>({matches:false,media,addListener(){},removeListener(){},addEventListener(){},removeEventListener(){}});
   for(const[key,value]of Object.entries({window:dom.window,document:dom.window.document,localStorage:dom.window.localStorage,navigator:dom.window.navigator,HTMLElement:dom.window.HTMLElement,Node:dom.window.Node,Text:dom.window.Text,Window:dom.window.Window,MutationObserver:dom.window.MutationObserver,getComputedStyle:dom.window.getComputedStyle.bind(dom.window),requestAnimationFrame:dom.window.requestAnimationFrame.bind(dom.window),cancelAnimationFrame:dom.window.cancelAnimationFrame.bind(dom.window),matchMedia})){saved.set(key,Object.getOwnPropertyDescriptor(globalThis,key));Object.defineProperty(globalThis,key,{configurable:true,writable:true,value});}
@@ -144,10 +144,15 @@ test('Workspace admits the captured creation actor through a delayed buffer load
   const root=dom.window.document.querySelector('main')!,workspace=new Workspace(root,(parent,options)=>{const input=parent.ownerDocument.createElement('textarea');parent.append(input);return{getValue:()=>options.value,setValue(){},focus(){},destroy(){input.remove();},insert(){}};});
   t.after(async()=>{release();try{await workspace.destroy();}finally{dom.window.close();for(const[key,descriptor]of saved){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else Reflect.deleteProperty(globalThis,key);}}});
   await workspace.start({adapter,id:'test:creation-continuation',label:'Creation'});await workspace.openNote('Start.md');
-  const anchor=dom.window.document.createElement('button');root.append(anchor);anchor.focus();hold=true;
+  const anchor=dom.window.document.createElement('button');root.append(anchor);anchor.focus();
+  return{dom,root,workspace,adapter,ids,checkpointLoads,anchor,holdRead(){hold=true;return{release,get started(){return started;}};}};
+}
+
+test('Workspace admits the captured creation actor through a delayed buffer load without adopting a replacement',async t=>{
+  const{dom,root,workspace,adapter,ids,checkpointLoads,anchor,holdRead}=await workspaceFixture(t),held=holdRead();
   const pending=(workspace as any).openBaseNewItem('ZCreated.md',anchor,root,false,{entryId:'created-entry',revision:'r1'});
-  const rejection=assert.rejects(pending,/identity|changed|replaced|coherent file observation/);await until(()=>started);
-  ids.set('ZCreated.md','replacement-entry');await adapter.write('ZCreated.md','Do not adopt this replacement');release();await rejection;
+  const rejection=assert.rejects(pending,/identity|changed|replaced|coherent file observation/);await until(()=>held.started);
+  ids.set('ZCreated.md','replacement-entry');await adapter.write('ZCreated.md','Do not adopt this replacement');held.release();await rejection;
   assert.equal(root.ownerDocument.querySelector('[aria-label="Page preview"]'),null);
   assert.equal(checkpointLoads.includes('note/v1/replacement-entry'),false,'a creation opener must not adopt another actor checkpoint before checking identity');
   const canceled=(workspace as any).openBaseNewItem('ZCreated.md',anchor,root,false,{entryId:'created-entry'});
@@ -155,4 +160,24 @@ test('Workspace admits the captured creation actor through a delayed buffer load
   const retired=(workspace as any).openBaseNewItem('ZCreated.md',anchor,root,false,{entryId:'created-entry'});
   workspace.activePane.renderVersion++;
   await assert.rejects(retired,/preview owner changed/,'a runtime owner replacement is not evidence of user cancellation');
+});
+
+for(const retirement of ['pane','host','healthy'] as const)test(`final popup preparation validates its structural owner while allowing its own focus: ${retirement}`,async t=>{
+  const{root,workspace,anchor}=await workspaceFixture(t),internal=workspace as any,original=internal.baseBufferFor.bind(internal);
+  let entered=false,release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});t.after(()=>release());
+  internal.baseBufferFor=async(...args:unknown[])=>{
+    const shared=await original(...args),load=shared.load.bind(shared);let held=false;
+    shared.load=async(...input:unknown[])=>{if(!held){held=true;entered=true;await gate;}return load(...input);};
+    return shared;
+  };
+  const host=root.ownerDocument.createElement('section');root.append(host);host.append(anchor);
+  const pending=internal.openBaseNewItem('ZCreated.md',anchor,host,false,{entryId:'created-entry'});
+  const result=retirement==='healthy'?pending:assert.rejects(pending,/preview owner changed/);
+  await until(()=>entered);
+  if(retirement==='pane')workspace.activePane.renderVersion++;
+  if(retirement==='host')host.remove();
+  release();await result;
+  if(retirement==='healthy'){
+    assert.equal(await pending,true);const popup=root.ownerDocument.querySelector('[aria-label="Page preview"]')!;assert.ok(popup);assert.ok(popup.contains(root.ownerDocument.activeElement));await internal.closeBaseNewItem();
+  }else assert.equal(root.ownerDocument.querySelector('[aria-label="Page preview"]'),null,'a retired owner cannot install or acknowledge the created popup');
 });
