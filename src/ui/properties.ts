@@ -7,8 +7,8 @@ import type { Vault } from '../core/vault.ts';
 import { baseExpressionValue } from '../bases/expression.ts';
 import type { BaseExpressionValue } from '../bases/expression.ts';
 import type { BasePropertyDefinition } from '../bases/property-definitions.ts';
-import { basePropertyPopoverOwner,mountBasePropertyWidget } from '../bases/property-widgets.ts';
-import type { BaseRelationTarget } from '../bases/property-widgets.ts';
+import { basePropertyPopoverOwner,mountBasePropertyWidget,canCaptureBasePropertyRawDraft,captureBasePropertyRawDraft,restoreBasePropertyRawDraft } from '../bases/property-widgets.ts';
+import type { BaseRelationTarget,BasePropertyRawDraft } from '../bases/property-widgets.ts';
 
 export interface PropertiesOptions {
   getSource: () => string;
@@ -17,6 +17,8 @@ export interface PropertiesOptions {
   path?: string;
   /** Explicit collection-scoped definitions supplied by the current owner. */
   getDefinitions?: () => Readonly<Record<string, BasePropertyDefinition>>;
+  /** Join the fresh owner's authoritative collection/schema read before restoring raw controls. */
+  prepareAdmissionRestore?: () => Promise<void>;
   /** Managed membership/identities cannot be edited as ordinary YAML keys. */
   isManaged?: () => boolean;
   /** Workspace notes show this panel only for authoritative collection members. */
@@ -43,8 +45,27 @@ export interface PropertiesOptions {
   /** Optional owner identity guard for a host that reuses a panel across files. */
   isCurrent?: () => boolean;
 }
+/** Component-owned RAM state only; restoring it never accepts a property edit. */
+export interface PropertiesRawControl {
+  readonly kind: 'key' | 'value'; readonly index: number; readonly tag: string; readonly inputType?: string;
+  readonly value: string; readonly checked?: boolean; readonly indeterminate?: boolean;
+  readonly focused: boolean; readonly selectionStart: number | null; readonly selectionEnd: number | null;
+  readonly selectionDirection: 'forward' | 'backward' | 'none' | null;
+}
+export interface PropertiesRawDrafts {
+  readonly identity: {readonly path?: string; readonly entryId?: string; readonly revision?: string};
+  readonly rows: readonly {readonly key:string;readonly valueFingerprint:string;readonly definitionFingerprint?:string;
+    readonly type:PropertyType;readonly controls:readonly PropertiesRawControl[];readonly widget?:BasePropertyRawDraft}[];
+  readonly addForm?: {readonly propertiesFingerprint:string;readonly name:PropertiesRawControl;readonly type:string};
+}
+export interface PropertiesRawConflict {readonly draft:PropertiesRawDrafts;readonly reason:string}
+export interface PropertiesAdmissionRecovery {readonly rawDrafts:PropertiesRawDrafts;settle():Promise<void>}
 export interface PropertiesView {
   refresh(): void;
+  canRecoverAdmission?(): boolean;
+  prepareAdmissionRestore?(): Promise<void>;
+  prepareAdmissionRecovery?(): PropertiesAdmissionRecovery;
+  restoreAdmissionDrafts?(drafts:PropertiesRawDrafts, options?:{focus?:boolean}): {restored:boolean;pending:boolean;conflicts:readonly PropertiesRawConflict[]};
   /** Includes accepted queued writes and unsubmitted scalar/list/name drafts. */
   hasPendingChanges(): boolean;
   /** Settle accepted writes; unresolved input stays mounted for correction. */
@@ -99,6 +120,8 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
   const addButton = button('Add property', 'metadata-add-button');
   root.append(heading, rowsContainer, globalError, addButton); container.append(root);
   const rows = new Map<string, Row>(), selectedTypes = new Map<string, PropertyType>();
+  let frozen = false;
+  let recovery:PropertiesAdmissionRecovery|undefined;
   let destroyed = false, pending = Promise.resolve(), addForm: HTMLElement | undefined, addingManagedProperty = false;
   let pendingGeneration=0,settledGeneration=0,mutationFailure:unknown,mutationFailureOwner:Row|undefined;
   // A canceled search cannot establish the outcome of an uncertain schema write.
@@ -130,13 +153,14 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
     error(target, problem);
     try { options.onError?.(problem); } catch (error) { console.error('Properties error handler failed', error); }
   }
-  function live(): boolean { return !destroyed && root.isConnected && (options.isCurrent?.() ?? true); }
+  function live(): boolean { return !frozen && !destroyed && root.isConnected && (options.isCurrent?.() ?? true); }
   function current(source: string, row: Row): Property {
     const property = readProperties(source).find(item => item.key === row.key);
     if (!property) throw new Error(`Property was removed or renamed: ${row.key}`);
     return property;
   }
   function commit(target: HTMLElement, operation: (source: string) => string, success?: () => void): void {
+    if(frozen)return;
     setPending(pending.then(async () => {
       if (destroyed) return;
       mutationFailure=undefined;mutationFailureOwner=undefined;
@@ -150,12 +174,13 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
     }));
   }
   function typeFor(property: Property): PropertyType { return selectedTypes.get(property.key) ?? property.type; }
-  function edited(row: Row): void { row.dirty = true; row.revision++; }
+  function edited(row: Row): void { if(!frozen){row.dirty = true; row.revision++;} }
   function acknowledge(row: Row, revision: number): boolean {
     if (row.revision !== revision) return false;
     row.dirty = false; return true;
   }
   function setValue(row: Row, value: unknown, type = typeFor(row.property)): void {
+    if(frozen)return;
     const revision = row.revision;
     commit(row.error, source => { current(source, row); return setProperty(source, row.key, value, type); }, () => { acknowledge(row, revision); });
   }
@@ -174,6 +199,7 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
   }
 
   function renderValue(row: Row): void {
+    if(frozen)return;
     const type = typeFor(row.property), value = row.property.value;
     const signature = JSON.stringify(value), definition = definitionFor(row.key), definitionSignature = JSON.stringify(definition);
     if (row.value.hasAttribute('data-base-editing')) return;
@@ -197,7 +223,7 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
         if (value.type === 'list') return value.value.map(toPlain);
         throw new Error('This property result cannot be stored in a note.');
       };
-      row.disposeWidget = mountBasePropertyWidget(row.value, { property: `note.${row.key}`, value: rawValue, row: { path: options.path ?? 'Note.md', values: {} }, version: 0 }, {
+      row.disposeWidget = mountBasePropertyWidget(row.value, { property: `note.${row.key}`, value: rawValue, row: { path: options.path ?? 'Note.md', values: {},entryId:options.path?options.vault?.entries.get(options.path)?.entryId:undefined,revision:options.path?options.vault?.entries.get(options.path)?.revision:undefined }, version: 0 }, {
         getDefinition: () => definitionFor(row.key) ?? definition,
         isCurrent: () => live() && rows.get(row.key) === row,
         getDisplayValue: presentation => options.getDisplayValue?.(row.key, presentation.value),
@@ -376,7 +402,7 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
 
   function refresh(): void {
     definitions = options.getDefinitions?.() ?? {};
-    if (destroyed) return;
+    if (destroyed || frozen) return;
     // A membership refresh must never strand an existing edit or failed save.
     // Unknown/nonmember notes stay quiet; readable YAML is not membership proof.
     const retained = pendingGeneration !== settledGeneration || !!mutationFailure || !!addForm || [...rows.values()].some(hasDraft);
@@ -558,6 +584,14 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
   document.addEventListener('keydown', keyboardSupersede, true);
   root.addEventListener('contextmenu', contextMenu);
   root.addEventListener('keydown', keyboardMenu);
+  // Freeze at the component boundary before making its containing workspace
+  // inert: browser-generated change/blur must not accept raw values on retire.
+  const blockFrozen=(event:Event)=>{if(frozen){event.preventDefault();event.stopImmediatePropagation();}};
+  for(const type of ['change','click','keydown','contextmenu'])root.addEventListener(type,blockFrozen,true);
+  const composing=new Set<EventTarget>();let compositionDone:(()=>void)|undefined;
+  const compositionStart=(event:Event)=>{if(event.target)composing.add(event.target);};
+  const compositionEnd=(event:Event)=>{if(event.target)composing.delete(event.target);if(!composing.size){compositionDone?.();compositionDone=undefined;}};
+  root.addEventListener('compositionstart',compositionStart,true);root.addEventListener('compositionend',compositionEnd,true);
 
   addButton.addEventListener('click', () => {
     const addOwnerCurrent = () => { try { return live(); } catch { return false; } };
@@ -634,12 +668,74 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
     if(addForm&&!globalError.hidden&&globalError.textContent?.trim())throw new Error(globalError.textContent);
     if(addForm||[...rows.values()].some(hasDraft))throw new Error('Finish editing the current property before closing.');
   };
+  const controlsFor=(row:Row):HTMLInputElement[]=>[row.keyInput,...row.value.querySelectorAll<HTMLInputElement>('input,textarea,select')];
+  const rawControl=(control:HTMLInputElement,kind:'key'|'value',index:number):PropertiesRawControl=>({kind,index,tag:control.tagName,inputType:control.tagName==='INPUT'?control.type:undefined,
+    value:control.value,checked:control.tagName==='INPUT'?control.checked:undefined,indeterminate:control.tagName==='INPUT'?control.indeterminate:undefined,
+    focused:document.activeElement===control,selectionStart:control.selectionStart??null,selectionEnd:control.selectionEnd??null,selectionDirection:control.selectionDirection??null});
+  const restoreControl=(control:HTMLInputElement|undefined,state:PropertiesRawControl,focus:boolean):boolean=>{
+    if(!control||control.tagName!==state.tag||state.inputType!==undefined&&control.type!==state.inputType)return false;
+    control.value=state.value;if(state.checked!==undefined)control.checked=state.checked;if(state.indeterminate!==undefined)control.indeterminate=state.indeterminate;
+    if(focus&&state.focused)control.focus();
+    if(state.selectionStart!==null&&state.selectionEnd!==null&&'setSelectionRange'in control)try{control.setSelectionRange(state.selectionStart,state.selectionEnd,state.selectionDirection??undefined);}catch{/* Checkbox/select controls have no text selection. */}
+    return true;
+  };
+  const canRecoverAdmission=()=>!destroyed&&!frozen&&pendingGeneration===settledGeneration&&!mutationFailure&&!retainedOptionFailures.size&&!addingManagedProperty&&!menuPending
+    &&[...rows.values()].every(row=>!row.value.hasAttribute('data-base-editing')||canCaptureBasePropertyRawDraft(row.value));
+  const prepareAdmissionRecovery=():PropertiesAdmissionRecovery=>{
+    if(recovery)return recovery;
+    if(!canRecoverAdmission())throw new Error('Submitted property changes must settle before storage reconnects.');
+    const identity={path:options.path,entryId:options.path?options.vault?.entries.get(options.path)?.entryId:undefined,revision:options.path?options.vault?.entries.get(options.path)?.revision:undefined};
+    const drafts=[...rows.values()].filter(hasDraft).map(row=>({row,key:row.key,valueFingerprint:row.renderedValue??JSON.stringify(row.property.value),definitionFingerprint:row.renderedDefinition,
+      type:row.renderedType??typeFor(row.property),widget:row.value.hasAttribute('data-base-editing')?captureBasePropertyRawDraft(row.value):undefined}));
+    if(drafts.some(draft=>draft.row.value.hasAttribute('data-base-editing')&&!draft.widget))throw new Error('The property draft changed before it could be retained.');
+    const formBaseline=addForm?JSON.stringify(readProperties(options.getSource())):undefined;
+    const snapshot=():PropertiesRawDrafts=>({identity,rows:drafts.map(({row,...draft})=>({...draft,controls:draft.widget?[]:controlsFor(row).map((control,index)=>rawControl(control,index===0?'key':'value',index===0?0:index-1))})),
+      ...(addForm?{addForm:{propertiesFingerprint:formBaseline!,name:rawControl(addForm.querySelector<HTMLInputElement>('input')!,'key',0),type:addForm.querySelector<HTMLSelectElement>('select')!.value}}:{})});
+    let raw=snapshot();frozen=true;
+    const compositionReady=composing.size?new Promise<void>(resolve=>{compositionDone=resolve;}):Promise.resolve();
+    const settled=Promise.all([compositionReady,...drafts.flatMap(draft=>draft.widget?[draft.widget.ready]:[])]).then(()=>new Promise<void>(resolve=>setTimeout(resolve,0))).then(()=>{
+      const next=snapshot();raw={...next,rows:next.rows.map((row,index)=>({...row,controls:row.controls.map((control,controlIndex)=>({...control,focused:raw.rows[index]?.controls[controlIndex]?.focused??false}))})),
+        ...(next.addForm?{addForm:{...next.addForm,name:{...next.addForm.name,focused:raw.addForm?.name.focused??false}}}:{})};
+    });
+    return recovery={get rawDrafts(){return raw;},settle:()=>settled};
+  };
+  const restoredDrafts=new WeakSet<PropertiesRawDrafts>();
+  const restoreAdmissionDrafts=(draft:PropertiesRawDrafts,restoreOptions?:{focus?:boolean}):{restored:boolean;pending:boolean;conflicts:readonly PropertiesRawConflict[]}=>{
+    const conflict=(reason:string)=>({restored:false,pending:false,conflicts:[{draft,reason}]});
+    if(restoredDrafts.has(draft)&&live())return {restored:true,pending:false,conflicts:[]};
+    if(!live()||pendingGeneration!==settledGeneration||hasPendingChanges())return conflict('The fresh properties owner already has unfinished changes.');
+    const actor=options.path?options.vault?.entries.get(options.path):undefined;
+    if(draft.identity.path!==options.path||draft.identity.entryId!==undefined&&draft.identity.entryId!==actor?.entryId)return conflict('The note identity changed while storage reconnected.');
+    let currentProperties:Property[];try{currentProperties=readProperties(options.getSource());}catch{return conflict('The fresh note properties cannot be read. Their raw draft is retained.');}
+    for(const item of draft.rows){const row=rows.get(item.key),property=currentProperties.find(property=>property.key===item.key);
+      if(!row||!property||JSON.stringify(property.value)!==item.valueFingerprint||JSON.stringify(definitionFor(item.key))!==item.definitionFingerprint)return conflict(`Property ${item.key} changed while storage reconnected. Its raw draft is retained.`);
+      if(!item.widget){const controls=controlsFor(row);if(item.controls.some(state=>{const control=state.kind==='key'?controls[0]:controls[state.index+1];return !control||control.tagName!==state.tag||state.inputType!==undefined&&control.type!==state.inputType;}))return conflict(`Property ${item.key} no longer has the same controls.`);}
+    }
+    if(draft.addForm&&JSON.stringify(currentProperties)!==draft.addForm.propertiesFingerprint)return conflict('Properties changed while the new-property form was retained.');
+    // All checks precede any raw control publication. Never dispatch input,
+    // change, blur, Enter, or a schema operation to reconstruct a draft.
+    for(const item of draft.rows){const row=rows.get(item.key)!;
+      if(item.widget){if(!restoreBasePropertyRawDraft(row.value,item.widget))return conflict(`Property ${item.key} could not restore its raw editor.`);}
+      else {const controls=controlsFor(row);for(const state of item.controls)restoreControl(state.kind==='key'?controls[0]:controls[state.index+1],state,restoreOptions?.focus!==false);}
+      if(!item.widget){row.dirty=true;row.revision++;}
+    }
+    if(draft.addForm){addButton.click();const name=addForm?.querySelector<HTMLInputElement>('input'),selector=addForm?.querySelector<HTMLSelectElement>('select');if(!name||!selector)return conflict('The new-property form is unavailable.');selector.value=draft.addForm.type;restoreControl(name,draft.addForm.name,restoreOptions?.focus!==false);}
+    restoredDrafts.add(draft);return {restored:true,pending:false,conflicts:[]};
+  };
   const owns=(node:Node)=>{if(destroyed||!root.isConnected||!node.isConnected)return false;if(root.contains(node))return true;const owner=basePropertyPopoverOwner(node);return !!owner&&[...rows.values()].some(row=>row.value===owner);};
-  return { refresh,hasPendingChanges,flush,owns, destroy() {
+  return { refresh,hasPendingChanges,flush,owns,canRecoverAdmission,prepareAdmissionRecovery,restoreAdmissionDrafts,
+    async prepareAdmissionRestore(){
+      if(!live())throw new Error('The fresh property owner is no longer current.');
+      await options.prepareAdmissionRestore?.();
+      if(!live())throw new Error('The property owner changed while its fresh schema was being read.');
+      refresh();
+    }, destroy() {
     if (destroyed) return;
     destroyed = true; menuSerial++;
     document.removeEventListener('contextmenu', supersede, true); document.removeEventListener('keydown', keyboardSupersede, true);
     root.removeEventListener('contextmenu', contextMenu); root.removeEventListener('keydown', keyboardMenu);
+    for(const type of ['change','click','keydown','contextmenu'])root.removeEventListener(type,blockFrozen,true);
+    root.removeEventListener('compositionstart',compositionStart,true);root.removeEventListener('compositionend',compositionEnd,true);
     if (menuPending) void (options.dismissMenu ?? dismissContextMenu)(document).catch(problem => { try { options.onError?.(problem); } catch { /* The owner is already disposed. */ } });
     menuPending = false; definitionLoad++; editObserver?.disconnect(); unsubscribers.forEach(unsubscribe => unsubscribe()); for (const row of rows.values()) row.disposeWidget?.(); rows.clear();retainedOptionFailures.clear();releasedWidgetRows.clear(); selectedTypes.clear(); root.remove();
   } };
