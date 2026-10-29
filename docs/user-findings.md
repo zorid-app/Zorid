@@ -16,8 +16,10 @@ List/Board density, settings/filter summaries, creation/cancellation, property
 ordering/anchored compact editor and page-peek focus. Root408/408 focused checks,
 full TypeScript/native frontend build and final REA Electron44.9.1 component and
 10-value clipboard transfers PASS. Both owned windows exited normally.
-Whole-app save/restart, sole-owner main integration and protected-session install
-holds remain. Separate Base post-edit latency stays OPEN.
+Main integration and installation completed by explicit user request on2026-10-29.
+Actual installed note save/restart and Base render PASS; previous bundle deleted
+after verification. User confirmed both protected drafts safely saved before old
+blank session termination. Separate recovery-fault/Base post-edit latency stays OPEN.
 
 ## URGENT: real-session automatic save failure — 2026-10-28
 

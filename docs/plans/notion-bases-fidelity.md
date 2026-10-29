@@ -107,3 +107,27 @@ Installation and previous-bundle deletion remain PENDING: exact protected real
 PID71549 is still running, with no new proof of saved Home/Project Idea drafts.
 No Quit, reload, freeze, draft apply or replacement was attempted. User was asked
 only for the current durable-save status after all safe staging/checks completed.
+
+## Installation complete — 2026-10-29
+
+The user explicitly confirmed BOTH protected drafts safely saved. Normal keyboard
+and menu Quit attempts left exact old main71549 running with a blank window;
+SIGTERM then closed that exact process. This was a forced process closure after
+user save confirmation, not a normal exit or independent draft-recovery proof.
+No recovery runner, real-vault write, preference edit or renderer hotpatch ran.
+
+Verified replacement atomically moved into /Users/ctk/Applications/Zorid.app;
+old bundle retained temporarily, then deleted ONLY after installed smoke PASS.
+Installed356-file package verification PASS; ASAR remains33474da8c2e7369b017dec4a11404f192e758df1c86f76d3aebffd7f6d1398ad,
+Electron44.9.1/executableab18c7c9, embedded native hosta1c862be unchanged.
+Actual installed bundle, separate disposable userData/vault/local-data, no host/dev
+or Electron-as-Node override: ordinary-note save/restart + Base rendering PASS.
+Both owned mains76103/76344 closed normally0/nullsignal; exact receipt lists the
+actual PIDs and subsequent absence checks. Do not infer a universal save-fault fix.
+
+Final evidence in isolated worktree tmp/notion-fidelity-20261028:
+installed-smoke001/receipt.json and install-final-receipt001.json. Vaults/preferences
+untouched by installation. Previous .Zorid-previous-20261029-58da213c.app deleted;
+new installed app preserved. All earlier installation holds in this ledger are
+historical and superseded for this delivery by the explicit user save confirmation.
+Separate recovery-fault, Base post-edit latency and parity gaps remain OPEN.

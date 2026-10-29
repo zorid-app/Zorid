@@ -2,6 +2,23 @@
 
 ## Execution checkpoint — shared-core coordinator
 
+**NOTION UI MERGED/INSTALLED — explicit user request,2026-10-29.**
+User directed this session to merge, then build/install/delete previous bundle.
+Clean main fast-forwarded58da213c (reviewed runtimece974470);408 focused tests,
+TS/frontend and packaged356-file verification PASS. Actual installed
+/Users/ctk/Applications/Zorid.app uses Electron44.9.1 and embeddedhosta1c862be,
+ASAR33474da8c2e7369b017dec4a11404f192e758df1c86f76d3aebffd7f6d1398ad.
+Installed isolated-profile note save/restart/Base render PASS, both owned apps
+normal0/nullsignal and absent; previous bundle deleted after successful proof.
+User explicitly confirmed BOTH protected drafts safely saved. Old blank71549
+ignored normal Quit and was then closed with SIGTERM; record forced closure,
+not independent recovery proof. Real vaults/preferences untouched by this install.
+No recovery runner/fault fix/recovery acceptance claimed. Prior install hold below
+is historical for this delivery; broader recovery and Base-edit findings stay OPEN.
+This session remains focused on original UI; no new recovery ownership assigned.
+See docs/plans/notion-bases-fidelity.md and isolated install-final-receipt001.json.
+
+
 
 **DIRECT USER REFOCUS / MAIN-LANE RELEASE — 2026-10-28.**
 User explicitly directs this session to focus ONLY its original Notion-style Bases
