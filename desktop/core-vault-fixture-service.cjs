@@ -18,6 +18,8 @@ function metadata(state, presentation) {
 function visible(path) { return !path.split('/').some(part => part.startsWith('.')); }
 const HEALTHY_WATCH_AUDIT_MS = 5 * 60 * 1000;
 const MAX_KNOWN_HINTS_PER_POLL = 16;
+// Keep secondary history outside the admission startup target; this is not a paint/readiness witness.
+const LOCAL_RECOVERY_ADMISSION_GRACE_MS = 5000;
 function sourceImportPending(status){const work=status?.work;return work?.pending===true&&(work.phase==='discovery'||work.phase==='import');}
 async function physicalWatchRoot(root){
   const path=await fs.realpath(root),stat=await fs.stat(path,{bigint:true});
@@ -117,7 +119,7 @@ class CoreVaultFixtureService {
       return service;
     } catch (reason) { stopWatcher(pendingWatch); await host?.close(); throw reason; }
   }
-  constructor(host, { pollMs, rescanMs, familyMode = false, documentRuntime = false, pendingWatch=watchState(), watchFactory=watch, now=Date.now, historySetTimeout=setTimeout, historyClearTimeout=clearTimeout }) {
+  constructor(host, { pollMs, rescanMs, familyMode = false, documentRuntime = false, pendingWatch=watchState(), watchFactory=watch, now=Date.now, historySetTimeout=setTimeout, historyClearTimeout=clearTimeout, historyClock=()=>performance.now() }) {
     if (documentRuntime) requireDocumentRuntime(host);
     this.documentRuntimeEnabled=documentRuntime;
     this.documentRuntimeOwners=new Set();
@@ -135,7 +137,7 @@ class CoreVaultFixtureService {
     this.listeners = new Set();
     this.hints = this.watchState.hints;
     this.closed = false;
-    this.historyHost=host;this.historyOwner=null;this.historyEpoch=0;this.historyTimer=null;this.historyToken=null;this.historyRun=null;
+    this.historyHost=host;this.historyOwner=null;this.historyEpoch=0;this.historyClock=historyClock;this.historyOwnerFence=null;this.historyTimer=null;this.historyToken=null;this.historyRun=null;
     this.historyNextDue=this.now();this.historyLastError=null;this.historyLastStatus=null;this.historyQuietMs=Math.min(250,Math.floor(pollMs/2));
     this.historySetTimeout=historySetTimeout;this.historyClearTimeout=historyClearTimeout;
     this.historyAvailable=host.capabilities?.includes('local_recovery_maintenance')&&typeof host.localRecoveryMaintenance==='function'&&typeof host.localRecoveryIdleDelay==='function'&&typeof host.subscribeActivity==='function';
@@ -222,25 +224,26 @@ class CoreVaultFixtureService {
   }
   syncLocalRecovery(){
     const owner=this.historyAvailable&&this.documentRuntimeEnabled&&!this.closed&&!this.runtimeFailed&&this.host===this.historyHost?this.runtimeOwner():null;
-    if(owner!==this.historyOwner){this.historyEpoch++;this.historyOwner=owner;this.cancelLocalRecoveryTimer();}
+    if(owner!==this.historyOwner){this.historyEpoch++;this.historyOwner=owner;this.historyOwnerFence=owner?this.historyClock()+LOCAL_RECOVERY_ADMISSION_GRACE_MS:null;this.cancelLocalRecoveryTimer();}
     this.scheduleLocalRecovery();
   }
-  localRecoveryGuard(host,owner,epoch){
+  localRecoveryGuard(host,owner,epoch,dispatch=false){
     if(this.closed||this.runtimeFailed||this.host!==host||this.historyHost!==host||this.historyOwner!==owner||this.historyEpoch!==epoch||owner.paused||!this.documentRuntimeOwners.has(owner))throw error('local_recovery_owner_changed');
     owner.assertActive();
+    if(dispatch&&this.historyClock()<this.historyOwnerFence)throw error('local_recovery_deferred');
   }
   scheduleLocalRecovery(){
     if(!this.historyAvailable||this.historyTimer!==null||this.historyRun||!this.historyOwner)return;
     const host=this.historyHost,owner=this.historyOwner,epoch=this.historyEpoch;
     try{this.localRecoveryGuard(host,owner,epoch);}catch{return;}
     const quiet=host.localRecoveryIdleDelay(this.historyQuietMs);if(quiet===null)return;
-    const delay=Math.max(0,this.historyNextDue-this.now(),quiet),token={};this.historyToken=token;
+    const delay=Math.max(0,this.historyNextDue-this.now(),quiet,this.historyOwnerFence-this.historyClock()),token={};this.historyToken=token;
     this.historyTimer=this.historySetTimeout(()=>{
       if(this.historyToken!==token)return;this.historyTimer=null;this.historyToken=null;
       try{this.localRecoveryGuard(host,owner,epoch);}catch{return;}
       const run=(async()=>{
         try{
-          const status=await host.localRecoveryMaintenance(()=>this.localRecoveryGuard(host,owner,epoch),this.historyQuietMs);
+          const status=await host.localRecoveryMaintenance(()=>this.localRecoveryGuard(host,owner,epoch,true),this.historyQuietMs);
           this.localRecoveryGuard(host,owner,epoch);
           this.historyLastStatus=Object.freeze({...status});
           if(status.ran)this.historyLastError=status.failed_notes?'local_recovery_note_skipped':null;

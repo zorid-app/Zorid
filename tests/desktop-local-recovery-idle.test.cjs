@@ -42,7 +42,7 @@ function scheduler(){
   async localRecoveryMaintenance(guard){guard();calls.push({at:now,guard});if(typeof reply==='function')return reply(guard);return reply;},
   async listSnapshot(){return{entries:[],cursor:'0'};},async close(){events.push('host-close');},
  };
- const service=new CoreVaultFixtureService(host,{pollMs:750,rescanMs:30000,documentRuntime:true,now:()=>now,
+ const service=new CoreVaultFixtureService(host,{pollMs:750,rescanMs:30000,documentRuntime:true,now:()=>now,historyClock:()=>now,
   historySetTimeout(callback,delay){const id=++next;timers.set(id,{callback,at:now+delay});return id;},historyClearTimeout(id){timers.delete(id);}});
  service.startPolling=()=>{};service.notify=value=>events.push(value);
  service.documentScheduler={addOwner(){let retired;return{subscribe(_listener,onRetire){retired=onRetire;},async pause(){},resume(){},async prepareRelease(){},release(){retired?.();},async revoke(){retired?.();}};},async close(){}};
@@ -52,13 +52,15 @@ function scheduler(){
   async fire(value){now=value;const due=[...timers].filter(([,timer])=>timer.at<=now);for(const[id,timer]of due){timers.delete(id);timer.callback();}await turn();},
  };
 }
-test('history starts only with admission, preserves pending due across activity, then sleeps five minutes',async()=>{
+test('history has no dispatch in the first 800ms, preserves its owner fence across activity, then follows native due time',async()=>{
  const f=scheduler();assert.equal(f.timers.size,0);const owner=f.admit();assert.equal(f.calls.length,0);
- await f.fire(249);assert.equal(f.calls.length,0);await f.fire(250);assert.equal(f.calls.length,1);
- assert.equal(f.service.historyNextDue,1250);f.activity(1200);assert.equal(f.service.historyNextDue,1250);
- await f.fire(1250);assert.equal(f.calls.length,1);
+ await f.fire(800);assert.equal(f.calls.length,0);assert.equal(f.service.historyOwnerFence,5000);
+ f.activity(1000);assert.equal(f.service.historyOwnerFence,5000);
+ await f.fire(4999);assert.equal(f.calls.length,0);await f.fire(5000);assert.equal(f.calls.length,1);
+ assert.equal(f.service.historyNextDue,6000);f.activity(5950);assert.equal(f.service.historyNextDue,6000);
+ await f.fire(6000);assert.equal(f.calls.length,1);
  f.setReply({available:true,ran:true,pending:false,failed_notes:0,retry_after_ms:300000});
- await f.fire(1450);assert.equal(f.calls.length,2);assert.equal(f.service.historyNextDue,301450);
+ await f.fire(6200);assert.equal(f.calls.length,2);assert.equal(f.service.historyNextDue,306200);
  await owner.pause();assert.equal(f.timers.size,0);await f.service.close();
 });
 test('history dispatch rechecks owner and does not expose its method or capability to leased contexts',async()=>{
@@ -74,14 +76,14 @@ test('retired timer, replaced host and unavailable owner cannot dispatch history
  for(const change of ['paused','host','owner']){
   const f=scheduler(),owner=f.admit(),old=[...f.timers.values()][0].callback;
   if(change==='paused')await owner.pause();else if(change==='host')f.service.host={};else f.retire();
-  f.time(1000);old();await turn();assert.equal(f.calls.length,0,change);assert.equal(f.events.length,0,change);
+  f.time(6000);old();await turn();assert.equal(f.calls.length,0,change);assert.equal(f.events.length,0,change);
   f.service.host=f.host;await f.service.close();
  }
 });
 
 test('pause drains accepted history and rejects its late status without consuming the obligation',async()=>{
  const f=scheduler(),owner=f.admit(),held=gate();f.setReply(()=>held.promise);
- await f.fire(250);assert.equal(f.calls.length,1);let paused=false;
+ await f.fire(5000);assert.equal(f.calls.length,1);let paused=false;
  const pause=owner.pause().then(()=>{paused=true;});await turn();assert.equal(paused,false);
  held.resolve({available:true,ran:true,pending:false,failed_notes:0,retry_after_ms:300000});await pause;
  assert.equal(f.service.historyNextDue,0);assert.equal(f.service.historyLastStatus,null);assert.equal(f.events.length,0);
@@ -90,23 +92,39 @@ test('pause drains accepted history and rejects its late status without consumin
 
 test('history failure stays diagnostic and backs off without poisoning ordinary reads',async()=>{
  const f=scheduler();f.admit();f.setReply(()=>Promise.reject(Object.assign(new Error('history unavailable'),{code:'local_recovery_unavailable'})));
- await f.fire(250);assert.equal(f.calls.length,1);assert.equal(f.service.historyLastError,'local_recovery_unavailable');
- assert.equal(f.service.historyNextDue,300250);assert.equal(f.events.length,0);assert.equal(f.service.runtimeFailed,undefined);
- assert.deepEqual(await f.service.list(),[]);await f.fire(1250);assert.equal(f.calls.length,1);await f.service.close();
+ await f.fire(5000);assert.equal(f.calls.length,1);assert.equal(f.service.historyLastError,'local_recovery_unavailable');
+ assert.equal(f.service.historyNextDue,305000);assert.equal(f.events.length,0);assert.equal(f.service.runtimeFailed,undefined);
+ assert.deepEqual(await f.service.list(),[]);await f.fire(6000);assert.equal(f.calls.length,1);await f.service.close();
 });
 
 test('close cancels scheduling, drains accepted history, then closes exactly the owned host',async()=>{
- const f=scheduler(),held=gate();f.admit();f.setReply(()=>held.promise);await f.fire(250);
+ const f=scheduler(),held=gate();f.admit();f.setReply(()=>held.promise);await f.fire(5000);
  let closed=false;const closing=f.service.close().then(()=>{closed=true;});await turn();assert.equal(closed,false);assert.equal(f.timers.size,0);assert.deepEqual(f.events,[]);
  held.resolve({available:true,ran:true,pending:false,failed_notes:0,retry_after_ms:300000});await closing;
  assert.deepEqual(f.events,['host-close']);assert.equal(f.service.historyLastStatus,null);
- f.activity(1000);assert.equal(f.timers.size,0);
+ f.activity(6000);assert.equal(f.timers.size,0);
 });
 test('a backoff status does not claim a failed history store recovered without a successful step',async()=>{
  const f=scheduler();f.admit();f.setReply(()=>Promise.reject(Object.assign(new Error('history unavailable'),{code:'local_recovery_unavailable'})));
- await f.fire(250);assert.equal(f.service.historyLastError,'local_recovery_unavailable');
+ await f.fire(5000);assert.equal(f.service.historyLastError,'local_recovery_unavailable');
  f.setReply({available:true,ran:false,pending:true,failed_notes:0,retry_after_ms:1000});
- await f.fire(300250);assert.equal(f.service.historyLastError,'local_recovery_unavailable');
+ await f.fire(305000);assert.equal(f.service.historyLastError,'local_recovery_unavailable');
  f.setReply({available:true,ran:true,pending:false,failed_notes:0,retry_after_ms:300000});
- await f.fire(301250);assert.equal(f.service.historyLastError,null);await f.service.close();
+ await f.fire(306000);assert.equal(f.service.historyLastError,null);await f.service.close();
+});
+
+test('selected-owner handoff captures a fresh fence and an old timer cannot dispatch for the new owner',async()=>{
+ const f=scheduler(),first=f.admit(),old=[...f.timers.values()][0].callback;
+ f.time(1000);const second=f.admit();assert.equal(f.service.historyOwnerFence,5000,'an unselected admission does not reset the selected owner fence');
+ f.time(2000);await first.pause();assert.equal(f.service.historyOwnerFence,7000);
+ f.time(5000);old();await turn();assert.equal(f.calls.length,0);
+ await f.fire(6999);assert.equal(f.calls.length,0);await f.fire(7000);assert.equal(f.calls.length,1);
+ await second.pause();await f.service.close();
+});
+test('owner resume starts a fresh fence and an early timer callback cannot bypass it',async()=>{
+ const f=scheduler(),owner=f.admit();f.time(1000);await owner.pause();owner.resume();
+ assert.equal(f.service.historyOwnerFence,6000);const early=[...f.timers.values()][0].callback;
+ f.time(1800);early();await turn();assert.equal(f.calls.length,0);
+ await f.fire(5999);assert.equal(f.calls.length,0);await f.fire(6000);assert.equal(f.calls.length,1);
+ await owner.pause();await f.service.close();
 });
