@@ -582,13 +582,14 @@ export class Workspace {
   private subscribeAdmissionRecovery(platform:PlatformVault,vault:Vault):void{
     if(!platform.recovery)return;
     const generation=this.vaultGeneration;
-    const current=()=>this.platform===platform&&this.vault===vault&&this.vaultGeneration===generation&&!this.platformReleased;
+    const owns=()=>this.platform===platform&&this.vault===vault&&this.vaultGeneration===generation;
+    const current=()=>owns()&&!this.platformReleased;
     const receive=()=>{
       if(!current())return;
       const transition=this.choosingVault??this.destroying??this.releasingPlatform;
       if(transition){void transition.catch(()=>{}).then(()=>{if(current())receive();});return;}
       if(this.closing||this.platformDraining)return;
-      void this.recoverAdmission(platform,vault,generation).catch(()=>{if(current()){this.showLifecycleRecovery(()=>this.recoverAdmission(platform,vault,generation));this.renderStatus();}});
+      void this.recoverAdmission(platform,vault,generation).catch(()=>{if(owns()){this.showLifecycleRecovery(()=>this.recoverAdmission(platform,vault,generation));this.renderStatus();}});
     };
     this.disposers.push(platform.recovery.subscribe(receive));
   }
