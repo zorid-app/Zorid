@@ -15,11 +15,11 @@ function key(f:ReturnType<typeof fixture>,target:Element,value:string,extra:Keyb
 test('existing-source list receives focus and complete keyboard navigation after initial choices hide',async()=>{
   const f=fixture();let cancelled=0;
   const chooser=mountSourceChooser(f.host,{service:{async request(){return reply([first,{...second,id:'deletedentry',deleted:true},second]);}},isCurrent:()=>true,choose:async()=>{},onCancel:()=>{cancelled++;}});
-  key(f,button(f.host,'New empty data source'),'ArrowDown');key(f,f.doc.activeElement!,'Enter');await tick();
+  key(f,button(f.host,'New empty data source'),'ArrowDown');key(f,f.doc.activeElement!,'ArrowDown');key(f,f.doc.activeElement!,'ArrowDown');key(f,f.doc.activeElement!,'Enter');await tick();
   const create=button(f.host,'Create a collection'),back=button(f.host,'Back');
   assert.equal(f.doc.activeElement,create);
   key(f,create,'ArrowDown');assert.equal(f.doc.activeElement,button(f.host,'Books'));
-  key(f,f.doc.activeElement!,'ArrowDown');assert.equal(f.doc.activeElement,button(f.host,'Tasks'));
+  key(f,f.doc.activeElement!,'ArrowDown');assert.equal(f.doc.activeElement,button(f.host.querySelector('.collection-source-existing')!,'Tasks'));
   key(f,f.doc.activeElement!,'End');assert.equal(f.doc.activeElement,back);
   key(f,back,'Home');assert.equal(f.doc.activeElement,create);
   key(f,create,'ArrowUp');assert.equal(f.doc.activeElement,back);

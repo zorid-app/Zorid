@@ -47,7 +47,7 @@ test('default names avoid active and trashed collections and bind the matching r
 test('choice-list arrows and Escape work without swallowing custom-name input keys',async()=>{
   const f=fixture();let closed=0;
   const chooser=mountSourceChooser(f.host,{service:{async request(){return reply();}},isCurrent:()=>true,choose:async()=>{},onCancel:()=>{closed++;}});
-  const primary=button(f.host,'New empty data source');key(f,primary,'ArrowDown');assert.equal(f.doc.activeElement,button(f.host,'Link to existing data source'));key(f,f.doc.activeElement!,'End');assert.ok(f.doc.activeElement?.textContent?.startsWith('Notes in your vault'));key(f,f.doc.activeElement!,'Home');assert.equal(f.doc.activeElement,primary);key(f,primary,'Escape');assert.equal(closed,1);
+  const primary=button(f.host,'New empty data source');key(f,primary,'ArrowDown');assert.equal(f.doc.activeElement,button(f.host,'Tasks'));key(f,f.doc.activeElement!,'End');assert.ok(f.doc.activeElement?.textContent?.startsWith('Notes in your vault'));key(f,f.doc.activeElement!,'Home');assert.equal(f.doc.activeElement,primary);key(f,primary,'Escape');assert.equal(closed,1);
   button(f.host,'Link to existing data source').click();await tick();button(f.host,'Create a collection').click();const name=f.host.querySelector<HTMLInputElement>('[aria-label="Collection name"]')!;assert.equal(key(f,name,'ArrowDown').defaultPrevented,false);assert.equal(closed,1);chooser.destroy();f.dom.window.close();
 });
 

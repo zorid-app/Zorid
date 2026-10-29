@@ -66,7 +66,8 @@ export function mountSourceChooser(container: HTMLElement, options: SourceChoose
   const form = element(doc, 'div'), error = element(doc, 'p'); error.setAttribute('role', 'alert'); error.hidden = true;
   let destroyed = false, busy = false, draft = false, composing = false, focusIntent = 0;
   let screen: 'choices' | 'existing' | 'create' = 'choices', canLeaveCreate: (() => boolean) | undefined;
-  let emptyRequest: DatabaseRequest | undefined, emptySource: BaseViewSource | undefined;
+  let returnFromCreate: (() => void) | undefined, createAvailability: (() => void) | undefined, retainedCreate = false;
+  let emptyRequest: DatabaseRequest | undefined, emptySource: BaseViewSource | undefined, emptyAccepted = false, emptyUncertain = false;
   const live = () => !destroyed && options.isCurrent();
   const outsideFocus = (event: Event) => {
     if (busy && event.target instanceof doc.defaultView!.Node && !root.contains(event.target)
@@ -97,19 +98,24 @@ export function mountSourceChooser(container: HTMLElement, options: SourceChoose
   const empty = button(doc, 'New empty data source', () => { void createEmpty(); }); empty.className = 'collection-source-primary';
   const notes = button(doc, 'Notes in your vault', () => { void select({ kind: 'untyped' }); });
   notes.append(element(doc, 'small', 'Browse note titles, previews and file information.'));
+  const tasks = button(doc, 'Tasks', () => { showCreate('choices', tasks, 'tasks'); });
+  const configured = button(doc, 'New data source with options', () => { showCreate('choices', configured); });
   const collection = button(doc, 'Link to existing data source', () => { draft = true; showCollections(); });
-  choices.append(empty, collection, notes);
+  choices.append(empty, tasks, configured, collection, notes);
   root.append(heading, choices, form, error);
-  const cancel = options.onCancel ? button(doc, 'Cancel', () => { if (!busy && !emptyRequest && !emptySource) options.onCancel!(); }) : undefined;
+  const cancel = options.onCancel ? button(doc, 'Cancel', () => { if (!busy && !emptyRequest && !emptySource && !retainedCreate && (screen !== 'create' || canLeaveCreate?.())) options.onCancel!(); }) : undefined;
   if (cancel) root.append(cancel);
   if (!options.service) root.append(element(doc, 'p', 'Collections are unavailable in this vault. You can browse existing notes.'));
   container.append(root);
   function availability() {
-    const retained = !!emptyRequest || !!emptySource;
-    empty.disabled = !options.service || busy;
+    createAvailability?.();
+    const retained = !!emptyRequest || !!emptySource || retainedCreate;
+    empty.disabled = !options.service || busy || retainedCreate;
+    tasks.disabled = !options.service || busy || retained;
+    configured.disabled = !options.service || busy || retained;
     collection.disabled = !options.service || busy || retained;
     notes.disabled = busy || retained;
-    if (cancel) cancel.disabled = busy || retained;
+    if (cancel) cancel.disabled = busy || retained || screen === 'create' && !canLeaveCreate?.();
     updateTabStops();
   }
   async function createEmpty() {
@@ -126,6 +132,7 @@ export function mountSourceChooser(container: HTMLElement, options: SourceChoose
             emptyRequest = { op: 'create', operationId: operationId(), name, preset: 'blank' };
           }
           const response = await options.service!.request(emptyRequest); if (!live()) return;
+          emptyAccepted = true;
           if (response.projection.pending || response.projection.issues.length) throw new Error(response.projection.issues.map(issue => issue.message).join('\n') || 'The data source is committed locally but its files still need publication. Retry this creation.');
           const created = response.collections.find(collection => !collection.deleted && emptyRequest?.op === 'create' && collection.name === emptyRequest.name);
           if (!created) throw new Error('The data source was not returned. Retry this creation.');
@@ -133,10 +140,11 @@ export function mountSourceChooser(container: HTMLElement, options: SourceChoose
         }
         if (!live()) return;
         await options.choose(emptySource);
-        if (live()) { emptyRequest = undefined; emptySource = undefined; draft = false; }
+        if (live()) { emptyRequest = undefined; emptySource = undefined; emptyAccepted = false; emptyUncertain = false; draft = false; }
       } catch (problem) {
         const rejected = problem as { source?: unknown; commitUncertain?: unknown };
-        if (!emptySource && rejected?.source === 'host' && rejected.commitUncertain === false) emptyRequest = undefined;
+        if (!emptyAccepted && !emptyUncertain && !emptySource && rejected?.source === 'host' && rejected.commitUncertain === false) emptyRequest = undefined;
+        else if (emptyRequest && !(rejected?.source === 'host' && rejected.commitUncertain === false)) emptyUncertain = true;
         draft = !!emptyRequest || !!emptySource;
         if (live()) empty.textContent = 'Retry data source';
         throw problem;
@@ -151,10 +159,10 @@ export function mountSourceChooser(container: HTMLElement, options: SourceChoose
     const available = navigationButtons(), active = preferred ?? available.find(control => control === doc.activeElement) ?? available.find(control => control.tabIndex === 0) ?? available[0];
     for (const control of available) control.tabIndex = control === active ? 0 : -1;
   }
-  function showChoices() {
-    screen = 'choices'; composing = false; draft = false; canLeaveCreate = undefined;
+  function showChoices(focus: HTMLButtonElement = collection) {
+    screen = 'choices'; composing = false; draft = false; canLeaveCreate = undefined; returnFromCreate = undefined; createAvailability = undefined;
     choices.hidden = false; heading.textContent = 'New database'; form.replaceChildren(); error.hidden = true; availability();
-    if (live()) collection.focus();
+    if (live()) focus.focus();
   }
   root.addEventListener('focusin', event => {
     if (event.target instanceof doc.defaultView!.HTMLButtonElement && navigationButtons().includes(event.target)) updateTabStops(event.target);
@@ -166,7 +174,7 @@ export function mountSourceChooser(container: HTMLElement, options: SourceChoose
       else if (screen !== 'choices') {
         event.preventDefault(); event.stopPropagation();
         if (screen === 'existing' && error.hidden) showChoices();
-        else if (screen === 'create' && canLeaveCreate?.()) showCollections();
+        else if (screen === 'create' && canLeaveCreate?.()) returnFromCreate?.();
       }
       return;
     }
@@ -178,11 +186,12 @@ export function mountSourceChooser(container: HTMLElement, options: SourceChoose
   });
   availability(); if (live()) (options.service ? empty : notes).focus();
   function showCollections() {
+    if (busy || !live() || retainedCreate || screen === 'create' && !canLeaveCreate?.()) return;
     if (!options.service) { error.textContent = 'Collections are unavailable in this vault.'; error.hidden = false; return; }
-    screen = 'existing'; composing = false; canLeaveCreate = undefined; choices.hidden = true; heading.textContent = 'Choose a collection'; form.replaceChildren();
+    screen = 'existing'; composing = false; canLeaveCreate = undefined; returnFromCreate = undefined; createAvailability = undefined; choices.hidden = true; heading.textContent = 'Choose a collection'; form.replaceChildren();
     const list = element(doc, 'div'); list.className = 'collection-source-existing';
-    const create = button(doc, 'Create a collection', showCreate);
-    form.append(create, list, button(doc, 'Back', showChoices));
+    const create = button(doc, 'Create a collection', () => showCreate('existing', create));
+    form.append(create, list, button(doc, 'Back', () => showChoices()));
     if (live()) create.focus();
     void run(async () => {
       const response = await options.service!.request({ op: 'list' }); if (!live()) return;
@@ -190,24 +199,57 @@ export function mountSourceChooser(container: HTMLElement, options: SourceChoose
       if (!list.childNodes.length) list.append(element(doc, 'p', 'No collections yet.'));
     });
   }
-  function showCreate() {
-    screen = 'create'; composing = false; form.replaceChildren(); heading.textContent = 'Create a collection';
-    const name = element(doc, 'input'); name.placeholder = 'Collection name'; name.setAttribute('aria-label', 'Collection name');
+  function showCreate(origin: 'choices' | 'existing', originButton: HTMLButtonElement, initialPreset: 'blank' | 'tasks' = 'blank') {
+    if (!options.service || busy || !live() || retainedCreate || screen === 'create' && !canLeaveCreate?.()) return;
+    screen = 'create'; composing = false; draft = true; choices.hidden = true; form.replaceChildren(); heading.textContent = 'New data source';
+    const initialName = initialPreset === 'tasks' ? 'Tasks' : '';
+    const name = element(doc, 'input'); name.value = initialName; name.placeholder = 'Collection name'; name.setAttribute('aria-label', 'Collection name');
     const preset = element(doc, 'select'); preset.setAttribute('aria-label', 'Collection preset');
     for (const [value, label] of [['blank', 'Start blank'], ['tasks', 'Tasks']] as const) { const option = element(doc, 'option', label); option.value = value; preset.append(option); }
-    let request: DatabaseRequest | undefined, signature = '';
+    preset.value = initialPreset;
+    let request: Extract<DatabaseRequest, {op:'create'}> | undefined, source: BaseViewSource | undefined, accepted = false, uncertain = false;
+    let capturedDraft: {name: string; preset: string} | undefined;
+    const hint = element(doc, 'p'); hint.className = 'collection-source-create-hint'; hint.setAttribute('role', 'status'); hint.hidden = true;
     const submit = button(doc, 'Create collection', () => { void run(async () => {
-      const next = JSON.stringify([name.value.trim(), preset.value]);
-      if (!request || signature !== next) { signature = next; request = { op: 'create', operationId: operationId(), name: name.value.trim(), preset: preset.value as 'blank' | 'tasks' }; }
-      const response = await options.service!.request(request); if (!live()) return;
-      if(response.projection.pending||response.projection.issues.length)throw new Error(response.projection.issues.map(issue=>issue.message).join('\n')||'The collection is committed locally but its files still need publication. Retry creation.');
-      const created = response.collections.find(item => !item.deleted);
-      if (!created) throw new Error('The collection was not returned. Retry this creation.');
-      await options.choose({ kind: 'collection', id: created.id });
+      try {
+        if (!source) {
+          if (!request) {
+            capturedDraft = {name: name.value, preset: preset.value};
+            request = { op: 'create', operationId: operationId(), name: name.value.trim(), preset: preset.value as 'blank' | 'tasks' };
+            retainedCreate = true;
+          }
+          const response = await options.service!.request(request); if (!live()) return;
+          accepted = true;
+          if (response.projection.pending || response.projection.issues.length) throw new Error(response.projection.issues.map(issue => issue.message).join('\n') || 'The collection is committed locally but its files still need publication. Retry creation.');
+          const created = response.collections.find(item => !item.deleted && item.name === request!.name);
+          if (!created) throw new Error('The collection was not returned. Retry this creation.');
+          source = { kind: 'collection', id: created.id };
+        }
+        await options.choose(source);
+        if (live()) { request = undefined; source = undefined; capturedDraft = undefined; retainedCreate = false; accepted = false; uncertain = false; draft = false; }
+      } catch (problem) {
+        const rejected = problem as {source?: unknown; commitUncertain?: unknown};
+        if (!accepted && !uncertain && !source && rejected?.source === 'host' && rejected.commitUncertain === false) { request = undefined; capturedDraft = undefined; retainedCreate = false; }
+        else if (request && !(rejected?.source === 'host' && rejected.commitUncertain === false)) uncertain = true;
+        throw problem;
+      }
     }); });
-    canLeaveCreate = () => !request && !name.value && preset.value === 'blank' && error.hidden;
+    canLeaveCreate = () => !request && !source && name.value === initialName && preset.value === initialPreset;
+    returnFromCreate = () => {
+      if (busy || !canLeaveCreate?.()) return;
+      if (origin === 'choices') showChoices(originButton); else showCollections();
+    };
+    const back = button(doc, 'Back', () => returnFromCreate?.());
+    createAvailability = () => {
+      retainedCreate = !!request || !!source;
+      if (capturedDraft) { name.value = capturedDraft.name; preset.value = capturedDraft.preset; }
+      name.readOnly = retainedCreate; preset.disabled = busy || retainedCreate; back.disabled = busy || !canLeaveCreate?.();
+      hint.hidden = !!canLeaveCreate?.();
+      hint.textContent = retainedCreate ? 'Retry this creation to finish linking the original data source.' : 'Undo the name or preset changes to go back.';
+    };
+    name.addEventListener('input', availability); preset.addEventListener('change', availability);
     name.addEventListener('keydown', event => { if (event.key === 'Enter' && !composing && !event.isComposing && event.keyCode !== 229 && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) { event.preventDefault(); event.stopPropagation(); submit.click(); } });
-    form.append(name, preset, submit, button(doc, 'Back', () => { if (!busy) showCollections(); })); name.focus();
+    form.append(name, preset, submit, back, hint); availability(); name.focus();
   }
   return { element: root, hasPendingChanges: () => busy || draft, destroy() { destroyed = true; doc.removeEventListener('focusin', outsideFocus, true); doc.removeEventListener('pointerdown', outsideFocus, true); doc.defaultView?.removeEventListener('blur', windowBlur); root.remove(); } };
 }
