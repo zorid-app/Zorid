@@ -28,6 +28,10 @@ fn marker(file: &File) -> Result<Marker> {
         m.ctime_nsec(),
     ))
 }
+
+#[cfg(test)]
+#[path = "external_scan_progress_noop_tests.rs"]
+mod noop_tests;
 fn corrupt(reason: &str) -> Error {
     zorid_store::StoreError::Corrupt(reason.into()).into()
 }
