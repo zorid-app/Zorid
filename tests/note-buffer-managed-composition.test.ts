@@ -109,10 +109,24 @@ test('lost commit acknowledgment reuses the persisted canonical plan rather than
 
 test('reopen settles a lost canonical commit from the original checkpoint without another plan',async()=>{
   const f=await fixture();f.loseCommitReply();f.buffer.update(oldHeader+'Retained across restart');await assert.rejects(f.buffer.flush());
-  const retained=f.state().operation.plan;const reopened=await f.reopen();
-  assert.equal(reopened.text,newHeader+'Retained across restart');assert.equal(reopened.savedText,reopened.text);assert.equal(reopened.dirty,false);
-  assert.equal(f.plans.length,1);assert.equal(f.commits,1);assert.deepEqual(f.plans[0].plan,retained);assert.equal(f.state().operation,undefined);
-  await stop(reopened);await stop(f.buffer);
+  const retained=structuredClone(f.state().operation),entered=deferred(),held=deferred();
+  const checkpoint=f.writes.checkpoints.compareAndSwap.bind(f.writes.checkpoints);
+  f.writes.checkpoints.compareAndSwap=async change=>{entered.resolve();await held.promise;return checkpoint(change);};
+  const reopened=await f.reopen();let saving:Promise<void>|undefined;
+  try{
+    await entered.promise;
+    // Load admits the exact confirmed checkpoint draft before background Core
+    // recovery settles. Its older header is not a claim of canonical success.
+    assert.equal(reopened.hasAdmittedContent,true);assert.equal(reopened.text,oldHeader+'Retained across restart');
+    assert.equal(reopened.pendingCanonicalRecovery,true);assert.equal(reopened.dirty,true);
+    assert.deepEqual(f.state().operation,retained);assert.equal(f.plans.length,1);assert.equal(f.commits,1);
+    let settled=false;saving=reopened.flush().then(()=>{settled=true;});
+    await new Promise<void>(resolve=>setImmediate(resolve));assert.equal(settled,false,'explicit flush must join the original held recovery');
+    held.resolve();await saving;
+    assert.equal(reopened.text,newHeader+'Retained across restart');assert.equal(reopened.savedText,reopened.text);assert.equal(reopened.dirty,false);
+    assert.equal(reopened.pendingCanonicalRecovery,false);
+    assert.equal(f.plans.length,1);assert.equal(f.commits,1);assert.deepEqual(f.plans[0].plan,retained.plan);assert.equal(f.state().operation,undefined);
+  }finally{held.resolve();await saving;await stop(reopened);await stop(f.buffer);}
 });
 
 test('ACK retry does not reapply canonical changes over newer typing',async()=>{
