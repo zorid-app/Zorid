@@ -116,3 +116,15 @@ for(const valid of [true,false])test(`typed collection TSV paste validates the w
   else{await tick();await tick();assert.equal(f.requests.filter(request=>request.op==='set_entry').length,0);assert.ok(f.errors.some(error=>/valid number/i.test(String(error))));assert.match(await f.adapter.read('One.md'),/Score: 1/);}
  }finally{await f.close();}
 });
+
+test('table Edit property forwards its header anchor into the existing compact schema editor',async()=>{
+ const f=await fixture();try{
+  const header=f.host.querySelector<HTMLElement>(`[role="columnheader"][data-property="note.${score}"]`)!;
+  header.getBoundingClientRect=()=>new f.dom.window.DOMRect(500,100,120,36);header.click();
+  const item=[...f.doc.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(item=>item.textContent==='Edit property...');assert.ok(item);item.click();
+  await until(()=>!!f.host.querySelector('.collection-property-editor'));
+  const panel=f.host.querySelector<HTMLElement>('.collection-property-editor')!;assert.equal(panel.classList.contains('is-anchored'),true);assert.equal(panel.style.left,'500px');assert.equal(panel.style.top,'140px');assert.equal(panel.parentElement?.className,'collection-source-panel');
+  const name=panel.querySelector<HTMLInputElement>('[aria-label="Score name"]')!;assert.equal(f.doc.activeElement,name);name.value='Rating';name.dispatchEvent(new f.dom.window.Event('input'));await assert.rejects(f.session.selectView(1),/Finish or cancel/);
+  const cancel=[...panel.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='Cancel')!;cancel.click();await until(()=>!f.host.querySelector('.collection-property-editor'));assert.deepEqual(f.errors,[]);
+ }finally{await f.close();}
+});

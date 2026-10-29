@@ -528,12 +528,12 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         ...(cancel?{onCancel:()=>{closeSourceChooser();resolve();}}:{}),onError:report});
     });
   }
-  function openCollectionProperties(propertyId?:string):void {
+  function openCollectionProperties(propertyId?:string,anchor?:HTMLElement):void {
     action();if(options.readOnly||!databaseService||!collection||collection.deleted)throw new Error('This collection is unavailable.');
     if(pendingCollectionRestore||pendingCollectionCreate||pending.size||propertyDraft()||toolbarUI.hasDraft())throw new Error('Finish editing the current value or retry the unfinished New first.');
     if(collectionEditor){collectionEditor.element.querySelector<HTMLInputElement>('input')?.focus();return;}
     const editingCollection=collection;
-    collectionEditor=mountCollectionEditor(sourcePanel,{service:databaseService,collection:editingCollection,entries:[...collectionEntries.values()],propertyId,
+    collectionEditor=mountCollectionEditor(sourcePanel,{service:databaseService,collection:editingCollection,entries:[...collectionEntries.values()],propertyId,anchor,
       isCurrent:()=>!disposed&&!closing&&currentViewSource().kind==='collection'&&(currentViewSource() as {id:string}).id===editingCollection.id,
       onSaved:async()=>{await options.vault.reload();await loadDefinitions();await controller.refresh();await loadDefinitions();},
       onClose:()=>{collectionEditor?.destroy();collectionEditor=undefined;schedule();}});
@@ -1180,7 +1180,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         },
         getConfigurationIdentity: () => disposed ? undefined : options.vault.entries.get(options.basePath)?.entryId,
         isConfigurationClosing: () => disposed || closing,
-        ...(source.kind==='collection'?{requestEditProperty:(property:string)=>openCollectionProperties(basePropertyName(property))}:{}),
+        ...(source.kind==='collection'?{requestEditProperty:(property:string,anchor:HTMLElement)=>openCollectionProperties(basePropertyName(property),anchor)}:{}),
       } : {}),
     };
     if (sharedBasePreview(result) && !result.rows.length) {

@@ -45,6 +45,7 @@
 .collection-property-picker[aria-busy="true"] { cursor: progress; }
 .collection-property-picker button:disabled { opacity: .5; cursor: default; }
 .collection-property-editor.is-single-property { width: min(390px, calc(100vw - 32px)); max-height: 80vh; overflow: auto; box-sizing: border-box; padding: 12px; margin: 0 auto; border-radius: 9px; box-shadow: 0 10px 36px #0002; font-size: 14px; }
+.collection-property-editor.is-single-property.is-anchored { position: fixed; z-index: 1100; margin: 0; max-height: calc(100vh - 16px); }
 .collection-property-editor.is-single-property > h3 { margin: 0 4px 8px; color: var(--text-muted); font-size: 12px; font-weight: 500; }
 .collection-property-editor.is-single-property .collection-property-row { padding: 0 0 8px; }
 .collection-property-editor.is-single-property .collection-property-row > input { display: block; width: calc(100% - 8px); box-sizing: border-box; }

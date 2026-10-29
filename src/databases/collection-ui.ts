@@ -262,6 +262,8 @@ export interface CollectionEditorOptions {
   readonly onSaved: (collection: DatabaseCollection) => Promise<void>;
   readonly onClose: () => void;
   readonly propertyId?: string;
+  /** Existing single-property editors may float at their invoking header. Full managers ignore this. */
+  readonly anchor?: HTMLElement;
 }
 export interface CollectionEditor { readonly element: HTMLElement; hasPendingChanges(): boolean; destroy(): void }
 
@@ -395,6 +397,14 @@ export function mountCollectionEditor(container: HTMLElement, options: Collectio
   let properties: DatabasePropertyInput[] = [...structuredClone(options.collection.properties)], busy = false, destroyed = false, dirty = false, destructiveConfirmed = false;
   let request: DatabaseRequest | undefined;
   const live = () => !destroyed && options.isCurrent();
+  const anchor = focusedProperty ? options.anchor : undefined, view = doc.defaultView;
+  const place = () => {
+    if (!live() || !root.isConnected || !anchor?.isConnected) return;
+    const rect = anchor.getBoundingClientRect(), width = root.offsetWidth || 390;
+    root.classList.add('is-anchored');
+    root.style.left = `${Math.max(8, Math.min(rect.left, (view?.innerWidth ?? 1024) - width - 8))}px`;
+    root.style.top = `${Math.max(8, Math.min(rect.bottom + 4, (view?.innerHeight ?? 768) - root.offsetHeight - 8))}px`;
+  };
   const changed = () => { dirty = true; request = undefined; };
   name.addEventListener('input', changed);
   function confirmRemoval(label: string, count: number, remove: () => void, host: HTMLElement) {
@@ -496,6 +506,7 @@ export function mountCollectionEditor(container: HTMLElement, options: Collectio
     // Object identity is local to this synchronous render, so duplicate names
     // and unsaved fields/options need no fake schema IDs or index-based rebinding.
     if (focusTarget && live() && root.isConnected && (doc.activeElement === doc.body || doc.activeElement === doc.documentElement)) focusTarget.focus();
+    place();
   }
   const add = button(doc, 'Add property', () => { properties.push({ name: 'New property', datatype: 'text', options: [] }); changed(); render(); list.lastElementChild?.querySelector('input')?.focus(); });
   add.hidden = !!focusedProperty;
@@ -512,9 +523,11 @@ export function mountCollectionEditor(container: HTMLElement, options: Collectio
     else if (event.key === 'Enter' && event.target === list.querySelector('.collection-property-row > input')) { event.preventDefault(); event.stopPropagation(); save.click(); }
   });
   root.append(title, name, list, add, error, cancel, save); container.append(root); render();
+  const resize = anchor && view?.ResizeObserver ? new view.ResizeObserver(place) : undefined;
+  if (anchor) { doc.addEventListener('scroll', place, true); view?.addEventListener('resize', place); resize?.observe(root); }
   const first = options.propertyId ? list.querySelector<HTMLElement>(`[data-property-id="${options.propertyId}"] input`) : name;
   first?.focus();
-  return { element: root, hasPendingChanges: () => dirty || busy, destroy() { destroyed = true; root.remove(); } };
+  return { element: root, hasPendingChanges: () => dirty || busy, destroy() { destroyed = true; doc.removeEventListener('scroll', place, true); view?.removeEventListener('resize', place); resize?.disconnect(); root.remove(); } };
 }
 
 export interface CollectionBrowserOptions {
