@@ -3,6 +3,43 @@
 ## Execution checkpoint — shared-core coordinator
 
 
+**Actual GUI003 no-flash failure; narrow scheduler ownership ACK — 2026-10-28.**
+Real native CAS success +renderer ACK withheld/typed uncertain on own fixture;
+notice3003.6/3015.4ms, manualRetry0,0acceptedpasses. LaterMDbytes recovered/UIclean
+is supplemental only; Base/restart/normalexit unaccepted. Observer2/0restore,
+owneddriver/app retained. UnattributedsyntheticRating7->8 command also recorded;
+not configuredBase7->9, no productcorruptionclaim. Inputclassificationpending.
+Next scoped harness captures notice text/class and bounded trustedinput/actions,
+strictoracle unchanged. checkpoint_review OWNED ACK isolatedWorkspace native
+change250ms refresh scheduler +mountedRED tests: cancel/defer exactobsolete queued
+reload, fence platform/vault/gen/retirementepoch for inflightfailure; freshinventory
+covers heldchanges; currentfailures and failedrecovery remain actionable. Global
+run unchanged/no blanketmask/no protocol or Base edits. Independent review needed.
+Rootkeepsmain+GUI lane; realfreeze/apply/installheld andprotected71549OPEN.
+See urgentqueue/currentfault003 and supplemental receipts.
+
+
+**Current runtime ee4d297d composed/package verified; GUI gate NOT accepted — 2026-10-28.**
+Workspace0a6->85d02746 +required5eb4 late-inventory CTA->ee4d297d. Actual45/45
+composition0skip/fullTS/frontendbuild pass; previous143+53 scopedchecks green.
+Isolated save-recovery-delivery uses frozen44.9.1 modules, mainshared44.8 unchanged.
+Package356files verified: ASARee2efe868..., embeddeda1c, exeab18, noRust rebuild.
+Attempt001 harness rawASARfs failure pre-input fixed/reviewed. Attempt002 genuine
+ownedhost framefault got nativeACK beforeoldexit, automatic newhost85562 observed,
+MDafter bytes exact; strict originalreplay gate timedout90s (no duplicate required
+for knownACK). Zero accepted passes; Base/restart/normalexit unproven. DOM5418frames/
+30mutations/0error/0manualRetry, restore3/0conflict. Driverunref then exited1; later
+ownapp/host absent without normalexit receipt, cause unknown. Preserve failure.
+Revised deterministic outer-rendererACKloss fault pending review: nativeSUCCESS
+then guardedhostabort+typeduncertain before callerACK, exactCASresumption required.
+NumericBase fault staysrequired; possible pendingviewfreeze isn't an exemption.
+Read-only Baseowner audits exactcommand/idempotency/conditionalproof; no product
+edits until actual result. Real operational runner prepared/reviewed, noapply or
+freeze attestation authorized before GUIaccept/ownedcleanup/latestscope/pending/
+physical+logicalbase proof. Old protected app71549 remains OPEN; install HELD.
+Full records in urgent queue and ignored save-recovery task evidence.
+
+
 **Critical exact-CAS/latest-RAM ordering; proxy composed — 2026-10-28.**
 Read-only maintenance preflight reports matching scope, IDs/path/revisions and
 physical BASE, journal636/no advance/no writes/nohostclaims. Home original CAS

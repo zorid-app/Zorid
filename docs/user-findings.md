@@ -3,6 +3,95 @@
 ## URGENT: real-session automatic save failure — 2026-10-28
 
 
+**Actual lost-renderer-ACK GUI failure; refresh-scheduler owner ACK — 2026-10-28.**
+Attempt003 on reviewed packageee4d297d/ASARee2efe86/hosta1c actually committed native
+CAS, validated native response and withheld renderer ACK before typed uncertain
+abort. Strict failure: visible-error-notice at3003.6ms mutation/3015.4ms frame,
+manualRetry0, zero accepted passes. Native success/outer ACK withheld proof and
+exact CAS identity/body digest are retained in fault-smoke003.json. Observer
+restore2/conflicts0; driver+owned app retained. Later supplemental synthetic MD
+physical after-bytes exact, rootInertfalse/saveStateempty/no current visible error;
+that does NOT erase transient-failure evidence or prove full acceptance. Base,
+restart and normal exit not yet accepted. Protected old app untouched.
+
+Synthetic fixture also contains a native set_entry7->8 operation not explained by
+recorded harness phase (Base configured7->9, passes[]). Read-only own-fixture journal
+confirms command; input provenance remains unclassified. Do not attribute it to
+product corruption or silently reset it. Async clarification requested, and next
+harness revision will retain bounded trusted-input metadata/actions plus matched
+error-notice text/class. No private real-vault data in those synthetic receipts.
+Strict DOM oracle remains unchanged. Historical003 kind-only events lack text.
+
+checkpoint_review's source-only audit identifies native adapter change debounce
+250ms -> run(captured vault.reload(batch)) -> bridge.list -> vault_closed log;
+withheldACK2760ms vsnotice3003ms aligns that timer but is not historical notice-text
+proof. Named **checkpoint_review** ownership ACK for ONLY exact native-refresh
+scheduler in src/ui/workspace.ts +focused mounted regressions, isolated lifecycle
+branch. Cancel/defer queued obsolete reload when exact admission recovery starts;
+fresh openVault inventory must cover held changes. Capture platform/vault/gen/
+retirement epoch for in-flight refresh completion. Expected obsolete rejection
+must be adjudicated by recovery outcome; current list errors still report.
+Do NOT change global run error handling, hide all errors, alter save protocol,
+relax DOM oracle or bypass pending draft fences. Meaningful RED must cover queued
+and held in-flight old list across actual retirement, plus stable current failure
+control and actionable failed recovery. Independent review/validation required.
+No other product author edits Workspace scheduler concurrently; this thread keeps
+exclusive main and GUI/harness lane. No Base source edits yet. Install/real apply/
+freeze remain held pending complete acceptance and latest live proof.
+
+
+**Full reviewed source/package composed; native GUI acceptance still FAILED — 2026-10-28.**
+Workspace0a6ba6fb -> main85d02746; required late-inventory recovery CTA successor
+5eb4c2cc -> mainee4d297d. Actual composition45/45 Workspace/search/proxy tests0skip;
+fullTS+frontend build pass. Earlier143buffer/durable/proxy and53desktop checks pass.
+Runtime matches reviewed source0a6+5eb. Main shared dependencies remain44.8.0 and
+staging correctly rejected that; isolated codex/save-recovery-delivery checkout
+uses existing frozen44.9.1 dependency tree, byte-exact copied frontend output.
+No network install/shared dependency mutation/Rust rebuild. New package356files
+verified, Electron44.9.1 executableab18c7c9,ASARee2efe86821a3488d6aaefe96500350f9b34272be24d60e7ad263b6a545967e2,
+embeddedhosta1c862be unchanged. Receipt recovery-package-receipt002.json under
+ignored tmp/save-recovery-20261028. Not installed; both older bundles preserved.
+
+GUI attempt001 failed before input/fault at whole-ASAR hashing through patched
+Electron fs; harness now uses original-fs ONLY for raw ASAR, independently reviewed.
+Attempt001 owned app72564 normally requested quit, no remaining bundle PIDs; failed
+receipt retained. Attempt002 did fault owned child85455 at final synthetic Markdown
+frame; native ACK was accepted on old host before exit, automatic newhost85562/new
+lease observed. Physical synthetic Markdown after-bytes exact, Base still before.
+But strict gate incorrectly required same original CAS replay after known ACK and
+timed out90s; zero accepted passes. Restore3/conflicts0, DOM5418frames/30mutations/
+0generic error events/0manualRetry. Do not manufacture a duplicate CAS merely to
+satisfy that gate. New source-only fault mode follows reviewed native test: await
+actual selected native success, withhold ACK from renderer, abort only guarded
+owned host, throw host_exited/commitUncertain before outer return. Then genuine
+uncertain original CAS must resume exactly; harness re-review required before run.
+Attempt002 driver unref exited1; later owned app/host absent with NO normal-exit
+receipt. No quit was sent by this thread. Disappearance cause unproven; revised
+failure path must retain driver/main handle and record eventual closure. No test
+acceptance from absent PIDs. Protected old71549 never touched.
+
+Numeric Base fault remains REQUIRED. Declared pending Base/property/etc view freeze
+may fail it even after native database commit; do not skip/relax. Root's Base owner
+notion_table_interactions is read-only auditing exact captured database command
+ID/body/idempotency and conditional-source proof lifetimes. No Base edits before
+actual failure. Future fix, if required, must safely settle exact pending source
+mutation under fresh same-client admission before widget/view rebuild, without
+blindly retargeting old derived pins or replanning dead-host conditional proof.
+
+Operational runner independently reviewed/prepared by live root (pin20dab0/source
+SHA00a646b2453ebc52af6fb9e1180a67a9bbe0aec1a86786cd667bfb76830525ff; pin004SHA67d6dd22aeadde7c50922a36a3f146d7e75922de174f1afbc9e958a65932396f),
+with disposable proof for both CAS cases/latestgen3/restart/Home inode unchanged;
+actual real apply remains unauthorized before GUI gate success and owned cleanup.
+No coordinator freeze/attestation receipt yet. A future private fresh single-use
+quiescence attestation must bind latest exportSHA/scope/PID/executable/start/profile,
+all pending flags and writer/generation/text/state/CAS hashes. UI inert is an honest
+coordinator attestation, not independently checked by runner. Recheck latest state,
+logical+physical baseline, all native-host absence before/after claim; no defaults
+or text-equality shortcuts. Real old app stays alive through preservation/recovery;
+normal closure is a separate post-durable-proof gate, not a precondition to apply.
+No real freeze, host claim, write, flush/retry/reload/quit or installation here.
+
+
 **CRITICAL read-only preflight: pending CAS encoding is older than RAM — 2026-10-28.**
 Maintenance owner reports protected actual authority matches scoped backup store/
 client. Both logical entry IDs/path/revisions and physical bytes equal backup BASE;
