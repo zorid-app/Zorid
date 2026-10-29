@@ -233,3 +233,48 @@ test('selected entry inventory opens no unrelated heads or bodies, including aft
   headReads=0;
   assert.equal((await recovery.list()).length,3);assert.equal(headReads,3,'foreign scope head is never opened');assert.equal(blobReads,0);
 });
+
+test('selected inventory skips unrelated corrupt heads but matching forged prefixes never authorize a candidate',async t=>{
+  const directory=await fixture(t),journal=await openDraftJournal(directory),lease=journal.bind(scope);
+  await lease.compareAndSwap(change());
+  await lease.compareAndSwap(change({entryId:'other-entry',baseline:{...change().baseline,entryId:'other-entry'}}));
+  const foreign=journal.bind({...scope,vaultId:'other-vault'});await foreign.compareAndSwap(change());
+  const folder=path.join(directory,'branches'),names=await fs.readdir(folder),byIdentity=[];
+  for(const name of names){const file=path.join(folder,name,'head.json'),raw=JSON.parse(await fs.readFile(file,'utf8'));byIdentity.push({name,file,raw});}
+  const chosen=byIdentity.find(row=>row.raw.identity.vaultId===scope.vaultId&&row.raw.identity.entryId==='entry-one');
+  const unrelated=byIdentity.find(row=>row.raw.identity.entryId==='other-entry');
+  const foreignRow=byIdentity.find(row=>row.raw.identity.vaultId==='other-vault');
+  await fs.writeFile(foreignRow.file,'Corrupt foreign head');
+  await fs.writeFile(unrelated.file,'Corrupt unrelated head');
+  assert.equal((await lease.list({entryId:'entry-one'})).length,1);
+  await assert.rejects(lease.list(),{code:'draft_storage_corrupt'},'explicit scope-wide inventory inspects the unrelated entry');
+  await fs.writeFile(unrelated.file,JSON.stringify(unrelated.raw));
+  const forged=chosen.name.slice(0,130)+unrelated.name.slice(130);
+  await fs.cp(path.join(folder,unrelated.name),path.join(folder,forged),{recursive:true});
+  await assert.rejects(lease.list({entryId:'entry-one'}),{code:'draft_storage_corrupt'},'prefix match must also match full head identity');
+});
+
+test('flat prototype names and version-one heads fail explicitly without migration or replacement',async t=>{
+  const directory=await fixture(t),journal=await openDraftJournal(directory),lease=journal.bind(scope);await lease.compareAndSwap(change());
+  const folder=path.join(directory,'branches'),[name]=await fs.readdir(folder),file=path.join(folder,name,'head.json');
+  const original=await fs.readFile(file,'utf8'),raw=JSON.parse(original);raw.version=1;const prototype=JSON.stringify(raw);
+  await fs.writeFile(file,prototype);
+  await assert.rejects(lease.read(change()),{code:'draft_layout_unsupported'});
+  await assert.rejects(lease.list({entryId:'entry-one'}),{code:'draft_layout_unsupported'});
+  await assert.rejects(lease.compareAndSwap(change({expectedRevision:'1',nextRevision:'2',generation:2})),{code:'draft_layout_unsupported'});
+  assert.equal(await fs.readFile(file,'utf8'),prototype);
+  await fs.writeFile(file,original);
+  await fs.mkdir(path.join(folder,'a'.repeat(64)));
+  await assert.rejects(lease.list({entryId:'entry-one'}),{code:'draft_layout_unsupported'});
+  await assert.rejects(openDraftJournal(directory),{code:'draft_layout_unsupported'});
+  assert.equal(await fs.readFile(file,'utf8'),original);
+});
+
+test('malformed directory names reject inventory while invalid list options never broaden a selected lookup',async t=>{
+  const directory=await fixture(t),lease=(await openDraftJournal(directory)).bind(scope);await lease.compareAndSwap(change());
+  await assert.rejects(lease.list({entryId:''}),{code:'invalid_draft_identity'});
+  await assert.rejects(lease.list({entryId:'entry-one',unknown:true}),{code:'invalid_draft_identity'});
+  await fs.mkdir(path.join(directory,'branches','not-a-branch'));
+  await assert.rejects(lease.list({entryId:'missing-entry'}),{code:'draft_storage_corrupt'});
+  await assert.rejects(openDraftJournal(directory),{code:'draft_storage_corrupt'});
+});

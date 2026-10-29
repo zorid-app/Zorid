@@ -29,7 +29,10 @@ function source(value) {
 }
 const identity = (scope, value) => ({vaultId:id(scope.vaultId),clientId:id(scope.clientId),
   incarnationId:id(value.incarnationId??scope.incarnationId),entryId:id(value.entryId),writer:id(value.writer)});
-const branchKey = value => hash(JSON.stringify([value.vaultId,value.clientId,value.incarnationId,value.entryId,value.writer]));
+const scopePrefix = value => hash(JSON.stringify([value.vaultId,value.clientId]))+'-';
+const entryPrefix = value => scopePrefix(value)+hash(JSON.stringify([value.vaultId,value.clientId,value.entryId]))+'-';
+const branchKey = value => entryPrefix(value)+hash(JSON.stringify([value.vaultId,value.clientId,value.incarnationId,value.entryId,value.writer]));
+const branchName = value => typeof value==='string'&&/^[a-f0-9]{64}-[a-f0-9]{64}-[a-f0-9]{64}$/.test(value);
 const receipt = head => Object.freeze({...head.identity,revision:head.revision,generation:head.generation,deleted:head.deleted});
 
 /** Independent, inert desktop draft storage. Never plans, commits or replays a
@@ -53,6 +56,11 @@ const receipt = head => Object.freeze({...head.identity,revision:head.revision,g
  * cross-writer last-writer-wins rule is needed. Raw UTF-16LE blobs preserve lone
  * surrogates too; oversized recovery fails explicitly, never truncates.
  *
+ * Unshipped layout v2 embeds hashed scope and entry prefixes in branch names.
+ * list({entryId}) filters names BEFORE reading heads; prefixes never authorize a
+ * candidate. Every selected head must recompute to its entire directory name.
+ * The flat v1 prototype is explicitly unsupported, never silently migrated.
+ *
  * fileSystem is a private filesystem-boundary fault-injection seam for tests.
  */
 async function openDraftJournal(directory, {fileSystem=fs}={}) {
@@ -74,6 +82,18 @@ async function openDraftJournal(directory, {fileSystem=fs}={}) {
   }
   await ensureDirectory(directory);
   const branches=path.join(directory,'branches');await ensureDirectory(branches);
+  async function* names() {
+    const entries=await io.opendir(branches);let count=0;
+    for await(const entry of entries){
+      if(++count>MAX_BRANCHES)throw fail('draft_inventory_limit');
+      if(digest(entry.name))throw fail('draft_layout_unsupported');
+      if(!branchName(entry.name))throw fail('draft_storage_corrupt');
+      yield entry.name;
+    }
+  }
+  // No head reads or in-memory catalogue: opening rejects an old/invalid layout,
+  // and every later inventory enumerates and validates current names afresh.
+  for await(const name of names())void name;
   const locations=key=>({branch:path.join(branches,key),blobs:path.join(branches,key,'blobs'),head:path.join(branches,key,'head.json')});
   async function existingDirectory(name, missing=false) {
     try {const info=await io.lstat(name);if(!info.isDirectory()||info.isSymbolicLink())throw fail('draft_storage_corrupt');return true;}
@@ -96,7 +116,8 @@ async function openDraftJournal(directory, {fileSystem=fs}={}) {
     let head;
     try {
       head=JSON.parse(bytes.toString('utf8'));
-      if(!head||head.version!==1||!head.identity||branchKey(identity(head.identity,head.identity))!==key||
+      if(head?.version===1)throw fail('draft_layout_unsupported');
+      if(!head||head.version!==2||!head.identity||branchKey(identity(head.identity,head.identity))!==key||
         revision(head.revision)!==head.revision||generation(head.generation)!==head.generation||
         typeof head.deleted!=='boolean'||!digest(head.fingerprint))throw Error();
       revision(head.previousRevision,true);
@@ -109,7 +130,7 @@ async function openDraftJournal(directory, {fileSystem=fs}={}) {
           head.pendingOperation!==null&&!digest(head.pendingOperation))throw Error();
         if(head.checkpointRevision!==null)id(head.checkpointRevision);
       }
-    }catch{throw fail('draft_storage_corrupt');}
+    }catch(error){if(error.code==='draft_layout_unsupported')throw error;throw fail('draft_storage_corrupt');}
     return head;
   }
   async function readBlobBytes(key, name) {
@@ -200,7 +221,7 @@ async function openDraftJournal(directory, {fileSystem=fs}={}) {
           let mutation=false;
           try {
             const key=branchKey(captured.identity),place=locations(key);
-            const head={version:1,...captured,previousRevision:expected};
+            const head={version:2,...captured,previousRevision:expected};
             // Hashing/encoding occurs on the async storage lane, never in offer's
             // synchronous capture. Whole bodies are not nested in head JSON.
             const bodies=new Map();
@@ -248,13 +269,19 @@ async function openDraftJournal(directory, {fileSystem=fs}={}) {
             check();return {...receipt(head),baseline,draft,checkpointRevision:head.checkpointRevision,pendingOperation};
           });
         },
-        list() {return enqueue(check,0,async()=>{
-          const found=[],entries=await io.opendir(branches);let count=0;
-          for await(const entry of entries){
-            if(!digest(entry.name))throw fail('draft_storage_corrupt');
-            if(++count>MAX_BRANCHES)throw fail('draft_inventory_limit');
-            const head=await readHead(entry.name);
-            if(head&&!head.deleted&&head.identity.vaultId===bound.vaultId&&head.identity.clientId===bound.clientId)found.push(receipt(head));
+        list(options={}) {
+          let selected;
+          try {
+            if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).some(key=>key!=='entryId'))throw fail('invalid_draft_identity');
+            selected=Object.hasOwn(options,'entryId')?id(options.entryId):undefined;
+          }catch(error){return Promise.reject(error);}
+          return enqueue(check,0,async()=>{
+          const found=[],prefix=selected===undefined?scopePrefix(bound):entryPrefix({...bound,entryId:selected});
+          for await(const name of names()){
+            if(!name.startsWith(prefix))continue;
+            const head=await readHead(name);
+            if(head&&(head.identity.vaultId!==bound.vaultId||head.identity.clientId!==bound.clientId||selected!==undefined&&head.identity.entryId!==selected))throw fail('draft_storage_corrupt');
+            if(head&&!head.deleted)found.push(receipt(head));
           }
           check();return found.sort((a,b)=>branchKey(a).localeCompare(branchKey(b)));
         });},
