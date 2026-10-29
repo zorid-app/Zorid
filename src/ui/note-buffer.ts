@@ -130,7 +130,7 @@ export class NoteBuffer {
     if(this.loaded)throw new Error('An admitted note must use its durable close barrier');
     this.disposed=true;this.cancelInitialLoad();this.durable?.stopDraftProtection();await this.closeMetadataProjection();
   }
-  coreAdmissionAvailable(scope:{vaultId:string;clientId:string}):void{this.durable?.coreAdmissionAvailable(scope);}
+  coreAdmissionAvailable(scope:{vaultId:string;clientId:string}):void{if(this.durable?.coreAdmissionAvailable(scope))this.initialLoad?.supervisor.admissionAvailable();}
 
   private validateWrite(): void { for (const validate of this.writeValidators) validate(); }
 

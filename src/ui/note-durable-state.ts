@@ -129,9 +129,10 @@ export class DurableNoteState {
   }
   /** Only a positively admitted SAME local authority may wake a retired source
    * wait. Independent-journal availability is not a replacement admission. */
-  coreAdmissionAvailable(scope:{vaultId:string;clientId:string}):void{
-    if(scope.vaultId!==this.noteScope.vaultId||scope.clientId!==this.noteScope.clientId||this.writes.checkpoints.scope.vaultId!==scope.vaultId||this.writes.checkpoints.scope.clientId!==scope.clientId)return;
+  coreAdmissionAvailable(scope:{vaultId:string;clientId:string}):boolean{
+    if(scope.vaultId!==this.noteScope.vaultId||scope.clientId!==this.noteScope.clientId||this.writes.checkpoints.scope.vaultId!==scope.vaultId||this.writes.checkpoints.scope.clientId!==scope.clientId)return false;
     this.sourceRecovery?.supervisor.admissionAvailable();
+    return true;
   }
   /** Called only AFTER NoteBuffer has made the validated raw draft usable. */
   startLoadRecovery(check:()=>void):void{

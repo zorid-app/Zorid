@@ -141,3 +141,10 @@ test('a loaded body cannot be readmitted after its capability or local scope is 
   await assert.rejects(f.note.load('entry'),{code:'intent_identity_mismatch'});assert.equal(f.sourceReads,before);assert.equal(f.calls.length,0);
   (f.writes.checkpoints.scope as {vaultId:string}).vaultId='load-authority';
 });
+
+test('a positive same-scope admission also wakes an unadmitted source read without a polling timer',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});const f=await fixture(t,{operation:false});f.failRead(fault('client_not_admitted'));
+  const loading=f.note.load('entry');let admitted=false;void loading.then(()=>{admitted=true;},()=>{});await drain();t.mock.timers.tick(90000);await drain();assert.equal(f.sourceReads,1);assert.equal(f.note.hasAdmittedContent,false);
+  f.failRead(undefined);f.note.coreAdmissionAvailable({vaultId:'foreign',clientId:'load-client'});await drain();assert.equal(f.sourceReads,1);
+  f.note.coreAdmissionAvailable(f.writes.checkpoints.scope);await drain();assert.equal(admitted,true);await loading;assert.equal(f.sourceReads,2);assert.equal(f.note.text,'Original');assert.equal(f.note.hasAdmittedContent,true);
+});
