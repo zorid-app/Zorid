@@ -5,6 +5,8 @@ import {MemoryAdapter,Vault} from '../src/core/index.ts';
 import {NoteBuffer} from '../src/ui/note-buffer.ts';
 import {BaseDocument} from '../src/bases/document.ts';
 import {createBaseSession} from '../src/bases/session.ts';
+import {Workspace} from '../src/ui/workspace.ts';
+import type {DurableWrites} from '../src/core/durable-writes.ts';
 import type {DocumentService} from '../src/core/document-semantics.ts';
 import type {DatabaseCollection,DatabaseRequest} from '../src/core/databases.ts';
 
@@ -16,23 +18,23 @@ async function until(check:()=>boolean){for(let n=0;n<150&&!check();n++)await ti
 async function fixture(managed=true){
   const base=`views:\n - {id: aaaaaaaaaaaa, type: table, name: Books${managed?', source: {kind: collection, id: abcdefghijkl}':''}}\n`;
   const adapter=new MemoryAdapter({'Work.base':base});
-  const requests:DatabaseRequest[]=[],errors:unknown[]=[],opened:string[]=[],writes:string[]=[];
-  let failReload=false,failAfterCommit=false,failOpen=false,failQuery=false,failQueryAfterCommit=false,loseAck=false;
+  const requests:DatabaseRequest[]=[],errors:unknown[]=[],opened:string[]=[],openedIds:(string|undefined)[]=[],writes:string[]=[],ids=new Map<string,string>();
+  let failReload=false,failAfterCommit=false,failOpen=false,cancelOpen=false,failQuery=false,failQueryAfterCommit=false,loseAck=false,failGets=false;
   const receipts=new Map<string,unknown>();
   const list=adapter.list.bind(adapter),write=adapter.write.bind(adapter);
-  adapter.list=async()=>{if(failReload){failReload=false;throw new Error('Postcommit inventory read failed');}return(await list()).map(entry=>({...entry,entryId:entry.path,revision:'r1'}));};
-  adapter.stat=async path=>(await list()).filter(entry=>entry.path===path).map(entry=>({...entry,entryId:path,revision:'r1'}))[0]??null;
+  adapter.list=async()=>{if(failReload){failReload=false;throw new Error('Postcommit inventory read failed');}return(await list()).map(entry=>({...entry,entryId:ids.get(entry.path)??entry.path,revision:'r1'}));};
+  adapter.stat=async path=>(await list()).filter(entry=>entry.path===path).map(entry=>({...entry,entryId:ids.get(path)??path,revision:'r1'}))[0]??null;
   adapter.write=async(path,text)=>{writes.push(path);return write(path,text);};
   if(managed){
     Object.assign(adapter,{databases:{async request(command:DatabaseRequest){
       if(command.op==='create_entry'){
         requests.push(structuredClone(command));if(receipts.has(command.operationId))return structuredClone(receipts.get(command.operationId));
-        await adapter.write(command.path,command.body);if(failAfterCommit){failAfterCommit=false;failReload=true;}
+        ids.set(command.path,command.entryId);await adapter.write(command.path,command.body);if(failAfterCommit){failAfterCommit=false;failReload=true;}
         if(failQueryAfterCommit){failQueryAfterCommit=false;failQuery=true;}
         const response={collections:[collection],entries:[{entryId:command.entryId,collectionId:collection.id,revision:'member-r1',fileRevision:'r1',path:command.path,values:command.values,deleted:false,pendingProjection:false}],projection:{pending:0,issues:[]}};
         receipts.set(command.operationId,structuredClone(response));if(loseAck){loseAck=false;throw new Error('Create reply lost');}return response;
       }
-      return{collections:[collection],entries:[],projection:{pending:0,issues:[]}};
+      if(failGets)throw new Error('Schema read failed');return{collections:[collection],entries:[],projection:{pending:0,issues:[]}};
     }}});
     const unused=async():Promise<never>=>{throw new Error('Unexpected document operation');};
     Object.assign(adapter,{documentSemantics:{status:async()=>({source,snapshot,coveredSource:source,current:true,rebuildRequired:false,coverageComplete:true}),initialize:unused,rebuild:unused,begin:unused,pump:unused,publish:unused,discard:unused,
@@ -43,11 +45,13 @@ async function fixture(managed=true){
   }
   const vault=new Vault(adapter);await vault.initialize();
   const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),host=dom.window.document.querySelector('main')!,buffers=new Map<string,NoteBuffer>();
-  const session=createBaseSession(host,{vault,basePath:'Work.base',validate(){},openFile(){throw new Error('Expected awaited presentation');},openCreatedFile:async path=>{opened.push(path);if(failOpen){failOpen=false;throw new Error('Created view failed to open');}},onError:error=>errors.push(error),buffers:{validate(){},getBuffer:async path=>{let buffer=buffers.get(path);if(!buffer){buffer=new NoteBuffer(vault,path);buffers.set(path,buffer);}await buffer.load();return buffer;}}});
+  const session=createBaseSession(host,{vault,basePath:'Work.base',validate(){},openFile(){throw new Error('Expected awaited presentation');},openCreatedFile:async(path,_event,_anchor,expectedEntryId)=>{opened.push(path);openedIds.push(expectedEntryId);if(failOpen){failOpen=false;throw new Error('Created view failed to open');}if(cancelOpen){cancelOpen=false;return false;}},onError:error=>errors.push(error),buffers:{validate(){},getBuffer:async path=>{let buffer=buffers.get(path);if(!buffer){buffer=new NoteBuffer(vault,path);buffers.set(path,buffer);}await buffer.load();return buffer;}}});
   await session.ready;
-  return{adapter,vault,session,requests,errors,opened,writes,host,dom,base,
+  return{adapter,vault,session,requests,errors,opened,openedIds,writes,host,dom,base,ids,
     failNextReload(){failAfterCommit=true;},failNextOpen(){failOpen=true;},
+    cancelNextPresentation(){cancelOpen=true;},
     failNextQuery(){failQueryAfterCommit=true;},loseNextAck(){loseAck=true;},
+    failSchemaReads(fail=true){failGets=fail;},
     create(){host.querySelector<HTMLButtonElement>('[aria-label="New"]')!.click();},
     async close(){await session.close();for(const buffer of buffers.values())await buffer.dispose();dom.window.close();}};
 }
@@ -58,6 +62,32 @@ test('managed New retains its committed receipt after a postcommit inventory fai
   f.create();await until(()=>f.opened.length===1);assert.equal(f.requests.length,1,'retry must not create another managed entry');
   assert.equal(f.opened[0],f.requests[0].op==='create_entry'?f.requests[0].path:undefined);
   await until(()=>!f.session.hasPendingChanges());await f.close();
+});
+
+test('explicitly canceled presentation ends only the verified committed intent and next New is distinct',async()=>{
+  const f=await fixture();f.cancelNextPresentation();f.create();await until(()=>f.opened.length===1&&!f.session.hasPendingChanges());
+  assert.equal(f.requests.length,1);assert.deepEqual(f.errors,[]);f.create();await until(()=>f.opened.length===2&&!f.session.hasPendingChanges());
+  assert.equal(f.requests.length,2);assert.notEqual(f.opened[0],f.opened[1]);await f.close();
+});
+
+test('a committed managed New resumes after its loaded schema was cleared by a failed read',async()=>{
+  const f=await fixture();f.failNextOpen();f.create();await until(()=>f.opened.length===1&&f.errors.length>0);
+  f.failSchemaReads();await f.session.refresh();f.failSchemaReads(false);
+  f.create();await until(()=>f.opened.length===2);assert.equal(f.requests.length,1);assert.equal(f.opened[0],f.opened[1]);
+  await until(()=>!f.session.hasPendingChanges());await f.close();
+});
+
+for(const managed of [true,false])test(`${managed?'managed':'note'} creation retry rejects an authoritative same-path replacement without losing its owner`,async()=>{
+  const f=await fixture(managed);f.failNextOpen();f.create();await until(()=>f.opened.length===1&&f.errors.length>0);
+  const path=f.opened[0],originalId=f.ids.get(path)??path;await f.adapter.rename(path,'Moved.md');await f.adapter.write(path,'Replacement contents');f.ids.set('Moved.md',originalId);f.ids.set(path,'replacement-entry');
+  // The map still contains the original ID: presentation must consult current
+  // authority and must not recapture the replacement as its selected actor.
+  assert.equal(f.vault.entries.get(path)?.entryId,originalId);
+  const before=f.errors.length;f.create();await until(()=>f.errors.length>before||f.opened.length===2);
+  assert.equal(f.opened.length,1,'replacement must never be presented as the created note');assert.equal(f.session.hasPendingChanges(),true);
+  if(managed)assert.equal(f.requests.length,1);
+  await f.adapter.trash(path);await f.adapter.rename('Moved.md',path);f.ids.set(path,originalId);f.ids.delete('Moved.md');f.create();await until(()=>f.opened.length===2);
+  assert.equal(f.openedIds[1],originalId,'the opener must admit the original stable actor');await until(()=>!f.session.hasPendingChanges());await f.close();
 });
 
 for(const managed of [true,false])test(`${managed?'managed entry':'note'} New retries presentation of the exact committed item, then accepts a distinct New`,async()=>{
@@ -96,4 +126,33 @@ for(const managed of [true,false])test(`${managed?'managed':'note'} committed Ne
   assert.match(String(f.errors.at(-1)),/original .* view/);assert.equal(f.opened.length,1);assert.equal(f.writes.filter(path=>path.endsWith('.md')).length,1);
   await f.vault.modify('Work.base',f.base);await f.session.refresh();f.create();await until(()=>f.opened.length===2);
   assert.equal(f.opened[0],f.opened[1]);await until(()=>!f.session.hasPendingChanges());await f.close();
+});
+
+test('Workspace admits the captured creation actor through a delayed buffer load without adopting a replacement',async t=>{
+  const dom=new JSDOM('<main></main>',{url:'https://creation.test/',pretendToBeVisual:true}),saved=new Map<string,PropertyDescriptor|undefined>();
+  const matchMedia=(media:string)=>({matches:false,media,addListener(){},removeListener(){},addEventListener(){},removeEventListener(){}});
+  for(const[key,value]of Object.entries({window:dom.window,document:dom.window.document,localStorage:dom.window.localStorage,navigator:dom.window.navigator,HTMLElement:dom.window.HTMLElement,Node:dom.window.Node,Text:dom.window.Text,Window:dom.window.Window,MutationObserver:dom.window.MutationObserver,getComputedStyle:dom.window.getComputedStyle.bind(dom.window),requestAnimationFrame:dom.window.requestAnimationFrame.bind(dom.window),cancelAnimationFrame:dom.window.cancelAnimationFrame.bind(dom.window),matchMedia})){saved.set(key,Object.getOwnPropertyDescriptor(globalThis,key));Object.defineProperty(globalThis,key,{configurable:true,writable:true,value});}
+  dom.window.matchMedia=matchMedia as typeof window.matchMedia;
+  const adapter=new MemoryAdapter({'Start.md':'Start','ZCreated.md':'Created exact body'}),ids=new Map([['Start.md','start-entry'],['ZCreated.md','created-entry']]),heads=new Map<string,any>(),checkpointLoads:string[]=[],list=adapter.list.bind(adapter);
+  adapter.list=async()=>(await list()).map(entry=>({...entry,entryId:ids.get(entry.path),revision:'r1'}));
+  adapter.stat=async path=>(await adapter.list()).find(entry=>entry.path===path)??null;
+  let release!:()=>void,started=false,hold=false;const gate=new Promise<void>(resolve=>{release=resolve;});
+  const unsupported=async():Promise<never>=>{throw new Error('Unexpected write');};
+  const durable:DurableWrites={checkpoints:{scope:{vaultId:'creation-vault',clientId:'creation-client'},load:async key=>{checkpointLoads.push(key);return heads.get(key)??null;},list:async()=>({items:[],cursor:null,highWater:'0'}),changes:async()=>({items:[],cursor:null,highWater:'0'}),compareAndSwap:async change=>{const next={version:1,...durable.checkpoints.scope,...change,sequence:'1',deleted:false,byteLength:change.encodedState.length,revision:change.nextRevision};heads.set(change.key,next);return next;}},
+    readText:async path=>{if(hold&&path==='ZCreated.md'){started=true;await gate;}return{entryId:ids.get(path)!,revision:'r1',path,content:await adapter.read(path),stat:{ctime:1,mtime:1,size:1}};},readTextById:async id=>{const path=[...ids].find(([,value])=>value===id)?.[0];return path?durable.readText(path):null;},planWrite:unsupported,prepare:unsupported,commit:unsupported,query:unsupported,listUnacknowledged:async()=>[],acknowledge:unsupported};
+  Object.assign(adapter,{durableWrites:durable});
+  const root=dom.window.document.querySelector('main')!,workspace=new Workspace(root,(parent,options)=>{const input=parent.ownerDocument.createElement('textarea');parent.append(input);return{getValue:()=>options.value,setValue(){},focus(){},destroy(){input.remove();},insert(){}};});
+  t.after(async()=>{release();try{await workspace.destroy();}finally{dom.window.close();for(const[key,descriptor]of saved){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else Reflect.deleteProperty(globalThis,key);}}});
+  await workspace.start({adapter,id:'test:creation-continuation',label:'Creation'});await workspace.openNote('Start.md');
+  const anchor=dom.window.document.createElement('button');root.append(anchor);anchor.focus();hold=true;
+  const pending=(workspace as any).openBaseNewItem('ZCreated.md',anchor,root,false,{entryId:'created-entry',revision:'r1'});
+  const rejection=assert.rejects(pending,/identity|changed|replaced|coherent file observation/);await until(()=>started);
+  ids.set('ZCreated.md','replacement-entry');await adapter.write('ZCreated.md','Do not adopt this replacement');release();await rejection;
+  assert.equal(root.ownerDocument.querySelector('[aria-label="Page preview"]'),null);
+  assert.equal(checkpointLoads.includes('note/v1/replacement-entry'),false,'a creation opener must not adopt another actor checkpoint before checking identity');
+  const canceled=(workspace as any).openBaseNewItem('ZCreated.md',anchor,root,false,{entryId:'created-entry'});
+  dom.window.dispatchEvent(new dom.window.Event('blur'));assert.equal(await canceled,false,'an explicit newer window action may decline presentation');
+  const retired=(workspace as any).openBaseNewItem('ZCreated.md',anchor,root,false,{entryId:'created-entry'});
+  workspace.activePane.renderVersion++;
+  await assert.rejects(retired,/preview owner changed/,'a runtime owner replacement is not evidence of user cancellation');
 });

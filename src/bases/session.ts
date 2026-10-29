@@ -217,7 +217,9 @@ export interface BaseSessionOptions {
   /** Rebind an existing named embed after its new name is durably saved. */
   readonly onViewRenamed?: (event: BaseViewRenamed) => void;
   readonly closeCreatedFile?: () => boolean | Promise<boolean>;
-  readonly openCreatedFile?: (path: string, event: MouseEvent | KeyboardEvent, anchor?: HTMLElement) => void | Promise<void>;
+  /** False explicitly ends this committed intent without presenting it. A
+   * rejected opener retains the exact committed item for another attempt. */
+  readonly openCreatedFile?: (path: string, event: MouseEvent | KeyboardEvent, anchor?: HTMLElement, expectedEntryId?:string) => void | boolean | Promise<void|boolean>;
   readonly openFile: (path: string, event: MouseEvent | KeyboardEvent, witness?: { readonly entryId: string; readonly revision: string }) => void;
   readonly validate: () => void;
   readonly loadThumbnail?: BaseCardsViewOptions['loadThumbnail'];
@@ -309,7 +311,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   const collectionVersions = new Map<string|number,{collection:DatabaseCollection;entries:Map<string,DatabaseEntry>}>();
   let pendingCollectionCreate: DatabaseRequest | undefined;
   type CreationContext={readonly viewId?:string;readonly source:string;readonly viewIndex:number};
-  type CreationPhase='submitted'|'committed'|'presented';
+  type CreationPhase='submitted'|'committed'|'presented'|'presentation-canceled';
   let pendingCollectionCreateOwner:(CreationContext&{readonly collectionId:string;phase:CreationPhase;entry?:DatabaseEntry})|undefined;
   const databaseService = options.vault.adapter.databases;
   const currentViewSource = (): BaseViewSource => {
@@ -332,7 +334,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   const getPropertyLabel=(property:string)=>collection?.properties.find(field=>field.id===basePropertyName(property))?.name
     ??(collectionLabelSource===loadedCollectionId?collectionPropertyLabels.get(basePropertyName(property)):undefined)??propertyLabel(propertyLabels,property);
   let definitions: BasePropertyDefinitions = { properties: {}, diagnostics: [] };
-  let creation: {readonly operation:BaseCreationOperation;readonly owner:CreationContext;phase:CreationPhase;entry?:{readonly path:string}} | undefined;
+  let creation: {readonly operation:BaseCreationOperation;readonly owner:CreationContext;phase:CreationPhase;entry?:{readonly path:string;readonly entryId?:string}} | undefined;
   const unfinishedNoteCreation=()=>!!creation&&(creation.phase==='committed'||creation.operation.status==='uncertain');
   let summaryPanel: HTMLElement | undefined;
   let summaryDraft = false, destroySummaryEditor: (() => void) | undefined;
@@ -871,8 +873,8 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     if(pendingCollectionCreate){const source=currentViewSource(),owner=pendingCollectionCreateOwner;if(!owner||source.kind!=='collection'||source.id!==owner.collectionId||(owner.viewId?controller.selectedViewIdentity!==owner.viewId:controller.state.source!==owner.source))throw new Error('The unfinished New belongs to its original collection view. Reopen that view to retry it.');}
     if(creation){const owner=creation.owner;if(collectionMode()||(owner.viewId?controller.selectedViewIdentity!==owner.viewId:controller.state.source!==owner.source))throw new Error('The unfinished New belongs to its original note view. Reopen that view to retry it.');}
     if(collectionMode()){
-      if(!databaseService||!collection||collection.deleted)throw new Error('This collection is unavailable.');
       if(!pendingCollectionCreate){
+        if(!databaseService||!collection||collection.deleted)throw new Error('This collection is unavailable.');
         const creatingCollection=collection;
         const plan=await planCollectionEntryCreation({vault:options.vault,collection:creatingCollection,document:BaseDocument.parse(creatingSource),basePath:options.basePath,viewIndex:creatingIndex,group,validate:validatePreparation});validatePreparation();
         const folder=plan.path.includes('/')?plan.path.slice(0,plan.path.lastIndexOf('/')):'';
@@ -882,6 +884,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       }
       const request=pendingCollectionCreate,owner=pendingCollectionCreateOwner!;
       if(!owner.entry){
+        if(!databaseService)throw new Error('This collection is unavailable.');
         let response;
         try{response=await databaseService.request(request);}
         catch(failure){
@@ -902,14 +905,15 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       validatePreparation();
       if(controller.state.error)throw controller.state.error;
       if(definitionsError)throw new Error(definitionsError);
+      const witness=await validateCreatedEntry(entry.path,entry.entryId,validatePreparation);
       notice=controller.state.result&&!controller.state.result.rows.some(row=>row.entryId===entry.entryId)?'Created entry is not shown in the current results.':undefined;renderStatus(controller.state);
       if(inline&&options.buffers?.rename&&controller.selectedViewIdentity===creatingViewId&&controller.selectedViewIndex===creatingIndex&&controller.state.source===creatingSource){
         const result=controller.state.result;
         if(result?.rows.some(row=>row.entryId===entry.entryId)&&result.properties.some(property=>property==='file.name'||property==='file.file')){owner.phase='presented';pendingCollectionCreate=undefined;pendingCollectionCreateOwner=undefined;return{path:entry.path,entryId:entry.entryId};}
       }
       const event=new(win?.MouseEvent??MouseEvent)('click');
-      if(options.openCreatedFile)await options.openCreatedFile(entry.path,event,anchor??content);else options.openFile(entry.path,event);
-      owner.phase='presented';pendingCollectionCreate=undefined;pendingCollectionCreateOwner=undefined;
+      const presented=options.openCreatedFile?await options.openCreatedFile(entry.path,event,anchor??content,entry.entryId):options.openFile(entry.path,event,witness);
+      owner.phase=presented===false?'presentation-canceled':'presented';pendingCollectionCreate=undefined;pendingCollectionCreateOwner=undefined;
       return;
     }
     // Keep both uncertain writes and committed-but-unpresented results. New is
@@ -920,12 +924,20 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     const entry=owner.entry;validatePreparation();
     await controller.refresh();
     validatePreparation();if(controller.state.error)throw controller.state.error;
+    const witness=await validateCreatedEntry(entry.path,entry.entryId,validatePreparation);
     notice = [...operation.plan.warnings, ...(controller.state.result && !controller.state.result.rows.some(row => row.path === entry.path) ? ['Created note is not shown in the current results.'] : [])].join(' ') || undefined;
     renderStatus(controller.state);
     const event = new (win?.MouseEvent ?? MouseEvent)('click');
-    if (options.openCreatedFile) await options.openCreatedFile(entry.path, event, anchor ?? toolbar.querySelector<HTMLElement>('[aria-label="New"]') ?? content);
-    else options.openFile(entry.path, event);
-    owner.phase='presented';creation=undefined;
+    const presented=options.openCreatedFile?await options.openCreatedFile(entry.path,event,anchor??toolbar.querySelector<HTMLElement>('[aria-label="New"]')??content,entry.entryId):options.openFile(entry.path,event,witness);
+    owner.phase=presented===false?'presentation-canceled':'presented';creation=undefined;
+  }
+  async function validateCreatedEntry(path:string,entryId:string|undefined,validate:()=>void):Promise<{entryId:string;revision:string}|undefined>{
+    if(!entryId)return;
+    const adapter=options.vault.adapter;
+    const entry=adapter.stat?await adapter.stat(path):(await adapter.list()).find(entry=>entry.path===path);
+    validate();
+    if(options.vault.adapter!==adapter||entry?.type!=='file'||entry.entryId!==entryId)throw new Error('The created note moved or was replaced. Its original creation is retained.');
+    return entry.revision?{entryId,revision:entry.revision}:undefined;
   }
   async function exportResults(format: BaseExportFormat, copy: boolean): Promise<void> {
     const result = controller.state.result; if (!result) throw new Error('Wait for results before exporting.');

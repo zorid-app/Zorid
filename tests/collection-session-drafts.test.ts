@@ -13,9 +13,9 @@ const snapshot={localStoreId:'store',generationEpoch:'epoch',generation:'1',vers
 const tick=()=>new Promise(resolve=>setTimeout(resolve,2));
 async function until(check:()=>boolean){for(let n=0;n<100&&!check();n++)await tick();assert.ok(check());}
 class Adapter extends MemoryAdapter{
-  documentSemantics?:DocumentService;databases?:DatabaseService;
-  override async list(){return(await super.list()).map(entry=>({...entry,entryId:entry.path,revision:'r1'}));}
-  override async stat(path:string){const entry=await super.stat(path);return entry&&{...entry,entryId:path,revision:'r1'};}
+  documentSemantics?:DocumentService;databases?:DatabaseService;ids=new Map<string,string>();
+  override async list(){return(await super.list()).map(entry=>({...entry,entryId:this.ids.get(entry.path)??entry.path,revision:'r1'}));}
+  override async stat(path:string){const entry=await super.stat(path);return entry&&{...entry,entryId:this.ids.get(path)??path,revision:'r1'};}
 }
 test('dirty or uncertain collection schema draft blocks view menus and source replacement',async()=>{
   const adapter=new Adapter({'Work.base':'views:\n - {type: table, name: Books, source: {kind: collection, id: abcdefghijkl}}\n'});
@@ -53,7 +53,7 @@ test('empty Base first view onboarding saves an independent untyped source with 
 test('uncertain New stays bound to its original collection view and retries the identical request',async()=>{
   const original='views:\n - {id: aaaaaaaaaaaa, type: table, name: Books, source: {kind: collection, id: abcdefghijkl}}\n - {id: bbbbbbbbbbbb, type: list, name: Notes, source: {kind: untyped}}\n';
   const adapter=new Adapter({'Work.base':original}),requests:unknown[]=[],errors:unknown[]=[],opened:string[]=[];let first=true;
-  adapter.databases={async request(command){if(command.op==='create_entry'){requests.push(structuredClone(command));const pending=first;first=false;if(!pending)await adapter.write(command.path,'Body');return{collections:[collection],entries:[{entryId:command.entryId,collectionId:collection.id,revision:'member-r1',fileRevision:pending?null:'r1',path:command.path,values:{},deleted:false,pendingProjection:pending}],projection:{pending:pending?1:0,issues:[]}};}return{collections:[collection],entries:[],projection:{pending:0,issues:[]}};}};
+  adapter.databases={async request(command){if(command.op==='create_entry'){requests.push(structuredClone(command));const pending=first;first=false;if(!pending){adapter.ids.set(command.path,command.entryId);await adapter.write(command.path,'Body');}return{collections:[collection],entries:[{entryId:command.entryId,collectionId:collection.id,revision:'member-r1',fileRevision:pending?null:'r1',path:command.path,values:{},deleted:false,pendingProjection:pending}],projection:{pending:pending?1:0,issues:[]}};}return{collections:[collection],entries:[],projection:{pending:0,issues:[]}};}};
   const unused=async():Promise<never>=>{throw new Error('unexpected operation');};
   adapter.documentSemantics={status:async()=>({source,snapshot,coveredSource:source,current:true,rebuildRequired:false,coverageComplete:true}),initialize:unused,rebuild:unused,begin:unused,pump:unused,publish:unused,discard:unused,
     open:async()=>({pinId:'pin',source,snapshot,coverageComplete:true,close:async()=>{},search:unused,backlinks:unused,metadata:async()=>({source,snapshot,coverageComplete:true,value:{entry:{id:'Work.base',revision:'r1',path:'Work.base',kind:'file',deleted:false},metadata:null,exclusion:null}}),
@@ -96,7 +96,7 @@ test('definitive non-commit New rejection releases its old attempt and allows fr
   const base='views:\n - {id: aaaaaaaaaaaa, type: table, name: Books, source: {kind: collection, id: abcdefghijkl}}\n';let first=true;
   const f=await creationSession({base,mutation:async(command,adapter)=>{
     if(first){first=false;await adapter.write('Untitled.md','Other writer');throw Object.assign(new Error('Path occupied'),{source:'host',commitUncertain:false,code:'path_occupied'});}
-    assert.equal(command.op,'create_entry');if(command.op!=='create_entry')throw new Error('wrong command');await adapter.write(command.path,'Created body');return{collections:[collection],entries:[{entryId:command.entryId,collectionId:collection.id,revision:'member-r1',fileRevision:'r1',path:command.path,values:{},deleted:false,pendingProjection:false}],projection:{pending:0,issues:[]}};
+    assert.equal(command.op,'create_entry');if(command.op!=='create_entry')throw new Error('wrong command');adapter.ids.set(command.path,command.entryId);await adapter.write(command.path,'Created body');return{collections:[collection],entries:[{entryId:command.entryId,collectionId:collection.id,revision:'member-r1',fileRevision:'r1',path:command.path,values:{},deleted:false,pendingProjection:false}],projection:{pending:0,issues:[]}};
   }});
   f.host.querySelector<HTMLButtonElement>('[aria-label="New"]')!.click();await until(()=>f.errors.length>0&&!f.session.hasPendingChanges());assert.equal(f.requests.length,1);
   f.host.querySelector<HTMLButtonElement>('[aria-label="New"]')!.click();await until(()=>f.opened.length===1);assert.equal(f.requests.length,2);const [old,next]=f.requests;assert.equal(old.op,'create_entry');assert.equal(next.op,'create_entry');if(old.op==='create_entry'&&next.op==='create_entry'){assert.notEqual(old.operationId,next.operationId);assert.notEqual(old.entryId,next.entryId);assert.equal(next.path,'Untitled 1.md');}await until(()=>!f.session.hasPendingChanges());await f.close();

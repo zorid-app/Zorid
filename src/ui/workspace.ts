@@ -170,7 +170,7 @@ export class Workspace {
   private baseNewItem?:BaseNewItemPopoverHandle;
   /** Stable initiating host; popover positioning keeps its separate button anchor. */
   private baseNewItemAnchor?:HTMLElement;
-  private baseNewItemOpening?:Promise<void>;
+  private baseNewItemOpening?:Promise<boolean>;
   private notePropertyQueries=new Set<{vault:Vault;session:NotePropertyTargets}>();
   private pendingBaseCreation?:{vault:Vault;generation:number;folder:string;preparing:Promise<BaseCreationOperation>;operation?:BaseCreationOperation};
   private collapsed = new Set<string>();
@@ -1326,8 +1326,8 @@ export class Workspace {
     validate();if(buffer.dirty)buffer.update(buffer.text,{validateWrite:()=>{validate();if(this.buffers.get(path)!==buffer||buffer.path!==path)throw new Error('The Base buffer was replaced.');}});await buffer.flush();validate();
   }
 
-  private async baseBufferFor(path:string,validateOwner:()=>void):Promise<NoteBuffer>{
-    validateOwner();const token=this.treeEntryToken(path),buffer=await this.bufferFor(path);
+  private async baseBufferFor(path:string,validateOwner:()=>void,expectedEntryId?:string):Promise<NoteBuffer>{
+    validateOwner();const token=this.treeEntryToken(path),buffer=await this.bufferFor(path,this.vault.adapter.durableWrites?expectedEntryId:undefined,validateOwner);
     const validate=()=>{validateOwner();if(!token||this.treeEntryToken(path)!==token||this.buffers.get(path)!==buffer||buffer.path!==path)throw new Error('The Base target file is no longer current.');};
     validate();
     if(this.bufferEntries.get(buffer)!==token){
@@ -1747,12 +1747,12 @@ export class Workspace {
             onEditsSettled:()=>{const sidebar=this.sidebarBase;if(sidebar&&sidebar.session===composed)this.retrySidebarFollowingContext(sidebar);},
             onViewRenamed:event=>{validate();const identity=this.treeEntryToken(event.basePath);if(!identity)return;for(const sessions of new Set([this.baseNewItemEmbeds,...this.baseHoverEmbeds,...this.loadedViews().map(pane=>pane.baseEmbeds)].filter((sessions):sessions is BaseEmbedSessions=>!!sessions)))sessions.renameViewBinding(event.basePath,event.from,event.to,identity,event.viewId);},
             closeCreatedFile:()=>this.baseNewItem?.element.contains(host)?false:this.closeBaseNewItem(),
-            openCreatedFile:async(target,_event,anchor)=>{
+            openCreatedFile:async(target,_event,anchor,expectedEntryId)=>{
               validate();
               // A nested Base's own New operation is still tracked by its
               // session. Release that operation before draining its parent.
-              if(this.baseNewItem?.element.contains(host)){this.run(async()=>{await this.closeBaseNewItem();await this.openBaseNewItem(target,this.root);});return;}
-              await this.openBaseNewItem(target,anchor??host,host);
+              if(this.baseNewItem?.element.contains(host)){this.run(async()=>{await this.closeBaseNewItem();await this.openBaseNewItem(target,this.root,this.root,false,expectedEntryId?{entryId:expectedEntryId}:undefined);});return;}
+              return this.openBaseNewItem(target,anchor??host,host,false,expectedEntryId?{entryId:expectedEntryId}:undefined);
             },
             buffers:{getBuffer:target=>this.baseBufferFor(target,validate),validate,
               onBufferChange:(target,buffer,previous)=>{
@@ -1935,34 +1935,42 @@ export class Workspace {
     const current=this.baseNewItem;if(!current)return false;
     await current.close();return true;
   }
-  private openBaseNewItem(path:string,anchor:HTMLElement,ownershipHost:HTMLElement=anchor,existing=false,expectedWitness?:{entryId:string;revision:string},openingOwner?:{current():boolean;release():void}):Promise<void>{
+  private openBaseNewItem(path:string,anchor:HTMLElement,ownershipHost:HTMLElement=anchor,existing=false,expectedWitness?:{entryId:string;revision?:string},openingOwner?:{current():boolean;canceled?():boolean;release():void}):Promise<boolean>{
     if(!openingOwner){
       const pane=this.activePane,activation=this.paneActivationRevision,navigation=this.navigationIntent.get(pane),version=pane.renderVersion;
-      const doc=anchor.ownerDocument,win=doc.defaultView,focused=doc.activeElement;let retired=false;
-      const retire=()=>{retired=true;},focus=(event:FocusEvent)=>{if(event.target!==focused)retire();};
+      const doc=anchor.ownerDocument,win=doc.defaultView,focused=doc.activeElement;let retired=false,canceled=false;
+      const retire=()=>{retired=true;canceled=true;},focus=(event:FocusEvent)=>{if(event.target!==focused)retired=true;};
       doc.addEventListener('pointerdown',retire,true);doc.addEventListener('focusin',focus,true);win?.addEventListener('blur',retire);
       openingOwner={current:()=>!retired&&ownershipHost.isConnected&&this.activePane===pane&&this.panes.includes(pane)&&this.paneActivationRevision===activation&&this.navigationIntent.get(pane)===navigation&&pane.renderVersion===version,
+        canceled:()=>canceled,
         release:()=>{doc.removeEventListener('pointerdown',retire,true);doc.removeEventListener('focusin',focus,true);win?.removeEventListener('blur',retire);}};
     }
     const owner=openingOwner;
+    const canceled=()=>{if(existing||owner.canceled?.())return false;throw new Error('The created note preview owner changed. Its original creation is retained.');};
     if(this.baseNewItemOpening)return this.baseNewItemOpening.then(()=>this.openBaseNewItem(path,anchor,ownershipHost,existing,expectedWitness,owner)).finally(owner.release);
     const vault=this.vault,generation=this.vaultGeneration;
     const opening=Promise.resolve().then(async()=>{
-      if(!owner.current())return;
-      const validateOpening=()=>{const entry=vault.entries.get(path);if(vault!==this.vault||generation!==this.vaultGeneration||expectedWitness&&(entry?.entryId!==expectedWitness.entryId||entry.revision!==expectedWitness.revision))throw new Error('The page changed before its preview could open.');};
+      if(!owner.current())return canceled();
+      const validateOpening=()=>{const entry=vault.entries.get(path);if(vault!==this.vault||generation!==this.vaultGeneration||expectedWitness&&(entry?.entryId!==expectedWitness.entryId||expectedWitness.revision!==undefined&&entry.revision!==expectedWitness.revision))throw new Error('The page changed before its preview could open.');};
+      const verifyOpening=async()=>{
+        validateOpening();if(!expectedWitness)return;
+        const adapter=vault.adapter,entry=adapter.stat?await adapter.stat(path):(await adapter.list()).find(entry=>entry.path===path);
+        validateOpening();if(vault.adapter!==adapter||entry?.type!=='file'||entry.entryId!==expectedWitness.entryId||expectedWitness.revision!==undefined&&entry.revision!==expectedWitness.revision)throw new Error('The page changed before its preview could open.');
+      };
       validateOpening();
       await this.baseNewItem?.close();
-      if(!owner.current())return;
-      validateOpening();
+      if(!owner.current())return canceled();
+      await verifyOpening();
       let disposed=false,buffer:NoteBuffer|undefined;
       const validate=()=>{
         if(disposed||vault!==this.vault||generation!==this.vaultGeneration||this.platformReleased||this.platformDrained)throw new Error('The new-item vault is no longer available.');
         if(buffer&&(this.buffers.get(buffer.path)!==buffer||vault.entries.get(buffer.path)?.type!=='file'))throw new Error('The new-item note changed. Its draft is retained.');
       };
-      buffer=await this.baseBufferFor(path,validate);validate();
-      if(!owner.current())return;
-      const shared=buffer,entryId=shared.savedDurableWitness?.entryId??vault.entries.get(path)?.entryId;
-      const validateFile=()=>{validate();const token=this.treeEntryToken(shared.path);if(!token||this.bufferEntries.get(shared)!==token||entryId&&vault.entries.get(shared.path)?.entryId!==entryId)throw new Error('The new-item note was replaced. Its draft is retained.');};
+      buffer=await this.baseBufferFor(path,()=>{validate();validateOpening();},expectedWitness?.entryId);validate();validateOpening();
+      await verifyOpening();
+      if(!owner.current())return canceled();
+      const shared=buffer,entryId=expectedWitness?.entryId??shared.savedDurableWitness?.entryId??vault.entries.get(path)?.entryId;
+      const validateFile=()=>{validate();const token=this.treeEntryToken(shared.path);if(!token||this.bufferEntries.get(shared)!==token||entryId&&(vault.entries.get(shared.path)?.entryId!==entryId||vault.adapter.durableWrites&&shared.savedDurableWitness?.entryId!==entryId))throw new Error('The new-item note was replaced. Its draft is retained.');};
       const recovery=el('div','bases-new-item-embed-recovery');
       const sessions=new BaseEmbedSessions({recoveryHost:recovery,create:async(container,target)=>{
         const validateEmbed=()=>{validateFile();if(!target.sourceIdentity||this.treeEntryToken(target.sourcePath)!==target.sourceIdentity||!target.targetIdentity||this.treeEntryToken(target.targetPath)!==target.targetIdentity)throw new Error('The embedded Base source changed. Its draft is retained.');};
@@ -2038,7 +2046,7 @@ export class Workspace {
             transfers:{autoConvertHtml:()=>this.settings.autoConvertHtml,importFile:async file=>{validateFile();const result=await this.importAttachment(file,shared.path,generation);validateFile();return result;},nativePath:file=>window.zorid?.getPathForFile?.(file)??'',onError:error=>notice(error instanceof Error?error.message:String(error))},
           },onError:error=>notice(error instanceof Error?error.message:String(error)),onClose:cleanup,
         });
-        validateFile();popup.element.append(recovery);this.baseNewItem=popup;this.baseNewItemAnchor=ownershipHost;
+        validateFile();popup.element.append(recovery);this.baseNewItem=popup;this.baseNewItemAnchor=ownershipHost;return true;
       }catch(error){if(popup?.element.isConnected){this.baseNewItem=popup;this.baseNewItemAnchor=ownershipHost;throw error;}cleanup();await sessions.close();throw error;}
     });
     this.baseNewItemOpening=opening;
