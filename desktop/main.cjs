@@ -27,7 +27,16 @@ function allowedURL(url) {
 const broker = new WindowBroker({ openVault: directory => editorCore ? editorCore.open(directory) : VaultService.open(directory), allowedURL });
 let lastVaultPath;
 function handle(name, callback) {
-  ipcMain.handle(`zorid:${name}`, (event, ...args) => callback(broker.authenticate(event), event, ...args));
+  ipcMain.handle(`zorid:${name}`, (event, ...args) => {
+    const record = broker.authenticate(event);
+    // Renderer/module loading overlaps vault initialization. Its window identity
+    // is already usable, but no vault capability may escape the opening barrier.
+    if (record.opening && name !== 'getWindowInfo') return record.opening.then(() => {
+      if (broker.authenticate(event) !== record) throw new Error('Window changed while opening');
+      return callback(record, event, ...args);
+    });
+    return callback(record, event, ...args);
+  });
 }
 function registerIPC() {
   handle('showContextMenu', (record, _event, request) => contextMenus.popup(record.window, request));
@@ -199,7 +208,7 @@ async function createWindow({ source, primary = false, initialState = 'empty', r
     return { action: 'deny' };
   });
   window.webContents.on('will-navigate', (event, url) => { if (!allowedURL(url)) event.preventDefault(); });
-  try {
+  const opening = (async () => {
     if (source) broker.bind(record, source.vault);
     else {
       const selected=restoreSlot?.vaultPath||(primary?clientSlot?.vaultPath||lastVaultPath:null);
@@ -210,10 +219,17 @@ async function createWindow({ source, primary = false, initialState = 'empty', r
     }
     if(record.vault&&clientSlot){await clientSlots.setVault(clientSlot.slotId,record.vault.service.root);record.persistedVaultRoot=record.vault.service.root;}
     if (recoveryCheck) { await recoveryCheck(record); recoveryAssert(record); }
-    if (devUrl) await window.loadURL(devUrl); else await window.loadFile(path.join(__dirname, '../dist/index.html'));
+  })();
+  record.opening = opening;
+  try {
+    // Start Chromium navigation before waiting for Rust/import/recovery. IPC
+    // above still admits all vault operations only after opening succeeds.
+    const loading = devUrl ? window.loadURL(devUrl) : window.loadFile(path.join(__dirname, '../dist/index.html'));
+    await Promise.all([opening, loading]);
     if (recoveryCheck) { await recoveryCheck(record); recoveryAssert(record); }
     return record;
   } catch (error) { if (!window.isDestroyed()) window.destroy(); throw error; }
+  finally { if (record.opening === opening) delete record.opening; }
 }
 function openEmptyWindow() {
   const focused = BrowserWindow.getFocusedWindow();
