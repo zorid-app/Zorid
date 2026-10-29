@@ -3,6 +3,28 @@
 ## URGENT: real-session automatic save failure — 2026-10-28
 
 
+**Additional independent copies verified; no quit until recovery proof — 2026-10-28.**
+Live owner preserved both exports in ignored project
+`tmp/save-recovery-20261028/private/`; this main owner verified directory0700,
+both files0600, and unchanged SHA256 for initial3851byte and full6272byte copies.
+Receipt `tmp/save-recovery-20261028/preservation-receipt.json` records two notes
+and exact visible-editor match (reported by live owner); `/private/tmp` originals
+also remain preserved. Ignored status confirmed; no private draft contents copied
+to tracked docs. Source/outside-vault data untouched by this preservation step.
+
+Worker progress reported, not independently executed by this thread: lifecycle
+actual regression RED3/3, draft GREEN3/3 under review; autoRetry RED14/15, fixing
+cause-chain classification and failed-facts retirement autosave. These partial
+counts are **not integrated acceptance** and do not prove live draft recovery.
+Explicit backend API scope ACK c4a78da3 is received. No build/GUI lane requested
+or granted by this update. Main integration remains exclusively coordinated here.
+Protected old app must stay OPEN: **do not use normal Quit until full pending-draft
+recovery and proof**, even though independent copies exist. No live flush/retry/
+reload/replacement in this thread. Install hold remains explicit. Require both
+uncertain CAS outcomes safely resolved and durable byte/revision proof before
+accepting recovery; preserving exports alone does not satisfy saving correctness.
+
+
 **Backend recovery API scope extension ACK — 2026-10-28.**
 Named `maintenance_triggers` scope now includes `desktop/main.cjs` and the existing
 bridge typing seam **`src/platform/bridge.d.ts`** (requested as bridge.ts; actual

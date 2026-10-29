@@ -3,6 +3,20 @@
 ## Execution checkpoint — shared-core coordinator
 
 
+**Independent preservation stable; protected app must remain OPEN — 2026-10-28.**
+Ignored project tmp/save-recovery-20261028/private copies independently verified:
+dir0700/files0600, initial3851/full6272 SHA unchanged. Preservation receipt records
+notes2/visibleeditor match; /private/tmp originals retained. No private content in
+tracked docs, no source/outside-vault changes. Lifecycle owner reports realRED3/3,
+draftGREEN3/3 underreview; retry owner reports RED14/15 and causechain/failed-facts
+retirement fix in progress. Counts are reported partial worker evidence, not this
+thread's executed or integrated acceptance. Backend explicit API ACK received.
+No build/GUI lane requested. Do NOT normal-Quit protected old app until complete
+pending-draft recovery/outcome/durable bytes proof; exports alone are insufficient.
+Live owner retains preservation/recovery coordination. Exclusive main integration
+and explicit install hold remain; no live action here. See urgent queue/receipt.
+
+
 **Explicit durable recovery API extension ACK — 2026-10-28.**
 maintenance_triggers additionally owns desktop/main.cjs and actual tracked
 src/platform/bridge.d.ts (request called it bridge.ts), registering/typing
