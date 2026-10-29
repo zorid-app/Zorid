@@ -41,10 +41,10 @@ fn fixture(entries: usize) -> (tempfile::TempDir, Store) {
     (directory, store)
 }
 
-// Intentionally calls the old full-status predicate for the first production
-// RED. The implementation owner changes only this seam after recording RED.
+// The tests-only c2ee79bb commit binds this seam to the old full predicate for
+// the controlled RED. The production implementation admits scalar authority.
 fn ready(store: &Store) -> Result<bool> {
-    store.family_is_enrolled()
+    store.family_enrollment_ready()
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -179,6 +179,67 @@ fn readiness_distinguishes_zero_and_one_valid_family_scope() {
     store.family_enroll(&scope()).unwrap();
     assert!(ready(&store).unwrap());
     assert_eq!(store.family_status().unwrap().scope, Some(scope()));
+}
+
+#[test]
+fn readiness_preserves_a_complete_legacy_text_binding_without_family_facts() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(directory.path().join("authority.sqlite")).unwrap();
+    let identity = zorid_client_sync::TextIdentity {
+        realm_id: scope().realm_id,
+        vault_id: scope().vault_id,
+        entry_id: id("legacy-text"),
+        bootstrap_id: zorid_sync_protocol::UpdateId::new("legacy-bootstrap").unwrap(),
+    };
+    let created = store
+        .apply(&MutationRequest {
+            operation_id: OperationId::new("legacy-create").unwrap(),
+            mutation: Mutation::Create {
+                id: identity.entry_id.clone(),
+                path: VaultPath::new("legacy.md").unwrap(),
+                kind: EntryKind::File,
+                content: Some(Vec::new()),
+            },
+        })
+        .unwrap();
+    let revision = &created
+        .changes
+        .iter()
+        .find(|change| change.after.id == identity.entry_id)
+        .unwrap()
+        .after
+        .revision;
+    let text = store.bind_empty_text(&identity, revision).unwrap();
+    assert!(!store.family_enrollment_ready().unwrap());
+    assert_eq!(store.text_state(&identity.entry_id).unwrap(), Some(text));
+    assert!(!store.family_is_enrolled().unwrap());
+}
+
+#[test]
+fn readiness_rejects_every_orphan_graph_fact_without_an_enrollment_head() {
+    // Deliberately model foreign corruption with valid table/column shapes but
+    // absent references. Each fact table must independently prevent legacy mode.
+    for sql in [
+        "INSERT INTO family_graph_sources VALUES ('r','v','s','events','{}',0)",
+        "INSERT INTO family_graph_events VALUES ('r','v','e','s',0,'entry','bootstrap','{}')",
+        "INSERT INTO family_graph_claims VALUES ('r','v','s',0,'entry','{}')",
+        "INSERT INTO family_graph_parents VALUES ('r','v','e','parent','entry')",
+        "INSERT INTO family_graph_entries VALUES ('r','v','entry','{}',NULL,'root','note','live')",
+        "INSERT INTO family_graph_entry_heads VALUES ('r','v','entry','namespace','e','{}')",
+        "INSERT INTO family_graph_pending VALUES ('r','v','e','entry')",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path().join("authority.sqlite")).unwrap();
+        store
+            .connection
+            .execute_batch("PRAGMA foreign_keys=OFF;")
+            .unwrap();
+        store.connection.execute_batch(sql).unwrap();
+        assert!(
+            store.family_enrollment_ready().is_err(),
+            "orphan must fail closed: {sql}"
+        );
+    }
 }
 
 #[test]

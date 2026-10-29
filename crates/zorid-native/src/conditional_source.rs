@@ -84,7 +84,7 @@ impl NativeVault {
         {
             return Err(changed());
         }
-        if !self.store.family_is_enrolled()?
+        if !self.store.family_enrollment_ready()?
             || self.store.family_text_state(&witness.entry_id)?.is_none()
         {
             return Err(Error::Unsupported(

@@ -1023,7 +1023,7 @@ fn execute(
         }
         Command::Rescan => {
             empty(&body)?;
-            if vault.family_status().map_err(native_fault)?.scope.is_some() {
+            if vault.family_enrollment_ready().map_err(native_fault)? {
                 let (report, reconciliation) = reconcile_desktop_vault(vault)?;
                 let issues: Vec<_> = reconciliation
                     .issues
@@ -1128,7 +1128,7 @@ fn reconciliation_status(report: &zorid_native::ExternalReconcileReport) -> Reco
     }
 }
 fn initialize_desktop_vault(vault: &mut NativeVault) -> Result<ReconciliationStatus, Value> {
-    if vault.family_status().map_err(native_fault)?.scope.is_none() {
+    if !vault.family_enrollment_ready().map_err(native_fault)? {
         let identity = vault.identity().map_err(native_fault)?;
         let scope: zorid_native::FamilyScope = serde_json::from_value(json!({
             "realm_id":format!("local_{}",identity.local_store_id.as_str()),

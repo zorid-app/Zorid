@@ -80,7 +80,7 @@ impl NativeVault {
         }
         let request = self.store.request_host_commit(reference)?;
         self.point("host_intent_commit_requested");
-        let applied = if self.store.family_is_enrolled()? {
+        let applied = if self.store.family_enrollment_ready()? {
             if matches!(request.mutation, Mutation::Write { .. }) {
                 self.family_apply_locked(&request, None)
             } else {

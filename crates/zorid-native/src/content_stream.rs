@@ -193,7 +193,10 @@ impl NativeVault {
     ) -> Result<StoredContent> {
         let enrolled = match scan {
             Some(scan) => { scan.check(self)?; true }
-            None => self.store.family_is_enrolled()?,
+            None => {
+                self.paths.verify_parent(path, parent)?;
+                self.store.family_enrollment_ready()?
+            },
         };
         let inline_limit = if enrolled {
             self.options

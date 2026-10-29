@@ -1012,7 +1012,7 @@ impl NativeVault {
         loop {
             let initial_attempts = self.store.namespace_attempt_metadata(true)?;
             let initial_jobs = self.store.pending_namespace_jobs()?;
-            if self.store.family_is_enrolled()? {
+            if self.store.family_enrollment_ready()? {
                 for metadata in initial_attempts
                     .iter()
                     .filter(|a| !a.completed && a.delegated_to.is_none())
@@ -1121,7 +1121,7 @@ impl NativeVault {
     }
 
     fn prepare_namespace_successors(&mut self, report: &mut ReconcileReport) -> Result<()> {
-        if !self.store.family_is_enrolled()? {
+        if !self.store.family_enrollment_ready()? {
             return Ok(());
         }
         for metadata in self.store.namespace_attempt_metadata(false)? {

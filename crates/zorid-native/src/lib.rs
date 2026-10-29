@@ -512,6 +512,9 @@ impl NativeVault {
     pub fn family_enroll(&mut self, _: &FamilyScope) -> Result<FamilyStatus> {
         unsupported()
     }
+    pub fn family_enrollment_ready(&self) -> Result<bool> {
+        unsupported()
+    }
     pub fn family_status(&self) -> Result<FamilyStatus> {
         unsupported()
     }

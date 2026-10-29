@@ -8,7 +8,9 @@ use zorid_store::{ExternalNamespaceAction, ExternalNamespaceMember};
 /// lock prevents this witness outliving the lock; scalar identity checks prevent
 /// borrowing it for another vault. Validated Store writers may advance graph
 /// revisions during the pass, but never change its enrollment scope.
-/// Construction performs the unchanged full enrollment/corruption validation.
+/// Construction freshly validates scalar authority/scope/head invariants. It
+/// never claims that unrelated publications were globally scrubbed; each selected
+/// source import and publication retains its independent strict Store guards.
 pub(super) struct EnrolledScan<'lock> {
     _lock: &'lock File,
     identity: AuthorityIdentity,
@@ -16,7 +18,7 @@ pub(super) struct EnrolledScan<'lock> {
 }
 impl<'lock> EnrolledScan<'lock> {
     fn admit(vault: &NativeVault, lock: &'lock File) -> Result<Self> {
-        if !vault.store.family_is_enrolled()? {
+        if !vault.store.family_enrollment_ready()? {
             return Err(Error::Unsupported(
                 "external family reconciliation requires enrollment",
             ));
@@ -36,7 +38,7 @@ impl<'lock> EnrolledScan<'lock> {
     }
     fn finish(&self, vault: &NativeVault) -> Result<()> {
         self.check(vault)?;
-        if !vault.store.family_is_enrolled()? {
+        if !vault.store.family_enrollment_ready()? {
             return Err(Error::Busy("external scan enrollment changed"));
         }
         Ok(())

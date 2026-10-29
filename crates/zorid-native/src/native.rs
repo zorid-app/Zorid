@@ -286,7 +286,7 @@ impl NativeVault {
         // Enrolled commands must check the complete family identity before a
         // legacy receipt or filesystem import can bypass its mode/outbox fence.
         // File Create with no explicit mode is rejected by FamilyCommand.
-        if self.store.family_is_enrolled()? {
+        if self.store.family_enrollment_ready()? {
             return self.family_apply_locked(request, None);
         }
         if let Some(commit) = self.store.replay(request)? {
@@ -527,12 +527,13 @@ impl NativeVault {
         Ok(())
     }
     fn observe(&mut self, path: &VaultPath) -> Result<Option<CommitResult>> {
+        self.paths.verify()?;
         self.namespace_clear(path)?;
         let (parent, name) = self.paths.parent(path)?;
         if fs::node_type(&parent, &name)? == Some(rustix::fs::FileType::Directory) {
             return self.observe_directory(path);
         }
-        if self.store.family_is_enrolled()? {
+        if self.store.family_enrollment_ready()? {
             if let Some(snapshot) = file_snapshot(&parent, &name)? {
                 return self.observe_streamed_file(
                     path,
@@ -551,7 +552,8 @@ impl NativeVault {
         parent: &File,
         disk: Option<fs::Snapshot>,
     ) -> Result<Option<CommitResult>> {
-        if self.store.family_is_enrolled()? {
+        self.paths.verify_parent(path, parent)?;
+        if self.store.family_enrollment_ready()? {
             if let Some(disk) = &disk {
                 let snapshot = file_snapshot(parent, path.file_name())?
                     .ok_or(Error::Busy("observed family file disappeared"))?;
@@ -666,7 +668,7 @@ impl NativeVault {
             .ok_or(Error::Unsupported(
                 "legacy observation requires bounded inline bytes",
             ))?;
-        let enrolled = self.store.family_is_enrolled()?;
+        let enrolled = self.store.family_enrollment_ready()?;
         let managed = match &state {
             Some(state) if enrolled => self.store.family_text_state(&state.id)?.is_some(),
             Some(state) => self.store.text_state(&state.id)?.is_some(),

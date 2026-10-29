@@ -108,7 +108,7 @@ impl NativeVault {
         budget: &mut super::external_scan_quantum::ExternalWorkBudget,
         report: &mut ReconcileReport,
     ) -> Result<bool> {
-        if !self.store.family_is_enrolled()? {
+        if !self.store.family_enrollment_ready()? {
             return Ok(true);
         }
         let attempts: BTreeSet<_> = self
@@ -268,7 +268,7 @@ impl NativeVault {
     /// Caller holds the vault lock. Call before legacy namespace diagnostics and
     /// normal materialization; existing attempts are resumed by recover_namespaces.
     pub(super) fn attach_family_namespaces(&mut self, report: &mut ReconcileReport) -> Result<()> {
-        if !self.store.family_is_enrolled()? {
+        if !self.store.family_enrollment_ready()? {
             return Ok(());
         }
         let attempts: BTreeSet<_> = self

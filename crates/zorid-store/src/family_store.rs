@@ -601,6 +601,57 @@ pub(super) fn reject_legacy_mutation(tx: &Connection) -> Result<()> {
 }
 
 impl Store {
+    /// Admit only the current local family authority and its scalar invariants.
+    /// This is a routing/readiness decision, never a publication proof or a
+    /// scrub of unrelated materializations/retained payloads. Explicit status
+    /// and selected source/publication readers retain their full validation.
+    /// Every call reads a fresh transaction; no process-cached boolean is used.
+    pub fn family_enrollment_ready(&self) -> Result<bool> {
+        let tx = self.connection.unchecked_transaction()?;
+        let authority = text_sync::identity(&tx)?;
+        storage_accounting::check_current(&tx)?;
+        let heads: i64 = tx.query_row(
+            "SELECT count(*) FROM (SELECT 1 FROM family_graph_heads LIMIT 2)",
+            [],
+            |row| row.get(0),
+        )?;
+        let states: i64 = tx.query_row(
+            "SELECT count(*) FROM (SELECT 1 FROM family_graph_state LIMIT 2)",
+            [],
+            |row| row.get(0),
+        )?;
+        if heads > 1 || states != heads {
+            return Err(StoreError::Corrupt(
+                "family authority head/state cardinality mismatch".into(),
+            ));
+        }
+        if heads == 0 {
+            // A complete text-only legacy binding may exist before combined
+            // enrollment. Orphan combined-family facts must not fall through
+            // to a legacy writer simply because their head disappeared.
+            let orphaned: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM family_graph_sources UNION ALL SELECT 1 FROM family_graph_events UNION ALL SELECT 1 FROM family_graph_claims UNION ALL SELECT 1 FROM family_graph_parents UNION ALL SELECT 1 FROM family_graph_entries UNION ALL SELECT 1 FROM family_graph_entry_heads UNION ALL SELECT 1 FROM family_graph_pending UNION ALL SELECT 1 FROM family_materializations UNION ALL SELECT 1 FROM family_file_records UNION ALL SELECT 1 FROM family_text_activities)", [], |row| row.get(0),
+            )?;
+            if orphaned {
+                return Err(StoreError::Corrupt(
+                    "family facts have no enrollment head".into(),
+                ));
+            }
+            tx.commit()?;
+            return Ok(false);
+        }
+        let (Some(realm_id), Some(vault_id)) = (authority.realm_id, authority.vault_id) else {
+            return Err(StoreError::Corrupt(
+                "family head has no bound authority scope".into(),
+            ));
+        };
+        let scope = Scope { realm_id, vault_id };
+        let snapshot = family_graph_read::GraphSnapshot::open(&tx, &scope)?;
+        snapshot.check_current()?;
+        tx.commit()?;
+        Ok(true)
+    }
+
     /// Whether the local authority has the current combined-family binding.
     pub fn family_is_enrolled(&self) -> Result<bool> {
         let tx = self.connection.unchecked_transaction()?;

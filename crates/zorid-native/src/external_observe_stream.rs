@@ -71,7 +71,7 @@ impl NativeVault {
         self.paths.verify_parent(path, parent)?;
         match scan {
             Some(scan) => scan.check(self)?,
-            None if !self.store.family_is_enrolled()? => return Err(Error::Unsupported(
+            None if !self.store.family_enrollment_ready()? => return Err(Error::Unsupported(
                 "streamed file observation requires family enrollment",
             )),
             None => {},

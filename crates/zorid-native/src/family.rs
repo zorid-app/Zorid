@@ -12,6 +12,12 @@ impl NativeVault {
         self.paths.verify()?;
         Ok(self.store.family_enroll(scope)?)
     }
+    /// Scalar authority readiness only; full diagnostics remain family_status.
+    pub fn family_enrollment_ready(&self) -> Result<bool> {
+        let _guard = self.paths.lock(self.options.lock_timeout)?;
+        self.paths.verify()?;
+        Ok(self.store.family_enrollment_ready()?)
+    }
     pub fn family_status(&self) -> Result<FamilyStatus> {
         let _guard = self.paths.lock(self.options.lock_timeout)?;
         self.paths.verify()?;
