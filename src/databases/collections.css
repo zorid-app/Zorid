@@ -50,7 +50,7 @@
 .collection-property-picker [role="alert"] { margin: 8px 6px; color: var(--color-red); font-size: 12px; white-space: pre-wrap; }
 .collection-property-picker[aria-busy="true"] { cursor: progress; }
 .collection-property-picker button:disabled { opacity: .5; cursor: default; }
-.collection-property-editor.is-single-property { width: min(390px, calc(100vw - 32px)); max-height: 80vh; overflow: auto; box-sizing: border-box; padding: 10px; margin: 0 auto; border-radius: 9px; box-shadow: 0 10px 36px #0002; font-size: 14px; }
+.collection-property-editor.is-single-property { --interactive-accent: var(--bases-accent, #2383e2); --interactive-accent-hover: var(--bases-accent-hover, var(--bases-accent, #1674cf)); width: min(390px, calc(100vw - 32px)); max-height: 80vh; overflow: auto; box-sizing: border-box; padding: 10px; margin: 0 auto; border-radius: 9px; box-shadow: 0 10px 36px #0002; font-size: 14px; }
 .collection-property-editor.is-single-property.is-anchored { position: fixed; z-index: 1100; margin: 0; max-height: calc(100vh - 16px); }
 .collection-property-editor.is-single-property > h3 { margin: 0 0 6px; color: var(--text-muted); font-size: 12px; font-weight: 500; line-height: 16px; }
 .collection-property-editor.is-single-property input, .collection-property-editor.is-single-property select { box-sizing: border-box; min-width: 0; max-width: 100%; min-height: 28px; padding: 4px 7px; margin: 0; font: inherit; font-size: 13px; }
@@ -87,6 +87,7 @@
 .collection-property-footer { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--background-modifier-border); }
 .collection-property-footer > button { min-width: 64px; }
 .collection-property-footer > button:last-child { border-color: var(--interactive-accent); background: var(--interactive-accent); color: var(--text-on-accent, #fff); }
+.collection-property-editor.is-single-property .collection-property-footer > button:last-child:hover { border-color: var(--interactive-accent-hover); background: var(--interactive-accent-hover); }
 .collection-property-edit-types:not([hidden]) { display: grid; grid-template-columns: 1fr 1fr; padding: 4px; border: 1px solid var(--background-modifier-border); border-radius: 6px; }
 .collection-property-edit-types button { display: flex; align-items: center; gap: 6px; margin: 0; border: 0; background: transparent; text-align: left; }
 .collection-property-edit-types button:hover, .collection-property-edit-types button:focus-visible { background: var(--background-modifier-hover); }
