@@ -54,6 +54,7 @@ test('failure capture preserves observer and actual selected editor diagnostics 
   assert.equal(Object.values(launch.failureObservation.probe).some(value=>typeof value==='function'),false);
 });
 test('failure capture cannot mask the original failure when the renderer is unavailable',async()=>{
+  const unattached={};await captureObserverFailure(null,unattached);assert.match(unattached.failureObservation.unavailable,/not attached/);
   const launch={errors:['original readiness failure']};await captureObserverFailure({evaluate:async()=>{throw Error('renderer gone');}},launch);
   assert.match(launch.failureObservation.error,/renderer gone/);assert.deepEqual(launch.errors,['original readiness failure']);
 });

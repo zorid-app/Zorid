@@ -79,7 +79,7 @@ export function selectedEditorDiagnostics(){
     visibleContent:[...node?.children??[]].filter(n=>{const r=n.getBoundingClientRect();return r.height>0&&r.bottom>0&&r.top<innerHeight;}).slice(0,12).map(n=>({text:n.textContent,html:n.outerHTML?.slice(0,4096),bounds:rect(n)}))};
 }
 export async function captureObserverFailure(renderer,launch){
-  if(!renderer)return;
+  if(!renderer){launch.failureObservation={unavailable:'Renderer observer not attached'};return;}
   try{launch.failureObservation=await renderer.evaluate(`(${selectedEditorDiagnostics.toString()})()`);
     const record=launch.cases?.find(record=>record.identity===launch.failureObservation?.probe?.identity);if(record)record.failureObservation=launch.failureObservation;
   }catch(error){launch.failureObservation={error:String(error)};}
