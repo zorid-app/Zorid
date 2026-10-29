@@ -211,6 +211,7 @@ export class Workspace {
     this.run(()=>pending);
   };
   private reloadTimer?: ReturnType<typeof setTimeout>;
+  private nativeVaultChanges?:{vault:Vault;changedPaths:Set<string>;needsFullReload:boolean;pending:boolean;version:number};
   private vaultGeneration = 0;
   private vaultRequest = 0;
   private vaultTransition: Promise<void> = Promise.resolve();
@@ -520,6 +521,7 @@ export class Workspace {
   private lifecycleRecovery?:Promise<void>;
   private lifecycleRecoveryView?:HTMLElement;
   private retiredAdmissionVaults=new WeakSet<Vault>();
+  private recoveringAdmissionVaults=new WeakSet<Vault>();
   private async releasePlatform():Promise<void>{
     if(this.releasingPlatform)return this.releasingPlatform;
     if(this.platformReleased||!this.platform?.release)return;
@@ -599,6 +601,7 @@ export class Workspace {
     if(this.lifecycleRecovery)return this.lifecycleRecovery;
     if(!platform.recovery)return;
     const current=()=>{if(this.platform!==platform||this.vault!==vault||this.vaultGeneration!==generation)throw new Error('The recovering vault changed.');};
+    current();this.recoveringAdmissionVaults.add(vault);clearTimeout(this.reloadTimer);
     const pendingViews=()=>this.hasPendingBaseCreation()||this.baseNewItemOpening||this.baseNewItem?.hasPendingChanges()||this.sidebarBase?.session.hasPendingChanges()
       ||[...this.panes,...this.cachedViews.values()].some(pane=>pane.properties?.hasPendingChanges()||pane.tasksView?.hasPendingChanges()||pane.calendarView?.hasPendingChanges()||pane.canvasView?.hasPendingChanges()||pane.baseView?.hasPendingChanges()||pane.baseEmbeds?.hasPendingChanges());
     if(pendingViews()){this.root.inert=true;throw new Error('Pending view changes are retained while storage reconnects.');}
@@ -1001,7 +1004,14 @@ export class Workspace {
     if(!platform.editorOnly&&this.sessionState.rightTab==='base'&&this.sidebarBasePath)await this.openBaseSidebar(this.sidebarBasePath,{reveal:false,persist:false});
     this.subscribeVaultMetadata(next);
     if(!platform.editorOnly)this.tabDocking=createTabDocking({root:this.root,getPanes:()=>this.dockPanes(),dock:intent=>this.dockTab(intent),enabled:()=>!matchMedia('(max-width: 700px)').matches,onError:error=>notice(error instanceof Error?error.message:String(error))});
-    this.disposers.push(this.vault.on('create', change => { this.invalidateTreeTokens(change.path); this.renderSidebar(); }), this.vault.on('delete', change => {
+    const eventVault=this.vault,eventGeneration=this.vaultGeneration;
+    const eventsCurrent=()=>this.vault===eventVault&&this.vaultGeneration===eventGeneration&&!this.recoveringAdmissionVaults.has(eventVault);
+    const runEvent=(operation:()=>unknown|Promise<unknown>)=>this.run(async()=>{
+      if(!eventsCurrent())return;
+      try{await operation();}catch(error){if(eventsCurrent())throw error;}
+    });
+    this.disposers.push(this.vault.on('create', change => {if(!eventsCurrent())return;this.invalidateTreeTokens(change.path);this.renderSidebar();}), this.vault.on('delete', change => {
+      if(!eventsCurrent())return;
       this.invalidateTreeTokens(change.path);
       const removed=(path:string)=>path===change.path||path.startsWith(change.path+'/');
       this.treeSelection=new Set([...this.treeSelection].filter(path=>!removed(path)));
@@ -1013,21 +1023,22 @@ export class Workspace {
         const cached=this.cachedViews.get(tab);
         if(cached){
           const path=tab.path,generation=this.vaultGeneration;
-          this.run(async()=>{
-            if(generation!==this.vaultGeneration||this.cachedViews.get(tab)!==cached||tab.path!==path||buffer?.dirty||cached.properties?.hasPendingChanges()||cached.canvasView?.hasPendingChanges()||cached.baseView?.hasPendingChanges()||cached.baseEmbeds?.hasPendingChanges())return;
+          runEvent(async()=>{
+            if(!eventsCurrent()||generation!==this.vaultGeneration||this.cachedViews.get(tab)!==cached||tab.path!==path||buffer?.dirty||cached.properties?.hasPendingChanges()||cached.canvasView?.hasPendingChanges()||cached.baseView?.hasPendingChanges()||cached.baseEmbeds?.hasPendingChanges())return;
             // Keep the original path until the runtime's flush gate succeeds.
             // A rejected write must leave the recoverable tab and owner intact.
             await this.disposePaneViews(cached);
-            if(this.cachedViews.get(tab)===cached)this.cachedViews.delete(tab);
-            if(generation!==this.vaultGeneration||!this.panes.includes(pane)||!pane.tabs.includes(tab)||tab.path!==path||this.vault.entries.has(path))return;
+            if(eventsCurrent()&&this.cachedViews.get(tab)===cached)this.cachedViews.delete(tab);
+            if(!eventsCurrent()||generation!==this.vaultGeneration||!this.panes.includes(pane)||!pane.tabs.includes(tab)||tab.path!==path||this.vault.entries.has(path))return;
             tab.path=null;
             if(pane.active===tab.id)await this.renderPane(pane);else this.renderTabBar(pane);
             this.saveSession();
           });
-        }else{tab.path = null; this.run(()=>this.renderPane(pane));}
+        }else{tab.path = null; runEvent(()=>eventsCurrent()?this.renderPane(pane):undefined);}
       }
       this.renderSidebar(); this.renderRight();
     }), this.vault.on('rename', change => {
+      if(!eventsCurrent())return;
       const oldPath = change.oldPath!;
       const sidebar=this.sidebarBase,generation=this.vaultGeneration,sidebarIntent=this.sidebarBaseIntent;
       const movedSidebar=sidebar&&(sidebar.path===oldPath||sidebar.path.startsWith(oldPath+'/'))?change.path+sidebar.path.slice(oldPath.length):undefined;
@@ -1047,72 +1058,96 @@ export class Workspace {
       for(const pane of this.panes)for(const tab of pane.tabs)if(tab.history)tab.history=tab.history.map(relocate);
       for (const [previous, buffer] of [...this.buffers]) if (previous === oldPath || previous.startsWith(oldPath + '/')) {
         const next = change.path + previous.slice(oldPath.length);
-        this.buffers.delete(previous); this.buffers.set(next, buffer);if(movedBuffers.has(buffer)){const token=this.treeEntryToken(next);if(token)this.bufferEntries.set(buffer,token);} this.run(() => buffer.relocate(next));
+        this.buffers.delete(previous); this.buffers.set(next, buffer);if(movedBuffers.has(buffer)){const token=this.treeEntryToken(next);if(token)this.bufferEntries.set(buffer,token);} runEvent(() => eventsCurrent()?buffer.relocate(next):undefined);
       }
       for (const pane of this.panes) for (const tab of pane.tabs) if (tab.path === oldPath || tab.path?.startsWith(oldPath + '/')) {
         const previous = tab.path; tab.path = change.path + previous.slice(oldPath.length);
       }
       if(sidebar&&movedSidebar&&!sidebar.session.hasPendingChanges()){
         const token=this.treeEntryToken(movedSidebar);
-        this.run(async()=>{
+        runEvent(async()=>{
           // A move is a new source binding. Never retarget retained drafts or a
           // newer sidebar request, nor adopt a replacement at the destination.
-          if(generation!==this.vaultGeneration||sidebarIntent!==this.sidebarBaseIntent||this.sidebarBase!==sidebar||this.sidebarBasePath!==movedSidebar||!token||this.treeEntryToken(movedSidebar)!==token||sidebar.session.hasPendingChanges())return;
+          if(!eventsCurrent()||generation!==this.vaultGeneration||sidebarIntent!==this.sidebarBaseIntent||this.sidebarBase!==sidebar||this.sidebarBasePath!==movedSidebar||!token||this.treeEntryToken(movedSidebar)!==token||sidebar.session.hasPendingChanges())return;
           await this.openBaseSidebar(movedSidebar,{activate:false,reveal:false,...(sidebar.pinned&&sidebar.pinnedContext?{pinnedContext:sidebar.pinnedContext}:{})});
         });
       }
-      this.renderSidebar(); this.renderRight(); this.panes.forEach(pane => this.run(()=>this.renderPane(pane))); this.saveSession();
+      this.renderSidebar(); this.renderRight(); this.panes.forEach(pane => runEvent(()=>eventsCurrent()?this.renderPane(pane):undefined)); this.saveSession();
     }), this.vault.on('modify', change => {
+      if(!eventsCurrent())return;
       if(/\.base$/i.test(change.path)){
         // The session observes query/config events itself. Keep its active property
         // draft and cached DOM; only reconcile the shared clean config buffer.
         const buffer=this.buffers.get(change.path),generation=this.vaultGeneration;
-        if(buffer&&!buffer.dirty)this.run(async()=>{const previous=buffer.text;await buffer.reload();if(generation===this.vaultGeneration&&this.buffers.get(change.path)===buffer){this.mapInactiveSelections(change.path,previous,buffer.text);for(const pane of this.loadedViews())if(pane.viewPath===change.path&&pane.viewBaseSource)pane.editor?.setValue(buffer.text);this.renderStatus();}});
+        if(buffer&&!buffer.dirty)runEvent(async()=>{if(!eventsCurrent())return;const previous=buffer.text;await buffer.reload();if(eventsCurrent()&&generation===this.vaultGeneration&&this.buffers.get(change.path)===buffer){this.mapInactiveSelections(change.path,previous,buffer.text);for(const pane of this.loadedViews())if(pane.viewPath===change.path&&pane.viewBaseSource)pane.editor?.setValue(buffer.text);this.renderStatus();}});
         return;
       }
       if(/\.canvas$/i.test(change.path)){
         const buffer=this.buffers.get(change.path),generation=this.vaultGeneration;
         const targets=this.loadedViews().filter(pane=>this.current(pane)?.path===change.path&&pane.canvasView).map(pane=>({pane,view:pane.canvasView!}));
-        if(buffer&&!buffer.dirty)this.run(async()=>{
+        if(buffer&&!buffer.dirty)runEvent(async()=>{
+          if(!eventsCurrent())return;
           for(const {view} of targets)await view.flush();
-          if(generation!==this.vaultGeneration)return;
+          if(!eventsCurrent()||generation!==this.vaultGeneration)return;
           await buffer.reload();
-          if(generation!==this.vaultGeneration||this.buffers.get(change.path)!==buffer)return;
+          if(!eventsCurrent()||generation!==this.vaultGeneration||this.buffers.get(change.path)!==buffer)return;
           for(const {view} of targets){const owner=this.loadedViews().find(pane=>pane.canvasView===view);if(owner&&!view.hasPendingChanges()){
             owner.canvasSource=buffer.text;view.setDocument(CanvasDocument.parse(buffer.text));
           }}
         });return;
       }
-      if(!isMarkdown(change.path)){for(const pane of this.panes)if(this.current(pane)?.path===change.path)this.run(()=>this.renderPane(pane,{refresh:true}));for(const [tab,pane] of this.cachedViews)if(pane.viewPath===change.path)this.run(async()=>{await this.disposePaneViews(pane);if(this.cachedViews.get(tab)===pane)this.cachedViews.delete(tab);});return;}
+      if(!isMarkdown(change.path)){for(const pane of this.panes)if(this.current(pane)?.path===change.path)runEvent(()=>eventsCurrent()?this.renderPane(pane,{refresh:true}):undefined);for(const [tab,pane] of this.cachedViews)if(pane.viewPath===change.path)runEvent(async()=>{if(!eventsCurrent())return;await this.disposePaneViews(pane);if(eventsCurrent()&&this.cachedViews.get(tab)===pane)this.cachedViews.delete(tab);});return;}
       const buffer = this.buffers.get(change.path);
-      if (buffer && !buffer.dirty) this.run(async () => {
+      if (buffer && !buffer.dirty) runEvent(async () => {
+        if(!eventsCurrent())return;
         const previous=buffer.text,revision=this.bufferRevisions.get(buffer)??0,generation=this.vaultGeneration;
-        await buffer.reload();if(generation!==this.vaultGeneration||this.buffers.get(change.path)!==buffer)return;
+        await buffer.reload();if(!eventsCurrent()||generation!==this.vaultGeneration||this.buffers.get(change.path)!==buffer)return;
         if((this.bufferRevisions.get(buffer)??0)===revision)this.mapInactiveSelections(change.path,previous,buffer.text);
         for (const pane of this.loadedViews()) if (pane.viewPath === change.path) { if (pane.viewMode === 'reading') pane.refreshPreview?.(); else pane.editor?.setValue(buffer.text); } this.renderRight();
       });
     }));
     for(const event of ['create','delete','rename','modify'] as const)this.disposers.push(this.vault.on(event,()=>{
+      if(!eventsCurrent())return;
       if(this.richDocumentSearch)this.richDocumentSearch.controller?.invalidateSource();
-      else if(this.treeTab==='search'&&this.documentSearchFreshness){this.clearDocumentSearch();this.run(()=>this.search());}
+      else if(this.treeTab==='search'&&this.documentSearchFreshness){this.clearDocumentSearch();runEvent(()=>this.search());}
       for(const pane of this.loadedViews())pane.editor?.refreshLinks?.();
     }));
     const generation = this.vaultGeneration;
-    const changedPaths = new Set<string>();
-    let needsFullReload = false;
     const vault = this.vault;
-    const unsubscribe = platform.adapter.subscribe?.(paths => {
-      if (generation !== this.vaultGeneration) return;
-      if (paths === undefined) needsFullReload = true;
-      else for (const path of paths) changedPaths.add(path);
+    const previousChanges=this.nativeVaultChanges,scope=vault.adapter.durableWrites?.checkpoints.scope,previousScope=previousChanges?.vault.adapter.durableWrites?.checkpoints.scope;
+    const carry=previousChanges&&this.retiredAdmissionVaults.has(previousChanges.vault)&&scope&&previousScope&&scope.vaultId===previousScope.vaultId&&scope.clientId===previousScope.clientId;
+    const changes=this.nativeVaultChanges={vault,changedPaths:new Set(carry?previousChanges.changedPaths:[]),needsFullReload:!!carry&&previousChanges.needsFullReload,pending:!!carry&&previousChanges.pending,version:0};
+    let active=true,dispatching=false;
+    const owns=()=>active&&this.nativeVaultChanges===changes&&this.platform===platform&&this.vault===vault&&generation===this.vaultGeneration;
+    const recovering=()=>this.recoveringAdmissionVaults.has(vault);
+    const schedule=()=>{
+      if(!owns()||recovering()||dispatching||!changes.pending)return;
       clearTimeout(this.reloadTimer);
-      this.reloadTimer = setTimeout(() => {
-        const batch = needsFullReload ? undefined : [...changedPaths];
-        needsFullReload = false; changedPaths.clear();
-        if (generation === this.vaultGeneration) this.run(() => vault.reload(batch));
-      }, 250);
+      this.reloadTimer=setTimeout(()=>this.run(async()=>{
+        // run queues a microtask: retirement may start after the timer fires.
+        if(!owns()||recovering()||dispatching||!changes.pending)return;
+        dispatching=true;const version=changes.version,batch=changes.needsFullReload?undefined:[...changes.changedPaths];
+        try{
+          await vault.reload(batch);
+          if(owns()&&!recovering()&&version===changes.version){changes.pending=false;changes.needsFullReload=false;changes.changedPaths.clear();}
+        }catch(error){
+          // The exact old admission is repaired by the lifecycle owner. Its
+          // obsolete read failure must not escape as a generic user notice.
+          if(owns()&&!recovering())throw error;
+        }finally{dispatching=false;if(changes.version!==version)schedule();}
+      }),250);
+    };
+    const unsubscribe = platform.adapter.subscribe?.(paths => {
+      if(!owns())return;
+      changes.pending=true;changes.version++;
+      if(paths===undefined)changes.needsFullReload=true;
+      else for(const path of paths)changes.changedPaths.add(path);
+      schedule();
     });
-    if (unsubscribe) this.disposers.push(unsubscribe);
+    this.disposers.push(()=>{active=false;unsubscribe?.();});
+    // A hint received after fresh inventory began still needs a checked read.
+    // Transfer it only across the positively retired, identical durable scope.
+    schedule();
     this.renderSidebar(); this.renderRight(); this.saveSession();
     this.bindMobileLifecycle();this.bindNativeEditor();this.bindNativeDocumentNavigation();
     }catch(error){cancelTasksClose();if(this.vault===searchVault)this.documentSearchSuspended=searchWasSuspended;throw error;}
