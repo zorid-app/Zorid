@@ -45,7 +45,7 @@ async function fixture({persistFailure = false, navigationFailure = false, lateO
     if (name === 'node:fs/promises') return {readFile:async () => '{"path":"/fixture"}'};
     if (name === './editor-core.cjs') return {createEditorCoreManager:() => ({
       async open() { opened.resolve(); await gate.promise; return service; }, owns:() => false,
-      async context() { contexts++; return {admissionId:'owned'}; }, async retire() {}, async close() {},
+      async context() { contexts++; return {admissionId:'owned',scope:{vaultId:'fixture-store',clientId:'client'}}; }, async retire() {}, async close() {},
     })};
     if (name === './client-slots.cjs') return {openClientSlots:async () => ({listRestorable:async () => [],
       claim:async () => ({slotId:'primary',clientId:'client',vaultPath:'/fixture'}),

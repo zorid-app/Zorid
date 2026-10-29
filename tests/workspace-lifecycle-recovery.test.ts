@@ -97,6 +97,27 @@ test('late close cleanup failure restores keyboard save and one registered close
 });
 
 
+test('concurrent note entry admission joins its pending load without retry navigation',async t=>{
+ const f=await fixture(t);await f.workspace.openNote('Two.md');
+ await f.workspace.buffers.get('One.md')!.dispose();f.workspace.buffers.delete('One.md');
+ const hold=gate();let reads=0;f.interceptRead(async()=>{reads++;await hold.promise;});
+ const first=f.internal.bufferFor('One.md','one');await until(()=>reads===1);
+ const second=f.internal.bufferFor('One.md','one'),both=Promise.all([first,second]);void both.catch(()=>{});
+ hold.resolve();const [a,b]=await both;
+ assert.equal(a,b);assert.equal(f.workspace.buffers.get('One.md'),a);assert.equal(a.savedDurableWitness?.entryId,'one');assert.equal(reads,1);
+});
+
+test('a superseded pending loader cannot strand a newer note admission outside the buffer registry',async t=>{
+ const f=await fixture(t);await f.workspace.openNote('Two.md');
+ await f.workspace.buffers.get('One.md')!.dispose();f.workspace.buffers.delete('One.md');
+ const hold=gate();let reads=0,current=true;f.interceptRead(async()=>{if(++reads===1)await hold.promise;});
+ const first=f.internal.bufferFor('One.md','one',()=>{if(!current)throw Error('Superseded loader');});
+ const rejected=assert.rejects(first,/Superseded loader/);await until(()=>reads===1);
+ const second=f.internal.bufferFor('One.md','one');void second.catch(()=>{});current=false;hold.resolve();
+ await rejected;const admitted=await second;
+ assert.equal(f.workspace.buffers.get('One.md'),admitted);assert.equal(admitted.savedDurableWitness?.entryId,'one');assert.equal(reads,2);
+});
+
 test('retirement automatically settles both original uncertain checkpoint identities before fresh editor installation',async t=>{
  const f=await fixture(t);await f.workspace.openNote('Two.md');
  const one=f.workspace.buffers.get('One.md')!,two=f.workspace.buffers.get('Two.md')!,old=f.workspace.platform;f.loseStorage();

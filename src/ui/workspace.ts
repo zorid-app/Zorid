@@ -136,6 +136,7 @@ export class Workspace {
   panes: Pane[] = [];
   activePane!: Pane;
   buffers = new Map<string, NoteBuffer>();
+  private bufferLoads=new WeakMap<NoteBuffer,Promise<NoteBuffer>>();
   private collectionPropertyRequests=new WeakMap<NoteBuffer,Map<string,DatabaseRequest>>();
   settings: Settings = { theme: 'system', fontSize: 16, readableWidth: true, showInlineTitle: true, defaultMode: 'live', useTab:true, tabSize:4, smartIndentList:true, autoConvertHtml:true, ...DEFAULT_ATTACHMENT_IMPORT_SETTINGS };
   private hotkeys!: HotkeyPreferences;
@@ -155,6 +156,7 @@ export class Workspace {
   private backlinksPresentedContents=new WeakSet<HTMLElement>();
   private backlinksPendingPresentation=new WeakSet<HTMLElement>();
   private backlinksAwaitingView?:{pane:Pane;tab:Tab;path:string;generation:number};
+  private backlinksFreshness:'request'|'observe'='observe';
   private documentBacklinksGeneration = 0;
   private metadataSubscription?: {vault:Vault;stop:()=>void};
   private retiredMetadataVaults = new Set<Vault>();
@@ -963,6 +965,7 @@ export class Workspace {
         if(!changed&&status){this.rightContent.dataset.metadataStatus=state.status;status.textContent=this.metadataDisplayMessage(state)??'';status.hidden=!status.textContent;const empty=this.rightContent.querySelector('.metadata-projection-empty');if(empty)empty.textContent=state.status!=='current'||!state.frame?.coverageComplete?'No tags in this saved snapshot.':'No tags found.';}
         else this.renderRight();
       }else if(this.rightTab==='outline')this.renderRight();
+      else if(changed&&this.rightTab==='backlinks'&&this.backlinksFreshness==='observe'&&!this.root.classList.contains('right-hidden'))this.renderRight();
       for(const pane of this.loadedViews()){
         if(pane.viewKind==='graph'&&pane.content)this.renderGraph(pane.content);
         if(changed)pane.editor?.refreshLinks?.();
@@ -1008,7 +1011,7 @@ export class Workspace {
     this.attachments=new AttachmentResources(this.vault);
     this.attachmentImporter=new AttachmentImporter(this.vault);
     this.splitLayout?.destroy(); this.splitLayout=undefined; this.restoringLayout=true;
-    this.panes = []; this.autoRevealFiles=false; this.collapsed.clear(); this.bookmarks.clear(); this.sessionState = {};this.rightTab='backlinks';this.sidebarBasePath=undefined;this.sidebarPinnedContext=undefined;
+    this.panes = []; this.autoRevealFiles=false; this.collapsed.clear(); this.bookmarks.clear(); this.sessionState = {};this.rightTab='backlinks';this.backlinksFreshness='observe';this.sidebarBasePath=undefined;this.sidebarPinnedContext=undefined;
     this.buildShell();
     if(!platform.editorOnly)this.mountFileTreeDrag();
     let restored = false;
@@ -1244,7 +1247,7 @@ export class Workspace {
     this.splitLayout=new SplitLayout(this.paneContainer,{onChange:()=>this.saveSession()});
     this.right = el('aside','right-sidebar'); this.right.setAttribute('aria-label','Right sidebar');
     const rightTabs = el('div','right-tabs');
-    for (const [type,glyph,label] of [['backlinks','link','Backlinks'],['outline','list','Outline'],['tags','tag','Tags']] as const) rightTabs.append(button(glyph,label,()=>{this.run(async()=>{await this.sidebarBase?.session.flush();this.rightTab=type;this.renderRight();});}));
+    for (const [type,glyph,label] of [['backlinks','link','Backlinks'],['outline','list','Outline'],['tags','tag','Tags']] as const) rightTabs.append(button(glyph,label,()=>{this.run(async()=>{await this.sidebarBase?.session.flush();this.rightTab=type;if(type==='backlinks')this.backlinksFreshness='request';this.renderRight();});}));
     rightTabs.append(button('table','Bases',()=>this.run(async()=>{await this.sidebarBase?.session.flush();const path=this.sidebarBasePath??this.sidebarBase?.path??this.current()?.path;if(this.sidebarBase&&this.sidebarBase.path===path){this.rightTab='base';this.renderRight();this.saveSession();}else if(path&&/\.base$/i.test(path))await this.openBaseSidebar(path);else notice('Open a Base first.');})));
     this.sidebarBasePinButton=button('pin','Pin sidebar Base',()=>this.run(()=>this.toggleSidebarBasePin()),'sidebar-base-pin');this.sidebarBasePinButton.hidden=true;rightTabs.append(this.sidebarBasePinButton);
     rightTabs.append(button('rightbar','Toggle right sidebar',()=>this.toggleRight(),'pane-sidebar-toggle')); this.rightContent=el('div','right-content'); this.right.append(rightTabs,this.rightContent);
@@ -1378,13 +1381,25 @@ export class Workspace {
       for(const [key,other] of this.buffers)if(key!==path&&other.savedDurableWitness?.entryId===expectedEntryId)throw new Error('The selected note moved; its existing draft is retained');
     }
     let buffer=this.buffers.get(path); if(buffer){
-      if(expectedEntryId!==undefined&&!buffer.savedDurableWitness)throw new Error('The selected note is still loading; retry navigation');
+      const loading=this.bufferLoads.get(buffer);
+      if(loading){
+        // Join the creator's complete admission/cleanup before inspecting the
+        // registry again. A superseded creator may have retired its empty buffer.
+        await loading.catch(()=>{});validate();
+        return this.bufferFor(path,expectedEntryId,validate);
+      }
       await buffer.load(expectedEntryId,validate);validate();await this.bindRecoveredBuffer(path,buffer,validate);validate();return buffer;
     }
     const vault=this.vault;
     buffer=new NoteBuffer(vault,path,{onMetadata:()=>this.draftMetadataChanged(buffer!,vault),storage:localStorage,storageKey:this.storageScope.draftPrefix(this.platform.id),onState:()=>{if(buffer)this.draftBufferStateChanged(buffer,vault);}});
     this.buffers.set(path,buffer);const token=this.treeEntryToken(path);if(token)this.bufferEntries.set(buffer,token);
-    try{await buffer.load(expectedEntryId,validate);validate();return buffer;}catch(error){if(this.buffers.get(path)===buffer&&!buffer.savedDurableWitness){await buffer.closeMetadataProjection();this.buffers.delete(path);}throw error;}
+    const admitted=buffer;
+    const loading=(async()=>{
+      try{await admitted.load(expectedEntryId,validate);validate();return admitted;}
+      catch(error){if(this.buffers.get(path)===admitted&&!admitted.savedDurableWitness){await admitted.closeMetadataProjection();if(this.buffers.get(path)===admitted)this.buffers.delete(path);}throw error;}
+    })();
+    this.bufferLoads.set(admitted,loading);
+    try{return await loading;}finally{if(this.bufferLoads.get(admitted)===loading)this.bufferLoads.delete(admitted);}
   }
 
   private renderTabBar(pane:Pane):void{
@@ -2738,7 +2753,7 @@ export class Workspace {
       }
       const target=path&&entry?.entryId?{id:entry.entryId,path}:null;
       this.documentBacklinks=mountDocumentBacklinks(this.rightContent,{
-        service,target,vaultIdentity:vault,
+        service,target,vaultIdentity:vault,freshness:this.backlinksFreshness,
         isCurrent:(owner,selected)=>current()&&owner===vault&&(!selected||!vault.entries.get(selected.path)?.entryId||vault.entries.get(selected.path)?.entryId===selected.id),
         onOpenStableEntry:async(id)=>{
           if(!current())return;
