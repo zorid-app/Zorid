@@ -1,6 +1,5 @@
 import { EditorView } from '@codemirror/view';
-import { createEditor } from '../ui/editor.ts';
-import type { EditorHandle, EditorOptions } from '../ui/editor.ts';
+import type { createEditor, EditorHandle, EditorOptions } from '../ui/editor.ts';
 import { renderMarkdown } from '../ui/markdown.ts';
 import { destroyMarkdown } from '../ui/markdown-lifecycle.ts';
 import { selectMarkdownSubpath } from '../core/subpath.ts';
@@ -43,6 +42,8 @@ export interface CanvasMarkdownCardOptions {
   onEditingChange?(editing: boolean): void;
   onError?(error: unknown): void;
   editorFactory?: typeof createEditor;
+  /** Load the factory without constructing a view; an injected factory bypasses this loader. */
+  loadEditor?: () => Promise<typeof createEditor>;
 }
 
 /** The shared Markdown renderer supplies the original source line. Preserve
@@ -234,9 +235,12 @@ export function createCanvasMarkdownCard(document: Document, options: CanvasMark
     await ready;
     if (!current() || version !== activation || !canEdit()) return;
     if (!editor) {
+      let factory = options.editorFactory;
+      if (!factory) factory = options.loadEditor ? await options.loadEditor() : (await import('../ui/editor.ts')).createEditor;
+      if (!current() || version !== activation || !canEdit()) return;
       const configuration = session!.editorOptions;
       listConfiguration = JSON.stringify(configuration?.listOptions ?? {});
-      editor = (options.editorFactory ?? createEditor)(editorHost, {
+      editor = factory(editorHost, {
         paths: () => [], ...configuration,
         value: source, mode: 'live', onChange: accept,
         renderEmbed: configuration?.renderEmbed ? request => {

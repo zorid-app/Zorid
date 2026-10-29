@@ -23,7 +23,12 @@ function setup(text: string, options: Partial<CanvasViewOptions> = {}) {
   const document = CanvasDocument.parse(source), saves: string[] = [], errors: unknown[] = [];
   const view = createCanvasView(host, { document, onChange: value => { saves.push(value); }, onError: error => { errors.push(error); }, ...options });
   const card = () => host.querySelector<HTMLElement>('[data-node-id="text"]')!;
-  const edit = async () => { card().dispatchEvent(new dom.window.MouseEvent('dblclick', { bubbles: true })); await tick(); const editor = EditorView.findFromDOM(card().querySelector('.cm-editor')!)!; assert.ok(editor); return editor; };
+  const edit = async () => {
+    card().dispatchEvent(new dom.window.MouseEvent('dblclick', { bubbles: true }));
+    // Node's first dynamic module load also needs I/O, beyond a fixed microtask count.
+    await import('../src/ui/editor.ts'); await tick();
+    const editor = EditorView.findFromDOM(card().querySelector('.cm-editor')!)!; assert.ok(editor); return editor;
+  };
   return { dom, host, document, source, view, saves, errors, card, edit, close() { view.destroy(); dom.window.dispatchEvent(new dom.window.Event('pagehide')); dom.window.close(); for (const [key, descriptor] of previous) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); } } };
 }
 function workerHarness(t: Parameters<Parameters<typeof test>[1]>[0]) {

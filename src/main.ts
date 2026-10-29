@@ -46,6 +46,9 @@ import './ui/tab-docking.css';
 
 const root = document.querySelector<HTMLDivElement>('#app')!;
 async function start(chooseAnother=false): Promise<void> {
+  // Fetch/evaluate the selected note's editor while platform admission is pending.
+  // The owning view reports a failed import only if it actually needs the editor.
+  void import('./ui/editor.ts').catch(()=>{});
   const workspace = new Workspace(root);
   let platform:PlatformVault|null=null;
   try {
