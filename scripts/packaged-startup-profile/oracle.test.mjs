@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {assessNote,clockInterval,fixtureText,planCampaign} from './oracle.mjs';
+import {assessNote,clockInterval,fixtureText,planCampaign,reopenPrepared} from './oracle.mjs';
 function receipt(){return {deadlineMs:800,packaged:true,packagedUrlVerified:true,identity:'owned-note',originMs:0,expectedCharacters:8192,
   clockSamples:[{timeOrigin:10000,remoteNow:100,before:119,after:121},{timeOrigin:10000,remoteNow:900,before:919,after:921}],
   observed:{identity:'owned-note',installedAt:10,initial:{length:8192,prefixMatches:true},ready:{at:200,visible:true,editable:true},
@@ -42,4 +42,9 @@ test('fixture bytes and paired first-import/reopen order stay exact and determin
   for(const size of [8192,432000])assert.equal(Buffer.byteLength(fixtureText(size)),size);
   const cases=planCampaign(3,42);assert.deepEqual(cases,planCampaign(3,42));assert.equal(cases.length,12);
   for(let i=0;i<cases.length;i+=2){assert.equal(cases[i].mode,'first-import');assert.equal(cases[i+1].mode,'reopen');assert.equal(cases[i].pairId,cases[i+1].pairId);}
+});
+test('a failed first-import Base navigation never grants a reopen expectation for the wrong restored note',()=>{
+  const launch={returnToStartupNoteVerified:true,errors:[],cleanup:{normal:true,gone:true},fixturesRestored:true,sourcePathsExact:true,artifactsUnchanged:true};
+  assert.equal(reopenPrepared(launch),true);
+  for(const change of [{errors:['Base row not mounted']},{returnToStartupNoteVerified:false},{fixturesRestored:false},{cleanup:{normal:false,gone:true}},{cleanupErrors:['PID proof failed']}])assert.equal(reopenPrepared({...launch,...change}),false);
 });

@@ -11,12 +11,35 @@ export function sampleFileTree({path,reveal=false}){
     visible:!!rect&&rect.width>0&&rect.height>0&&rect.top>=viewport.top&&rect.bottom<=viewport.bottom,
     point:rect?{x:rect.left+rect.width/2,y:rect.top+rect.height/2}:null};
 }
-export async function navigateFileTree(renderer,path,{now=()=>performance.now(),timeoutMs=30000,receipt={}}={}){
-  Object.assign(receipt,{path,startedAtMs:now(),scrollSteps:0,rowUnavailableWaitMs:0});
-  let value=await renderer.evaluate(`(${sampleFileTree.toString()})(${JSON.stringify({path,reveal:true})})`);
-  if(!value.found||!value.visible)throw Object.assign(Error('Expected normal UI control missing'),{navigation:receipt});
-  receipt.locatedAtMs=now();
-  await renderer.call('Input.dispatchMouseEvent',{type:'mousePressed',...value.point,button:'left',clickCount:1});
-  await renderer.call('Input.dispatchMouseEvent',{type:'mouseReleased',...value.point,button:'left',clickCount:1});
-  receipt.clickedAtMs=now();receipt.totalMs=receipt.clickedAtMs-receipt.startedAtMs;return receipt;
+export async function navigateFileTree(renderer,path,{now=()=>performance.now(),timeoutMs=30000,pause=ms=>new Promise(resolve=>setTimeout(resolve,ms)),receipt={}}={}){
+  Object.assign(receipt,{path,startedAtMs:now(),scrollSteps:0,rowReveals:0,rowUnavailableWaitMs:0});
+  const sample=reveal=>renderer.evaluate(`(${sampleFileTree.toString()})(${JSON.stringify({path,reveal})})`);
+  const frames=()=>renderer.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+  let beganScan=false,extent=null;
+  while(now()-receipt.startedAtMs<timeoutMs){
+    const value=await sample(false);receipt.lastTree=value;
+    if(value.available&&value.found){
+      if(!value.visible){await sample(true);receipt.rowReveals++;await frames();continue;}
+      receipt.locatedAtMs=now();
+      await renderer.call('Input.dispatchMouseEvent',{type:'mousePressed',...value.point,button:'left',clickCount:1});
+      await renderer.call('Input.dispatchMouseEvent',{type:'mouseReleased',...value.point,button:'left',clickCount:1});
+      receipt.clickedAtMs=now();receipt.totalMs=receipt.clickedAtMs-receipt.startedAtMs;return receipt;
+    }
+    if(value.available){
+      // Start at the top once; a growing namespace can insert the target above
+      // the current window, so restart the normal scan when extent changes.
+      const restart=!beganScan||extent!==null&&extent!==value.extent;
+      extent=value.extent;beganScan=true;
+      const delta=restart&&value.top>0?-value.extent:value.top+value.height<value.extent-1?Math.max(1,value.height*0.75):0;
+      if(delta){
+        await renderer.call('Input.dispatchMouseEvent',{type:'mouseWheel',x:value.viewport.left+value.viewport.width/2,y:value.viewport.top+value.viewport.height/2,deltaX:0,deltaY:delta});
+        receipt.scrollSteps++;await frames();continue;
+      }
+    }
+    // An absent/unmounted row is not proof of virtualization or complete
+    // inventory. Wait for ordinary UI publication, within this same clock.
+    const before=now();await pause(25);receipt.rowUnavailableWaitMs+=now()-before;
+  }
+  receipt.totalMs=now()-receipt.startedAtMs;
+  throw Object.assign(Error('Normal filetree target did not become available before navigation deadline: '+path),{navigation:receipt});
 }

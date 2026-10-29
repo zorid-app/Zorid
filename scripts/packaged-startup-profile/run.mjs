@@ -8,7 +8,8 @@ import {randomUUID} from 'node:crypto';
 import {createRequire} from 'node:module';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {CDP} from '../../tests/tasks-electron-integration/cdp.mjs';
-import {assessNote,baseFixtureSource,clockInterval,DEADLINE_MS,fixtureText,planCampaign} from './oracle.mjs';
+import {assessNote,baseFixtureSource,clockInterval,DEADLINE_MS,fixtureText,planCampaign,reopenPrepared} from './oracle.mjs';
+import {navigateFileTree} from './file-navigation.mjs';
 import {observerSource} from './observer.mjs';
 import {installMainObserver} from './main-observer.mjs';
 import {stopOwned} from './cleanup.mjs';
@@ -28,7 +29,7 @@ export async function main(args=process.argv.slice(2)){
   const schedule=planCampaign(repetitions,seed),asar=await import(pathToFileURL(require.resolve('@electron/asar')).href);
   await fs.mkdir(out,{recursive:false,mode:0o700});await fs.mkdir(path.join(out,'clones'));
   const report={version:1,label:'Real packaged Zorid startup and trusted editor input',out,notes,repetitions,seed,deadlineMs:DEADLINE_MS,
-    harnessHead:execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim(),started:new Date().toISOString(),plannedOrder:schedule,actualOrder:[],apps:{},launches:[],errors:[],limitations:[
+    harnessHead:execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim(),started:new Date().toISOString(),plannedOrder:schedule,actualOrder:[],apps:{},launches:[],skipped:[],errors:[],limitations:[
       'Process-cold, not disk-cold. Fixture creation, hashing, APFS clones and prior repetitions affect filesystem caches.',
       'Actual packaged main/renderer are unchanged; inspectors, buffered observers and automation have overhead recorded separately.',
       'Startup phases before main/renderer attachment are censored. Observer attachment is never a main-module-entry marker.',
@@ -43,12 +44,8 @@ export async function main(args=process.argv.slice(2)){
   const clones=[],pairs=new Map();let active;
   async function bounded(action,record,ms=timeoutMs){const end=performance.now()+ms;let last;do{if(record?.exitCode!==undefined||record?.launchError)throw Error('Owned app exited before evidence: '+record.stderr);try{return await action();}catch(error){last=error;}await sleep(10);}while(performance.now()<end);throw last??Error('Packaged profiling deadline');}
   async function clock(cdp,record){const before=record.elapsed(),sample=await cdp.evaluate('({remoteNow:performance.now(),timeOrigin:performance.timeOrigin})'),after=record.elapsed();return {...sample,before,after};}
-  async function click(renderer,selector){
-    const bounds=await renderer.evaluate(`(()=>{const node=${selector};if(!node)throw Error('Expected normal UI control missing');node.scrollIntoView({block:'center'});const r=node.getBoundingClientRect();if(r.width<=0||r.height<=0)throw Error('Normal UI control not visible');return{x:r.x+r.width/2,y:r.y+r.height/2};})()`);
-    await renderer.call('Input.dispatchMouseEvent',{type:'mousePressed',...bounds,button:'left',clickCount:1});
-    await renderer.call('Input.dispatchMouseEvent',{type:'mouseReleased',...bounds,button:'left',clickCount:1});
-  }
-  const fileSelector=name=>`[...document.querySelectorAll('.tree-row[data-path]')].find(node=>node.dataset.path===${JSON.stringify(name)})`;
+  const remaining=(launch,record)=>{const value=record.originMs+timeoutMs-launch.elapsed();assert.ok(value>0,'Original navigation/readiness deadline expired');return value;};
+  async function selectFile(launch,record,name){record.navigation={};return navigateFileTree(active.renderer,name,{now:launch.elapsed,timeoutMs:remaining(launch,record),receipt:record.navigation});}
   async function press(renderer,key,code,commands){await renderer.call('Input.dispatchKeyEvent',{type:'keyDown',key,code,modifiers:4,...(commands?.length?{commands}:{})});await renderer.call('Input.dispatchKeyEvent',{type:'keyUp',key,code,modifiers:4});}
   async function coreRead(renderer,vault,name){return renderer.evaluate(`(async()=>{const context=await window.zorid.getDurableContext(${JSON.stringify(vault)});const value=await window.zorid.durableInvoke(${JSON.stringify(vault)},context.admissionId,'readText',[${JSON.stringify(name)}]);return{entryId:value.entryId,revision:value.revision,content:value.content};})()`);}
   async function stop(launch){
@@ -87,7 +84,7 @@ export async function main(args=process.argv.slice(2)){
     });await record.inputQueue;
   }
   async function finishNote(launch,record){
-    await bounded(async()=>{const value=await active.renderer.evaluate(serializableState);assert.equal(value?.identity,record.identity);assert.ok(value.ready,'Correct selected fixture is not ready');return value;},launch);
+    await bounded(async()=>{const value=await active.renderer.evaluate(serializableState);assert.equal(value?.identity,record.identity);assert.ok(value.ready,'Correct selected fixture is not ready');return value;},launch,remaining(launch,record));
     const ready={name:'ready',attemptedAtMs:launch.elapsed(),status:'unobservable'};record.dispatches.push(ready);await sendProbe(launch,record,ready);
     await record.deadlineDone;await record.inputQueue;
     record.observed=await bounded(async()=>{const value=await active.renderer.evaluate(serializableState);assert.ok(value.probes.length&&value.probes.every(p=>p.caretAfterPaint!==undefined));return value;},launch);
@@ -119,13 +116,13 @@ export async function main(args=process.argv.slice(2)){
   }
   async function baseCase(launch,pair){
     const record={kind:'base',path:'Profile.base',originMs:launch.elapsed(),trustedEditAuthority:'not-measured',errors:[]};launch.cases.push(record);
-    await click(active.renderer,fileSelector(record.path));
+    await selectFile(launch,record,record.path);
     const snapshot=`(()=>{
       const pane=document.querySelector('.pane.is-active'),s=pane?.querySelector('.bases-session'),g=s?.querySelector('.zorid-bases-table');if(!s||!g||s.dataset.baseControllerUpdating!=='false'||s.querySelector('.bases-session-content')?.getAttribute('aria-busy')!=='false'||!g.getClientRects().length||pane.querySelector('.error-message')||s.dataset.baseControllerError==='true'||!s.querySelector('.bases-session-toolbar button:not([disabled])'))return null;
       const cells=[...g.querySelectorAll('[role="gridcell"][data-property="file.name"][data-path]')],chrome=1+(g.querySelector('.zorid-bases-table-new-row')?1:0)+(g.querySelector('.zorid-bases-table-footer:not([hidden])')?1:0),total=Number(g.getAttribute('aria-rowcount'))-chrome;
       if(total!==${notes+1}||!cells.some(c=>c.dataset.path==='Note 0000.md'))return null;
       return{at:performance.now(),totalRows:total,knownFixtureRow:'Note 0000.md',visibleRows:cells.length,controlsReady:true};})()`;
-    await bounded(async()=>assert.ok(await active.renderer.evaluate(snapshot),'Known Base fixture row/controls not ready'),launch);
+    await bounded(async()=>assert.ok(await active.renderer.evaluate(snapshot),'Known Base fixture row/controls not ready'),launch,remaining(launch,record));
     await active.renderer.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
     const observed=await active.renderer.evaluate(snapshot);assert.ok(observed,'Base became unavailable after paint');
     record.observed=observed;const sample=await clock(active.renderer,launch),interval=clockInterval(observed.at,[sample]);record.readyMs={lower:interval.lower-record.originMs,upper:interval.upper-record.originMs};
@@ -151,6 +148,10 @@ export async function main(args=process.argv.slice(2)){
         for(const [name,text] of sources)await fs.writeFile(path.join(vault,name),text,{flag:'wx',mode:0o600});
         await fs.writeFile(path.join(profile,'vault.json'),JSON.stringify({path:vault}),{flag:'wx'});
         pair={directory,profile,vault,data,sources,fixtureHashes:Object.fromEntries([...sources].map(([name,text])=>[name,hash(text)]))};pairs.set(scheduled.pairId,pair);
+      }
+      if(scheduled.mode==='reopen'&&pair.reopenPrepared!==true){
+        const skipped={...scheduled,status:'skipped-dependency',reason:'Prior first-import did not complete verified Note0000 return, fixture restoration and normal cleanup',priorResult:path.join(pair.directory,'first-import/result.json')};
+        report.skipped.push(skipped);process.stdout.write(JSON.stringify({event:'launch-skipped',...skipped})+'\n');await save();continue;
       }
       const directory=path.join(pair.directory,scheduled.mode);await fs.mkdir(directory);
       const launch={...scheduled,directory,profile:pair.profile,vault:pair.vault,localDataDirectory:pair.data,fixtureHashesBefore:pair.fixtureHashes,mainFinalFile:path.join(directory,'main-final.json'),cases:[],stderr:'',stdout:'',errors:[]};report.launches.push(launch);
@@ -186,16 +187,17 @@ export async function main(args=process.argv.slice(2)){
         if(startup.clockSamples.some(sample=>sample.timeOrigin!==loadedClock.timeOrigin)){startup.preNavigationClockSamples=startup.clockSamples;startup.clockSamples=[];}
         startup.clockSamples.push(loadedClock);launch.scopeVerified=true;startup.packaged=true;startup.packagedUrlVerified=true;
         assert.equal((await active.renderer.evaluate('window.zorid.getVault()')).path,pair.vault);launch.vaultVerified=true;
-        if(scheduled.mode==='first-import'){await bounded(async()=>assert.ok(await active.renderer.evaluate(`!!(${fileSelector(startup.path)})`)),launch);await click(active.renderer,fileSelector(startup.path));}
+        if(scheduled.mode==='first-import')await selectFile(launch,startup,startup.path);
         await finishNote(launch,startup);
         launch.navigationTiming=await active.renderer.evaluate('performance.getEntriesByType("navigation").map(value=>value.toJSON())');
         launch.rendererResources=await active.renderer.evaluate('performance.getEntriesByType("resource").slice(0,500).map(value=>({name:value.name,startTime:value.startTime,duration:value.duration,transferSize:value.transferSize,decodedBodySize:value.decodedBodySize}))');
         for(const [name,kind] of [['Note 0001.md','ordinary-note-open'],['Large 432000.md','large432000-note-open']]){
-          const record=noteCase(launch,name,kind,0);launch.cases.push(record);await configure(launch,record);record.configured=true;record.originMs=launch.elapsed();arm(launch,record);await click(active.renderer,fileSelector(name));await finishNote(launch,record);
+          const record=noteCase(launch,name,kind,0);launch.cases.push(record);await configure(launch,record);record.configured=true;record.originMs=launch.elapsed();arm(launch,record);await selectFile(launch,record,name);await finishNote(launch,record);
         }
         await baseCase(launch,pair);
-        await click(active.renderer,fileSelector('Note 0000.md'));
+        launch.returnNavigation={};await navigateFileTree(active.renderer,'Note 0000.md',{now:launch.elapsed,timeoutMs,receipt:launch.returnNavigation});
         await bounded(async()=>assert.equal(await active.renderer.evaluate("(()=>{const n=document.querySelector('.pane.is-active .cm-content');return(n?.cmTile?.root?.view??n?.cmView?.view)?.state.doc.toString();})()"),pair.sources.get('Note 0000.md')),launch);
+        launch.returnToStartupNoteVerified=true;
         launch.mainClockSamples.push(await clock(active.main,launch));
       }catch(error){launch.errors.push(error.stack??String(error));report.errors.push({pairId:scheduled.pairId,mode:scheduled.mode,error:String(error)});try{if(active.renderer){const image=await active.renderer.call('Page.captureScreenshot',{format:'png'});await fs.writeFile(path.join(directory,'failure.png'),Buffer.from(image.data,'base64'));}}catch{}}
       finally{
@@ -215,6 +217,7 @@ export async function main(args=process.argv.slice(2)){
       launch.fixtureHashesAfter={};for(const name of pair.sources.keys())launch.fixtureHashesAfter[name]=await hashFile(path.join(pair.vault,name));
       launch.fixturesRestored=JSON.stringify(launch.fixtureHashesAfter)===JSON.stringify(pair.fixtureHashes);
       launch.sourcePathsExact=JSON.stringify((await fs.readdir(pair.vault)).filter(name=>!name.startsWith('.')).sort())===JSON.stringify([...pair.sources.keys()].sort());
+      if(scheduled.mode==='first-import')pair.reopenPrepared=reopenPrepared(launch);
       for(const record of launch.cases)if(record.kind!=='base'){record.cleanup=launch.cleanup;record.artifactsUnchanged=launch.artifactsUnchanged;record.assessment=assessNote(record);}
       await fs.writeFile(path.join(directory,'result.json'),JSON.stringify(launch,null,2));await save();
       process.stdout.write(JSON.stringify({event:'launch-complete',label:launch.label,mode:launch.mode,pid:launch.pid,cleanup:launch.cleanup,cases:launch.cases.map(c=>({kind:c.kind,assessment:c.assessment??c.readyMs}))})+'\n');
@@ -238,7 +241,7 @@ export async function main(args=process.argv.slice(2)){
     }
     report.artifactsValid=report.launches.length===schedule.length&&report.launches.every(l=>!l.errors.length&&!l.cleanupErrors?.length&&l.cleanup?.normal&&l.cleanup.gone&&l.fixturesRestored&&l.sourcePathsExact&&l.artifactsUnchanged);
     report.candidateTargetMet=report.artifactsValid&&report.launches.filter(l=>l.label==='candidate').every(l=>l.cases.filter(c=>c.kind!=='base').every(c=>c.assessment?.usableByDeadline));
-    report.complete=report.launches.length===schedule.length;await save();
+    report.complete=report.launches.length===schedule.length;report.allPlannedProcessed=report.launches.length+report.skipped.length===schedule.length;await save();
   }
   process.stdout.write(JSON.stringify({out,complete:report.complete,artifactsValid:report.artifactsValid,candidateTargetMet:report.candidateTargetMet})+'\n');
   return report.artifactsValid&&report.candidateTargetMet?0:1;

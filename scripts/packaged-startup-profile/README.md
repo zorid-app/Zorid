@@ -33,11 +33,19 @@ directory before any probe. Vault selection is independently checked too.
 
 The matrix randomizes baseline/candidate pair order with a recorded seed. Each
 pair runs first import followed by a normal process reopen of the same profile.
+If the first launch fails before its verified return to Note0000, fixture
+restoration or normal cleanup, its dependent reopen is explicitly skipped rather
+than asserting a wrong restored-document expectation.
 Each launch measures the correct selected 8 KiB note, opening a different ordinary
 note, opening an exact **432,000-byte** note and normal Base view readiness. A
 fresh-import shell, Welcome page, blank editor, wrong file or truncated body can
 never satisfy the selected-note check. Reopen preparation returns to Note0000
 through its normal file-tree command before normal quit.
+File selection scans the actual scrollable Files UI using normal wheel events
+and clicks only a mounted target row. Missing rows may be offscreen/unmounted or
+not imported yet; the harness does not guess which. Bounded row-availability
+waits, wheel steps and ordinary scrollIntoView are recorded in `navigation` and
+stay inside the original startup/note/Base clock, including the800ms attempt.
 
 The renderer observer is registered with
 `Page.addScriptToEvaluateOnNewDocument` as early as the owned target is available,
