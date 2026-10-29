@@ -17,10 +17,9 @@ Do not coordinate with that session. Root owns this isolated branch
 Only reviewed, validated batches go into main. Completion includes a verified macOS
 build, staged replacement and installation at `/Users/ctk/Applications/Zorid.app`.
 
-The thread goal already exists but is marked blocked. On the user's request to
-create a goal, create_goal rejected replacement because that goal is unfinished;
-the tools cannot resume it. UI Resume is needed. This record tracks current work
-while implementation continues; the objective is not complete.
+The user resumed the existing thread goal: it is active. The objective is not
+complete. Earlier create_goal replacement was rejected while the unfinished goal
+was blocked; that is historical, not a current execution blocker.
 
 ## Implementation and evidence gates
 
@@ -112,3 +111,62 @@ Transferable findings, with original app.js byte offsets (end exclusive):
 Adopt metadata reuse, cooperative parsing and deferred views where appropriate.
 Keep Zorid's stronger identity/CAS and durable publication protections. Independent
 draft protection and automatic renewable bindings remain implementation work.
+
+## Integrated candidate checkpoint
+
+All changes below are in the isolated candidate, not main or the installed app.
+Source review and focused checks do not establish packaged acceptance.
+
+- `4f60473c` reduces Pump manifest lookup work; `df98bfd0` retains generic durable
+  error fields across contextBridge. Independent reviews accepted both.
+- `302cc0f3` + `5191ddcd` overlap Chromium navigation and vault opening behind an
+  authenticated IPC barrier. Actual-main tests cover early requests, failed
+  opening, reauthentication and synchronous navigation exceptions.
+- `ce33313b` + `eb98603b` separate namespace readiness from committed metadata
+  hydration. Actual Workspace editing/saving proceeds with a metadata page held.
+  `41cce2ee` renders the selected pane first; other visible panes remain awaited.
+  All have independent source approval. This does not establish 800 ms launch.
+- Creation continuation is composed through `f1afc233`, including actual nested
+  child presentation, retained parents and accessible failed-close drafts.
+- Read renewal is composed through `a80b02fd`: authoritative retirement wakes
+  owned recovery, one repair budget survives delegation, explicit release rejects
+  held calls, and late successful old-host replies are discarded. Cross-review
+  caught that last race; successor tests prove it. Native acceptance is pending.
+- The independent journal storage, selected-entry inventory, coordinator and
+  document admission are composed through `75000120`. These reviewed foundations
+  remain unwired. Journal ACK means its storage barriers completed, never a Core
+  save. Main/preload/provider wiring belongs to checkpoint_dedup; NoteBuffer and
+  DurableNoteState protection belongs to file_open_audit.
+- Cooperative native reconciliation remains in maintenance_triggers' isolated
+  branch. Ten unique Native quantum/namespace checks passed; five Store epoch
+  checks passed. The old real-host RED imported all 32 notes in one request;
+  the new process test imports a bounded partial batch, permits a leased read and
+  checkpoint CAS before continuation, then completes with exact checkpoint bytes.
+  Public copied-vault controls found a rejection-starvation bug; its fix and final
+  guards are still being verified. No final batch integration or speed claim yet.
+
+Corrected benchmark source through `1e8602de` buffers timing events and supports
+seeded repeated order. The preceding corrected two-case package still produced
+an invalid reopen receipt (missed fixed probe; later input 5694 ms), and valid
+selection-clock input at 171 ms. Construction was about 58/84 ms, respectively.
+Those are fixture-editor results, not production authority. Evidence:
+`/private/tmp/zorid-editor-floor-corrected-20261029`. The late diagnostic latch
+was corrected afterward; that successor has not run in a package.
+
+Disk exhaustion stopped a Store test compilation before execution. Its own
+process group was canceled and verified absent; the failed run is preserved.
+The user then freed space; actual available space was measured at 6.5 GiB and
+verification resumed. Only rebuildable caches/dependencies were reclaimed.
+The old isolated performance fixture is preserved in a byte-verified archive
+`performance-preserved.tar.gz`, SHA-256
+`b50046ee65e2b94b96d632624531cdb24e699fc35ba2f7a2364bd042ce75994d`,
+with its 1070-file verification receipt under the previous save-platform-prehint
+worktree's `tmp/isolated-recovery-20261029`. No vault or real app data was removed.
+
+Additional foreground work was found by source audit: periodic history runs before
+hello and read replies, loads bodies before cadence/equality decisions, and prunes
+on opening/capture. checkpoint_review owns a separate deferred-maintenance and
+metadata eligibility implementation. Host scheduling waits for the quantum batch
+to release its overlapping host/service files. This is not yet a measured cause
+or a completed change. index_redundancy separately audits background index work
+during import; explicit foreground demand and cleanup must remain possible.
