@@ -494,13 +494,17 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     return items.find(item => item.row && matches(item) && item.groupIndex === owner.group) ?? items.find(matches);
   }
   function moveAfterTab(point: CellPoint, direction: 1 | -1) {
-    let column = point.column + direction, target = point.row, group = point.group;
-    if (column < 0) { column = result.properties.length - 1; target--; }
-    else if (column >= result.properties.length) { column = 0; target++; }
-    while (target < 0 && group > 0) { group--; target = result.groups[group].rows.length - 1; }
-    while (target >= result.groups[group].rows.length && group + 1 < result.groups.length) { group++; target = 0; }
-    const next = result.groups[group]?.rows[target];
-    if (next) { range = undefined; anchor = undefined; focusCell(next.path, result.properties[column], { group, row: target, column }); paintRange(); }
+    let target = items.findIndex(item => item.row && item.groupIndex === point.group && item.rowIndex === point.row);
+    if (target < 0) return;
+    let column = point.column + direction;
+    if (column < 0 || column >= result.properties.length) {
+      column = column < 0 ? result.properties.length - 1 : 0;
+      // Match arrow navigation's visible rows, skipping collapsed groups,
+      // headings and summaries without changing selection at the table edge.
+      do { target += direction; } while (target >= 0 && target < items.length && !items[target].row);
+    }
+    const item = items[target];
+    if (item?.row) { range = undefined; anchor = undefined; focusCell(item.row.path, result.properties[column], { group: item.groupIndex, row: item.rowIndex, column }); paintRange(); }
   }
   function replayBlockedActivation(): boolean {
     const blocked = blockedActivation; blockedActivation = undefined;
