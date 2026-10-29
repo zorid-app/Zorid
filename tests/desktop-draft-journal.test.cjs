@@ -278,3 +278,53 @@ test('malformed directory names reject inventory while invalid list options neve
   await assert.rejects(lease.list({entryId:'missing-entry'}),{code:'draft_storage_corrupt'});
   await assert.rejects(openDraftJournal(directory),{code:'draft_storage_corrupt'});
 });
+
+async function maintainPass(journal) {
+  const totals={examined:0,removed:0,errors:[]};
+  for(let turn=0;turn<128;turn++){
+    const result=await journal.maintain({maxUnits:1});
+    assert.ok(result.examined<=1);assert.ok(result.removed<=1);
+    totals.examined+=result.examined;totals.removed+=result.removed;totals.errors.push(...result.errors);
+    if(result.done)return totals;
+  }
+  assert.fail('bounded maintenance pass did not finish');
+}
+
+test('idle maintenance preserves an active uncertain retirement and prunes it only after revoke',async t=>{
+  const directory=await fixture(t);let lose=false;
+  const journal=await openDraftJournal(directory,{fileSystem:faultFiles({renameHead:async(from,to)=>{
+    await fs.rename(from,to);if(lose){lose=false;throw Object.assign(new Error('Lost retirement reply'),{code:'EIO'});}
+  }})}),lease=journal.bind(scope);
+  const saved=await lease.compareAndSwap(change()),retire={entryId:saved.entryId,writer:saved.writer,generation:saved.generation,expectedRevision:'1',nextRevision:'2'};
+  lose=true;await assert.rejects(lease.retire(retire),{code:'draft_storage_failure',commitUncertain:true});
+  assert.equal((await maintainPass(journal)).removed,0);
+  assert.equal((await lease.retire(retire)).revision,'2','uncertain cleanup retains exact retry identity');
+  lease.revoke();assert.equal((await maintainPass(journal)).removed,1);
+  await journal.close();
+  const recovery=(await openDraftJournal(directory)).bind({...scope,incarnationId:'recovery'});
+  assert.deepEqual(await recovery.list(),[]);assert.equal(await recovery.read({...change(),incarnationId:scope.incarnationId}),null);
+});
+
+test('a live new incarnation protects its uncertain retirement of an older revoked branch',async t=>{
+  const journal=await openDraftJournal(await fixture(t)),old=journal.bind(scope),saved=await old.compareAndSwap(change());old.revoke();
+  const current=journal.bind({...scope,incarnationId:'new-renderer'}),retire={entryId:saved.entryId,writer:saved.writer,incarnationId:saved.incarnationId,generation:saved.generation,expectedRevision:'1',nextRevision:'2'};
+  await current.retire(retire);
+  assert.equal((await maintainPass(journal)).removed,0,'target incarnation inactivity does not revoke the issuing live lease');
+  assert.equal((await current.retire(retire)).revision,'2');
+  current.revoke();assert.equal((await maintainPass(journal)).removed,1);
+});
+
+test('inactive live candidates and other scopes survive maintenance without body reads',async t=>{
+  const directory=await fixture(t);let headReads=0,bodyReads=0;
+  const counted=new Proxy(fs,{get(target,key){
+    if(key==='open')return async(file,...args)=>{if(path.basename(file)==='head.json')headReads++;if(path.basename(path.dirname(file))==='blobs')bodyReads++;return fs.open(file,...args);};
+    const value=target[key];return typeof value==='function'?value.bind(target):value;
+  }});
+  const journal=await openDraftJournal(directory,{fileSystem:counted}),one=journal.bind(scope),other=journal.bind({...scope,vaultId:'foreign-vault'});
+  await one.compareAndSwap(change({draft:'Retained one'}));await other.compareAndSwap(change({draft:'Retained foreign'}));one.revoke();other.revoke();
+  headReads=0;bodyReads=0;const result=await maintainPass(journal);
+  assert.equal(result.examined,2);assert.equal(result.removed,0);assert.equal(headReads,2);assert.equal(bodyReads,0);
+  const recovery=journal.bind({...scope,incarnationId:'recovery'}),foreignRecovery=journal.bind({...scope,vaultId:'foreign-vault',incarnationId:'recovery'});
+  assert.equal((await recovery.read({...change(),incarnationId:scope.incarnationId})).draft,'Retained one');
+  assert.equal((await foreignRecovery.read({...change(),incarnationId:scope.incarnationId})).draft,'Retained foreign');
+});
