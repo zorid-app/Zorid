@@ -4,6 +4,7 @@ import type { ContextMenuRequest } from './context-menu';
 
 export interface DesktopDurableContext { conditionalSavedSourceAvailable?:true; textCreateReceiptsAvailable?:true; workBlocks?:true; databases?:true; documentSemantics?:true; documentMaintenance?:true; metadataRowsAvailable?:boolean; propertyTargetsAvailable?:boolean; basePreviewAvailable?:boolean; draftsAvailable?:boolean; admissionId: string; scope: CheckpointScope; binaryLimits?:import('../core/binary-streams.ts').BinaryStreamLimits }
 export interface DesktopReconciliation {
+  work?: {phase: 'discovery' | 'import' | 'publication' | 'complete' | 'blocked'; pending: boolean; workUnits: number};
   scanId: string; complete: boolean; scanComplete: boolean; finished: boolean;
   observed: number; imported: number; namespaceApplied: number; issueCount: number; issuesTruncated: boolean;
   issues: readonly {path: string | null; code: 'scan_limit' | 'recovery_retained' | 'changed_during_scan' | 'reconciliation_blocked'}[];

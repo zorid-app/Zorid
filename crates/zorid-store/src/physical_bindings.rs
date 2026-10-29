@@ -416,6 +416,286 @@ pub(super) fn put_publication_proof(tx: &Connection, proof: &PublicationProof) -
     tx.execute("INSERT INTO publication_parent_proofs(attempt_id,kind,entry_id,parent_inode,record) VALUES(?1,?2,?3,?4,?5)",params![proof.attempt_id.as_str(),publication_kind(proof.kind),proof.entry_id.as_str(),proof.parent_inode,serde_json::to_string(proof)?])?;
     Ok(())
 }
+/// A connection-bound, read-validated rebaseline preparation. This is scheduling
+/// state, not serializable authority; a restart requires all validation again.
+pub struct IdleRebaselinePreparation {
+    owner: std::sync::Arc<()>,
+    epoch: IdleRebaselineEpoch,
+    expected: Vec<PhysicalBinding>,
+    current: Vec<Option<PhysicalIdentity>>,
+}
+#[derive(Debug, PartialEq, Eq)]
+struct IdleRebaselineEpoch {
+    relevant_changes: u64,
+    foreign_changes: i64,
+    schema: i64,
+    temp_schema: i64,
+    version: i64,
+    application: i64,
+}
+impl IdleRebaselinePreparation {
+    pub fn members(&self) -> &[PhysicalBinding] {
+        &self.expected
+    }
+}
+fn idle_rebaseline_epoch(
+    connection: &Connection,
+    credit: Option<u64>,
+) -> Result<IdleRebaselineEpoch> {
+    let relevant_changes = credit
+        .and_then(|credit| connection.total_changes().checked_sub(credit))
+        .ok_or_else(|| invalid("rebaseline write epoch is poisoned"))?;
+    Ok(IdleRebaselineEpoch {
+        relevant_changes,
+        foreign_changes: connection.query_row("PRAGMA data_version", [], |row| row.get(0))?,
+        schema: connection.query_row("PRAGMA main.schema_version", [], |row| row.get(0))?,
+        temp_schema: connection.query_row("PRAGMA temp.schema_version", [], |row| row.get(0))?,
+        version: connection.query_row("PRAGMA user_version", [], |row| row.get(0))?,
+        application: connection.query_row("PRAGMA application_id", [], |row| row.get(0))?,
+    })
+}
+fn idle_rebaseline(connection: &Connection) -> Result<bool> {
+    for query in [
+        "SELECT EXISTS(SELECT 1 FROM projection_jobs WHERE completed=0)",
+        "SELECT EXISTS(SELECT 1 FROM projection_attempts WHERE completed=0)",
+        "SELECT EXISTS(SELECT 1 FROM directory_attempts WHERE completed=0)",
+        "SELECT EXISTS(SELECT 1 FROM namespace_attempts WHERE completed=0)",
+        "SELECT EXISTS(SELECT 1 FROM family_namespace_covered WHERE satisfied=0)",
+        "SELECT EXISTS(SELECT 1 FROM host_intents WHERE state IN ('prepared','commit_requested'))",
+        "SELECT EXISTS(SELECT 1 FROM external_observations WHERE json_extract(record,'$.resolution') IS NULL)",
+        "SELECT EXISTS(SELECT 1 FROM family_external_namespace WHERE result IS NULL)",
+        "SELECT EXISTS(SELECT 1 FROM binary_stages WHERE (purpose='command' AND phase IN ('receiving','sealed','commit_requested')) OR (purpose='capture' AND phase='receiving'))",
+    ] {
+        if connection.query_row(query, [], |row| row.get::<_, bool>(0))? { return Ok(false); }
+    }
+    Ok(true)
+}
+fn binding_metadata(connection: &Connection) -> Result<Vec<PhysicalBinding>> {
+    let mut statement = connection.prepare("SELECT entry_id,path,revision,kind,inode,parent_inode,record FROM physical_bindings ORDER BY entry_id")?;
+    let mut rows = statement.query([])?;
+    let mut values = Vec::new();
+    while let Some(row) = rows.next()? {
+        let id = EntryId::new(row.get::<_, String>(0)?)?;
+        let value = decode_binding(
+            &id,
+            (
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+            ),
+        )?;
+        validate_saved(&value)?;
+        values.push(value);
+    }
+    Ok(values)
+}
+#[cfg(test)]
+thread_local! {
+    static REBASELINE_AFTER_SCHEMA: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+impl Store {
+    /// Scheduling metadata only; no baseline/body-validation authority. The
+    /// prepared member validator below retains the full existing content checks.
+    pub fn physical_binding_metadata(&self) -> Result<Vec<PhysicalBinding>> {
+        binding_metadata(&self.connection)
+    }
+    pub fn begin_idle_rebaseline(
+        &self,
+        expected: Vec<PhysicalBinding>,
+    ) -> Result<Option<IdleRebaselinePreparation>> {
+        if expected.is_empty() || expected.len() > 100_000 || !self.connection.is_autocommit() {
+            return Ok(None);
+        }
+        let epoch =
+            idle_rebaseline_epoch(&self.connection, self.external_checkpoint_changes.get())?;
+        // Exact main schema prevents hidden trigger writes inside the certified
+        // checkpoint-only method. No application code installs temporary triggers.
+        super::check_schema(&self.connection)?;
+        #[cfg(test)]
+        REBASELINE_AFTER_SCHEMA.with(|point| { if let Some(point) = point.borrow_mut().take() { point(); } });
+        let triggers: bool = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_temp_schema WHERE type='trigger')",
+            [],
+            |row| row.get(0),
+        )?;
+        if triggers {
+            return Err(invalid("temporary triggers cannot authorize rebaseline"));
+        }
+        let tx = self.connection.unchecked_transaction()?;
+        if !idle_rebaseline(&tx)? || binding_metadata(&tx)? != expected {
+            return Ok(None);
+        }
+        let entries = entry_content::read_visible_metadata(&tx)?;
+        if entries.len() != expected.len() {
+            return Ok(None);
+        }
+        let entries: std::collections::BTreeMap<_, _> = entries
+            .into_iter()
+            .map(|entry| (entry.state.id.clone(), entry.state))
+            .collect();
+        let mut ids = std::collections::BTreeSet::new();
+        for before in &expected {
+            if !ids.insert(before.state.id.clone())
+                || entries.get(&before.state.id) != Some(&before.state)
+            {
+                return Ok(None);
+            }
+        }
+        tx.commit()?;
+        if idle_rebaseline_epoch(&self.connection, self.external_checkpoint_changes.get())? != epoch
+        {
+            return Ok(None);
+        }
+        let count = expected.len();
+        Ok(Some(IdleRebaselinePreparation {
+            owner: self.external_work_owner.clone(),
+            epoch,
+            expected,
+            current: vec![None; count],
+        }))
+    }
+    pub fn idle_rebaseline_is_current(&self, prepared: &IdleRebaselinePreparation) -> Result<bool> {
+        Ok(
+            std::sync::Arc::ptr_eq(&self.external_work_owner, &prepared.owner)
+                && idle_rebaseline_epoch(&self.connection, self.external_checkpoint_changes.get())?
+                    == prepared.epoch,
+        )
+    }
+    /// Validate exactly one complete member after native has hashed its current
+    /// anchored physical bytes. No inline body is retained in the prepared token.
+    pub fn validate_idle_rebaseline_member(
+        &self,
+        prepared: &mut IdleRebaselinePreparation,
+        index: usize,
+        physical: PhysicalIdentity,
+        content: Option<(u64, zorid_file_sync::Sha256Digest)>,
+    ) -> Result<bool> {
+        if !self.idle_rebaseline_is_current(prepared)? {
+            return Ok(false);
+        }
+        let before = prepared
+            .expected
+            .get(index)
+            .ok_or_else(|| invalid("rebaseline member index is invalid"))?;
+        physical.validate()?;
+        let tx = self.connection.unchecked_transaction()?;
+        if binding(&tx, &before.state.id)?.as_ref() != Some(before) {
+            return Ok(false);
+        }
+        let entry = entry_content::read_metadata_row(&tx, &before.state.id)?;
+        if !is_visible(&tx, &before.state.id)? {
+            return Ok(false);
+        }
+        let Some(entry) = entry.filter(|entry| entry.state == before.state) else {
+            return Ok(false);
+        };
+        let claimed: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM physical_bindings WHERE inode=?1 AND entry_id<>?2)",
+            params![physical.inode, before.state.id.as_str()],
+            |row| row.get(0),
+        )?;
+        if claimed {
+            return Ok(false);
+        }
+        let normal = family_materialization::get(&tx, &before.state.id)?;
+        if !normal.as_ref().is_some_and(|value| matches!(&value.publication, FamilyPublication::Normal { path, kind, .. } if path == &before.state.path && kind == &before.state.kind)) { return Ok(false); }
+        if before.state.kind == EntryKind::File {
+            let Some(base) = projection::baseline(&tx, &before.state.id)?
+                .filter(|base| base.state == before.state)
+            else {
+                return Ok(false);
+            };
+            if !entry.content.as_ref().is_some_and(|saved| {
+                saved.len() == base.content.len() && *saved.digest() == base.content.digest()
+            }) || content != Some((base.content.len(), base.content.digest()))
+            {
+                return Ok(false);
+            }
+            family_materialization::check_publication_content(
+                &tx,
+                &before.state,
+                Some(&base.content),
+            )?;
+        } else {
+            if content.is_some()
+                || !directory::baseline(&tx, &before.state.id)?.is_some_and(|base| {
+                    base.state == before.state && base.identity == before.physical.inode
+                })
+            {
+                return Ok(false);
+            }
+            family_materialization::check_publication_content(&tx, &before.state, None)?;
+        }
+        tx.commit()?;
+        if !self.idle_rebaseline_is_current(prepared)? {
+            return Ok(false);
+        }
+        prepared.current[index] = Some(physical);
+        Ok(true)
+    }
+    /// Atomic scalar apply. All body checks were performed under this unchanged
+    /// opaque epoch. The final writer blocks foreign commits before checking it.
+    /// Enumeration and the metadata transaction may overrun a soft native clock.
+    pub fn finish_idle_rebaseline(&mut self, prepared: IdleRebaselinePreparation) -> Result<bool> {
+        if !self.idle_rebaseline_is_current(&prepared)?
+            || prepared.current.iter().any(Option::is_none)
+        {
+            return Ok(false);
+        }
+        let credit = self.external_checkpoint_changes.get();
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if idle_rebaseline_epoch(&tx, credit)? != prepared.epoch {
+            return Ok(false);
+        }
+        let current: Vec<_> = prepared.current.into_iter().map(Option::unwrap).collect();
+        let mut inodes = std::collections::BTreeSet::new();
+        let parents: std::collections::BTreeMap<_, _> = prepared
+            .expected
+            .iter()
+            .zip(&current)
+            .filter(|(before, _)| before.state.kind == EntryKind::Folder)
+            .map(|(before, physical)| (&before.state.path, physical))
+            .collect();
+        for (before, physical) in prepared.expected.iter().zip(&current) {
+            if !inodes.insert(&physical.inode)
+                || before.state.path.parent().is_some_and(|parent| {
+                    !parents
+                        .get(&parent)
+                        .is_some_and(|parent| parent.inode == physical.parent_inode)
+                })
+            {
+                return Ok(false);
+            }
+        }
+        for (before, physical) in prepared.expected.iter().zip(current) {
+            if before.state.kind == EntryKind::Folder {
+                let record = serde_json::to_string(&DirectoryBaseline {
+                    state: before.state.clone(),
+                    identity: physical.inode.clone(),
+                })?;
+                if tx.execute(
+                    "UPDATE directory_baselines SET record=?1 WHERE entry_id=?2",
+                    params![record, before.state.id.as_str()],
+                )? != 1
+                {
+                    return Err(invalid("prepared directory baseline disappeared"));
+                }
+            }
+            let record = serde_json::to_string(&PhysicalBinding {
+                state: before.state.clone(),
+                physical: physical.clone(),
+            })?;
+            if tx.execute("UPDATE physical_bindings SET inode=?1,parent_inode=?2,record=?3 WHERE entry_id=?4 AND path=?5 AND revision=?6 AND kind=?7 AND inode=?8 AND parent_inode=?9", params![physical.inode,physical.parent_inode,record,before.state.id.as_str(),before.state.path.as_str(),before.state.revision.as_str(),kind_name(before.state.kind),before.physical.inode,before.physical.parent_inode])? != 1 { return Err(invalid("prepared physical binding changed")); }
+        }
+        tx.commit()?;
+        Ok(true)
+    }
+}
 impl Store {
     /// Rebaseline a complete idle bound namespace after native has re-read exact
     /// same-path, same-kind, baseline-equivalent physical objects under its vault
@@ -1039,7 +1319,10 @@ mod tests {
         let last = add_bound_file(&mut store, "zzz-file", "last-inode");
         let before = store.connection.total_changes();
         let trace = InodeReads::new(&store.connection);
-        assert_eq!(store.physical_bindings().unwrap(), vec![first, directory, last]);
+        assert_eq!(
+            store.physical_bindings().unwrap(),
+            vec![first, directory, last]
+        );
         assert_eq!(trace.counts.get(), [0, 0, 1]);
         assert_eq!(store.connection.total_changes(), before);
     }
@@ -1052,9 +1335,17 @@ mod tests {
         }
         impl Drop for QueryCapture<'_> {
             fn drop(&mut self) {
-                assert_eq!(unsafe {
-                    rusqlite::ffi::sqlite3_trace_v2(self.connection.handle(), 0, None, std::ptr::null_mut())
-                }, rusqlite::ffi::SQLITE_OK);
+                assert_eq!(
+                    unsafe {
+                        rusqlite::ffi::sqlite3_trace_v2(
+                            self.connection.handle(),
+                            0,
+                            None,
+                            std::ptr::null_mut(),
+                        )
+                    },
+                    rusqlite::ffi::SQLITE_OK
+                );
             }
         }
         unsafe extern "C" fn capture_inventory(
@@ -1066,7 +1357,10 @@ mod tests {
             if event == rusqlite::ffi::SQLITE_TRACE_STMT && !context.is_null() && !sql.is_null() {
                 let sql = unsafe { std::ffi::CStr::from_ptr(sql.cast()) }.to_string_lossy();
                 let lower = sql.to_ascii_lowercase();
-                if lower.starts_with("select") && lower.contains("from physical_bindings") && lower.contains("projection_baselines") {
+                if lower.starts_with("select")
+                    && lower.contains("from physical_bindings")
+                    && lower.contains("projection_baselines")
+                {
                     let captured = unsafe { &*context.cast::<std::cell::RefCell<Vec<String>>>() };
                     captured.borrow_mut().push(sql.into_owned());
                 }
@@ -1082,14 +1376,25 @@ mod tests {
             connection: &store.connection,
             sql: Box::new(std::cell::RefCell::new(Vec::new())),
         };
-        assert_eq!(unsafe {
-            rusqlite::ffi::sqlite3_trace_v2(
-                store.connection.handle(), rusqlite::ffi::SQLITE_TRACE_STMT,
-                Some(capture_inventory), (&*capture.sql as *const std::cell::RefCell<Vec<String>>).cast_mut().cast(),
-            )
-        }, rusqlite::ffi::SQLITE_OK);
+        assert_eq!(
+            unsafe {
+                rusqlite::ffi::sqlite3_trace_v2(
+                    store.connection.handle(),
+                    rusqlite::ffi::SQLITE_TRACE_STMT,
+                    Some(capture_inventory),
+                    (&*capture.sql as *const std::cell::RefCell<Vec<String>>)
+                        .cast_mut()
+                        .cast(),
+                )
+            },
+            rusqlite::ffi::SQLITE_OK
+        );
         assert_eq!(store.physical_bindings().unwrap().len(), 3);
-        assert_eq!(capture.sql.borrow().len(), 1, "capture the executed inventory statement, not a copied query");
+        assert_eq!(
+            capture.sql.borrow().len(),
+            1,
+            "capture the executed inventory statement, not a copied query"
+        );
         let sql = capture.sql.borrow()[0].clone();
         drop(capture);
 
@@ -1099,9 +1404,15 @@ mod tests {
             if with_statistics {
                 store.connection.execute_batch("ANALYZE").unwrap();
             }
-            let mut statement = store.connection.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
-            let plan = statement.query_map([], |row| row.get::<_, String>(3)).unwrap()
-                .collect::<rusqlite::Result<Vec<_>>>().unwrap();
+            let mut statement = store
+                .connection
+                .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+                .unwrap();
+            let plan = statement
+                .query_map([], |row| row.get::<_, String>(3))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
             assert!(!plan.is_empty());
             assert!(plan.iter().all(|step| !step.to_ascii_uppercase().contains("TEMP B-TREE")),
                 "inventory must not sort joined baseline content (statistics={with_statistics}): {plan:?}");
@@ -1157,7 +1468,10 @@ mod tests {
             let (_dir, store, binding) = setup(EntryKind::Folder);
             put_binding(&store.connection, &binding).unwrap();
             store.connection.execute(sql, []).unwrap();
-            assert!(store.physical_binding(&binding.state.id).is_err(), "point: {sql}");
+            assert!(
+                store.physical_binding(&binding.state.id).is_err(),
+                "point: {sql}"
+            );
             assert!(store.physical_bindings().is_err(), "inventory: {sql}");
         }
     }
@@ -1167,8 +1481,17 @@ mod tests {
         let (_dir, mut store, selected) = setup(EntryKind::File);
         put_binding(&store.connection, &selected).unwrap();
         let unrelated = add_bound_file(&mut store, "unrelated", "different-inode");
-        store.connection.execute("UPDATE projection_baselines SET record='invalid-json' WHERE entry_id='unrelated'", []).unwrap();
-        assert_eq!(store.physical_binding(&selected.state.id).unwrap(), Some(selected.clone()));
+        store
+            .connection
+            .execute(
+                "UPDATE projection_baselines SET record='invalid-json' WHERE entry_id='unrelated'",
+                [],
+            )
+            .unwrap();
+        assert_eq!(
+            store.physical_binding(&selected.state.id).unwrap(),
+            Some(selected.clone())
+        );
         assert!(store.physical_bindings().is_err());
         remove_binding(&store.connection, &unrelated.state.id).unwrap();
         assert_eq!(store.physical_bindings().unwrap(), vec![selected]);
@@ -1179,9 +1502,22 @@ mod tests {
         for kind in [EntryKind::File, EntryKind::Folder] {
             let (_dir, store, binding) = setup(kind);
             put_binding(&store.connection, &binding).unwrap();
-            let other = if kind == EntryKind::File { "directory_baselines" } else { "projection_baselines" };
-            store.connection.execute(&format!("INSERT INTO {other}(entry_id,record) VALUES('entry','invalid-json')"), []).unwrap();
-            for sql in ["UPDATE entries SET visible=0 WHERE id='entry'", "UPDATE entries SET deleted=1 WHERE id='entry'"] {
+            let other = if kind == EntryKind::File {
+                "directory_baselines"
+            } else {
+                "projection_baselines"
+            };
+            store
+                .connection
+                .execute(
+                    &format!("INSERT INTO {other}(entry_id,record) VALUES('entry','invalid-json')"),
+                    [],
+                )
+                .unwrap();
+            for sql in [
+                "UPDATE entries SET visible=0 WHERE id='entry'",
+                "UPDATE entries SET deleted=1 WHERE id='entry'",
+            ] {
                 store.connection.execute(sql, []).unwrap();
                 assert_eq!(store.physical_bindings().unwrap(), vec![binding.clone()]);
             }
@@ -1286,6 +1622,121 @@ mod tests {
                 .physical_owner_by_inode(&value.physical.inode)
                 .unwrap(),
             Some(value)
+        );
+    }
+}
+
+#[cfg(test)]
+mod rebaseline_epoch_tests {
+    use super::*;
+    use zorid_core::VaultPath;
+    fn epoch(store: &Store) -> IdleRebaselineEpoch {
+        idle_rebaseline_epoch(&store.connection, store.external_checkpoint_changes.get()).unwrap()
+    }
+    fn checkpoint(
+        store: &mut Store,
+        next: &str,
+        expected: Option<&str>,
+    ) -> std::result::Result<crate::Checkpoint, crate::CheckpointError> {
+        let scope = crate::CheckpointScope {
+            vault_id: store.identity().unwrap().local_store_id,
+            client_id: OperationId::new("c4ffd451-ce1c-4d98-a839-e91974dfd7d8").unwrap(),
+        };
+        store.checkpoint_compare_and_swap(
+            &scope,
+            crate::CheckpointWrite {
+                key: "draft",
+                expected_revision: expected,
+                next_revision: next,
+                encoded_state: Some("{\"draft\":true}"),
+            },
+        )
+    }
+    #[test]
+    fn checkpoint_actual_delta_credit_preserves_epoch_across_retry_conflict_abort_and_rollback() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(root.path().join("vault.sqlite")).unwrap();
+        let initial = epoch(&store);
+        checkpoint(&mut store, "d94e7514-3be0-45d5-8093-000000000001", None).unwrap();
+        assert_eq!(epoch(&store), initial);
+        checkpoint(&mut store, "d94e7514-3be0-45d5-8093-000000000001", None).unwrap();
+        assert_eq!(
+            epoch(&store),
+            initial,
+            "idempotent same-key retry credits zero changes"
+        );
+        assert!(checkpoint(&mut store, "d94e7514-3be0-45d5-8093-000000000002", None).is_err());
+        assert_eq!(epoch(&store), initial);
+        store.connection.execute_batch("CREATE TEMP TRIGGER checkpoint_abort BEFORE UPDATE ON main.checkpoint_heads BEGIN SELECT RAISE(ABORT,'checkpoint test abort'); END;").unwrap();
+        let before_abort = epoch(&store);
+        assert!(checkpoint(&mut store, "d94e7514-3be0-45d5-8093-000000000003", Some("d94e7514-3be0-45d5-8093-000000000001")).is_err());
+        assert_eq!(
+            epoch(&store),
+            before_abort,
+            "credit completed total delta only after rollback"
+        );
+        store
+            .connection
+            .execute_batch("DROP TRIGGER checkpoint_abort;")
+            .unwrap();
+        let before_write = epoch(&store);
+        store
+            .apply(&MutationRequest {
+                operation_id: OperationId::new("after-aborted-checkpoint").unwrap(),
+                mutation: Mutation::Create {
+                    id: EntryId::new("authority-entry").unwrap(),
+                    path: VaultPath::new("Authority.md").unwrap(),
+                    kind: EntryKind::File,
+                    content: Some(b"authoritative".to_vec()),
+                },
+            })
+            .unwrap();
+        assert!(
+            epoch(&store).relevant_changes > before_write.relevant_changes,
+            "later authority writes cannot cancel an ignored failure"
+        );
+        assert_ne!(epoch(&store), initial);
+    }
+    #[test]
+    fn epoch_is_pinned_before_schema_validation_can_race_with_foreign_trigger_creation() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("vault.sqlite");
+        let mut store = Store::open(&path).unwrap();
+        let id = EntryId::new("schema-race-file").unwrap();
+        store.apply(&MutationRequest { operation_id: OperationId::new("schema-race-create").unwrap(), mutation: Mutation::Create { id: id.clone(), path: VaultPath::new("Race.md").unwrap(), kind: EntryKind::File, content: Some(b"stable".to_vec()) } }).unwrap();
+        let state = store.read(&id).unwrap().unwrap().state;
+        projection::put_baseline(&store.connection, &ProjectionBaseline { state: state.clone(), content: StoredContent::InlineBytes(b"stable".to_vec()) }).unwrap();
+        put_binding(&store.connection, &PhysicalBinding { state, physical: PhysicalIdentity { inode: "1:2".into(), parent_inode: "1:3".into() } }).unwrap();
+        for job in crate::projection_jobs::pending(&store.connection, &id, ProjectionWork::MaterializeFile).unwrap() { crate::projection_jobs::finish(&store.connection, &job).unwrap(); }
+        REBASELINE_AFTER_SCHEMA.with(|point| *point.borrow_mut() = Some(Box::new(move || {
+            let foreign = Connection::open(path).unwrap();
+            foreign.execute_batch("CREATE TRIGGER foreign_checkpoint_write AFTER INSERT ON checkpoint_heads BEGIN UPDATE entries SET path=path; END;").unwrap();
+        })));
+        let prepared = store.begin_idle_rebaseline(store.physical_binding_metadata().unwrap()).unwrap();
+        assert!(prepared.is_none(), "a schema checked before a foreign commit cannot authorize the new epoch");
+    }
+    #[test]
+    fn unknown_writes_ddl_and_credit_overflow_fail_closed() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(root.path().join("vault.sqlite")).unwrap();
+        let first = epoch(&store);
+        store.connection.execute_batch("CREATE TEMP TABLE unknown_work(value INTEGER); INSERT INTO unknown_work VALUES(1);").unwrap();
+        assert_ne!(epoch(&store), first);
+        let second = epoch(&store);
+        store
+            .connection
+            .execute_batch("DELETE FROM unknown_work;")
+            .unwrap();
+        assert!(
+            epoch(&store).relevant_changes > second.relevant_changes,
+            "truncate optimization remains an unknown write"
+        );
+        store.external_checkpoint_changes.set(Some(u64::MAX));
+        checkpoint(&mut store, "d94e7514-3be0-45d5-8093-000000000004", None).unwrap();
+        assert!(store.external_checkpoint_changes.get().is_none());
+        assert!(
+            idle_rebaseline_epoch(&store.connection, store.external_checkpoint_changes.get())
+                .is_err()
         );
     }
 }

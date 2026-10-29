@@ -308,13 +308,20 @@ impl Store {
         s: &CheckpointScope,
         request: CheckpointWrite<'_>,
     ) -> Result<Checkpoint> {
-        let tx = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        scope(&tx, s)?;
-        let result = cas(&tx, s, request)?;
-        tx.commit()?;
-        Ok(result)
+        let before = self.connection.total_changes();
+        // This closed implementation touches only checkpoint_heads/revisions.
+        // No callback or source writer can interleave with this &mut Store call.
+        let result = (|| {
+            let tx = self
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            scope(&tx, s)?;
+            let result = cas(&tx, s, request)?;
+            tx.commit()?;
+            Ok(result)
+        })();
+        self.credit_external_checkpoint_changes(before);
+        result
     }
 
     /// Latest nondeleted metadata per key as of a fixed high-water boundary.

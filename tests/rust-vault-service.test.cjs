@@ -516,3 +516,11 @@ for(const shape of ['missing','empty','number','null','spaces','control','long',
   await assert.rejects(host.changesAfter('0',100),{code:'invalid_response',commitUncertain:true});
   await assert.rejects(host.status(),{code:'invalid_response',commitUncertain:true});
 });
+
+test('cooperative reconciliation work is bounded typed progress, never an unknown extra payload',()=>{
+  const status={scanId:'scan',complete:false,scanComplete:false,finished:false,observed:1,imported:1,namespaceApplied:0,issueCount:0,issuesTruncated:false,issues:[]};
+  for(const phase of ['discovery','import','publication'])assert.equal(reconciliationStatus({...status,work:{phase,pending:true,workUnits:16}}),true);
+  assert.equal(reconciliationStatus({...status,work:{phase:'blocked',pending:false,workUnits:0}}),true);
+  assert.equal(reconciliationStatus({...status,complete:true,scanComplete:true,finished:true,work:{phase:'complete',pending:false,workUnits:1}}),true);
+  for(const work of [{phase:'complete',pending:false,workUnits:1},{phase:'publication',pending:false,workUnits:1},{phase:'blocked',pending:true,workUnits:1},{phase:'discovery',pending:true,workUnits:257},{phase:'discovery',pending:true,workUnits:-1},{phase:'discovery',pending:true,workUnits:1.5},{phase:'unknown',pending:true,workUnits:1},{phase:'discovery',pending:true,workUnits:1,internal:'private'}])assert.equal(reconciliationStatus({...status,work}),false);
+});

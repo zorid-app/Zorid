@@ -121,6 +121,7 @@ mod presentation;
 mod projection;
 pub use physical_bindings::{
     ObservationPhysical, PhysicalBinding, PhysicalIdentity, PublicationKind, PublicationProof,
+    IdleRebaselinePreparation,
 };
 mod projection_jobs;
 pub use presentation::{
@@ -442,6 +443,10 @@ pub struct StoredEntry {
 /// separately; SQLite transactions do not make filesystem writes atomic.
 pub struct Store {
     connection: Connection,
+    // Certified checkpoint-only changes cannot alter source/publication proof.
+    // All other main-connection changes remain in the conservative epoch.
+    external_checkpoint_changes: std::cell::Cell<Option<u64>>,
+    external_work_owner: std::sync::Arc<()>,
     document_cache: document_cache::DocumentCache,
     // Process-local handles deliberately expire on reopen; persisted generations do not.
     document_query_owner: zorid_core::OperationId,
@@ -579,12 +584,23 @@ impl Store {
         let document_cache = document_cache::DocumentCache::memory()?;
         Ok(Self {
             connection,
+            external_checkpoint_changes: std::cell::Cell::new(Some(0)),
+            external_work_owner: std::sync::Arc::new(()),
             document_cache,
             document_query_owner: zorid_core::OperationId::new(uuid::Uuid::new_v4().to_string())?,
             document_query_pins: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         })
     }
 
+    /// Called only around the synchronous checkpoint CAS implementation. Credit
+    /// actual completed SQLite changes even on failure, never callback counts.
+    /// Panics/unknown writers can only cause conservative invalidation.
+    fn credit_external_checkpoint_changes(&self, before: u64) {
+        let credited = self.external_checkpoint_changes.get().and_then(|prior| {
+            self.connection.total_changes().checked_sub(before).and_then(|delta| prior.checked_add(delta))
+        });
+        self.external_checkpoint_changes.set(credited);
+    }
     pub fn list(&self) -> Result<Vec<EntryState>> {
         let tx = self.connection.unchecked_transaction()?;
         let states = read_states(&tx, false)?;

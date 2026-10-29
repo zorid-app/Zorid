@@ -115,6 +115,12 @@ struct Inventory {
     next_directory: usize,
     blocked: bool,
     ready: bool,
+    #[serde(default)]
+    publication_started: bool,
+    #[serde(default)]
+    reconciliation_issues: Vec<ScanIssue>,
+    #[serde(default)]
+    namespace_processed: BTreeSet<EntryId>,
     processed: BTreeSet<VaultPath>,
     absence_bindings: Option<Vec<PhysicalBinding>>,
     absence_after: Option<EntryId>,
@@ -130,6 +136,9 @@ impl Inventory {
             || self.private_identity.is_empty()
             || self.database_identity.as_ref().is_none_or(String::is_empty)
             || self.processed.len() > MAX_INVENTORY as usize
+            || self.namespace_processed.len() > MAX_INVENTORY as usize
+            || self.publication_started && !self.ready
+            || self.reconciliation_issues.len() > MAX_INVENTORY as usize
             || self.ready
                 && (self.next_directory != self.directories.len()
                     || self.absence_bindings.is_none())
@@ -288,6 +297,14 @@ impl ProgressScan {
         vault: &mut NativeVault,
         paths: &[VaultPath],
     ) -> Result<()> {
+        self.record_processed_retaining(vault, paths, false)
+    }
+    pub(super) fn record_processed_retaining(
+        &mut self,
+        vault: &mut NativeVault,
+        paths: &[VaultPath],
+        retain: bool,
+    ) -> Result<()> {
         if !self.active {
             return if paths.is_empty() {
                 Ok(())
@@ -304,12 +321,63 @@ impl ProgressScan {
             }
             self.inventory.processed.insert(path.clone());
         }
-        if self.inventory.ready && self.pending_paths().is_empty() {
+        if !retain && self.inventory.ready && self.pending_paths().is_empty() {
             vault.save_inventory(&mut self.checkpoint_revision, None)?;
             self.active = false;
         } else {
             vault.save_inventory(&mut self.checkpoint_revision, Some(&self.inventory))?;
         }
+        Ok(())
+    }
+    pub(super) fn active(&self) -> bool {
+        self.active
+    }
+    pub(super) fn publication_started(&self) -> bool {
+        self.inventory.publication_started
+    }
+    pub(super) fn namespace_processed(&self) -> BTreeSet<EntryId> {
+        self.inventory.namespace_processed.clone()
+    }
+    pub(super) fn record_namespace_processed(
+        &mut self,
+        vault: &mut NativeVault,
+        ids: BTreeSet<EntryId>,
+    ) -> Result<()> {
+        self.inventory.namespace_processed = ids;
+        vault.save_inventory(&mut self.checkpoint_revision, Some(&self.inventory))
+    }
+    pub(super) fn retained_issues(&self) -> &[ScanIssue] {
+        &self.inventory.reconciliation_issues
+    }
+    pub(super) fn retain_issues(
+        &mut self,
+        vault: &mut NativeVault,
+        issues: &[ScanIssue],
+    ) -> Result<()> {
+        for issue in issues {
+            if !self
+                .inventory
+                .reconciliation_issues
+                .iter()
+                .any(|old| old.path == issue.path && old.reason == issue.reason)
+            {
+                self.inventory.reconciliation_issues.push(issue.clone());
+            }
+        }
+        vault.save_inventory(&mut self.checkpoint_revision, Some(&self.inventory))
+    }
+    pub(super) fn begin_publication(&mut self, vault: &mut NativeVault) -> Result<()> {
+        if !self.run.complete || !self.pending_paths().is_empty() {
+            return Err(Error::Busy(
+                "unfinished external inventory cannot enter publication",
+            ));
+        }
+        self.inventory.publication_started = true;
+        vault.save_inventory(&mut self.checkpoint_revision, Some(&self.inventory))
+    }
+    pub(super) fn retire(&mut self, vault: &mut NativeVault) -> Result<()> {
+        vault.save_inventory(&mut self.checkpoint_revision, None)?;
+        self.active = false;
         Ok(())
     }
     pub(super) fn revalidate(&self, vault: &NativeVault) -> Result<()> {
@@ -579,6 +647,9 @@ impl NativeVault {
             next_directory: 0,
             blocked: false,
             ready: false,
+            publication_started: false,
+            reconciliation_issues: Vec::new(),
+            namespace_processed: BTreeSet::new(),
             processed: BTreeSet::new(),
             absence_bindings: None,
             absence_after: None,
@@ -595,6 +666,13 @@ impl NativeVault {
         &mut self,
         options: ScanOptions,
     ) -> Result<ProgressScan> {
+        self.external_progress_scan_with_budget(options, None)
+    }
+    pub(super) fn external_progress_scan_with_budget(
+        &mut self,
+        options: ScanOptions,
+        mut budget: Option<&mut super::external_scan_quantum::ExternalWorkBudget>,
+    ) -> Result<ProgressScan> {
         if options.max_entries == 0 || options.max_entries > MAX_INVENTORY {
             return Err(Error::Unsupported("scan max_entries must be 1..=100000"));
         }
@@ -610,6 +688,22 @@ impl NativeVault {
             if inventory.ready {
                 if !run.finished || !run.complete {
                     return Err(corrupt("ready external inventory has no complete run"));
+                }
+                // Publication has exact per-attempt guards. Its own filesystem
+                // changes invalidate directory markers, so this cursor grants
+                // no further absence authority once publication has begun.
+                if budget.is_none() && inventory.publication_started {
+                    // A legacy caller cannot reuse the historical absence
+                    // proof after publication has changed the filesystem.
+                    self.external_publication = None;
+                    self.save_inventory(&mut revision, None)?;
+                    return self.external_progress_scan_locked(options);
+                }
+                if budget.is_some() && inventory.publication_started {
+                    if !inventory.authority_matches(self)? {
+                        return Err(Error::Busy("external publication authority changed"));
+                    }
+                    return self.progress_result(inventory, Vec::new(), revision, true);
                 }
                 let valid =
                     inventory.authority_matches(self)? && inventory.max_depth == options.max_depth;
@@ -691,7 +785,12 @@ impl NativeVault {
         let mut total_bytes = 0u64;
         let mut stopped = false;
         while inventory.next_directory < inventory.directories.len() {
-            if work >= options.max_entries || started.elapsed() >= options.max_duration {
+            if work >= options.max_entries
+                || budget.as_ref().map_or_else(
+                    || started.elapsed() >= options.max_duration,
+                    |b| !b.available(),
+                )
+            {
                 stopped = true;
                 break;
             }
@@ -731,6 +830,13 @@ impl NativeVault {
                         ) {
                             return Err(error);
                         }
+                        if budget
+                            .as_mut()
+                            .is_some_and(|b| !b.try_unit(format!("directory-error:{index}")))
+                        {
+                            stopped = true;
+                            break;
+                        }
                         inventory.blocked = true;
                         issues.push(ScanIssue {
                             path: saved.path.clone(),
@@ -745,7 +851,12 @@ impl NativeVault {
                 .into_iter()
                 .filter(|name| saved.last_name.as_ref().is_none_or(|last| name > last))
             {
-                if work >= options.max_entries || started.elapsed() >= options.max_duration {
+                if work >= options.max_entries
+                    || budget.as_ref().map_or_else(
+                        || started.elapsed() >= options.max_duration,
+                        |b| !b.available(),
+                    )
+                {
                     directory_complete = false;
                     stopped = true;
                     break;
@@ -753,6 +864,14 @@ impl NativeVault {
                 let path = match child_path(saved.path.as_ref(), &name) {
                     Ok(path) => path,
                     Err(error) => {
+                        if budget
+                            .as_mut()
+                            .is_some_and(|b| !b.try_unit(format!("invalid-entry:{index}:{name}")))
+                        {
+                            directory_complete = false;
+                            stopped = true;
+                            break;
+                        }
                         inventory.blocked = true;
                         work += 1;
                         issues.push(ScanIssue {
@@ -763,6 +882,11 @@ impl NativeVault {
                         continue;
                     }
                 };
+                if budget.as_mut().is_some_and(|b| !b.capture_positive(&path)) {
+                    directory_complete = false;
+                    stopped = true;
+                    break;
+                }
                 if self.store.scan_run(&inventory.scan_id)?.observed >= MAX_INVENTORY
                     && !observed_paths.contains(&path)
                 {
@@ -970,7 +1094,19 @@ impl NativeVault {
                 .into_iter()
                 .filter(|b| after.as_ref().is_none_or(|id| &b.state.id > id))
             {
-                if work >= options.max_entries || started.elapsed() >= options.max_duration {
+                if work >= options.max_entries
+                    || budget.as_ref().map_or_else(
+                        || started.elapsed() >= options.max_duration,
+                        |b| !b.available(),
+                    )
+                {
+                    stopped = true;
+                    break;
+                }
+                if budget
+                    .as_mut()
+                    .is_some_and(|b| !b.try_unit(format!("absence:{}", binding.state.id.as_str())))
+                {
                     stopped = true;
                     break;
                 }

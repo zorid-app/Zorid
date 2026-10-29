@@ -2,7 +2,7 @@
 const test=require('node:test');
 const assert=require('node:assert/strict');
 const {EventEmitter}=require('node:events');
-const {RustVaultService}=require('../desktop/rust-vault-service.cjs');
+const {RustVaultService,reconciliationStatus}=require('../desktop/rust-vault-service.cjs');
 const {CoreVaultFixtureService}=require('../desktop/core-vault-fixture-service.cjs');
 
 function fixture(options={}){
@@ -265,4 +265,55 @@ test('explicit Retry retains index error recovery without manufacturing a source
 test('concurrent explicit retries with a real source change notify the index once',async()=>{
   const f=fixture();f.changed();await Promise.all([f.service.retryReconciliation(),f.service.retryReconciliation()]);
   assert.equal(f.calls.filter(call=>call==='rescan').length,1);assert.deepEqual(f.notifications,['wake']);assert.equal(f.service.cursor,'1');
+});
+
+const turn=()=>new Promise(resolve=>setImmediate(resolve));
+const workStatus=(phase='discovery')=>({complete:phase==='complete',work:{phase,pending:['discovery','import','publication'].includes(phase),workUnits:1}});
+
+test('interactive import continuations yield event-loop turns, share explicit Retry and keep new hints',async t=>{
+  const f=watchFixture();f.service.reconciliation=workStatus();const notices=[];f.service.listeners.add(change=>notices.push(change));
+  let release,scans=0,active=0,maximum=0;
+  const gate=new Promise(resolve=>{release=resolve;});
+  f.host.rescan=async()=>{scans++;maximum=Math.max(maximum,++active);if(scans===1)await gate;active--;return{complete:scans>=3,reconciliation:workStatus(scans>=3?'complete':'publication')};};
+  f.service.startPolling();t.after(()=>f.service.stopPolling());await turn();assert.equal(scans,1);
+  const retry=f.service.retryReconciliation();await turn();assert.equal(scans,1,'Retry must join the existing continuation');
+  f.event('Unobserved-later.md');release();await retry;
+  assert.equal(scans,1,'one RPC per event-loop turn');assert.equal(f.service.hints.has('Unobserved-later.md'),true);
+  for(let n=0;n<8&&scans<3;n++)await turn();
+  f.service.stopPolling();assert.equal(scans,3);assert.equal(maximum,1);assert.deepEqual(f.notifications,[]);
+  assert.equal(notices.some(change=>change.type==='error'),false,'a voluntary yield is ordinary progress');
+});
+
+test('blocked and failed interactive work do not schedule a busy continuation',async t=>{
+  for(const failure of [false,true]){
+    const f=watchFixture();f.service.reconciliation=workStatus();let scans=0;
+    f.host.rescan=async()=>{scans++;if(failure)throw Object.assign(Error('transient'),{code:'temporary_scan_failure'});return{complete:false,reconciliation:workStatus('blocked')};};
+    f.service.startPolling();t.after(()=>f.service.stopPolling());await f.service.poll();for(let n=0;n<4;n++)await turn();
+    assert.equal(scans,1);assert.equal(f.service.continuation,null);f.service.stopPolling();
+  }
+});
+
+test('retiring the last admitted owner cancels a queued import continuation',async t=>{
+  const f=await startupOwnerFixture(t);f.service.reconciliation=workStatus();
+  f.service.host.request=async(command,_body,_lease,beforeDispatch)=>{beforeDispatch?.();assert.equal(command.method,'rescan');return{result:{complete:false,reconciliation:workStatus()}};};
+  const owner=f.register();await f.service.poll();assert.ok(f.service.continuation);
+  await owner.pause();for(let n=0;n<3;n++)await turn();assert.equal(f.service.continuation,null);assert.equal(f.service.polling,null);
+});
+
+test('partial native reply after owner retirement preserves discovery duty for another admitted owner',async t=>{
+  const f=await startupOwnerFixture(t);const first=f.register('first');f.register('second');await f.service.poll();
+  let release,scans=0;const gate=new Promise(resolve=>{release=resolve;});
+  f.service.host.request=async(command,_body,_lease,beforeDispatch)=>{beforeDispatch?.();assert.equal(command.method,'rescan');scans++;if(scans===1)await gate;return{result:{complete:false,reconciliation:workStatus()}};};
+  f.service.hints.add('Late.md');const pending=f.service.poll();await turn();const paused=first.pause();release();await Promise.all([pending,paused]);
+  assert.equal(scans,1);assert.equal(f.service.reconciliation.complete,true,'the retired owner cannot publish its response');assert.equal(f.service.needsScan,true);
+  await f.service.poll();f.service.stopPolling();assert.equal(scans,2,'the other owner resumes before the five-minute audit');assert.equal(f.service.reconciliation.work.pending,true);
+});
+
+
+test('a failed continuation publishes coherent stopped work instead of stale pending progress',async()=>{
+  const f=fixture();f.service.reconciliation={scanId:'scan',complete:false,scanComplete:true,finished:true,observed:1,imported:0,namespaceApplied:0,issueCount:0,issuesTruncated:false,issues:[],work:{phase:'publication',pending:true,workUnits:1}};
+  f.host.rescan=async()=>{throw Object.assign(Error('unavailable'),{code:'temporary_scan_failure'});};
+  await assert.rejects(f.service.scanNow(),{code:'temporary_scan_failure'});
+  assert.equal(f.service.reconciliation.work.pending,false);assert.equal(f.service.reconciliation.work.phase,'blocked');
+  assert.equal(f.service.reconciliation.failure,'scan_failed');assert.equal(reconciliationStatus(f.service.reconciliation),true);
 });

@@ -46,12 +46,17 @@ function reconciliationStatus(value) {
   const count=value=>Number.isSafeInteger(value)&&value>=0;
   const relative=value=>value===null||typeof value==='string'&&Buffer.byteLength(value,'utf8')<=2048&&value.length>0
     &&!value.startsWith('/')&&!value.includes('\\')&&!/[\u0000-\u001f\u007f]/.test(value)&&!/^[A-Za-z]:/.test(value)&&!/^\.zorid(?:\/|$)/i.test(value)&&!value.split('/').some(part=>!part||part==='.'||part==='..');
-  return object(value)&&Object.keys(value).every(key=>['scanId','complete','scanComplete','finished','observed','imported','namespaceApplied','issueCount','issuesTruncated','issues','failure'].includes(key))&&identity(value.scanId)&&typeof value.complete==='boolean'&&typeof value.scanComplete==='boolean'&&typeof value.finished==='boolean'
+  return object(value)&&Object.keys(value).every(key=>['scanId','complete','scanComplete','finished','observed','imported','namespaceApplied','issueCount','issuesTruncated','issues','failure','work'].includes(key))&&identity(value.scanId)&&typeof value.complete==='boolean'&&typeof value.scanComplete==='boolean'&&typeof value.finished==='boolean'
     &&[value.observed,value.imported,value.namespaceApplied,value.issueCount].every(count)
     &&typeof value.issuesTruncated==='boolean'&&Array.isArray(value.issues)&&value.issues.length<=32
     &&value.issueCount>=value.issues.length&&value.issuesTruncated===(value.issueCount>value.issues.length)
     &&value.issues.every(issue=>object(issue)&&Object.keys(issue).every(key=>key==='path'||key==='code')&&relative(issue.path)&&['scan_limit','recovery_retained','changed_during_scan','reconciliation_blocked'].includes(issue.code))
     &&(!value.complete||value.scanComplete&&value.finished&&value.issueCount===0)
+    &&(value.work===undefined||exactKeys(value.work,['phase','pending','workUnits'])
+      &&['discovery','import','publication','complete','blocked'].includes(value.work.phase)
+      &&typeof value.work.pending==='boolean'&&Number.isInteger(value.work.workUnits)&&value.work.workUnits>=0&&value.work.workUnits<=256
+      &&value.work.pending===['discovery','import','publication'].includes(value.work.phase)
+      &&(!value.complete||value.work.phase==='complete')&&(value.work.phase!=='complete'||value.complete))
     &&(value.failure===undefined||value.failure==='scan_failed'&&!value.complete);
 }
 function entry(value) {

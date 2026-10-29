@@ -162,6 +162,50 @@ fn fixture() -> tempfile::TempDir {
 }
 
 #[test]
+fn interactive_rescan_yields_before_remaining_imports_so_reads_and_checkpoint_cas_interleave() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("already-open.md"), b"existing editor bytes\n").unwrap();
+    let mut host = Host::spawn_options(root.path(), None, true);
+    assert_eq!(host.recv().0["ok"], true);
+    let client = "10000000-0000-4000-8000-000000000001";
+    let lease = host.request(json!({"method":"claim_client","client_id":client}), &[]).0["result"]["lease"].clone();
+    assert!(lease.is_object());
+    for index in 0..32 {
+        std::fs::write(root.path().join(format!("new-{index:02}.md")), format!("new UTF-8 note {index}: é 🐈\n")).unwrap();
+    }
+    let first = host.request(json!({"method":"rescan"}), &[]).0;
+    assert_eq!(first["ok"], true, "{first}");
+    assert_eq!(first["result"]["reconciliation"]["complete"], false,
+        "one interactive continuation must return before consuming the whole new vault: {first}");
+    assert!(first["result"]["imported"].as_u64().unwrap() <= 16, "{first}");
+    let scope = json!({"vaultId":lease["local_store_id"],"clientId":client});
+    let next = "20000000-0000-4000-8000-000000000001";
+    host.send_header(json!({"version":1,"request_id":"1","lease":lease,"command":{"method":"read_path","path":"already-open.md"}}), &[]);
+    let (read, bytes) = host.recv();
+    assert_eq!(read["ok"], true, "{read}");
+    assert_eq!(bytes, b"existing editor bytes\n");
+    host.send_header(json!({"version":1,"request_id":"1","lease":lease,"command":{"method":"checkpoint_cas","scope":scope,"key":"between-import-quanta","expected_revision":null,"next_revision":next,"has_state":true}}), b"retained foreground draft");
+    let (saved, _) = host.recv();
+    assert_eq!(saved["ok"], true, "{saved}");
+    assert_eq!(saved["result"]["checkpoint"]["revision"], next);
+    let mut completed = false;
+    for _ in 0..128 {
+        let scan = host.request(json!({"method":"rescan"}), &[]).0;
+        assert_eq!(scan["ok"], true, "{scan}");
+        if scan["result"]["reconciliation"]["complete"] == true { completed = true; break; }
+    }
+    assert!(completed, "bounded continuations must eventually finish");
+    host.send_header(json!({"version":1,"request_id":"1","lease":lease,"command":{"method":"checkpoint_load","scope":scope,"key":"between-import-quanta"}}), &[]);
+    let (loaded, retained) = host.recv();
+    assert_eq!(loaded["ok"], true, "{loaded}");
+    assert_eq!(loaded["result"]["checkpoint"]["revision"], next);
+    assert_eq!(retained, b"retained foreground draft");
+    let listed = host.request(json!({"method":"list_snapshot"}), &[]).0;
+    assert_eq!(listed["result"]["entries"].as_array().unwrap().len(), 33);
+    host.close();
+}
+
+#[test]
 fn real_host_preserves_binary_and_replays_across_processes() {
     let root = fixture();
     let bytes = [0, 255, 13, 10, 0, 128];

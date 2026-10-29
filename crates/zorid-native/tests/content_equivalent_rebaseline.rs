@@ -107,3 +107,127 @@ fn original_inode_elsewhere_prevents_adopting_same_byte_replacement() {
     assert_eq!(bindings(dir.path()), before);
     assert_eq!(fs::read(dir.path().join("Original.md")).unwrap(), b"saved note\n");
 }
+
+fn quantum_options() -> zorid_native::ExternalReconcileOptions {
+    zorid_native::ExternalReconcileOptions {
+        scan: ScanOptions {
+            max_duration: std::time::Duration::from_nanos(1),
+            ..Default::default()
+        },
+        max_work_units: std::num::NonZeroU16::new(1).unwrap(),
+    }
+}
+fn finish_quantum(vault: &mut NativeVault) -> zorid_native::ExternalReconcileQuantum {
+    for _ in 0..200 {
+        let turn = vault
+            .reconcile_external_quantum(quantum_options(), ExternalFileMode::Auto)
+            .unwrap();
+        assert!(turn.work_units <= 1);
+        if !turn.pending {
+            return turn;
+        }
+    }
+    panic!("copied namespace did not finish cooperative validation");
+}
+#[test]
+fn quantum_equivalent_copy_progresses_with_checkpoint_cas_between_every_turn_and_restart() {
+    let dir = fixture();
+    old_device(dir.path());
+    let before = bindings(dir.path());
+    let history = proofs(dir.path());
+    let mut vault = NativeVault::open(dir.path()).unwrap();
+    let states = vault.list().unwrap();
+    let scope = zorid_native::CheckpointScope {
+        vault_id: vault.identity().unwrap().local_store_id,
+        client_id: op("ca51e9e1-1b85-4f4b-a959-f972fb445a7a"),
+    };
+    let mut revision: Option<String> = None;
+    let mut completed = false;
+    for i in 0..250 {
+        let turn = vault
+            .reconcile_external_quantum(quantum_options(), ExternalFileMode::Auto)
+            .unwrap();
+        assert!(turn.work_units <= 1);
+        let next = format!("ef0a94f0-d4c0-4d92-b18c-{i:012x}");
+        vault
+            .checkpoint_compare_and_swap(
+                &scope,
+                zorid_native::CheckpointWrite {
+                    key: "between-rebaseline-turns",
+                    expected_revision: revision.as_deref(),
+                    next_revision: &next,
+                    encoded_state: Some("{\"retained\":true}"),
+                },
+            )
+            .unwrap();
+        revision = Some(next);
+        if !turn.pending {
+            assert_eq!(
+                turn.phase,
+                zorid_native::ExternalWorkPhase::Complete,
+                "{turn:?}"
+            );
+            completed = true;
+            break;
+        }
+        if i == 8 {
+            drop(vault);
+            vault = NativeVault::open_existing(dir.path()).unwrap();
+        }
+    }
+    assert!(completed);
+    assert_eq!(vault.list().unwrap(), states);
+    assert_ne!(bindings(dir.path()), before);
+    assert_eq!(proofs(dir.path()), history);
+    assert_eq!(
+        fs::read(dir.path().join("Folder/Note.md")).unwrap(),
+        b"saved note\n"
+    );
+}
+#[test]
+fn quantum_changed_copy_and_prepared_intent_remain_fail_closed() {
+    for prepared in [false, true] {
+        let dir = fixture();
+        old_device(dir.path());
+        let before = bindings(dir.path());
+        let mut vault = NativeVault::open(dir.path()).unwrap();
+        if prepared {
+            let note = vault
+                .list()
+                .unwrap()
+                .into_iter()
+                .find(|state| state.path.as_str() == "Folder/Note.md")
+                .unwrap();
+            vault
+                .prepare_host_intent(
+                    &op("pending-quantum-client"),
+                    &MutationRequest {
+                        operation_id: op("pending-quantum-save"),
+                        mutation: Mutation::Write {
+                            id: note.id,
+                            expected: note.revision,
+                            content: b"never guessed".to_vec(),
+                        },
+                    },
+                )
+                .unwrap();
+        } else {
+            fs::write(
+                dir.path().join("Folder/Note.md"),
+                b"external changed bytes\n",
+            )
+            .unwrap();
+        }
+        let turn = finish_quantum(&mut vault);
+        assert_eq!(turn.phase, zorid_native::ExternalWorkPhase::Blocked);
+        assert_eq!(bindings(dir.path()), before);
+        assert_eq!(
+            fs::read(dir.path().join("Folder/Note.md")).unwrap(),
+            if prepared {
+                b"saved note\n".as_slice()
+            } else {
+                b"external changed bytes\n".as_slice()
+            }
+        );
+    }
+}

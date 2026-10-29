@@ -17,12 +17,19 @@ pub(super) struct EnrolledScan<'lock> {
 impl<'lock> EnrolledScan<'lock> {
     fn admit(vault: &NativeVault, lock: &'lock File) -> Result<Self> {
         if !vault.store.family_is_enrolled()? {
-            return Err(Error::Unsupported("external family reconciliation requires enrollment"));
+            return Err(Error::Unsupported(
+                "external family reconciliation requires enrollment",
+            ));
         }
-        Ok(Self { _lock: lock, identity: vault.store.identity()?, root: fs::identity(&vault.paths.root)? })
+        Ok(Self {
+            _lock: lock,
+            identity: vault.store.identity()?,
+            root: fs::identity(&vault.paths.root)?,
+        })
     }
     pub(super) fn check(&self, vault: &NativeVault) -> Result<()> {
-        if fs::identity(&vault.paths.root)? != self.root || vault.store.identity()? != self.identity {
+        if fs::identity(&vault.paths.root)? != self.root || vault.store.identity()? != self.identity
+        {
             return Err(Error::Busy("external scan enrollment changed"));
         }
         Ok(())
@@ -36,7 +43,285 @@ impl<'lock> EnrolledScan<'lock> {
     }
 }
 
+pub(super) struct RebaselineCursor {
+    scan_id: OperationId,
+    prepared: zorid_store::IdleRebaselinePreparation,
+    phase: u8,
+    offset: usize,
+    attempts: Vec<OperationId>,
+    directories: Vec<zorid_store::DirectoryAttempt>,
+    namespace_members: Vec<(OperationId, usize)>,
+    witnesses: Vec<Option<RebaselineWitness>>,
+}
+enum RebaselineWitness {
+    File(crate::fs_stream::ReadonlyFileWitness),
+    Directory,
+}
+enum RebaselineProgress {
+    NotEquivalent,
+    Pending,
+    Applied,
+}
 impl NativeVault {
+    /// The copied-namespace exception also cooperates: one exact historical
+    /// artifact audit or one fully hashed member per unit. Only scalar witnesses
+    /// survive a yield. Final reachability/stamp checks and the atomic metadata
+    /// transaction may overrun the soft clock, never the whole-vault body reads.
+    fn rebaseline_equivalent_quantum(
+        &mut self,
+        scan: &mut external_scan_progress::ProgressScan,
+        budget: &mut external_scan_quantum::ExternalWorkBudget,
+    ) -> Result<RebaselineProgress> {
+        if !scan.run.complete || !scan.issues.is_empty() {
+            self.external_rebaseline = None;
+            return Ok(RebaselineProgress::NotEquivalent);
+        }
+        let mut cursor = self.external_rebaseline.take();
+        if cursor
+            .as_ref()
+            .is_some_and(|cursor| cursor.scan_id != scan.run.scan_id)
+        {
+            cursor = None;
+        }
+        if let Some(existing) = cursor.as_ref() {
+            if !self.store.idle_rebaseline_is_current(&existing.prepared)? {
+                cursor = None;
+            }
+        }
+        let mut cursor = if let Some(cursor) = cursor {
+            cursor
+        } else {
+            let bindings = self.store.physical_binding_metadata()?;
+            if !bindings.iter().any(|binding| {
+                scan.entries.get(&binding.state.path).is_some_and(|entry| {
+                    entry.identity != binding.physical.inode
+                        || entry.parent_identity != binding.physical.parent_inode
+                })
+            }) {
+                return Ok(RebaselineProgress::NotEquivalent);
+            }
+            let locations: std::collections::BTreeMap<_, _> = scan
+                .entries
+                .iter()
+                .map(|(path, entry)| (&entry.identity, path))
+                .collect();
+            let mut inodes = BTreeSet::new();
+            for binding in &bindings {
+                let Some(entry) = scan.entries.get(&binding.state.path) else {
+                    return Ok(RebaselineProgress::NotEquivalent);
+                };
+                if entry.kind != binding.state.kind
+                    || !inodes.insert(&entry.identity)
+                    || locations
+                        .get(&binding.physical.inode)
+                        .is_some_and(|path| **path != binding.state.path)
+                {
+                    return Ok(RebaselineProgress::NotEquivalent);
+                }
+            }
+            let Some(prepared) = self.store.begin_idle_rebaseline(bindings)? else {
+                return Ok(RebaselineProgress::NotEquivalent);
+            };
+            let count = prepared.members().len();
+            RebaselineCursor {
+                scan_id: scan.run.scan_id.clone(),
+                prepared,
+                phase: 0,
+                offset: 0,
+                attempts: self.store.projection_attempt_ids(true)?,
+                directories: self.store.directory_attempts(true)?,
+                namespace_members: self
+                    .store
+                    .namespace_attempt_metadata(true)?
+                    .into_iter()
+                    .flat_map(|attempt| {
+                        attempt
+                            .members
+                            .into_iter()
+                            .map(move |member| (attempt.job.job_id.clone(), member.index))
+                    })
+                    .collect(),
+                witnesses: (0..count).map(|_| None).collect(),
+            }
+        };
+        // A failed equivalence speculation is not retry work. Remember it for
+        // this exact inventory/database epoch so a one-unit turn can advance
+        // ordinary conflict handling instead of repeating the same hash forever.
+        if cursor.phase == 5 {
+            self.external_rebaseline = Some(cursor);
+            return Ok(RebaselineProgress::NotEquivalent);
+        }
+        loop {
+            match cursor.phase {
+                0 => {
+                    while cursor.offset < cursor.attempts.len() {
+                        let id = &cursor.attempts[cursor.offset];
+                        if !budget.try_unit(format!("rebaseline:file-artifact:{}", id.as_str())) {
+                            self.external_rebaseline = Some(cursor);
+                            return Ok(RebaselineProgress::Pending);
+                        }
+                        self.store.projection_attempt(id)?;
+                        for suffix in ["stage", "previous"] {
+                            if fs::node_type(
+                                &self.paths.private,
+                                &format!("{}.{suffix}", id.as_str()),
+                            )?
+                            .is_some()
+                            {
+                                return self.reject_external_rebaseline(cursor);
+                            }
+                        }
+                        cursor.offset += 1;
+                    }
+                    cursor.phase = 1;
+                    cursor.offset = 0;
+                }
+                1 => {
+                    while cursor.offset < cursor.directories.len() {
+                        let id = &cursor.directories[cursor.offset].attempt_id;
+                        if !budget
+                            .try_unit(format!("rebaseline:directory-artifact:{}", id.as_str()))
+                        {
+                            self.external_rebaseline = Some(cursor);
+                            return Ok(RebaselineProgress::Pending);
+                        }
+                        if fs::node_type(
+                            &self.paths.private,
+                            &format!("{}.directory", id.as_str()),
+                        )?
+                        .is_some()
+                        {
+                            return self.reject_external_rebaseline(cursor);
+                        }
+                        cursor.offset += 1;
+                    }
+                    cursor.phase = 2;
+                    cursor.offset = 0;
+                }
+                2 => {
+                    while cursor.offset < cursor.namespace_members.len() {
+                        let (id, index) = &cursor.namespace_members[cursor.offset];
+                        if !budget.try_unit(format!(
+                            "rebaseline:namespace-artifact:{}:{index}",
+                            id.as_str()
+                        )) {
+                            self.external_rebaseline = Some(cursor);
+                            return Ok(RebaselineProgress::Pending);
+                        }
+                        for suffix in ["namespace", "directory"] {
+                            if fs::node_type(
+                                &self.paths.private,
+                                &format!("{}.{index}.{suffix}", id.as_str()),
+                            )?
+                            .is_some()
+                            {
+                                return self.reject_external_rebaseline(cursor);
+                            }
+                        }
+                        cursor.offset += 1;
+                    }
+                    cursor.phase = 3;
+                    cursor.offset = 0;
+                }
+                3 => {
+                    while cursor.offset < cursor.prepared.members().len() {
+                        let before = cursor.prepared.members()[cursor.offset].clone();
+                        if !budget
+                            .try_unit(format!("rebaseline:member:{}", before.state.id.as_str()))
+                        {
+                            self.external_rebaseline = Some(cursor);
+                            return Ok(RebaselineProgress::Pending);
+                        }
+                        let snapshot = &scan.entries[&before.state.path];
+                        let physical = PhysicalIdentity {
+                            inode: snapshot.identity.clone(),
+                            parent_inode: snapshot.parent_identity.clone(),
+                        };
+                        let (parent, name) = self.paths.parent(&before.state.path)?;
+                        let (content, witness) = if before.state.kind == EntryKind::File {
+                            let witness = crate::fs_stream::readonly_file_witness(&parent, &name)?;
+                            let Some(file) = scan.file_snapshot(self, &before.state.path)? else {
+                                return self.reject_external_rebaseline(cursor);
+                            };
+                            crate::fs_stream::verify_readonly_file_witness(
+                                &parent, &name, &witness,
+                            )?;
+                            (
+                                Some((file.length, zorid_store::Sha256Digest(file.digest))),
+                                RebaselineWitness::File(witness),
+                            )
+                        } else {
+                            if !scan.confirm_snapshot(self, &before.state.path)? {
+                                return self.reject_external_rebaseline(cursor);
+                            }
+                            (None, RebaselineWitness::Directory)
+                        };
+                        if !self.store.validate_idle_rebaseline_member(
+                            &mut cursor.prepared,
+                            cursor.offset,
+                            physical,
+                            content,
+                        )? {
+                            if self.store.idle_rebaseline_is_current(&cursor.prepared)? {
+                                return self.reject_external_rebaseline(cursor);
+                            }
+                            return Ok(RebaselineProgress::Pending);
+                        }
+                        cursor.witnesses[cursor.offset] = Some(witness);
+                        cursor.offset += 1;
+                        self.point("external_quantum_rebaseline_member_validated");
+                    }
+                    cursor.phase = 4;
+                }
+                _ => {
+                    if !budget.try_unit("rebaseline:finalize".into()) {
+                        self.external_rebaseline = Some(cursor);
+                        return Ok(RebaselineProgress::Pending);
+                    }
+                    self.point("external_quantum_rebaseline_before_verify");
+                    scan.revalidate(self)?;
+                    for (before, witness) in cursor.prepared.members().iter().zip(&cursor.witnesses)
+                    {
+                        match witness
+                            .as_ref()
+                            .ok_or(Error::Busy("rebaseline witness missing"))?
+                        {
+                            RebaselineWitness::File(witness) => {
+                                let (parent, name) = self.paths.parent(&before.state.path)?;
+                                crate::fs_stream::verify_readonly_file_witness(
+                                    &parent, &name, witness,
+                                )?;
+                            }
+                            RebaselineWitness::Directory => {
+                                if !scan.confirm_snapshot(self, &before.state.path)? {
+                                    return Err(Error::Busy("rebaseline directory changed"));
+                                }
+                            }
+                        }
+                    }
+                    if !self.store.idle_rebaseline_is_current(&cursor.prepared)? {
+                        return Ok(RebaselineProgress::Pending);
+                    }
+                    // Retire old absence authority before changing any binding.
+                    scan.discard_for_rebaseline(self)?;
+                    self.point("external_quantum_rebaseline_before_apply");
+                    self.paths.verify()?;
+                    return Ok(if self.store.finish_idle_rebaseline(cursor.prepared)? {
+                        RebaselineProgress::Applied
+                    } else {
+                        RebaselineProgress::Pending
+                    });
+                }
+            }
+        }
+    }
+}
+impl NativeVault {
+    fn reject_external_rebaseline(&mut self, mut cursor: RebaselineCursor) -> Result<RebaselineProgress> {
+        cursor.phase = 5;
+        self.external_rebaseline = Some(cursor);
+        Ok(RebaselineProgress::NotEquivalent)
+    }
     /// Accept only fresh same-path projections of the COMPLETE bound namespace.
     /// Extra untracked physical files remain ordinary imports. One changed or
     /// missing bound file conservatively prevents the entire rebaseline batch.
@@ -132,14 +417,125 @@ impl NativeVault {
         let _guard = self.paths.lock(self.options.lock_timeout)?;
         self.paths.verify()?;
         let enrolled = EnrolledScan::admit(self, &_guard)?;
+        Ok(self
+            .reconcile_external_locked(options, mode, &enrolled, None)?
+            .0)
+    }
+    /// Interactive discovery and publication share one monotonic, cooperative
+    /// budget. Returning pending releases the vault lock; the next call resumes
+    /// the same durable inventory rather than granting partial absence proof.
+    pub fn reconcile_external_quantum(
+        &mut self,
+        options: ExternalReconcileOptions,
+        mode: ExternalFileMode,
+    ) -> Result<ExternalReconcileQuantum> {
+        let mut budget = external_scan_quantum::ExternalWorkBudget::new(&options)?;
+        let _guard = self.paths.lock(self.options.lock_timeout)?;
+        self.paths.verify()?;
+        let enrolled = EnrolledScan::admit(self, &_guard)?;
+        let (mut reconciliation, mut scan) =
+            self.reconcile_external_locked(options.scan, mode, &enrolled, Some(&mut budget))?;
+        if !scan.active() {
+            return Ok(ExternalReconcileQuantum {
+                reconciliation,
+                publication: ReconcileReport::default(),
+                phase: ExternalWorkPhase::Blocked,
+                pending: false,
+                work_units: budget.used(),
+            });
+        }
+        let source_pending = !scan.run.complete
+            || !scan.pending_paths().is_empty()
+            || reconciliation
+                .issues
+                .iter()
+                .any(|issue| issue.reason.contains("duration budget exhausted"));
+        if source_pending {
+            return Ok(ExternalReconcileQuantum {
+                phase: if scan.run.complete {
+                    ExternalWorkPhase::Import
+                } else {
+                    ExternalWorkPhase::Discovery
+                },
+                pending: true,
+                work_units: budget.used(),
+                reconciliation,
+                publication: ReconcileReport::default(),
+            });
+        }
+        if !scan.publication_started() {
+            // Complete discovery must precede publication, but a source conflict
+            // must not suppress independent pending recovery. Each publication
+            // unit retains its exact existing guards; conflicts remain in this
+            // inventory and prevent terminal success after recovery is attempted.
+            scan.begin_publication(self)?;
+            self.external_rebaseline = None;
+        }
+        let (done, publication) =
+            self.recover_external_quantum_locked(&scan.run.scan_id, &mut budget)?;
+        enrolled.finish(self)?;
+        reconciliation.complete = done && publication.blocked.is_empty() && reconciliation.issues.is_empty();
+        let phase = if !done {
+            ExternalWorkPhase::Publication
+        } else if reconciliation.complete {
+            ExternalWorkPhase::Complete
+        } else {
+            ExternalWorkPhase::Blocked
+        };
+        if done {
+            scan.retire(self)?;
+        }
+        Ok(ExternalReconcileQuantum {
+            reconciliation,
+            publication,
+            phase,
+            pending: !done,
+            work_units: budget.used(),
+        })
+    }
+    fn reconcile_external_locked(
+        &mut self,
+        options: ScanOptions,
+        mode: ExternalFileMode,
+        enrolled: &EnrolledScan<'_>,
+        mut budget: Option<&mut external_scan_quantum::ExternalWorkBudget>,
+    ) -> Result<(
+        ExternalReconcileReport,
+        external_scan_progress::ProgressScan,
+    )> {
         let namespace_origin = OperationId::new("native_external_namespace")?;
         let observe_origin = OperationId::new("native_external_observe")?;
         let create_origin = OperationId::new("native_external_create")?;
-        let started = std::time::Instant::now();
+        let started = budget
+            .as_ref()
+            .map_or_else(std::time::Instant::now, |b| b.started());
         let duration = options.max_duration;
-        let mut scan = self.external_progress_scan_locked(options.clone())?;
-        if self.rebaseline_equivalent_inventory(&mut scan, started, duration)? {
-            scan = self.external_progress_scan_locked(options)?;
+        let mut scan =
+            self.external_progress_scan_with_budget(options.clone(), budget.as_deref_mut())?;
+        if !scan.publication_started() {
+            let rebased = if let Some(budget) = budget.as_deref_mut() {
+                match self.rebaseline_equivalent_quantum(&mut scan, budget)? {
+                    RebaselineProgress::Applied => true,
+                    RebaselineProgress::NotEquivalent => false,
+                    RebaselineProgress::Pending => {
+                        // A final epoch mismatch can race after safe cursor
+                        // retirement. Restart discovery, keeping this ordinary
+                        // continuation pending rather than reporting a conflict.
+                        if !scan.active() {
+                            scan = self.external_progress_scan_with_budget(options.clone(), Some(budget))?;
+                        }
+                        self.paths.verify()?;
+                        enrolled.finish(self)?;
+                        let report = ExternalReconcileReport { complete: false, run: scan.run.clone(), imported: Vec::new(), namespace: Vec::new(), issues: vec![ScanIssue { path: None, reason: "external reconciliation duration budget exhausted during rebaseline preparation".into() }] };
+                        return Ok((report, scan));
+                    }
+                }
+            } else {
+                self.rebaseline_equivalent_inventory(&mut scan, started, duration)?
+            };
+            if rebased {
+                scan = self.external_progress_scan_with_budget(options, budget.as_deref_mut())?;
+            }
         }
         let mut report = ExternalReconcileReport {
             complete: false,
@@ -156,6 +552,19 @@ impl NativeVault {
                 reason: issue.reason.clone(),
             })
             .collect();
+        if !scan.active() {
+            self.paths.verify()?;
+            enrolled.finish(self)?;
+            return Ok((report, scan));
+        }
+        if budget.is_some() {
+            report.issues.extend_from_slice(scan.retained_issues());
+            if scan.publication_started() {
+                return Ok((report, scan));
+            }
+        }
+        let retained_start = report.issues.len();
+        let mut namespace_processed = scan.namespace_processed();
         let pending_paths = scan.pending_paths();
         let pending: BTreeSet<_> = pending_paths.iter().cloned().collect();
         let mut processed = BTreeSet::new();
@@ -169,7 +578,7 @@ impl NativeVault {
             .collect();
         folders.sort_by_key(|p| p.as_str().split('/').count());
         for path in folders {
-            if started.elapsed() >= duration {
+            if budget.is_none() && started.elapsed() >= duration {
                 report.issues.push(ScanIssue {
                     path: Some(path),
                     reason: "external reconciliation duration budget exhausted".into(),
@@ -186,15 +595,35 @@ impl NativeVault {
                         .read(&owner.state.id)?
                         .is_some_and(|e| e.state.path == path && !e.state.deleted)
                 {
+                    if budget.as_mut().is_some_and(|b| !b.enroll_positive(&path)) {
+                        report.issues.push(ScanIssue {
+                            path: Some(path),
+                            reason: "external reconciliation duration budget exhausted".into(),
+                        });
+                        break;
+                    }
                     match scan.confirm_snapshot(self, &path) {
                         Ok(true) => {
                             processed.insert(path.clone());
                         }
-                        Ok(false) => {}
-                        Err(error) => report.issues.push(ScanIssue {
-                            path: Some(path.clone()),
-                            reason: self.external_reconciliation_issue(error)?,
-                        }),
+                        Ok(false) => {
+                            if budget.is_some() {
+                                processed.insert(path.clone());
+                                report.issues.push(ScanIssue {
+                                    path: Some(path.clone()),
+                                    reason: "external parent changed before enrollment".into(),
+                                });
+                            }
+                        }
+                        Err(error) => {
+                            if budget.is_some() {
+                                processed.insert(path.clone());
+                            }
+                            report.issues.push(ScanIssue {
+                                path: Some(path.clone()),
+                                reason: self.external_reconciliation_issue(error)?,
+                            });
+                        }
                     }
                 }
                 continue;
@@ -208,6 +637,13 @@ impl NativeVault {
                 }) {
                     continue;
                 }
+            }
+            if budget.as_mut().is_some_and(|b| !b.enroll_positive(&path)) {
+                report.issues.push(ScanIssue {
+                    path: Some(path),
+                    reason: "external reconciliation duration budget exhausted".into(),
+                });
+                break;
             }
             let attempt = (|| -> Result<_> {
                 if !scan.confirm_snapshot(self, &path)? {
@@ -228,10 +664,15 @@ impl NativeVault {
                     report.imported.push(commit);
                     processed.insert(path.clone());
                 }
-                Err(error) => report.issues.push(ScanIssue {
-                    path: Some(path),
-                    reason: self.external_reconciliation_issue(error)?,
-                }),
+                Err(error) => {
+                    if budget.is_some() {
+                        processed.insert(path.clone());
+                    }
+                    report.issues.push(ScanIssue {
+                        path: Some(path),
+                        reason: self.external_reconciliation_issue(error)?,
+                    });
+                }
             }
         }
         // Only a fully covered and revalidated inventory may interpret a
@@ -249,20 +690,35 @@ impl NativeVault {
             });
             let mut handled = BTreeSet::new();
             for before in &bindings {
-                if started.elapsed() >= duration {
+                if budget.is_none() && started.elapsed() >= duration {
                     report.issues.push(ScanIssue {
                         path: Some(before.state.path.clone()),
                         reason: "external reconciliation duration budget exhausted".into(),
                     });
                     break;
                 }
-                if handled.contains(&before.state.id) {
+                if handled.contains(&before.state.id)
+                    || budget.is_some() && namespace_processed.contains(&before.state.id)
+                {
                     continue;
                 }
                 if scan.entries.get(&before.state.path).is_some_and(|s| {
                     s.identity == before.physical.inode && s.kind == before.state.kind
                 }) {
                     continue;
+                }
+                if budget
+                    .as_mut()
+                    .is_some_and(|b| !b.try_unit(format!("namespace:{}", before.state.id.as_str())))
+                {
+                    report.issues.push(ScanIssue {
+                        path: Some(before.state.path.clone()),
+                        reason: "external reconciliation duration budget exhausted".into(),
+                    });
+                    break;
+                }
+                if budget.is_some() {
+                    namespace_processed.insert(before.state.id.clone());
                 }
                 if scan.entries.contains_key(&before.state.path) {
                     report.issues.push(ScanIssue {
@@ -505,7 +961,10 @@ impl NativeVault {
                 .then_with(|| a.cmp(b))
         });
         for path in paths {
-            if started.elapsed() >= duration {
+            if budget.as_mut().map_or_else(
+                || started.elapsed() >= duration,
+                |b| !b.enroll_positive(&path),
+            ) {
                 report.issues.push(ScanIssue {
                     path: Some(path),
                     reason: "external reconciliation duration budget exhausted".into(),
@@ -535,7 +994,13 @@ impl NativeVault {
                         let expected = scan
                             .file_snapshot(self, &path)?
                             .ok_or(Error::Busy("file snapshot missing"))?;
-                        self.observe_streamed_file_with_scan(&path, &parent, &expected, &observe_origin, Some(&enrolled))
+                        self.observe_streamed_file_with_scan(
+                            &path,
+                            &parent,
+                            &expected,
+                            &observe_origin,
+                            Some(&enrolled),
+                        )
                     } else {
                         Ok(None)
                     };
@@ -601,12 +1066,31 @@ impl NativeVault {
             }
             processed.insert(path);
         }
-        scan.record_processed(self, &processed.into_iter().collect::<Vec<_>>())?;
+        if budget.is_some() {
+            let durable: Vec<_> = report.issues[retained_start..]
+                .iter()
+                .filter(|issue| !issue.reason.contains("duration budget exhausted"))
+                .cloned()
+                .collect();
+            // Unfinished positive observations may legitimately defer a moved
+            // inode/parent. Complete inventory resets positive acknowledgements
+            // and retries them with full namespace proof; only then retain an
+            // unresolved conflict across publication-sized turns.
+            if scan.run.complete {
+                scan.retain_issues(self, &durable)?;
+            }
+            scan.record_namespace_processed(self, namespace_processed)?;
+        }
+        scan.record_processed_retaining(
+            self,
+            &processed.into_iter().collect::<Vec<_>>(),
+            budget.is_some(),
+        )?;
         self.paths.verify()?;
         enrolled.finish(self)?;
         report.complete =
             scan.run.complete && report.issues.is_empty() && scan.pending_paths().is_empty();
-        Ok(report)
+        Ok((report, scan))
     }
 }
 
@@ -616,10 +1100,12 @@ mod enrolled_scan_tests {
 
     fn enrolled(root: &std::path::Path) -> NativeVault {
         let mut vault = NativeVault::open(root).unwrap();
-        vault.family_enroll(&FamilyScope {
-            realm_id: zorid_sync_protocol::RealmId::new("scan-realm").unwrap(),
-            vault_id: zorid_sync_protocol::VaultId::new("scan-vault").unwrap(),
-        }).unwrap();
+        vault
+            .family_enroll(&FamilyScope {
+                realm_id: zorid_sync_protocol::RealmId::new("scan-realm").unwrap(),
+                vault_id: zorid_sync_protocol::VaultId::new("scan-vault").unwrap(),
+            })
+            .unwrap();
         vault
     }
 
@@ -633,12 +1119,24 @@ mod enrolled_scan_tests {
             std::fs::write(root.path().join(name), bytes).unwrap();
             let path = VaultPath::new(name).unwrap();
             let (parent, leaf) = vault.paths.parent(&path).unwrap();
-            let expected = content_stream::file_snapshot(&parent, &leaf).unwrap().unwrap();
-            let mode = if name.ends_with(".md") { FamilyCreateMode::Text } else { FamilyCreateMode::Binary };
-            vault.observe_new_family_stream_with_scan(
-                &path, &parent, &expected, mode,
-                &OperationId::new("scan_test_create").unwrap(), Some(&scan),
-            ).unwrap();
+            let expected = content_stream::file_snapshot(&parent, &leaf)
+                .unwrap()
+                .unwrap();
+            let mode = if name.ends_with(".md") {
+                FamilyCreateMode::Text
+            } else {
+                FamilyCreateMode::Binary
+            };
+            vault
+                .observe_new_family_stream_with_scan(
+                    &path,
+                    &parent,
+                    &expected,
+                    mode,
+                    &OperationId::new("scan_test_create").unwrap(),
+                    Some(&scan),
+                )
+                .unwrap();
             scan.check(&vault).unwrap();
             let entry = vault.store.read_path(&path).unwrap().unwrap();
             assert_eq!(entry.content.as_deref(), Some(bytes));
@@ -653,9 +1151,17 @@ mod enrolled_scan_tests {
         let other_root = tempfile::tempdir().unwrap();
         let vault = enrolled(root.path());
         let other = enrolled(other_root.path());
-        let sql = rusqlite::Connection::open(other_root.path().join(".zorid/vault.sqlite")).unwrap();
-        sql.execute("UPDATE authority_identity SET local_store_id=?1", [vault.store.identity().unwrap().local_store_id.as_str()]).unwrap();
-        assert_eq!(vault.store.identity().unwrap(), other.store.identity().unwrap());
+        let sql =
+            rusqlite::Connection::open(other_root.path().join(".zorid/vault.sqlite")).unwrap();
+        sql.execute(
+            "UPDATE authority_identity SET local_store_id=?1",
+            [vault.store.identity().unwrap().local_store_id.as_str()],
+        )
+        .unwrap();
+        assert_eq!(
+            vault.store.identity().unwrap(),
+            other.store.identity().unwrap()
+        );
         let lock = vault.paths.lock(vault.options.lock_timeout).unwrap();
         let scan = EnrolledScan::admit(&vault, &lock).unwrap();
         assert!(matches!(scan.check(&other), Err(Error::Busy(_))));
@@ -666,27 +1172,62 @@ mod enrolled_scan_tests {
         let root = tempfile::tempdir().unwrap();
         let mut vault = enrolled(root.path());
         std::fs::write(root.path().join("retained.md"), b"retained").unwrap();
-        assert!(vault.reconcile_external(ScanOptions::default(), ExternalFileMode::Auto).unwrap().complete);
+        assert!(
+            vault
+                .reconcile_external(ScanOptions::default(), ExternalFileMode::Auto)
+                .unwrap()
+                .complete
+        );
         let lock = vault.paths.lock(vault.options.lock_timeout).unwrap();
         let scan = EnrolledScan::admit(&vault, &lock).unwrap();
         let sql = rusqlite::Connection::open(root.path().join(".zorid/vault.sqlite")).unwrap();
-        let authored: i64 = sql.query_row("SELECT count(*) FROM authored_envelopes", [], |row| row.get(0)).unwrap();
-        sql.execute("DELETE FROM family_materializations", []).unwrap();
+        let authored: i64 = sql
+            .query_row("SELECT count(*) FROM authored_envelopes", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        sql.execute("DELETE FROM family_materializations", [])
+            .unwrap();
         // Per-file membership is scalar, rather than an implicit whole-graph
         // status read. The unchanged full corruption oracle still guards both
         // ends of a scan; Store writers retain their own source validation.
         scan.check(&vault).unwrap();
-        assert!(matches!(scan.finish(&vault), Err(Error::Store(zorid_store::StoreError::Corrupt(_)))));
-        assert!(matches!(EnrolledScan::admit(&vault, &lock), Err(Error::Store(zorid_store::StoreError::Corrupt(_)))));
+        assert!(matches!(
+            scan.finish(&vault),
+            Err(Error::Store(zorid_store::StoreError::Corrupt(_)))
+        ));
+        assert!(matches!(
+            EnrolledScan::admit(&vault, &lock),
+            Err(Error::Store(zorid_store::StoreError::Corrupt(_)))
+        ));
         let path = VaultPath::new("retained.md").unwrap();
         let (parent, name) = vault.paths.parent(&path).unwrap();
-        let expected = content_stream::file_snapshot(&parent, &name).unwrap().unwrap();
+        let expected = content_stream::file_snapshot(&parent, &name)
+            .unwrap()
+            .unwrap();
         // The ordinary capture entrypoint still performs the same full check.
-        assert!(matches!(vault.capture_observed_file(
-            &path, &parent, &name, &OperationId::new("unscoped_test").unwrap(),
-            None, None, &expected, true,
-        ), Err(Error::Store(zorid_store::StoreError::Corrupt(_)))));
-        assert_eq!(sql.query_row("SELECT count(*) FROM authored_envelopes", [], |row| row.get::<_, i64>(0)).unwrap(), authored);
-        assert_eq!(std::fs::read(root.path().join("retained.md")).unwrap(), b"retained");
+        assert!(matches!(
+            vault.capture_observed_file(
+                &path,
+                &parent,
+                &name,
+                &OperationId::new("unscoped_test").unwrap(),
+                None,
+                None,
+                &expected,
+                true,
+            ),
+            Err(Error::Store(zorid_store::StoreError::Corrupt(_)))
+        ));
+        assert_eq!(
+            sql.query_row("SELECT count(*) FROM authored_envelopes", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            authored
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("retained.md")).unwrap(),
+            b"retained"
+        );
     }
 }

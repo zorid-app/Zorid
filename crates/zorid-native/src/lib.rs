@@ -146,7 +146,36 @@ impl Default for ScanOptions {
         }
     }
 }
+/// Interactive reconciliation is cooperative. The duration includes admission
+/// and validation, but is a soft deadline: one admitted indivisible work unit
+/// can overrun it. The separate nonzero unit cap bounds each continuation.
+#[derive(Debug, Clone)]
+pub struct ExternalReconcileOptions {
+    pub scan: ScanOptions,
+    pub max_work_units: std::num::NonZeroU16,
+}
+impl Default for ExternalReconcileOptions {
+    fn default() -> Self {
+        Self {
+            scan: ScanOptions { max_duration: Duration::from_millis(50), ..ScanOptions::default() },
+            max_work_units: std::num::NonZeroU16::new(16).expect("nonzero default"),
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExternalWorkPhase { Discovery, Import, Publication, Complete, Blocked }
 #[derive(Debug, Serialize, Deserialize)]
+pub struct ExternalReconcileQuantum {
+    pub reconciliation: ExternalReconcileReport,
+    pub publication: ReconcileReport,
+    pub phase: ExternalWorkPhase,
+    /// More bounded work is available. A blocked cycle is incomplete but does
+    /// not request an automatic immediate retry.
+    pub pending: bool,
+    pub work_units: u16,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanIssue {
     pub path: Option<VaultPath>,
     pub reason: String,
@@ -469,6 +498,7 @@ impl NativeVault {
     ) -> Result<ExternalReconcileReport> {
         unsupported()
     }
+    pub fn reconcile_external_quantum(&mut self, _: ExternalReconcileOptions, _: ExternalFileMode) -> Result<ExternalReconcileQuantum> { unsupported() }
     pub fn rescan_with_options(&mut self, _: ScanOptions) -> Result<RescanReport> {
         unsupported()
     }

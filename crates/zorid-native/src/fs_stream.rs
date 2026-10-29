@@ -80,6 +80,33 @@ fn verify_path(
     Ok(())
 }
 
+/// A hash is captured between witness creation and verification by the caller.
+/// Keeping the full ctime/mtime/size/link/inode stamp lets a later cooperative
+/// turn reject in-place edits without rehashing every earlier file together.
+#[derive(Debug)]
+pub(super) struct ReadonlyFileWitness {
+    parent: String,
+    stamp: Stamp,
+}
+pub(super) fn readonly_file_witness(parent: &File, name: &str) -> Result<ReadonlyFileWitness> {
+    let file = fs::regular(parent, name)?.ok_or(Error::Busy("rebaseline file disappeared"))?;
+    let expected = stamp(&file.metadata()?)?;
+    let parent_id = parent_identity(parent)?;
+    verify_path(parent, name, &parent_id, &file, expected)?;
+    Ok(ReadonlyFileWitness {
+        parent: parent_id,
+        stamp: expected,
+    })
+}
+pub(super) fn verify_readonly_file_witness(
+    parent: &File,
+    name: &str,
+    witness: &ReadonlyFileWitness,
+) -> Result<()> {
+    let file = fs::regular(parent, name)?.ok_or(Error::Busy("rebaseline file disappeared"))?;
+    verify_path(parent, name, &witness.parent, &file, witness.stamp)
+}
+
 fn read_filled(reader: &mut impl Read, buffer: &mut [u8]) -> Result<usize> {
     let mut count = 0;
     while count < buffer.len() {

@@ -81,6 +81,29 @@ fn pending_undo(root: &Path) -> (NativeVault, HostIntentRef, zorid_core::CommitR
     (vault, reference, receipt)
 }
 
+/// Drive only the explicitly resumable new work contract. Legacy replies still
+/// return after one call. Every actual response and physical oracle is retained;
+/// only the per-call import counts are summed for the complete episode.
+fn settled_rescan(vault: &mut NativeVault, leases: &mut ClientLeases) -> (Value, u64) {
+    let mut imported = 0;
+    let mut scan_id = None;
+    for _ in 0..128 {
+        let (scan, body) = execute(vault, leases, None, Command::Rescan, vec![]).unwrap();
+        assert!(body.is_empty());
+        let count = scan["imported"].as_u64().unwrap();
+        imported += count;
+        if let Some(work) = scan.get("reconciliation").and_then(|status| status.get("work")) {
+            assert!(count <= 16, "one quantum cannot import an unbounded page: {scan}");
+            assert!(work["workUnits"].as_u64().unwrap() <= 16);
+        }
+        if let Some(before) = &scan_id { assert_eq!(before, &scan["scan_id"], "publication continues the accepted inventory"); }
+        scan_id = Some(scan["scan_id"].clone());
+        if scan["reconciliation"]["work"]["pending"] != true { return (scan, imported); }
+        assert_eq!(scan["complete"], false);
+    }
+    panic!("publication continuation did not settle");
+}
+
 #[test]
 fn family_rescan_publishes_merged_acknowledged_undo_after_cancelled_attempt() {
     let fixture = tempfile::tempdir().unwrap();
@@ -89,11 +112,10 @@ fn family_rescan_publishes_merged_acknowledged_undo_after_cancelled_attempt() {
     let root = fixture.path().canonicalize().unwrap();
     let (mut vault, reference, receipt) = pending_undo(&root);
     let mut leases = ClientLeases::default();
-    let (scan, body) = execute(&mut vault, &mut leases, None, Command::Rescan, vec![]).unwrap();
-    assert!(body.is_empty());
+    let (scan, imported) = settled_rescan(&mut vault, &mut leases);
     assert_eq!(scan["complete"], true, "{scan}");
     assert_eq!(scan["reconciliation"]["complete"], true, "{scan}");
-    assert_eq!(scan["imported"], 1, "{scan}");
+    assert_eq!(imported, 1, "{scan}");
     let current = vault.read(&EntryId::new("note").unwrap()).unwrap().unwrap();
     assert_eq!(current.content.as_deref(), Some(MERGED));
     assert_ne!(current.state.revision, receipt.changes[0].after.revision);
@@ -116,9 +138,9 @@ fn family_rescan_publishes_merged_acknowledged_undo_after_cancelled_attempt() {
     }
     // Poll/retry cannot author a second undo or lose the merged external edit.
     let cursor = vault.list_snapshot().unwrap().cursor;
-    let (again, _) = execute(&mut vault, &mut leases, None, Command::Rescan, vec![]).unwrap();
+    let (again, imported) = settled_rescan(&mut vault, &mut leases);
     assert_eq!(again["complete"], true, "{again}");
-    assert_eq!(again["imported"], 0, "{again}");
+    assert_eq!(imported, 0, "{again}");
     assert_eq!(
         vault.commit_host_intent(&reference).unwrap().receipt,
         Some(receipt)
@@ -135,14 +157,7 @@ fn family_rescan_reports_retained_recovery_without_overwriting_replacement_inode
     let replacement = b"Unrelated replacement inode\n";
     std::fs::write(root.join("replacement.tmp"), replacement).unwrap();
     std::fs::rename(root.join("replacement.tmp"), root.join("A.md")).unwrap();
-    let (scan, _) = execute(
-        &mut vault,
-        &mut ClientLeases::default(),
-        None,
-        Command::Rescan,
-        vec![],
-    )
-    .unwrap();
+    let (scan, _) = settled_rescan(&mut vault, &mut ClientLeases::default());
     assert_eq!(scan["complete"], false, "{scan}");
     assert_eq!(scan["reconciliation"]["complete"], false, "{scan}");
     assert!(

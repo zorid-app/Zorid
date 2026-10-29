@@ -362,6 +362,38 @@ impl Store {
             .map(|(id, entry, completed, s)| decode_attempt(&id, &entry, completed, &s))
             .collect()
     }
+    /// Scheduling metadata only. Publication callers must point-read and fully
+    /// validate an admitted attempt before acting on it; no retained body is
+    /// decoded while selecting unrelated work.
+    pub fn projection_attempt_ids(&self, include_completed: bool) -> Result<Vec<OperationId>> {
+        let mut statement = self.connection.prepare(
+            "SELECT attempt_id FROM projection_attempts WHERE ?1 OR completed=0 ORDER BY rowid",
+        )?;
+        let rows = statement
+            .query_map([include_completed], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|id| {
+                OperationId::new(id)
+                    .map_err(|_| StoreError::Corrupt("invalid projection attempt identity".into()))
+            })
+            .collect()
+    }
+    /// Active-attempt scheduling for one entry, independently of the number or
+    /// size of other entries' pending bodies. The selected attempt stays subject
+    /// to the unchanged full `projection_attempt` decoder.
+    pub fn projection_attempt_ids_for_entry(&self, id: &EntryId) -> Result<Vec<OperationId>> {
+        let mut statement = self.connection.prepare("SELECT attempt_id FROM projection_attempts WHERE entry_id=?1 AND completed=0 ORDER BY rowid")?;
+        let rows = statement
+            .query_map([id.as_str()], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|id| {
+                OperationId::new(id)
+                    .map_err(|_| StoreError::Corrupt("invalid projection attempt identity".into()))
+            })
+            .collect()
+    }
     pub fn begin_projection(&mut self, id: &EntryId) -> Result<ProjectionAttempt> {
         self.begin_projection_inner(id, None)
     }
@@ -1648,5 +1680,72 @@ mod recovery_prefix_tests {
         assert_eq!(store.projection_clean_prefix(&[]).unwrap(), 0);
         assert!(store.projection_clean_prefix(&vec![states[0].clone(); Store::PROJECTION_RECOVERY_MAX_STATES + 1]).is_err());
         assert_eq!(reads.count.get(), 0);
+    }
+}
+
+#[cfg(test)]
+mod attempt_scheduling_tests {
+    use super::*;
+    #[test]
+    fn scheduling_ids_never_decode_unselected_bodies_and_selected_attempt_stays_strict() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(root.path().join("vault.sqlite")).unwrap();
+        let mut attempts = Vec::new();
+        for name in ["selected", "unrelated"] {
+            let id = EntryId::new(name).unwrap();
+            store
+                .apply(&MutationRequest {
+                    operation_id: OperationId::new(format!("create-{name}")).unwrap(),
+                    mutation: Mutation::Create {
+                        id: id.clone(),
+                        path: VaultPath::new(format!("{name}.md")).unwrap(),
+                        kind: EntryKind::File,
+                        content: Some(b"retained".to_vec()),
+                    },
+                })
+                .unwrap();
+            attempts.push(store.begin_projection(&id).unwrap());
+        }
+        store
+            .connection
+            .execute(
+                "UPDATE projection_attempts SET record='{' WHERE attempt_id=?1",
+                [attempts[1].attempt_id.as_str()],
+            )
+            .unwrap();
+        assert_eq!(
+            store.projection_attempt_ids(false).unwrap(),
+            attempts
+                .iter()
+                .map(|a| a.attempt_id.clone())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            store
+                .projection_attempt_ids_for_entry(&attempts[0].target.state.id)
+                .unwrap(),
+            vec![attempts[0].attempt_id.clone()]
+        );
+        assert_eq!(
+            store.projection_attempt(&attempts[0].attempt_id).unwrap(),
+            attempts[0]
+        );
+        assert!(store.projection_attempt(&attempts[1].attempt_id).is_err());
+        assert!(
+            store.projection_attempts(false).is_err(),
+            "the legacy full validator is preserved"
+        );
+        store
+            .finish_projection(&attempts[0].attempt_id, false)
+            .unwrap();
+        assert!(store
+            .projection_attempt_ids_for_entry(&attempts[0].target.state.id)
+            .unwrap()
+            .is_empty());
+        assert_eq!(store.projection_attempt_ids(true).unwrap().len(), 2);
+        assert_eq!(
+            store.projection_attempt_ids(false).unwrap(),
+            vec![attempts[1].attempt_id.clone()]
+        );
     }
 }

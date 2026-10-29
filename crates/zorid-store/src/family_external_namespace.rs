@@ -597,6 +597,12 @@ fn check_members(
     Ok(result)
 }
 impl Store {
+    /// Opaque connection-local observation of commits made by other authority
+    /// connections. Own checkpoint writes do not invalidate interactive native
+    /// publication cursors; foreign publication-only commits still do.
+    pub fn external_work_data_version(&self) -> Result<i64> {
+        Ok(self.connection.query_row("PRAGMA data_version", [], |row| row.get(0))?)
+    }
     /// Immutable metadata for a bounded unfinished/completed physical inventory.
     /// Content bytes remain on disk; resumed native scans recheck them lazily.
     pub fn external_scan_proofs(&self, id: &OperationId) -> Result<Vec<ExternalScanProof>> {
@@ -1211,4 +1217,27 @@ fn move_physical(
             physical: physical.clone(),
         },
     )
+}
+
+#[cfg(test)]
+mod external_work_version_tests {
+    use super::*;
+    #[test]
+    fn foreign_publication_only_commit_invalidates_ephemeral_work_cursor() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().canonicalize().unwrap().join("vault.sqlite");
+        let mut owner = Store::open(&database).unwrap();
+        let id = EntryId::new("external-work-file").unwrap();
+        owner.apply(&zorid_core::MutationRequest { operation_id: OperationId::new("external-work-create").unwrap(), mutation: zorid_core::Mutation::Create { id: id.clone(), path: VaultPath::new("Note.md").unwrap(), kind: EntryKind::File, content: Some(b"body".to_vec()) } }).unwrap();
+        let attempt = owner.begin_projection(&id).unwrap();
+        let source = owner.changes_after("0", 1).unwrap().head_cursor;
+        let before = owner.external_work_data_version().unwrap();
+        let mut other = Store::open_existing_no_follow(&database).unwrap();
+        other.mark_projection(&attempt.attempt_id, crate::ProjectionPhase::Staged, Some("1:2".into())).unwrap();
+        assert_eq!(owner.changes_after("0", 1).unwrap().head_cursor, source);
+        assert_ne!(owner.external_work_data_version().unwrap(), before);
+        let after = owner.external_work_data_version().unwrap();
+        owner.mark_projection(&attempt.attempt_id, crate::ProjectionPhase::Staged, Some("1:2".into())).unwrap();
+        assert_eq!(owner.external_work_data_version().unwrap(), after, "own publication work must not invalidate its own cursor");
+    }
 }

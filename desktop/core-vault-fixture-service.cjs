@@ -120,7 +120,7 @@ class CoreVaultFixtureService {
     if (documentRuntime) requireDocumentRuntime(host);
     this.documentRuntimeEnabled=documentRuntime;
     this.documentRuntimeOwners=new Set();
-    this.documentScheduler=null;this.pendingIndexSource=false;this.hasStartedPolling=false;this.reconciliationRetry=null;
+    this.documentScheduler=null;this.pendingIndexSource=false;this.hasStartedPolling=false;this.reconciliationRetry=null;this.continuation=null;this.continuationFailed=false;
     this.host = host;
     this.familyMode = familyMode;
     this.root = host.root;
@@ -209,7 +209,8 @@ class CoreVaultFixtureService {
     else if(this.hasStartedPolling||this.closed||this.runtimeFailed)this.stopPolling();
   }
   startPolling() {
-    if(this.timer)return;
+    this.continuationFailed=false;
+    if(this.timer){this.scheduleContinuation();return;}
     startWatcher(this.root,this.watchState,this.watchFactory);
     this.timer = setInterval(() => { void this.poll(); }, this.pollMs);
     this.timer.unref();
@@ -217,9 +218,16 @@ class CoreVaultFixtureService {
   }
   stopPolling() {
     clearInterval(this.timer);this.timer=null;
+    clearImmediate(this.continuation);this.continuation=null;
     // A later admission must reconcile the interval with no active watcher.
     if(this.watchState.active)this.needsScan=true;
     stopWatcher(this.watchState);
+  }
+  scheduleContinuation() {
+    if(this.continuation||this.continuationFailed||!this.timer||this.closed||this.runtimeFailed||this.reconciliation?.work?.pending!==true)return;
+    if(this.documentRuntimeEnabled&&!this.runtimeOwner())return;
+    this.continuation=setImmediate(()=>{this.continuation=null;void this.poll();});
+    this.continuation.unref();
   }
   subscribe(listener) {
     this.live();
@@ -280,10 +288,12 @@ class CoreVaultFixtureService {
     }:null;
     const before=this.cursor;
     this.polling = this.pollNow(host,maintenanceGuard).then(result=>{
+      if(result?.scanned)this.continuationFailed=false;
       if(this.cursor!==before||result?.reloaded)this.pendingIndexSource=true;
       const indexNotified=this.flushIndexSourceNotification(maintenanceGuard,result?.scanned&&this.documentScheduler?.needsRetry?.());
       return {indexNotified};
     }).catch(reason => {
+      this.continuationFailed=reason?.code!=='client_ownership_lost';
       if(this.host.fatal||this.host.exited){this.runtimeFailed=true;this.stopPolling();void this.documentScheduler?.close();}
       // Accepted journal progress remains an indexing obligation even when later
       // filesystem maintenance fails. A retired owner cannot deliver it; retain
@@ -293,7 +303,7 @@ class CoreVaultFixtureService {
       try{indexNotified=this.flushIndexSourceNotification(maintenanceGuard);}catch{/* Retain for an active owner. */}
       if (!this.closed) this.notify({ type: 'error', message: 'Native vault reconciliation needs attention.', code: reason?.code ?? 'reconciliation_failed' });
       return {indexNotified};
-    }).finally(() => { this.polling = null; });
+    }).finally(() => { this.polling = null;this.scheduleContinuation(); });
     return this.polling;
   }
   async changePage(host=this.host) {
@@ -331,11 +341,16 @@ class CoreVaultFixtureService {
       maintenanceGuard?.();
       this.lastScan=this.now();
       this.updateReconciliation(scan.reconciliation);
-      if(!scan.complete)this.notify({type:'error',code:'scan_incomplete',message:'Native vault scan is incomplete; existing files are retained.'});
+      if(!scan.complete&&scan.reconciliation?.work?.pending!==true)this.notify({type:'error',code:'scan_incomplete',message:'Native vault scan is incomplete; existing files are retained.'});
       return scan;
     } catch(reason) {
+      // A response can arrive after the selected owner retires. Its native
+      // inventory may already be partial even though this owner cannot publish
+      // the status. Preserve observation duty for the next admitted owner.
+      this.needsScan=true;
+      this.continuationFailed=reason?.code!=='client_ownership_lost';
       maintenanceGuard?.();
-      if(this.reconciliation)this.updateReconciliation({...this.reconciliation,complete:false,failure:'scan_failed'});
+      if(this.reconciliation)this.updateReconciliation({...this.reconciliation,complete:false,...(this.reconciliation.work?{work:{...this.reconciliation.work,phase:'blocked',pending:false}}:{}),failure:'scan_failed'});
       throw reason;
     }
   }
@@ -346,7 +361,17 @@ class CoreVaultFixtureService {
     // Multiple viewers may retry the same incomplete import. Share only the
     // currently accepted explicit retry; a later request is a fresh file check.
     if(this.reconciliationRetry)return this.reconciliationRetry;
+    this.continuationFailed=false;
     const retry=(async()=>{
+      // A continuation already owns the accepted inventory. Join its guarded
+      // poll rather than queueing a second rescan of the same native work.
+      if(this.reconciliation?.work?.pending===true){
+        await this.poll();
+        return this.reconciliation?structuredClone(this.reconciliation):null;
+      }
+      // Consume only the obligation that existed before this explicit pass.
+      // Watch errors/new gaps during the awaited scan can set it again.
+      this.needsScan=false;
       await this.scanNow();
       const polled=await this.poll();
       if(!polled?.indexNotified)
@@ -400,9 +425,14 @@ class CoreVaultFixtureService {
     const auditMs=this.familyMode&&this.watchState.healthy&&this.reconciliation?.complete===true
       ?Math.max(this.rescanMs,HEALTHY_WATCH_AUDIT_MS):this.rescanMs;
     const due=this.now()-this.lastScan>=auditMs;
+    if(this.continuationFailed&&!due)return {scanned,reloaded:false};
     const known=new Set(hints.length?[...this.entries.values()].filter(row=>row.state.kind==='file'&&!row.state.deleted).map(row=>row.state.path):[]);
     const knownFiles=hints.length&&hints.every(path=>known.has(path));
-    if(this.needsScan||due||this.familyMode&&hints.length&&!knownFiles){
+    if(this.reconciliation?.work?.pending===true){
+      // Hints collected while an inventory is in progress still belong to the
+      // next observation. Do not acknowledge them with an older inventory.
+      await this.scanNow(host,maintenanceGuard);scanned=true;
+    }else if(this.needsScan||due||this.familyMode&&hints.length&&!knownFiles){
       this.hints.clear();this.needsScan=false;
       await this.scanNow(host,maintenanceGuard);scanned=true;
     }else if(hints.length){

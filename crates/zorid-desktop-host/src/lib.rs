@@ -986,6 +986,15 @@ struct ReconciliationStatus {
     issue_count: usize,
     issues_truncated: bool,
     issues: Vec<ReconciliationIssue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    work: Option<ReconciliationWork>,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReconciliationWork {
+    phase: zorid_native::ExternalWorkPhase,
+    pending: bool,
+    work_units: u16,
 }
 #[derive(Serialize)]
 struct ReconciliationIssue {
@@ -1033,6 +1042,7 @@ fn reconciliation_status(report: &zorid_native::ExternalReconcileReport) -> Reco
         issue_count: report.issues.len(),
         issues_truncated: report.issues.len() > issues.len(),
         issues,
+        work: None,
     }
 }
 fn initialize_desktop_vault(vault: &mut NativeVault) -> Result<ReconciliationStatus, Value> {
@@ -1054,18 +1064,14 @@ fn initialize_desktop_vault(vault: &mut NativeVault) -> Result<ReconciliationSta
 fn reconcile_desktop_vault(
     vault: &mut NativeVault,
 ) -> Result<(zorid_native::ExternalReconcileReport, ReconciliationStatus), Value> {
-    // Shared native import policy owns bytes, family mode and safe filesystem observation.
-    let report = vault
-        .reconcile_external(
-            zorid_native::ScanOptions::default(),
-            zorid_native::ExternalFileMode::Auto,
-        )
-        .map_err(native_fault)?;
-    // Discovery must precede publication recovery so externally moved/deleted
-    // branches are observed before pending journal state is retried.
-    let recovered = vault.recover().map_err(native_fault)?;
+    let quantum = vault.reconcile_external_quantum(
+        zorid_native::ExternalReconcileOptions::default(),
+        zorid_native::ExternalFileMode::Auto,
+    ).map_err(native_fault)?;
+    let report = quantum.reconciliation;
     let mut status = reconciliation_status(&report);
-    for (path, _) in recovered.blocked {
+    status.work = Some(ReconciliationWork { phase: quantum.phase, pending: quantum.pending, work_units: quantum.work_units });
+    for (path, _) in quantum.publication.blocked {
         status.complete = false;
         status.issue_count += 1;
         if status.issues.len() < 32 {

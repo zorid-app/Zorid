@@ -40,6 +40,8 @@ mod external_observe_stream;
 mod external_scan;
 #[path = "external_scan_progress.rs"]
 mod external_scan_progress;
+#[path = "external_scan_quantum.rs"]
+mod external_scan_quantum;
 #[cfg(test)]
 #[path = "external_scan_progress_tests.rs"]
 mod external_scan_progress_tests;
@@ -99,6 +101,8 @@ pub struct NativeVault {
     options: Options,
     recovery: Option<zorid_recovery::RecoveryStore>,
     recovery_queue: Option<std::collections::VecDeque<EntryId>>,
+    external_publication: Option<external_scan_quantum::PublicationCursor>,
+    external_rebaseline: Option<external_namespace::RebaselineCursor>,
     // Optional immutable Base data belongs to this vault handle, never to a
     // query pin, lease, transaction or source-write capability. Drop releases it.
     base_preparation_cache: std::cell::RefCell<zorid_bases::BasePreparationCache>,
@@ -155,6 +159,8 @@ impl NativeVault {
             options,
             recovery: None,
             recovery_queue: None,
+            external_publication: None,
+            external_rebaseline: None,
             base_preparation_cache: std::cell::RefCell::new(
                 zorid_bases::BasePreparationCache::new(),
             ),
@@ -410,6 +416,8 @@ impl NativeVault {
         Ok(report)
     }
     pub fn recover(&mut self) -> Result<ReconcileReport> {
+        self.external_publication = None;
+        self.external_rebaseline = None;
         let _guard = self.paths.lock(self.options.lock_timeout)?;
         self.recover_locked()
     }
@@ -748,12 +756,11 @@ impl NativeVault {
             self.namespace_clear(&entry.state.path)?;
         }
         self.paths.verify()?;
-        if let Some(a) = self
-            .store
-            .projection_attempts(false)?
-            .into_iter()
-            .find(|a| a.target.state.id == *id)
-        {
+        for attempt_id in self.store.projection_attempt_ids_for_entry(id)? {
+            let a = self.store.projection_attempt(&attempt_id)?;
+            if a.target.state.id != *id {
+                return Err(zorid_store::StoreError::Corrupt("projection attempt entry changed".into()).into());
+            }
             self.resume(&a)?;
         }
         let Some(current) = self.store.read_metadata(id)? else {
