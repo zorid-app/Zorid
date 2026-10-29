@@ -3,6 +3,23 @@
 ## Execution checkpoint — shared-core coordinator
 
 
+**URGENT live save preservation; installation explicitly HELD — 2026-10-28.**
+User reports “Could not save Home”, “Could not save Project Idea”, “Folder needs
+attention”. Keep protected default-profile main71549/renderer44315 OPEN: no quit,
+reload, replacement, force/discard. This supersedes the prior closure request and
+install-next instruction until coordinated draft preservation/diagnosis releases
+this hold. Both bundles are intact; accepted startup/opening batch is not proof
+that the live save failure is fixed. Do not apply even if PID later disappears.
+Main ledger/handoff owner is this thread; requesting live diagnostic root owns
+read-only inspection/preservation. Workspace/NoteBuffer/core edits require named
+ownership before implementation. No runtime source edits here.
+Installed Electron44.8.0/ASAR8a97b721/hostd4f8bb25, not staged44.9.1/feebce14/a1c862be.
+No default-profile CDP handle/inspector flags/listening TCP endpoints found;
+9257/9258 were closed disposable tests. Exact passive handoff and install hold:
+`tmp/bases-edit-performance-20261028/protected-live-save-failure-handoff.json`,
+`installation-held-live-drafts.json`. See urgent queue entry for acceptance scope.
+
+
 **Main integrated; staged smoke passed; installation awaits normal user-app closure — 2026-10-28.**
 Main `6ff5bc4d` contains the confirmed batch. Staged Electron44.9.1/embedded a1c862be
 passed isolated note/Base/save/restart plus 11 slash/focus/Properties/embed checks;

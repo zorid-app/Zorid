@@ -1,5 +1,38 @@
 # User findings queue
 
+## URGENT: real-session automatic save failure — 2026-10-28
+
+**OPEN; live draft preservation takes priority over installation.** User reports
+screenshot messages “Could not save Home”, “Could not save Project Idea” and
+“Folder needs attention”. User requires reliable automatic saving without this
+failure UX. Cause, on-disk/durable draft state, and scope are not yet established;
+do not infer a specific corruption, CAS conflict, permissions or capacity cause.
+Protected default-profile main PID71549 and renderer44315 must stay OPEN. Do not
+quit, reload, replace, force-close or discard. Previous requests for user closure
+are superseded. Preserve both installed fallback and staged replacement bundles.
+
+Ownership: this main integration owner records the ledger/handoff only. The
+requesting live diagnostic root owns read-only inspection and draft preservation;
+Workspace, NoteBuffer and core changes require explicit named scope coordination
+before edits. No runtime edit scope is granted by this finding.
+
+Passive handoff receipt:
+`tmp/bases-edit-performance-20261028/protected-live-save-failure-handoff.json`.
+Installed bundle is `app.zorid.notes` version/build0.1.0, Electron44.8.0,
+ASAR `8a97b7219ff34da870b2c3ee9e6af2989571cc687fa74b112d139f250ba4b56d`,
+embedded host `d4f8bb259a4e14b172e1f7b935cd1f0bec00a8df0bed75039ce4d283c7d8aea6`.
+No prior reliable default-profile CDP handle; passive metadata finds no inspector
+flags or listening TCP endpoints on71549/44315. Ports9257/9258 and historical
+UUIDs were closed disposable tests, not this real session. Prior CUA getApp timed
+out and provides no reliable app-state evidence; do not use selection to reopen.
+
+Installation is explicitly held even if process state changes, until coordinated
+draft preservation/diagnosis releases the hold. Task installer now rejects apply
+while `installation-held-live-drafts.json` exists. Staged smoke and representative
+startup/opening evidence do not establish this live save failure fixed. Base-edit
+and external-to-Search latency findings remain open separately.
+
+
 ## Remove unnecessary rescan/reindex work; notes and Bases both slow — 2026-10-28
 
 

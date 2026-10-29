@@ -431,3 +431,18 @@ Both installed fallback and verified staged bundles remain untouched. After
 normal closure, the remaining gates are atomic replacement, actual installed
 isolated-profile smoke and old-bundle deletion after acceptance. Broader Base
 post-edit latency and external-to-Search latency remain open as recorded above.
+
+
+### Urgent delivery hold — live save failures, 2026-10-28
+
+The latest user report supersedes the normal-closure delivery plan: real-session
+“Could not save Home”, “Could not save Project Idea” and “Folder needs attention”.
+Keep default-profile main71549/renderer44315 OPEN. No quit/reload/replace/force/
+discard; both bundles preserved. Installation stays held pending coordinated live
+draft preservation and diagnosis, even if process state changes. No live-fix claim
+from the staged smoke or startup campaign. This thread owns ledger/handoff only;
+live diagnostic root owns read-only preservation. Named Workspace/NoteBuffer/core
+edit scopes are required before implementation. Exact passive installed identity
+and endpoint absence are in protected-live-save-failure-handoff.json under the
+existing task evidence directory. Previous disposable CDP ports are not live
+handles for the protected session. See urgent user-findings entry.
