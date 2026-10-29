@@ -34,11 +34,27 @@ export interface NoteDraftProtectionOptions {
 
 const delays=[500,1500,4000,30_000] as const;
 const transientCodes=new Set(['draft_storage_failure','draft_journal_busy','draft_transport_lost']);
+type JournalFailureSource='main'|'transport'|'protocol'|'untrusted';
+type JournalFailure=Error&{code?:string;source?:JournalFailureSource};
 const failure=(code:string)=>Object.assign(new Error('Independent note draft protection is incomplete; the draft is retained.'),{code});
+function sourceOf(value:object):JournalFailureSource|undefined {
+  const descriptor=Object.getOwnPropertyDescriptor(value,'source');
+  if(!descriptor)return 'source'in value?'untrusted':undefined;
+  const source=Object.hasOwn(descriptor,'value')?descriptor.value:undefined;
+  return source==='main'||source==='transport'||source==='protocol'?source:'untrusted';
+}
+function transientFailure(error:Error):boolean {
+  const source=sourceOf(error),code=Object.getOwnPropertyDescriptor(error,'code')?.value;
+  return (source===undefined||source==='main'||source==='transport')&&typeof code==='string'&&transientCodes.has(code);
+}
 function asError(value:unknown):Error {
   if(value instanceof Error)return value;
-  const error=failure('draft_protection_failed');
-  if(value&&typeof value==='object'&&'code'in value&&typeof value.code==='string')error.code=value.code;
+  const error:JournalFailure=failure('draft_protection_failed');
+  if(value&&typeof value==='object'){
+    const code=Object.getOwnPropertyDescriptor(value,'code')?.value,source=sourceOf(value);
+    if(typeof code==='string'&&/^[a-z][a-z0-9_]{0,127}$/.test(code))error.code=code;
+    if(source!==undefined)error.source=source;
+  }
   return error;
 }
 function sameCapture(left:NoteDraftCapture,right:NoteDraftCapture):boolean {
@@ -62,6 +78,7 @@ export class NoteDraftProtection {
   private timer:ReturnType<typeof setTimeout>|undefined;
   private retryStep=0;
   private running?:Promise<void>;
+  private explicitRequested=false;
   private scheduled=false;
   private stopped=false;
 
@@ -97,10 +114,12 @@ export class NoteDraftProtection {
     this.notify();
   }
   /** Explicit barrier retries the retained original CAS before protecting latest. */
-  flush():Promise<void> {
+  flush():Promise<void> {return this.startFlush(true);}
+  private startFlush(explicit:boolean):Promise<void> {
     if(this.stopped)return Promise.reject(failure('draft_protection_stopped'));
     this.cancelTimer();
-    if(this.running)return this.running;
+    if(this.running){this.explicitRequested ||= explicit;return this.running;}
+    this.explicitRequested=explicit;
     const operation=this.run();this.running=operation;
     void operation.then(()=>this.finished(operation),error=>this.finished(operation,error));
     return operation;
@@ -111,7 +130,7 @@ export class NoteDraftProtection {
     else if(!this.failureError()&&this.inventory!=='unknown')this.kick();
     this.notify();
   }
-  availability():void {if(!this.stopped){this.cancelTimer();this.kick();}}
+  availability():void {if(!this.stopped){const error=this.failureError();if(error&&!transientFailure(error))return;this.cancelTimer();this.kick();}}
   stop():void {this.stopped=true;this.cancelTimer();}
 
   private covered(capture:NoteDraftCapture):boolean {return this.options.coreCovered(capture);}
@@ -120,26 +139,29 @@ export class NoteDraftProtection {
   private scheduleRetry():void {
     if(this.stopped||this.timer!==undefined)return;
     const error=this.failureError();
-    if(!error||!transientCodes.has((error as Error&{code?:string}).code??''))return;
+    if(!error||!transientFailure(error))return;
     if(this.inventory!=='unknown'&&(!this.latest||this.status.currentProtected))return;
     const delay=delays[Math.min(this.retryStep++,delays.length-1)];
-    this.timer=setTimeout(()=>{this.timer=undefined;if(!this.stopped)void this.flush().catch(()=>{});},delay);
+    this.timer=setTimeout(()=>{this.timer=undefined;if(!this.stopped)void this.startFlush(false).catch(()=>{});},delay);
   }
   private kick():void {
     if(this.stopped||this.scheduled)return;
+    const error=this.failureError();if(error&&!transientFailure(error))return;
     this.scheduled=true;
-    queueMicrotask(()=>{this.scheduled=false;if(!this.stopped)void this.flush().catch(()=>{});});
+    queueMicrotask(()=>{this.scheduled=false;if(!this.stopped)void this.startFlush(false).catch(()=>{});});
   }
   private createProtection(capture:NoteDraftCapture):DraftProtection {
     const provider=this.options.provider;
     return new DraftProtection({entryId:capture.snapshot.baseline.entryId,writer:capture.writer,initialReceipt:this.options.initialReceipt,
-      transport:{scope:provider.scope,compareAndSwap:request=>{this.assertActive();return provider.compareAndSwap(request);},retire:request=>{this.assertActive();return provider.retire(request);}},
+      transport:{scope:provider.scope,compareAndSwap:async request=>{this.assertActive();try{return await provider.compareAndSwap(request);}catch(error){throw asError(error);}},
+        retire:async request=>{this.assertActive();try{return await provider.retire(request);}catch(error){throw asError(error);}}},
       encodePendingOperation:this.options.encodePendingOperation??JSON.stringify,
       onStatus:()=>{if(this.stopped)return;this.scheduleRetry();this.notify();}});
   }
   private async run():Promise<void> {
     this.assertActive();
     if(this.inventory==='unknown'){
+      if(!this.explicitRequested&&this.inventoryError&&!transientFailure(this.inventoryError))return;
       if(this.options.retryInventory){
         try{await this.options.retryInventory();}catch(error){if(!this.stopped)this.markInventory('unknown',error);throw error;}
         this.assertActive();
@@ -148,6 +170,7 @@ export class NoteDraftProtection {
     }
     for(;;){
       this.assertActive();const capture=this.latest;if(!capture)return;
+      const error=this.errorValue??this.protection?.status.error;if(!this.explicitRequested&&error&&!transientFailure(error))return;
       if(this.covered(capture)){
         await this.retireClean(capture);this.assertActive();
         if(this.latest===capture)return;

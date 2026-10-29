@@ -56,10 +56,50 @@ test('one failure timer uses 500,1500,4000 then repeated 30 second retries',asyn
   assert.ok(f.writes.every(write=>write===f.writes[0]));f.helper.stop();t.mock.timers.tick(300_000);await drain();assert.equal(f.writes.length,expected);
 });
 
-for(const code of ['draft_revision_conflict','invalid_draft_receipt','draft_protection_failed','io'])test(`terminal ${code} does not schedule an automatic journal retry`,async t=>{
+for(const code of ['draft_revision_conflict','invalid_draft_receipt','draft_protection_failed','io','draft_journal_corrupt','lease_revoked','unknown_failure'])test(`terminal ${code} does not schedule an automatic journal retry`,async t=>{
   t.mock.timers.enable({apis:['setTimeout']});const f=fixture();f.fail(error(code));f.helper.markInventory('ready');f.helper.capture(capture());await until(()=>!!f.helper.status.error);
   for(let n=2;n<8;n++)f.helper.capture(capture('New '+n,n));t.mock.timers.tick(300_000);await drain();assert.equal(f.writes.length,1);assert.equal(f.helper.status.retryPending,false);
-  f.fail(undefined);f.helper.availability();await until(()=>f.helper.status.currentProtected);assert.equal(f.writes[1],f.writes[0]);assert.equal(f.writes.at(-1)!.draft,'New 7');f.helper.stop();
+  f.fail(undefined);f.helper.availability();await drain();assert.equal(f.writes.length,1,'passive availability cannot promote a terminal journal failure');
+  await f.helper.flush();assert.equal(f.helper.status.currentProtected,true);assert.equal(f.writes[1],f.writes[0]);assert.equal(f.writes.at(-1)!.draft,'New 7');f.helper.stop();
+});
+
+for(const source of ['protocol','host','foreign','authorization','unexpected-source'])for(const plain of [false,true])test(`${source} provenance with transient-looking code stays terminal (${plain?'plain throw':'Error'})`,async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});const rejection={code:'draft_storage_failure',source,message:'Private plain message must not be copied'};
+  const f=fixture();f.fail(plain?rejection:Object.assign(Error('Sanitized provider error'),rejection));f.helper.markInventory('ready');f.helper.capture(capture());await until(()=>!!f.helper.status.error);
+  assert.equal(f.helper.status.retryPending,false);f.helper.availability();t.mock.timers.tick(300_000);await drain();assert.equal(f.writes.length,1);
+  if(plain){assert.equal((f.helper.status.error as Error&{source:string}).source,source==='protocol'?'protocol':'untrusted');assert.ok(!f.helper.status.error!.message.includes(rejection.message));}
+  f.fail(undefined);await f.helper.flush();assert.equal(f.writes[1],f.writes[0]);assert.equal(f.helper.status.currentJournalAcknowledged,true);f.helper.stop();
+});
+
+for(const source of ['main','transport',undefined])for(const plain of [false,true])test(`known journal transport provenance ${source??'legacy'} retries the exact request (${plain?'plain throw':'Error'})`,async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});const rejection={code:'draft_transport_lost',...(source===undefined?{}:{source})};
+  const f=fixture();f.fail(plain?rejection:Object.assign(Error('Journal transient'),rejection));f.helper.markInventory('ready');f.helper.capture(capture());await until(()=>!!f.helper.status.error);
+  assert.equal(f.helper.status.retryPending,true);const original=f.writes[0];f.fail(undefined);t.mock.timers.tick(500);await until(()=>f.helper.status.currentJournalAcknowledged);assert.equal(f.writes[1],original);f.helper.stop();
+});
+
+test('terminal inventory provenance blocks passive RPC while unknown inventory without failure can resume',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});let attempts=0;let helper!:NoteDraftProtection;
+  const f=fixture({retryInventory:async()=>{attempts++;helper.markInventory('retained');}});helper=f.helper;
+  helper.markInventory('unknown',{code:'draft_storage_failure',source:'protocol',message:'Private failure path'});helper.availability();t.mock.timers.tick(300_000);await drain();
+  assert.equal(attempts,0);assert.equal(helper.status.retryPending,false);assert.equal((helper.status.inventoryError as Error&{source:string}).source,'protocol');assert.ok(!helper.status.inventoryError!.message.includes('Private failure path'));
+  await helper.flush();assert.equal(attempts,1);assert.equal(helper.status.inventory,'retained');helper.stop();
+  let initial!:NoteDraftProtection;const clean=fixture({retryInventory:async()=>{attempts++;initial.markInventory('ready');}});initial=clean.helper;
+  initial.availability();await until(()=>initial.status.inventory==='ready');assert.equal(attempts,2);initial.stop();
+});
+
+test('passive clean captures and successful inventory discovery cannot resume an existing terminal journal RPC',async()=>{
+  let clean=false,inventoryReads=0;let helper!:NoteDraftProtection;
+  const f=fixture({coreCovered:()=>clean,retryInventory:async()=>{inventoryReads++;helper.markInventory('ready');},getCleanWitness:current=>({entryId:'note',writer:current.writer,generation:current.snapshot.generation,content:current.snapshot.draft,revision:'core-r2'})});helper=f.helper;
+  f.fail(Object.assign(error(),{source:'protocol'}));helper.markInventory('ready');const dirty=capture('Exact original body',1);helper.capture(dirty);await until(()=>!!helper.status.error);const original=f.writes[0];
+  clean=true;helper.capture({...dirty,snapshot:{...dirty.snapshot,baseline:{...dirty.snapshot.baseline,revision:'core-r2',content:dirty.snapshot.draft},checkpointRevision:'core-confirmed'}});helper.coreSettled();await drain();assert.equal(f.writes.length,1);
+  helper.markInventory('unknown');helper.availability();await until(()=>inventoryReads===1);await drain();assert.equal(f.writes.length,1);assert.equal(helper.status.currentJournalAcknowledged,false);
+  f.fail(undefined);await helper.flush();assert.equal(f.writes[1],original);assert.equal(helper.status.currentJournalAcknowledged,true);assert.equal(f.retirements.length,1);helper.stop();
+});
+
+test('plain thrown provenance is captured without copying private message or unknown source paths',async()=>{
+  const f=fixture(),rejection={code:'draft_storage_failure',source:'/private/synthetic-sensitive-path',message:'Synthetic sensitive message'};
+  f.fail(rejection);f.helper.markInventory('ready');f.helper.capture(capture());await until(()=>!!f.helper.status.error);
+  assert.equal((f.helper.status.error as Error&{source:string}).source,'untrusted');assert.ok(!f.helper.status.error!.message.includes(rejection.message));assert.ok(!f.helper.status.error!.message.includes(rejection.source));assert.equal(f.helper.status.retryPending,false);f.helper.stop();
 });
 
 test('unknown inventory retries independently with no current capture and never means an empty inventory',async t=>{
