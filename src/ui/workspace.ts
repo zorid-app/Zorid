@@ -171,6 +171,9 @@ export class Workspace {
   activePane!: Pane;
   buffers = new Map<string, NoteBuffer>();
   private bufferLoads=new WeakMap<NoteBuffer,Promise<NoteBuffer>>();
+  private bufferLoadEntries=new WeakMap<NoteBuffer,string>();
+  private initialNoteLoads=new WeakMap<Pane,AbortController>();
+  private cancelledNoteViews=new WeakSet<Pane>();
   private collectionPropertyRequests=new WeakMap<NoteBuffer,Map<string,DatabaseRequest>>();
   settings: Settings = { theme: 'system', fontSize: 16, readableWidth: true, showInlineTitle: true, defaultMode: 'live', useTab:true, tabSize:4, smartIndentList:true, autoConvertHtml:true, ...DEFAULT_ATTACHMENT_IMPORT_SETTINGS };
   private hotkeys!: HotkeyPreferences;
@@ -350,7 +353,7 @@ export class Workspace {
       this.closeCleanup=window.zorid?.onBeforeClose?.(async()=>{
         if(this.closing||this.choosingVault||this.lifecycleRecovery)throw new Error('Window close already pending');
         this.closing=true;const inert=this.root.inert,platform=this.platform,generation=this.vaultGeneration;this.root.inert=true;
-        try{await this.destroy();}catch(error){this.closing=false;if(this.platformDraining||this.platformDrained||this.platformReleased){try{await this.reconnectRetiredPlatform();this.root.inert=inert;}catch(recoveryError){this.showLifecycleRecovery(undefined,recoveryError);}}else this.root.inert=inert;this.resumeStatusCounts(platform,generation);if(this.lifecycleRecoveryRetry?.timer===undefined&&this.lifecycleRecoveryRetry)this.scheduleLifecycleRecoveryRetry(this.lifecycleRecoveryRetry);throw error;}
+        try{await this.destroy();}catch(error){this.closing=false;if(this.platformDraining||this.platformDrained||this.platformReleased){try{await this.reconnectRetiredPlatform();this.root.inert=inert;}catch(recoveryError){this.showLifecycleRecovery(undefined,recoveryError);}}else this.root.inert=inert;this.resumeStatusCounts(platform,generation);this.resumeCancelledNoteViews();if(this.lifecycleRecoveryRetry?.timer===undefined&&this.lifecycleRecoveryRetry)this.scheduleLifecycleRecoveryRetry(this.lifecycleRecoveryRetry);throw error;}
       });
     }
     try {
@@ -612,7 +615,7 @@ export class Workspace {
     this.documentSearchSuspended=true;this.clearDocumentSearch();
     let cancelTasksClose:(recover?:boolean)=>void=()=>{};
     try{
-      this.vaultRequest++;await this.vaultTransition;current();
+      this.cancelInitialNoteLoads();this.vaultRequest++;await this.vaultTransition;current();
       if(!this.platformDrained){
         await this.flushAdmissionPreflight(platform,vault);await this.closeBaseNewItem();await this.sidebarBase?.session.close();this.sidebarBase=undefined;this.sidebarBaseIntent++;
         cancelTasksClose=await this.prepareTasksViewsClose();current();this.saveSession();
@@ -622,7 +625,7 @@ export class Workspace {
       this.clearDocumentBacklinks();await this.closeDocumentSearchPins().catch(()=>{});
       await this.drainMetadataOpenings();await this.closeVaultMetadata(vault);await this.closeRetiredVaultMetadata();current();
       await platform.release!();current();this.platformReleased=true;this.releaseDocumentSearchOwner(vault);cancelTasksClose(false);
-    }catch(error){cancelTasksClose();if(!this.platformDraining)this.documentSearchSuspended=searchWasSuspended;throw error;}
+    }catch(error){cancelTasksClose();if(!this.platformDraining){this.documentSearchSuspended=searchWasSuspended;this.resumeCancelledNoteViews();}throw error;}
   }
   /** Retirement cannot be rolled back by re-enabling disposed buffers. Finish
    * its exact release, then recover through a newly admitted platform instead. */
@@ -760,7 +763,7 @@ export class Workspace {
         if(!previous||!next||previous.vaultId!==next.vaultId||previous.clientId!==next.clientId)throw new Error('The recovered note authority changed.');
         // Wake exact retained note IO only after positive same-scope admission,
         // before derived Base settlements can wait on those note continuations.
-        for(const buffer of this.buffers.values())if(buffer.vault===vault)buffer.coreAdmissionAvailable(next);
+        for(const buffer of this.buffers.values())buffer.coreAdmissionAvailable(next);
         this.retiredAdmissionVaults.add(vault);this.releaseDocumentSearchOwner(vault);
         const settled=await Promise.allSettled(prepared.settlements.map(recovery=>Promise.resolve().then(()=>recovery.settle())));current();
         for(const result of settled)if(result.status==='rejected')throw result.reason;
@@ -1142,6 +1145,7 @@ export class Workspace {
     try{
     await next.initialize({metadata:'background'});
     if(request!==this.vaultRequest)return;
+    this.cancelInitialNoteLoads();
     const transition=this.vaultTransition.then(async()=>{if(request===this.vaultRequest){
       this.nativeOpening=platform;
       try{
@@ -1153,7 +1157,7 @@ export class Workspace {
       if(request===this.vaultRequest&&this.platform===platform)this.notifyNativeNoteOpened(this.activePane);
     }});
     this.vaultTransition=transition.catch(()=>{});
-    await transition;
+    try{await transition;}catch(error){this.resumeCancelledNoteViews();throw error;}
     }finally{
       try{if(this.vault!==next)await this.closeVaultMetadata(next);}
       finally{this.metadataOpenings.delete(opening);settled();}
@@ -1517,6 +1521,37 @@ export class Workspace {
     sidebar.append(handle);
   }
 
+  private noteLoadCancelled():Error{return Object.assign(new Error('The note load was cancelled'),{code:'note_load_cancelled'});}
+  private cancelPaneInitialLoad(pane:Pane):void{
+    const controller=this.initialNoteLoads.get(pane);if(!controller)return;
+    this.initialNoteLoads.delete(pane);
+    if(!pane.viewReady)this.cancelledNoteViews.add(pane);
+    controller.abort();
+  }
+  private beginPaneInitialLoad(pane:Pane):AbortController{
+    this.cancelPaneInitialLoad(pane);const controller=new AbortController();this.initialNoteLoads.set(pane,controller);return controller;
+  }
+  private finishPaneInitialLoad(pane:Pane,controller:AbortController):void{
+    if(this.initialNoteLoads.get(pane)===controller)this.initialNoteLoads.delete(pane);
+  }
+  private cancelInitialNoteLoads():void{for(const pane of this.panes)this.cancelPaneInitialLoad(pane);}
+  private resumeCancelledNoteViews():void{
+    if(this.closing||this.platformReleased||this.platformDraining||!this.initialized)return;
+    for(const pane of this.panes)if(this.cancelledNoteViews.has(pane)&&!this.initialNoteLoads.has(pane)){
+      this.cancelledNoteViews.delete(pane);
+      if(!pane.viewReady)this.run(()=>this.renderPane(pane,{flush:false}));
+    }
+  }
+  /** Cancel only this caller's wait. A split joining another pane's healthy
+   * initial read must not revoke that creator's read owner. */
+  private async awaitNoteLoad<T>(pending:Promise<T>,signal?:AbortSignal):Promise<T>{
+    if(!signal)return pending;
+    if(signal.aborted)throw this.noteLoadCancelled();
+    let abort!:()=>void;
+    const cancelled=new Promise<never>((_,reject)=>{abort=()=>reject(this.noteLoadCancelled());signal.addEventListener('abort',abort,{once:true});});
+    try{return await Promise.race([pending,cancelled]);}finally{signal.removeEventListener('abort',abort);}
+  }
+
   private current(pane=this.activePane): Tab { return pane.tabs.find(tab=>tab.id===pane.active)!; }
   private addPane(tabs?: Tab[], id=makeId()): Pane {
     const first: Tab = {id:makeId(),path:null,mode:this.settings.defaultMode,kind:'note'};
@@ -1535,13 +1570,15 @@ export class Workspace {
     // older render may assign the first version while this newer open flushes.
     // Admit only the same untouched initial tab; established views keep their
     // existing render-version fence.
+    const load=this.beginPaneInitialLoad(pane);
+    try{
     const initialTab=version===0?this.current(pane):undefined;
     const initialOrigin=initialTab?{tab:initialTab,id:initialTab.id,path:initialTab.path,kind:initialTab.kind,mode:initialTab.mode}:undefined;
     await this.flushPane(pane);
     if(/\.base$/i.test(path))await this.prepareBase(path,generation);
     if(expectedEntryId!==undefined){
       const validate=()=>{if(generation!==this.vaultGeneration||this.navigationIntent.get(pane)!==intent||!this.panes.includes(pane)||this.vault.entries.get(path)?.entryId!==expectedEntryId||(commitGuard&&!commitGuard()))throw new Error('The selected note changed before admission');};
-      if(isMarkdown(path))await this.bufferFor(path,expectedEntryId,validate);validate();
+      if(isMarkdown(path))await this.bufferFor(path,expectedEntryId,validate,load.signal);validate();
     }
     const initialCurrent=initialOrigin&&this.current(pane)===initialOrigin.tab&&pane.active===initialOrigin.id&&initialOrigin.tab.path===initialOrigin.path&&initialOrigin.tab.kind===initialOrigin.kind&&initialOrigin.tab.mode===initialOrigin.mode;
     if(this.navigationIntent.get(pane)!==intent||generation!==this.vaultGeneration||(initialOrigin?!initialCurrent:pane.renderVersion!==version)||!this.panes.includes(pane)||(expectedActivation!==undefined&&expectedActivation!==this.paneActivationRevision)||(commitGuard&&!commitGuard()))return;
@@ -1556,8 +1593,11 @@ export class Workspace {
     pane.history=this.current(pane).history??[];pane.historyIndex=this.current(pane).historyIndex??-1;
     if(recordHistory&&pane.history[pane.historyIndex]!==path){pane.history=pane.history.slice(0,pane.historyIndex+1);pane.history.push(path);pane.historyIndex=pane.history.length-1;}
     this.current(pane).history=pane.history;this.current(pane).historyIndex=pane.historyIndex;
+    this.finishPaneInitialLoad(pane,load);
     this.activate(pane); await this.renderPane(pane); this.renderSidebar();this.renderRight();this.saveSession();
     if(matchMedia('(max-width: 700px)').matches)this.root.classList.add('left-hidden');
+    }catch(error){if(load.signal.aborted||(error as {code?:unknown})?.code==='note_load_cancelled')return;this.finishPaneInitialLoad(pane,load);this.resumeCancelledNoteViews();throw error;}
+    finally{this.finishPaneInitialLoad(pane,load);if(this.navigationIntent.get(pane)===intent&&generation===this.vaultGeneration)this.resumeCancelledNoteViews();}
   }
 
   private async prepareBase(path:string,generation=this.vaultGeneration):Promise<void>{
@@ -1608,9 +1648,11 @@ export class Workspace {
     this.recoveredBufferBindings.delete(buffer);
   }
 
-  private async bufferFor(path:string,expectedEntryId?:string,validate:()=>void=()=>{}):Promise<NoteBuffer>{
+  private async bufferFor(path:string,expectedEntryId?:string,validate:()=>void=()=>{},signal?:AbortSignal):Promise<NoteBuffer>{
     const vault=this.vault,generation=this.vaultGeneration;
-    const check=()=>{validate();if(this.vault!==vault||this.vaultGeneration!==generation)throw new Error('The selected vault changed before this note finished opening.');};
+    // Freeze the selected actor before any initial read or shared-load wait.
+    expectedEntryId??=vault.adapter.durableWrites?vault.entries.get(path)?.entryId:undefined;
+    const check=()=>{if(signal?.aborted)throw this.noteLoadCancelled();validate();if(this.vault!==vault||this.vaultGeneration!==generation)throw new Error('The selected vault changed before this note finished opening.');if(expectedEntryId!==undefined&&vault.entries.get(path)?.entryId!==expectedEntryId)throw new Error('The selected note identity changed');};
     check();
     if(expectedEntryId!==undefined){
       if(this.vault.entries.get(path)?.entryId!==expectedEntryId)throw new Error('The selected note identity changed');
@@ -1619,22 +1661,27 @@ export class Workspace {
     let buffer=this.buffers.get(path); if(buffer){
       const loading=this.bufferLoads.get(buffer);
       if(loading){
+        const creatorEntry=this.bufferLoadEntries.get(buffer);
+        // A trusted tree replacement makes the older unadmitted actor stale.
+        // A same-actor joiner only cancels its own wait, never the creator.
+        if(expectedEntryId!==undefined&&creatorEntry!==undefined&&creatorEntry!==expectedEntryId&&!buffer.hasAdmittedContent)buffer.cancelInitialLoad();
         // Join the creator's complete admission/cleanup before inspecting the
         // registry again. A superseded creator may have retired its empty buffer.
-        await loading.catch(()=>{});check();
-        return this.bufferFor(path,expectedEntryId,validate);
+        await this.awaitNoteLoad(loading.catch(()=>{}),signal);check();
+        return this.bufferFor(path,expectedEntryId,validate,signal);
       }
-      await buffer.load(expectedEntryId,check);check();await this.bindRecoveredBuffer(path,buffer,check);check();return buffer;
+      await buffer.load(expectedEntryId,check,{signal});check();await this.bindRecoveredBuffer(path,buffer,check);check();return buffer;
     }
     buffer=new NoteBuffer(vault,path,{onMetadata:()=>this.draftMetadataChanged(buffer!,vault),storage:localStorage,storageKey:this.storageScope.draftPrefix(this.platform.id),onState:()=>{if(buffer)this.draftBufferStateChanged(buffer,vault);}});
     this.buffers.set(path,buffer);const token=this.treeEntryToken(path);if(token)this.bufferEntries.set(buffer,token);
+    if(expectedEntryId!==undefined)this.bufferLoadEntries.set(buffer,expectedEntryId);
     const admitted=buffer;
     const loading=(async()=>{
-      try{await admitted.load(expectedEntryId,check);check();return admitted;}
+      try{await admitted.load(expectedEntryId,check,{signal});check();return admitted;}
       catch(error){if(this.buffers.get(path)===admitted&&!admitted.hasAdmittedContent){await admitted.disposeUnadmitted();if(this.buffers.get(path)===admitted)this.buffers.delete(path);}throw error;}
     })();
     this.bufferLoads.set(admitted,loading);
-    try{return await loading;}finally{if(this.bufferLoads.get(admitted)===loading)this.bufferLoads.delete(admitted);}
+    try{return await loading;}finally{if(this.bufferLoads.get(admitted)===loading){this.bufferLoads.delete(admitted);this.bufferLoadEntries.delete(admitted);}}
   }
 
   private renderTabBar(pane:Pane):void{
@@ -1658,9 +1705,10 @@ export class Workspace {
 
   private async selectTab(pane:Pane,tab:Tab):Promise<void>{
     if(this.tasksRetiring)return;
+    if(pane.active===tab.id){this.activate(pane);if(!pane.viewReady&&!this.initialNoteLoads.has(pane))await this.renderPane(pane);this.observeNativeNoteView(pane);this.flushNativePresentation(pane);this.focusPane(pane);return;}
     const intent=(this.navigationIntent.get(pane)??0)+1,generation=this.vaultGeneration;this.navigationIntent.set(pane,intent);
-    if(pane.active===tab.id){this.activate(pane);this.observeNativeNoteView(pane);this.flushNativePresentation(pane);this.focusPane(pane);return;}
-    await this.flushPane(pane);
+    this.cancelPaneInitialLoad(pane);
+    try{await this.flushPane(pane);}catch(error){this.resumeCancelledNoteViews();throw error;}
     if(this.tasksRetiring||intent!==this.navigationIntent.get(pane)||generation!==this.vaultGeneration||!this.panes.includes(pane)||!pane.tabs.includes(tab))return;
     pane.active=tab.id;this.activate(pane);await this.renderPane(pane);this.saveSession();
   }
@@ -1683,14 +1731,15 @@ export class Workspace {
     let pane=initialPane;
     const request=(this.renderRequests.get(initialPane)??0)+1,generation=this.vaultGeneration;this.renderRequests.set(initialPane,request);
     const current=()=>generation===this.vaultGeneration&&this.panes.includes(initialPane)&&this.renderRequests.get(initialPane)===request;
-    if(options.flush!==false)await this.flushPane(pane);
+    this.cancelPaneInitialLoad(initialPane);
+    if(options.flush!==false)try{await this.flushPane(pane);}catch(error){this.resumeCancelledNoteViews();throw error;}
     if(!current())return;
     const wanted=this.current(pane);
     if(!options.refresh&&pane.viewReady&&pane.viewTabId===wanted?.id&&pane.viewPath===wanted.path&&pane.viewMode===wanted.mode&&pane.viewKind===wanted.kind&&!!pane.viewBaseSource===!!wanted.baseSource ){
       this.applyViewSettings(pane);this.renderTabBar(pane);pane.refreshPreview?.();return;
     }
     if(this.platform.nativeEditor&&pane===this.activePane)this.hideNativeEditorToolbar();
-    if(pane.viewTabId&&pane.viewTabId!==pane.active&&pane.tabs.some(tab=>tab.id===pane.viewTabId))this.parkPaneView(pane);else await this.disposePaneViews(pane);
+    if(pane.viewReady&&pane.viewTabId&&pane.viewTabId!==pane.active&&pane.tabs.some(tab=>tab.id===pane.viewTabId))this.parkPaneView(pane);else await this.disposePaneViews(pane);
     if(!current())return;
     const tab=this.current(pane);if(!tab)return;
     this.renderTabBar(pane);
@@ -1838,8 +1887,10 @@ export class Workspace {
       focusBody:()=>pane.editor?.focus(),onError:error=>notice(error instanceof Error?error.message:String(error)),
     });
     scroll.append(title);content.append(scroll);
+    const load=this.beginPaneInitialLoad(initialPane);
+    const ownsLoad=()=>!load.signal.aborted&&current()&&version===pane.renderVersion&&pane.content===content&&this.current(pane)===tab;
     try{
-      const buffer=await this.bufferFor(path,tab.expectedEntryId,()=>{if(!current()||version!==pane.renderVersion||this.current(pane)!==tab)throw new Error('The note render was superseded');});if(version!==pane.renderVersion)return;
+      const buffer=await this.bufferFor(path,tab.expectedEntryId,()=>{if(!ownsLoad())throw this.noteLoadCancelled();},load.signal);if(!ownsLoad())return;
       recoveryCleanup=this.mountNoteRecovery(content,buffer);
       const admittedActor=buffer.savedDurableWitness;if(admittedActor){pane.rawAdmissionActor={path:admittedActor.path,entryId:admittedActor.entryId,revision:admittedActor.revision};if(!pane.noteTitleActor&&title.readOnly&&title.value===nameOf(path)){pane.noteTitleActor=pane.rawAdmissionActor;title.readOnly=false;}}
       {
@@ -1879,7 +1930,7 @@ export class Workspace {
         pane.refreshPreview();
       }else{
         const host=el('div','editor-host');scroll.append(host);
-        const factory=this.editorFactory||(await import('./editor.ts')).createEditor;if(version!==pane.renderVersion)return;
+        const factory=this.editorFactory||(await import('./editor.ts')).createEditor;if(!ownsLoad())return;
         const embeds=createEmbeds();pane.embeds=embeds;const generation=this.vaultGeneration;
         const ownsEditor=()=>generation===this.vaultGeneration&&pane.renderVersion===version&&pane.viewPath===path;
         const nativeCurrent=()=>ownsEditor()&&this.activePane===pane&&pane.runtime===runtime&&runtime.phase!=='disposed'&&this.current(pane)?.id===tab.id&&!this.closing&&!this.root.inert&&!this.startupFailed&&!this.platformReleased;
@@ -1910,12 +1961,13 @@ export class Workspace {
       if(tab.viewState){if(tab.viewState.editor)pane.editor?.restoreViewState?.(tab.viewState.editor);if(Number.isFinite(tab.viewState.scrollTop))scroll.scrollTop=Math.max(0,tab.viewState.scrollTop);if(Number.isFinite(tab.viewState.scrollLeft))scroll.scrollLeft=Math.max(0,tab.viewState.scrollLeft);}
       if(buffer.error)this.noteStorageFailure(buffer.error);
     }catch(error){
-      if(version!==pane.renderVersion)return;
+      if(!ownsLoad()||(error as {code?:unknown})?.code==='note_load_cancelled')return;
       pane.readingFind?.destroy();pane.readingFind=undefined;destroyMarkdown(scroll);pane.embeds?.destroy();pane.embeds=undefined;pane.refreshPreview=undefined;
       console.error('Note could not be opened',error);
       scroll.append(el('p','error-message','This note couldn’t be opened. Please try opening it again.'));
     }
-    if(version===pane.renderVersion)pane.viewReady=true;this.renderStatus();
+    finally{this.finishPaneInitialLoad(initialPane,load);}
+    if(ownsLoad()){pane.viewReady=true;this.cancelledNoteViews.delete(initialPane);}this.renderStatus();
   }
 
   private createWorkspaceBaseSession(host:HTMLElement,path:string,owner:()=>Pane,validate:()=>void,sourcePath?:string|SidebarBaseContext,viewName?:string,inline?:InlineBaseRequest,onSourceError?:(error:Error|null,unavailable?:BaseSourceUnavailable)=>void,onInlineSourceSaved?:(next:InlineBaseRequest)=>boolean,viewId?:string):BaseSession{
@@ -2561,7 +2613,7 @@ export class Workspace {
   }
   private parkPaneView(pane:Pane,keepConnected=false):void{
     const tab=pane.tabs.find(tab=>tab.id===pane.viewTabId);
-    if(!tab||!pane.content||!pane.runtime)return;
+    if(!tab||!pane.viewReady||!pane.content||!pane.runtime)return;
     this.capturePaneState(pane);
     const parked:Pane={...pane,tabs:[tab],active:tab.id,history:[...pane.history],element:pane.content};
     pane.rebindView?.(parked);parked.readingFind?.refresh();this.cachedViews.set(tab,parked);
@@ -2571,7 +2623,7 @@ export class Workspace {
   /** No await between attachment and owner rebinding. Failed attach leaves the
    * cached owner/resources intact so the caller can roll back its tab model. */
   private restoreCachedViewNow(pane:Pane,tab:Tab):boolean{
-    const cached=this.cachedViews.get(tab);if(!cached?.runtime||!cached.content)return false;
+    const cached=this.cachedViews.get(tab);if(!cached?.viewReady||!cached.runtime||!cached.content)return false;
     const connected=cached.content.isConnected;
     cached.runtime.attach(pane.element,this.viewOwner(pane));
     const fields=['viewTabId','viewPath','viewMode','viewKind','viewBaseSource','viewReady','viewSettings','rebindView','editor','imageView','pdfView','mediaView','canvasView','baseView','calendarView','tasksView','canvasSource','baseEmbeds','embeds','properties','refreshPreview','readingFind','propertyTimer','noteTitle','noteTitleActor','rawAdmissionActor','renderVersion','runtime','content'] as const;
@@ -2608,6 +2660,7 @@ export class Workspace {
     clearTimeout(pane.propertyTimer);pane.noteTitle?.destroy();pane.editor?.destroy();pane.imageView?.destroy();pane.pdfView?.destroy();pane.mediaView?.destroy();pane.canvasView?.destroy();pane.calendarView?.destroy();pane.embeds?.destroy();pane.properties?.destroy();this.clearPaneViewFields(pane);
   }
   private async disposePaneViews(pane:Pane):Promise<void>{
+    this.cancelPaneInitialLoad(pane);
     if(pane.runtime){await pane.canvasView?.flush();try{await pane.runtime.destroy();}catch(error){pane.tasksView?.cancelClose();throw error;}}
   }
 
@@ -3583,12 +3636,13 @@ export class Workspace {
     if(next===path)return next;await this.flush();const buffer=this.buffers.get(path);if(buffer)await buffer.rename(next);else await this.vault.rename(path,next);for(const pane of this.panes)await this.renderPane(pane);return next;
   }
   private async deletePath(path:string):Promise<void>{await this.flush();await this.vault.trash(path);await this.buffers.get(path)?.closeMetadataProjection();this.buffers.delete(path);notice('Moved to vault trash.');}
-  private async newTab(pane=this.activePane):Promise<void>{await this.flushPane(pane);const tab:Tab={id:makeId(),path:null,mode:this.settings.defaultMode,kind:'note'};pane.tabs.push(tab);pane.active=tab.id;this.renderRight();this.run(()=>this.renderPane(pane));this.saveSession();}
+  private async newTab(pane=this.activePane):Promise<void>{this.cancelPaneInitialLoad(pane);try{await this.flushPane(pane);}catch(error){this.resumeCancelledNoteViews();throw error;}const tab:Tab={id:makeId(),path:null,mode:this.settings.defaultMode,kind:'note'};pane.tabs.push(tab);pane.active=tab.id;this.renderRight();this.run(()=>this.renderPane(pane));this.saveSession();}
   private async closeTab(pane:Pane,tab:Tab):Promise<void>{
     if(this.tasksRetiring)return;
     if(!pane.tabs.includes(tab))return;
+    if(pane.active===tab.id)this.cancelPaneInitialLoad(pane);
     const owner=pane.viewTabId===tab.id?pane:this.cachedViews.get(tab);
-    if(owner)await this.disposePaneViews(owner);else if(tab.path)await this.buffers.get(tab.path)?.flush();
+    try{if(owner)await this.disposePaneViews(owner);else if(tab.path)await this.buffers.get(tab.path)?.flush();}catch(error){this.resumeCancelledNoteViews();throw error;}
     if(!this.panes.includes(pane))return;
     const index=pane.tabs.indexOf(tab);if(index<0)return;
     this.cachedViews.delete(tab);pane.tabs.splice(index,1);
@@ -4051,7 +4105,7 @@ export class Workspace {
     const current=()=>{if(this.platform!==platform||this.vault!==vault)throw new Error('The vault changed while closing.');};
     const closing=this.destroyOwnedPlatform(current,platform,vault);this.destroying=closing;
     try{await closing;}
-    catch(error){if(!this.platformDraining&&!this.platformDrained&&!this.platformReleased){this.closing=wasClosing;this.root.inert=inert;this.resumeStatusCounts(platform,generation);}throw error;}
+    catch(error){if(!this.platformDraining&&!this.platformDrained&&!this.platformReleased){this.closing=wasClosing;this.root.inert=inert;this.resumeStatusCounts(platform,generation);this.resumeCancelledNoteViews();}throw error;}
     finally{if(this.destroying===closing)this.destroying=undefined;resumeRecovery();}
   }
   private async destroyOwnedPlatform(current:()=>void,platform:PlatformVault,vault:Vault):Promise<void>{
@@ -4059,7 +4113,7 @@ export class Workspace {
     const searchWasSuspended=this.documentSearchSuspended;this.documentSearchSuspended=true;this.clearDocumentSearch();
     try{
       this.hideNativeEditorToolbar();this.nativeEditorCleanup?.();this.nativeEditorCleanup=undefined;this.nativeDocumentCleanup?.();this.nativeDocumentCleanup=undefined;this.mobileLifecycleCleanup?.();this.mobileLifecycleCleanup=undefined;
-      this.vaultRequest++;await this.vaultTransition;current();this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);
+      this.cancelInitialNoteLoads();this.vaultRequest++;await this.vaultTransition;current();this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);
       await this.flushAdmissionPreflight(platform,vault);await this.closeBaseNewItem();await this.sidebarBase?.session.close();this.sidebarBase=undefined;this.sidebarBaseIntent++;
       cancelTasksClose=await this.prepareTasksViewsClose();current();this.saveSession();this.platformDraining=true;
       this.disposers.forEach(dispose=>dispose());this.disposers=[];clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;
