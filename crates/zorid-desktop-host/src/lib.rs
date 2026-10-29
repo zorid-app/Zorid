@@ -1391,6 +1391,16 @@ fn preview_base_frame(
 }
 
 pub fn run_stdio() -> io::Result<()> {
+    // Opt-in diagnostics contain phase timings only; stdout remains the framed
+    // protocol and ordinary launches perform no diagnostic IO.
+    let startup_started = std::time::Instant::now();
+    let startup_profile = std::env::var_os("ZORID_PROFILE_STARTUP").as_deref() == Some(std::ffi::OsStr::new("1"));
+    let startup_phase = |phase: &str| {
+        if startup_profile {
+            eprintln!("zorid_startup phase={phase} elapsed_ms={:.3}", startup_started.elapsed().as_secs_f64() * 1000.0);
+        }
+    };
+    startup_phase("entry");
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     // Initialization is a trusted main-process startup decision, never a framed RPC.
     if args.len() < 2 || args[0] != "--vault" {
@@ -1436,6 +1446,7 @@ pub fn run_stdio() -> io::Result<()> {
             return Ok(());
         }
     };
+    startup_phase("vault_open");
     let mut recovery_maintenance_enabled = false;
     if initialize_local {
         // Configure history before reconciliation, which may settle interrupted
@@ -1448,12 +1459,14 @@ pub fn run_stdio() -> io::Result<()> {
             Err(error) => eprintln!("Local recovery initialization failed: {error}"),
         }
     }
+    startup_phase("recovery_ready");
     if initialize_local || local_cache {
         match app_local_data_root() {
             Ok(data_root) => enable_local_document_cache(&mut vault, Path::new(&args[1]), &data_root),
             Err(error) => eprintln!("Local document cache unavailable; using temporary cache: {error}"),
         }
     }
+    startup_phase("document_cache_ready");
     // The trusted main process selects a protected config path once. No framed
     // command accepts credential bytes, paths, endpoints or key material.
     let sync = if let Some(config) = config {
@@ -1472,6 +1485,7 @@ pub fn run_stdio() -> io::Result<()> {
     } else {
         None
     };
+    startup_phase("sync_ready");
     let reconciliation = if initialize_local {
         match initialize_desktop_vault(&mut vault) {
             Ok(status) => Some(status),
@@ -1487,6 +1501,7 @@ pub fn run_stdio() -> io::Result<()> {
     } else {
         None
     };
+    startup_phase("reconciliation_yielded");
     let mut leases = ClientLeases { recovery_maintenance_enabled, ..ClientLeases::default() };
     write_frame(
         &mut output,
