@@ -178,11 +178,12 @@ test('unknown reconciliation status retains thirty-second fallback with a health
   assert.deepEqual(f.calls,['changes','rescan','changes']);
 });
 
-async function startupOwnerFixture(t,{startupHint=false,rootChanged=false}={}){
-  const original=RustVaultService.open,watchers=[];let scans=0,identityReads=0;
+async function startupOwnerFixture(t,{startupHint=false,rootChanged=false,exit}={}){
+  const original=RustVaultService.open,watchers=[],nativeCalls=[],notifications=[];let scans=0,identityReads=0,externalChange=false,journalChange=false;
   const host={root:'/startup-owner-order',capabilities:['documents','document_runtime','read_path','list_snapshot','changes_after','rescan','prepare_intent','commit_intent','query_intent','list_intents','acknowledge_intent','local_family_status','reconciliation_status'],reconciliation:{complete:true},
-    async localFamilyStatus(){},async listSnapshot(){return{entries:[],cursor:'0'};},async changesAfter(cursor){return{changes:[],next_cursor:cursor,has_more:false};},
-    async request(command,_body,_lease,beforeDispatch){beforeDispatch?.();assert.equal(command.method,'rescan');scans++;return{result:{complete:true,reconciliation:{complete:true}}};},async close(){},
+    ...(exit?{exit}:{}),
+    async localFamilyStatus(){},async listSnapshot(){return{entries:[],cursor:'0'};},async changesAfter(cursor){nativeCalls.push('changes');const changed=journalChange;journalChange=false;return{changes:changed?[{cursor:'1',origin:{kind:'local_command',operation_id:'external'},requires_full_reload:false,entries:[{...entry('One.md','one'),state:{...entry('One.md','one').state,revision:'fresh-revision'}}]}]:[],next_cursor:changed?'1':cursor,has_more:false};},
+    async request(command,_body,_lease,beforeDispatch){beforeDispatch?.();nativeCalls.push(command.method);if(command.method==='reconcile'){if(externalChange){journalChange=true;externalChange=false;}return{result:{imported:[],projected:[],blocked:[]}};}assert.equal(command.method,'rescan');scans++;return{result:{complete:true,reconciliation:{complete:true}}};},async close(){},
   };
   RustVaultService.open=async()=>{if(startupHint)watchers[0].callback('change','During startup.md');return host;};
   t.after(()=>{RustVaultService.open=original;});
@@ -192,11 +193,11 @@ async function startupOwnerFixture(t,{startupHint=false,rootChanged=false}={}){
   });
   service.documentScheduler={
     addOwner(){let retired;return{subscribe(_listener,onRetire){retired=onRetire;return()=>{};},async pause(){},resume(){},revoke(){retired?.();return Promise.resolve();},release(){retired?.();}};},
-    wake(){},sourceHint(){},sourceImportProgress(){},needsRetry(){return false;},async close(){},
+    wake(){notifications.push('wake');},sourceHint(){},sourceImportProgress(){},needsRetry(){return false;},async close(){},
   };
   t.after(()=>service.close());
-  const register=(clientId='client')=>service.registerDocumentRuntimeOwner({host,clientId,localStoreId:'store',assertActive(){}});
-  return{service,watchers,register,get scans(){return scans;}};
+  const register=(clientId='client',assertActive=()=>{})=>service.registerDocumentRuntimeOwner({host,clientId,localStoreId:'store',assertActive});
+  return{service,watchers,register,nativeCalls,notifications,changeKnownFile(){externalChange=true;},get scans(){return scans;}};
 }
 
 test('broker subscription before first runtime admission preserves the continuous startup watcher and performs no scan',async t=>{
@@ -217,10 +218,56 @@ test('physical startup-root replacement still requires discovery despite pre-own
   assert.equal(f.scans,1);assert.equal(f.watchers.length,2,'only the proven root replacement reinstalls the watcher');
 });
 
-test('real owner pause stops the watcher and resume reconciles the genuine gap once',async t=>{
+test('healthy last-owner pause preserves watcher coverage and resume does not manufacture a scan',async t=>{
   const f=await startupOwnerFixture(t);f.service.subscribe(()=>{});const owner=f.register();await f.service.poll();assert.equal(f.scans,0);
-  await owner.pause();assert.equal(f.watchers[0].closed,true);assert.equal(f.service.needsScan,true);
-  owner.resume();await f.service.poll();assert.equal(f.scans,1);assert.equal(f.watchers.length,2);
+  await owner.pause();assert.equal(f.service.timer,null);assert.equal(f.service.continuation,null);
+  assert.equal(f.watchers[0].closed,false);assert.equal(f.service.needsScan,false);
+  owner.resume();await f.service.poll();assert.equal(f.scans,0);assert.equal(f.watchers.length,1);
+});
+
+test('known-file hints while paused stay metadata-only and import targeted freshness on resume',async t=>{
+  const f=await startupOwnerFixture(t),owner=f.register();f.service.entries.set('one',entry('One.md','one'));await f.service.poll();await owner.pause();
+  f.nativeCalls.length=0;f.changeKnownFile();f.watchers[0].callback('change','One.md');await f.service.poll();await turn();
+  assert.deepEqual(f.nativeCalls,[]);assert.equal(f.service.hints.has('One.md'),true);assert.equal(f.service.timer,null);
+  owner.resume();await f.service.poll();assert.deepEqual(f.nativeCalls,['changes','reconcile','changes']);
+  assert.equal(f.scans,0);assert.equal(f.watchers.length,1);assert.equal(f.service.entries.get('one').state.revision,'fresh-revision');assert.deepEqual(f.notifications,['wake']);
+});
+
+for(const reason of ['unknown-path','unknown-name','unsafe-name','overflow','watch-error','watch-close'])test(`paused watcher ${reason} still requires complete discovery on resume`,async t=>{
+  const f=await startupOwnerFixture(t),owner=f.register();await f.service.poll();await owner.pause();f.nativeCalls.length=0;
+  const watcher=f.watchers[0];
+  if(reason==='unknown-path')watcher.callback('rename','New.md');
+  if(reason==='unknown-name')watcher.callback('rename',null);
+  if(reason==='unsafe-name')watcher.callback('rename','../outside.md');
+  if(reason==='overflow')for(let n=0;n<1025;n++)watcher.callback('change',`N${n}.md`);
+  if(reason==='watch-error')watcher.emit('error',Error('watch lost'));
+  if(reason==='watch-close')watcher.close();
+  await f.service.poll();assert.deepEqual(f.nativeCalls,[]);assert.ok(f.service.hints.size<=1024);
+  owner.resume();await f.service.poll();assert.equal(f.scans,1);
+});
+
+for(const action of ['release','revoke'])test(`last paused owner ${action} closes its watcher and later admission repairs the gap`,async t=>{
+  const f=await startupOwnerFixture(t),owner=f.register();await f.service.poll();await owner.pause();
+  await owner[action]();assert.equal(f.watchers[0].closed,true);assert.equal(f.service.needsScan,true);
+  f.watchers[0].callback('change','Stale.md');assert.equal(f.service.hints.has('Stale.md'),false);
+  f.register('next');await f.service.poll();assert.equal(f.scans,1);assert.equal(f.watchers.length,2);
+});
+
+test('a paused owner whose grant fails cannot retain passive watcher ownership',async t=>{
+  const f=await startupOwnerFixture(t);let active=true;
+  const owner=f.register('client',()=>{if(!active)throw Object.assign(Error('retired'),{code:'grant_retired'});});
+  await f.service.poll();await owner.pause();active=false;f.service.syncPolling();await turn();
+  assert.equal(f.service.documentRuntimeOwners.size,0);assert.equal(f.watchers[0].closed,true);assert.equal(f.service.needsScan,true);
+});
+
+test('failed first grant closes the pre-admission watcher without native polling',async t=>{
+  const f=await startupOwnerFixture(t);assert.throws(()=>f.register('bad',()=>{throw Object.assign(Error('retired'),{code:'grant_retired'});}),{code:'client_ownership_lost'});
+  assert.equal(f.watchers[0].closed,true);assert.equal(f.service.timer,null);assert.deepEqual(f.nativeCalls,[]);
+});
+
+test('runtime failure closes a passive watcher and cancels paused maintenance',async t=>{
+  let finish;const exit=new Promise(resolve=>{finish=resolve;});const f=await startupOwnerFixture(t,{exit}),owner=f.register();await f.service.poll();await owner.pause();
+  finish();await turn();assert.equal(f.watchers[0].closed,true);assert.equal(f.service.timer,null);assert.equal(f.service.continuation,null);assert.equal(f.service.needsScan,true);
 });
 
 test('closing before any runtime owner arrives still retires the early startup watcher',async t=>{
