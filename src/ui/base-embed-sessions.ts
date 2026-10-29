@@ -1,4 +1,4 @@
-import type { BaseSession } from '../bases/session.ts';
+import type { BaseSession, BaseSessionRawDraft } from '../bases/session.ts';
 import { inlineBaseRequest } from '../bases/inline-base.ts';
 import type { InlineBaseRequest } from '../bases/inline-base.ts';
 
@@ -20,6 +20,35 @@ export interface BaseEmbedCreationTarget extends BaseEmbedTarget {
   readonly onInlineSourceSaved?: (next: InlineBaseRequest) => boolean;
 }
 export interface BaseEmbedBinding { readonly ready: Promise<void>; detach(): void; }
+/** Saved actors only. Runtime tree/occurrence tokens never cross admissions. */
+export interface BaseEmbedRecoveryIdentity {
+  readonly sourceEntryId: string;
+  readonly sourceRevision?: string;
+  readonly sourceText?: string;
+  readonly targetEntryId: string;
+}
+export interface BaseEmbedRawDraft {
+  readonly binding: {
+    readonly sourcePath: string;
+    readonly targetPath: string;
+    readonly viewName: string;
+    readonly viewId?: string;
+    readonly inline?: InlineBaseRequest;
+    readonly identity?: BaseEmbedRecoveryIdentity;
+    /** Ordinary identical embeds lack a saved occurrence coordinate. */
+    readonly ambiguous: boolean;
+  };
+  readonly draft: BaseSessionRawDraft;
+}
+export interface BaseEmbedAdmissionRecovery {
+  readonly rawDrafts: readonly BaseEmbedRawDraft[];
+  settle(): Promise<void>;
+}
+export interface BaseEmbedDraftRestore {
+  readonly restored: readonly BaseEmbedRawDraft[];
+  readonly pending: readonly BaseEmbedRawDraft[];
+  readonly conflicts: readonly {readonly draft: BaseEmbedRawDraft;readonly reason:string}[];
+}
 interface Entry {
   target: BaseEmbedTarget;
   root: HTMLElement;
@@ -43,12 +72,17 @@ export class BaseEmbedSessions {
   private closed = false;
   private flushing?: Promise<void>;
   private pruneQueued=false;
-  private admissionRecovery?:{settle():Promise<void>};
+  private admissionRecovery?:BaseEmbedAdmissionRecovery;
+  private restoredRawDrafts = new WeakMap<BaseEmbedRawDraft, Entry>();
+  private restoringRawDrafts = new WeakMap<BaseEmbedRawDraft, Promise<BaseEmbedDraftRestore>>();
   private finishingSession?:object;
 
   private readonly options: {
     recoveryHost: HTMLElement;
     create(container: HTMLElement, target: BaseEmbedCreationTarget): BaseSession | Promise<BaseSession>;
+    recoveryIdentity?(target: Pick<BaseEmbedTarget,'sourcePath'|'targetPath'>): BaseEmbedRecoveryIdentity | undefined;
+    /** The host retries its retained pending capsules; this manager owns none. */
+    onAdmissionRestoreReady?(): void;
   };
   constructor(options: BaseEmbedSessions['options']) {
     this.options=options;
@@ -98,7 +132,7 @@ export class BaseEmbedSessions {
         const message = root.ownerDocument.createElement('p'); message.className = 'error-message';
         message.textContent = error instanceof Error ? error.message : String(error); root.append(message);
         throw error;
-      }).finally(()=>{created.settled=true;this.pruneClean();});
+      }).finally(()=>{created.settled=true;this.pruneClean();if(!this.closed&&!this.closing&&!this.admissionRecovery)this.options.onAdmissionRestoreReady?.();});
       // The renderer observes ready too. Keep unmounted late failures handled.
       void created.ready.catch(() => {});
     }
@@ -180,14 +214,81 @@ export class BaseEmbedSessions {
     try{await operation();}finally{if(this.finishingSession===phase)this.finishingSession=undefined;}
   }
 
-  prepareAdmissionRecovery():{settle():Promise<void>} {
+  prepareAdmissionRecovery():BaseEmbedAdmissionRecovery {
     if(this.admissionRecovery)return this.admissionRecovery;
     if(!this.canRecoverAdmission())throw new Error('Unfinished embedded Base drafts are retained while storage reconnects.');
-    const prepared=[...this.entries].flatMap(entry=>{const recovery=entry.session?.prepareAdmissionRecovery?.();return recovery?[recovery]:[];});
-    return this.admissionRecovery={settle:async()=>{
-      const results=await Promise.allSettled(prepared.map(recovery=>Promise.resolve().then(()=>recovery.settle())));
+    const prepared=[...this.entries].flatMap(entry=>{const recovery=entry.session?.prepareAdmissionRecovery?.();return recovery?[{entry,recovery}]:[];});
+    const rawDrafts=prepared.flatMap(({entry,recovery})=>{
+      if(!recovery.rawDrafts?.length)return [];
+      const target=entry.target,identity=this.options.recoveryIdentity?.(target);
+      const ambiguous=!target.inline&&[...this.entries].filter(other=>this.sameDraftTarget(other,target)).length!==1;
+      const binding={sourcePath:target.sourcePath,targetPath:target.targetPath,viewName:target.viewName,
+        viewId:target.viewId??entry.session?.selectedViewIdentity,...(target.inline?{inline:{...target.inline}}:{}),
+        ...(identity?{identity:{...identity}}:{}),ambiguous};
+      return recovery.rawDrafts.map(draft=>({binding,draft}));
+    });
+    return this.admissionRecovery={rawDrafts,settle:async()=>{
+      const results=await Promise.allSettled(prepared.map(({recovery})=>Promise.resolve().then(()=>recovery.settle())));
       for(const result of results)if(result.status==='rejected')throw result.reason;
     }};
+  }
+
+  private sameDraftTarget(entry:Entry,target:Pick<BaseEmbedTarget,'sourcePath'|'targetPath'|'viewName'|'viewId'|'inline'>):boolean {
+    const candidate=entry.target;
+    return candidate.sourcePath===target.sourcePath&&candidate.targetPath===target.targetPath
+      &&(target.viewId!==undefined?(candidate.viewId??entry.session?.selectedViewIdentity)===target.viewId:candidate.viewName===target.viewName)
+      &&(!candidate.inline&&!target.inline||!!candidate.inline&&!!target.inline
+        &&candidate.inline.from===target.inline.from&&candidate.inline.to===target.inline.to
+        &&candidate.inline.contentFrom===target.inline.contentFrom&&candidate.inline.contentTo===target.inline.contentTo
+        &&candidate.inline.source===target.inline.source&&candidate.inline.documentText===target.inline.documentText);
+  }
+
+  /** Restore only raw control state into a new session's own witnesses. The
+   * Workspace retains pending/conflicting capsules, never an old native pin. */
+  async restoreAdmissionDrafts(drafts:readonly BaseEmbedRawDraft[]):Promise<BaseEmbedDraftRestore> {
+    const restored:BaseEmbedRawDraft[]=[],pending:BaseEmbedRawDraft[]=[],conflicts:{draft:BaseEmbedRawDraft;reason:string}[]=[];
+    for(const draft of drafts){
+      let restoring=this.restoringRawDrafts.get(draft);
+      if(!restoring){restoring=Promise.resolve().then(()=>this.restoreAdmissionDraft(draft));this.restoringRawDrafts.set(draft,restoring);}
+      try{const result=await restoring;restored.push(...result.restored);pending.push(...result.pending);conflicts.push(...result.conflicts);}
+      finally{if(this.restoringRawDrafts.get(draft)===restoring)this.restoringRawDrafts.delete(draft);}
+    }
+    return{restored,pending,conflicts};
+  }
+
+  private async restoreAdmissionDraft(draft:BaseEmbedRawDraft):Promise<BaseEmbedDraftRestore> {
+    const conflict=(reason:string):BaseEmbedDraftRestore=>({restored:[],pending:[],conflicts:[{draft,reason}]});
+    if(this.closed||this.closing||this.admissionRecovery)return conflict('The embedded Base owner is no longer current.');
+    if(draft.binding.ambiguous)return conflict('Identical embedded Bases have no saved occurrence identity. The original raw input is retained.');
+    const expected=draft.binding.identity,current=this.options.recoveryIdentity?.(draft.binding);
+    if(!expected||!current||expected.sourceEntryId!==current.sourceEntryId||expected.targetEntryId!==current.targetEntryId)
+      return conflict('The containing note or embedded Base was replaced or removed. The original raw input is retained.');
+    const candidates=[...this.entries].filter(entry=>this.sameDraftTarget(entry,draft.binding));
+    if(!candidates.length)return{restored:[],pending:[draft],conflicts:[]};
+    if(candidates.length!==1)return conflict('The embedded Base occurrence changed. The original raw input is retained.');
+    const entry=candidates[0];
+    if(entry.retiring||entry.error)return conflict('The fresh embedded Base is unavailable. The original raw input is retained.');
+    if(!entry.settled||!entry.session)return{restored:[],pending:[draft],conflicts:[]};
+    if(!this.matchesRawDraftIdentity(entry,draft))return conflict('The containing note, embedded Base or source changed. The original raw input is retained.');
+    if(this.restoredRawDrafts.get(draft)===entry)return{restored:[draft],pending:[],conflicts:[]};
+    const session=entry.session;
+    if(!session.restoreAdmissionDrafts)return conflict('The fresh embedded Base cannot restore this raw input.');
+    const result=await session.restoreAdmissionDrafts([draft.draft]);
+    if(this.closed||this.closing||this.admissionRecovery||!this.entries.has(entry)||entry.retiring||entry.error||entry.session!==session||!this.matchesRawDraftIdentity(entry,draft))
+      return conflict('The embedded Base owner changed while restoring its raw input.');
+    if(result.conflicts.length)return conflict(result.conflicts[0].reason);
+    if(result.pending.length)return{restored:[],pending:[draft],conflicts:[]};
+    if(!result.restored.includes(draft.draft))return conflict('The fresh embedded Base did not accept the raw input.');
+    this.restoredRawDrafts.set(draft,entry);return{restored:[draft],pending:[],conflicts:[]};
+  }
+
+  private matchesRawDraftIdentity(entry:Entry,draft:BaseEmbedRawDraft):boolean {
+    const candidates=[...this.entries].filter(candidate=>this.sameDraftTarget(candidate,draft.binding));
+    if(candidates.length!==1||candidates[0]!==entry)return false;
+    const expected=draft.binding.identity,current=this.options.recoveryIdentity?.(entry.target);
+    if(!expected||!current||expected.sourceEntryId!==current.sourceEntryId||expected.targetEntryId!==current.targetEntryId)return false;
+    return typeof expected.sourceText==='string'?current.sourceText===expected.sourceText
+      :!!draft.binding.inline||typeof expected.sourceRevision==='string'&&current.sourceRevision===expected.sourceRevision;
   }
 
   flush(): Promise<void> {
