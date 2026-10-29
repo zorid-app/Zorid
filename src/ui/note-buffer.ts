@@ -56,7 +56,7 @@ export class NoteBuffer {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private autosaveEpoch=0;
   private autosaveRetries=0;
-  private autosaving=false;
+  private autosaveRunningEpoch?:number;
   private autosaveRequested=false;
   private retryingAutosave=false;
   private pending: Promise<unknown> = Promise.resolve();
@@ -104,7 +104,13 @@ export class NoteBuffer {
 
   /** A bounded retry is scheduled or running; the original error stays visible
    * to callers until the durable save actually succeeds. */
-  get autosaveRetryPending():boolean{return this.retryingAutosave;}
+  get autosaveRetryPending():boolean {
+    if(!this.error||!this.canAutosave()||!this.dirty||this.conflict||this.hasRecoveryConflict||!retryableSaveError(this.error))return false;
+    // Durable state can publish its error before the outer save promise rejects.
+    // Its first notification already belongs to this admitted automatic attempt.
+    return this.retryingAutosave||this.autosaveRetries<autosaveRetryDelays.length
+      &&(this.timer!==undefined||this.autosaveRunningEpoch===this.autosaveEpoch);
+  }
 
   private validateWrite(): void { for (const validate of this.writeValidators) validate(); }
 
@@ -219,14 +225,14 @@ export class NoteBuffer {
       this.timer=undefined;
       if(epoch!==this.autosaveEpoch||!this.canAutosave())return;
       if(!this.dirty){const retrying=this.retryingAutosave;this.retryingAutosave=false;this.autosaveRetries=0;if(retrying)this.notify();return;}
-      if(this.autosaving){this.autosaveRequested=true;return;}
-      this.autosaving=true;this.autosaveRequested=false;
+      if(this.autosaveRunningEpoch!==undefined){this.autosaveRequested=true;return;}
+      this.autosaveRunningEpoch=epoch;this.autosaveRequested=false;
       const saving=this.enqueue(async()=>{if(epoch===this.autosaveEpoch&&this.canAutosave()&&this.dirty)await this.save();});
       void saving.then(()=>this.finishAutosave(epoch),error=>this.finishAutosave(epoch,error));
     },delay);
   }
   private finishAutosave(epoch:number,error?:unknown):void {
-    this.autosaving=false;
+    this.autosaveRunningEpoch=undefined;
     const requested=this.autosaveRequested;this.autosaveRequested=false;
     if(epoch!==this.autosaveEpoch){if(requested)this.scheduleAutosave(this.options.debounceMs??400);return;}
     const wasRetrying=this.retryingAutosave;

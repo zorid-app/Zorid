@@ -9,7 +9,7 @@ import type {DurableWrites,DurableWriteRead,DurableWriteIntent,DurableWriteRef,D
 const transient=()=>Object.assign(new Error('Temporary storage failure'),{code:'io'});
 const drain=()=>new Promise<void>(resolve=>setImmediate(resolve));
 async function advance(t:TestContext,ms:number){t.mock.timers.tick(ms);await drain();}
-async function fixture(){
+async function fixture(onState?:()=>void){
   const scope={vaultId:'retry-authority',clientId:'retry-client'},adapter=new MemoryAdapter({'One.md':'Original exact body\n'});
   let current:DurableWriteRead={entryId:'entry',revision:'r1',path:'One.md',content:await adapter.read('One.md'),stat:{ctime:1,mtime:1,size:20}},head:Checkpoint|null=null;
   const calls:CheckpointChange[]=[],plans:DurableWritePlan[]=[],events:string[]=[],commits:DurableWriteRef[]=[];
@@ -37,7 +37,7 @@ async function fixture(){
     }finally{activeCommits--;}
   },listUnacknowledged:async()=>[],acknowledge:async()=>{events.push('ack');}};
   Object.assign(adapter,{durableWrites:writes});const vault=new Vault(adapter);await vault.initialize();
-  const note=new NoteBuffer(vault,'One.md',{debounceMs:10});await note.load('entry');
+  const note=new NoteBuffer(vault,'One.md',{debounceMs:10,onState});await note.load('entry');
   return{note,vault,adapter,writes,calls,plans,events,commits,get head(){return head;},get maxCommits(){return maxCommits;},
     failCheckpoint(){failCheckpoint=true;},loseCommit(){loseCommit=true;},failCommit(error:unknown){failCommit=error;},holdCommit(gate:Promise<void>){commitGate=gate;}};
 }
@@ -122,7 +122,14 @@ test('retirement while autosave is running cancels further automatic retries and
 
 test('reverting an unsubmitted legacy draft clears retry state and leaves no automatic work',async t=>{
   t.mock.timers.enable({apis:['setTimeout']});const adapter=new MemoryAdapter({'One.md':'Original'}),vault=new Vault(adapter);await vault.initialize();
-  const note=new NoteBuffer(vault,'One.md',{debounceMs:10});await note.load();let guards=0;
-  note.update('Draft',{validateWrite(){guards++;throw transient();}});await advance(t,10);assert.equal(note.autosaveRetryPending,true);
+  const note=new NoteBuffer(vault,'One.md',{debounceMs:10});await note.load();let guards=0,blocked=false;
+  note.update('Draft',{validateWrite(){guards++;if(blocked)throw transient();}});blocked=true;await advance(t,10);assert.equal(note.autosaveRetryPending,true);
   note.update('Original');assert.equal(note.dirty,false);assert.equal(note.autosaveRetryPending,false);const before=guards;await advance(t,60_000);assert.equal(guards,before);assert.equal(await adapter.read('One.md'),'Original');await note.dispose();
+});
+
+for(const code of ['io','client_not_admitted'])test(`first ${code} autosave error notification exposes truthful recovery state`,async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});const observations:boolean[]=[];let f:Awaited<ReturnType<typeof fixture>>;
+  f=await fixture(()=>{if(f?.note.error)observations.push(f.note.autosaveRetryPending);});f.failCommit(Object.assign(new Error('Save unavailable'),{code}));f.note.update('Exact first-failure draft');await advance(t,10);
+  assert.ok(observations.length>0);assert.equal(observations[0],code==='io','the initial failure notification must already distinguish bounded recovery from terminal rejection');
+  f.failCommit(undefined);await f.note.flush();await f.note.dispose();
 });
