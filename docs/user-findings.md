@@ -3,6 +3,36 @@
 ## URGENT: real-session automatic save failure — 2026-10-28
 
 
+**Backend admission scope ACK; current-context failure — 2026-10-28.**
+Live root reports current `adapter.durableWrites.readTextById` for Project Idea's
+current entry rejects generic `Durable editor request failed`, rather than the
+local released-context string. Both dirty buffers share CURRENT adapter writes.
+Project Idea planning error is `client_not_admitted`; Home retains uncertain CAS
+with expected +nextRevision and conflict=false. No native host is present while
+the app remains alive. This strengthens backend terminal-service/admission
+investigation; it does not prove the lifecycle proposal alone fixes the incident.
+No flush/retry/reload is authorized in the protected live session by this update.
+
+Named author ACK: **maintenance_triggers**, assigned by the live diagnostic root,
+owns isolated `desktop/editor-core.cjs`, `desktop/client-admission.cjs`, focused
+backend tests, and if required the **error-envelope-only** portion of
+`desktop/preload.cjs` (actual paths confirmed). Coordinate any envelope contract
+with the existing platform-index owner before both sides change it. Worker must
+report exact branch/worktree/base and test-first reproduction before handoff.
+Existing checkpoint_review and checkpoint_dedup do not edit desktop files.
+No Rust, host transport implementation or unrelated preload behavior is added to
+this scope; request named coordination for further files if evidence requires.
+
+Acceptance must cover a terminal/absent backend with still-visible dirty buffers,
+automatic valid readmission, and safe eventual save without released-adapter reuse,
+unknown-outcome replay or loss of retained drafts/intent/expected-next revision.
+Preserve client/vault/generation/lease fences and CAS semantics; bounded frontend
+retry alone cannot establish recovery if no valid backend admission exists.
+Use isolated fixtures, real regression RED/GREEN and independent review. Main
+integration remains exclusive in this thread. Installation remains HELD and
+PID71549 stays OPEN. Exact independent export remains preserved and verified.
+
+
 **Independent export verified; owners split — 2026-10-28.**
 Live diagnostic root completed independent JSON export at
 `/private/tmp/Zorid-protected-drafts-2026-10-28.json`. This main owner independently

@@ -478,3 +478,15 @@ Worker checkpoint_review owns Workspace lifecycle/platform index/tests in
 registered inside project, no main source edits; review/validation pending.
 Main integration remains exclusive here. Protected app stays open, installation
 held, no live flush/retry/reload/quit. See latest urgent finding for full scope.
+
+
+### Backend admission recovery named scope — 2026-10-28
+
+Live current-adapter read now fails generic durable request, ProjectIdea planning
+client_not_admitted, Home uncertainCAS expected+nextRevision/conflict=false; host
+absent with live app. Root cause remains open. Named maintenance_triggers owns
+isolated desktop/editor-core.cjs, client-admission.cjs/tests and necessary
+preload.cjs error-envelope-only coordination with platform owner; no Rust or other
+transport scope. Automatic valid readmission must preserve drafts/retained unknown
+outcomes and CAS/lease/generation guards. Test-first fixture regression and review
+required. Main exclusively integrated here; live PID71549 protected, install HELD.

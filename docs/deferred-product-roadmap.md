@@ -3,6 +3,21 @@
 ## Execution checkpoint — shared-core coordinator
 
 
+**Backend admission author ACK — 2026-10-28.**
+Current adapter readTextById rejects generic durable request failure, ProjectIdea
+client_not_admitted; Home uncertainCAS expected+nextRevision/conflict=false, both
+buffers CURRENT adapter, host absent while app alive (live owner observations).
+Root cause not yet established; lifecycle fix alone not accepted. Named isolated
+maintenance_triggers owns desktop/editor-core.cjs +client-admission.cjs/tests,
+conditional preload.cjs error-envelope-only if needed, coordinating contract with
+platform-index owner. Branch/worktree/base to be supplied; no other desktop/core
+scope granted. Existing two worker scopes stay separate. Require backend-death
+RED/GREEN and valid automatic readmission preserving pending/uncertain intent,
+client/vault/generation/lease/CAS fences. No live flush/retry/reload/quit; main
+integration remains exclusive here, installation HELD, PID71549 OPEN. Full
+ownership/invariants and independent export receipt are in the urgent queue.
+
+
 **Live draft export COMPLETE; concrete worker ownership — 2026-10-28.**
 Export `/private/tmp/Zorid-protected-drafts-2026-10-28.json` verified locally:
 mode0600,3851bytes,SHA2566c8f2dc8905633b42df261b50f5d489191ae102283795581962eec4d74627667.
