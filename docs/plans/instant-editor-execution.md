@@ -56,6 +56,41 @@ integration. Do not start further recovery architecture while delivering the
 bounded performance measurement/build. The installed app and real vault data
 remain unchanged.
 
+## Measured package checkpoint — 2026-10-29, build004
+
+Release build004 (source b924b55e) passed TypeScript, native Vite build, unsigned
+packaging and package verification with unchanged tracked inputs. ASAR SHA-256
+`db43870180a48bab42591a5253c10734a186496ab0777f897e4bd00da46d3c04`;
+host SHA-256 remains `418f91a0e2afbb3401fc13db47277e0dac36737df043d72dc5f90affdd361d6a`.
+
+Same physical 1000-note workload: first new-host reopen included schema18→19
+migration (hello1289ms). Second reopen hello755ms; full inventory8440ms,
+explicit unchanged audit9182ms/267quanta/4013units, zero imports. Baseline
+hello4229ms and blocking unchanged audit5540ms. All1001 logical bodies and
+physical bytes matched, source head unchanged1002, all3 hosts normal0. The
+>180s regression is fixed, but total unchanged audit is still slower than the
+baseline. This is native evidence, not editor800ms acceptance.
+
+Packaged pilot002 terminal exit1, preserved under
+`/private/tmp/zorid-packaged-startup-20261029-pilot002`. All4 apps and their
+native children exited normally; clones cleaned up. First-import ordinary note
+trusted-input134ms and432KB note662–685ms met the per-open800ms target in that
+run; baseline56ms/350ms was faster. Startup first-import input observed7674–7678ms
+is indeterminate for the800ms deadline because observer attachment was late;
+main inspector itself attached4784ms after spawn. Do not claim startup acceptance.
+
+Candidate Base navigation exposed another harness defect: Profile.base was absent
+from the current file-tree DOM and immediate selector click failed. Root source
+renders all currently known rows, so the screenshot alone does not prove
+virtualization; cooperative namespace import may still be incomplete. Since the normal
+return-to-Note0000 step was skipped after that failure, the subsequent reopen
+restored the large note and failed the expected-document oracle. Neither is a
+passing whole-run receipt. The isolated harness owner is fixing normal UI
+navigation while rows become available or are outside the viewport; no direct
+Workspace/bridge opening is permitted.
+Native owner is measuring the remaining unchanged-audit cost; no additional
+architecture or feature scopes are approved by this checkpoint.
+
 ## Implementation and evidence gates
 
 1. Establish an honest packaged editor benchmark. Separate process launch from
