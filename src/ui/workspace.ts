@@ -27,6 +27,7 @@ import { createFileTreeDrag, executeFileTreeMove } from './file-tree-drag.ts';
 import type { FileTreeDragRow } from './file-tree-drag.ts';
 import { shouldOverrideInputContextMenu } from '../platform/input-context-menu.ts';
 import { bindNoteTitleFocus } from './note-title-focus.ts';
+import {baseToolbarAdmissionDraftText} from '../bases/toolbar.ts';
 import type { NoteTitleFocusHandle, NoteTitleRawDraft } from './note-title-focus.ts';
 import { Vault } from '../core/index.ts';
 import type { VaultEntry } from '../core/index.ts';
@@ -71,7 +72,7 @@ import {collectionValue,mountCollectionBrowser,mountCollectionPropertyPicker} fr
 import type {CollectionEditor} from '../databases/collection-ui.ts';
 import {prepareCollectionOptionCreation} from '../databases/collection-option-creation.ts';
 import type {CollectionOptionCreation} from '../databases/collection-option-creation.ts';
-import {newBaseViewId} from '../bases/document.ts';
+import {BaseDocument,newBaseViewId} from '../bases/document.ts';
 import {inlineBaseRequest,replaceInlineBaseSource} from '../bases/inline-base.ts';
 import type {InlineBaseRequest} from '../bases/inline-base.ts';
 import {sharedBaseWitness} from '../bases/shared-query.ts';
@@ -574,6 +575,7 @@ export class Workspace {
   private admissionRawPreparations=new WeakMap<Vault,{readonly settlements:readonly {settle():Promise<void>}[];readonly ready:readonly Promise<void>[];readonly collect:()=>RetainedAdmissionRawInput[];collected:boolean}>();
   private retainedAdmissionRawInputs:RetainedAdmissionRawInput[]=[];
   private admissionRestoredTabIds=new WeakMap<Tab,ReadonlySet<string>>();
+  private admissionBaseInitialPreferences=new WeakSet<Tab>();
   private admissionRawRestore?:Promise<void>;
   private admissionRawRestoreAgain=false;
   private admissionRawCandidates?:HTMLElement;
@@ -681,6 +683,28 @@ export class Workspace {
     const tab=owner?.tabs.find(candidate=>candidate.id===tabId);
     if(!owner||!tab||!tab.path||!actor||actor.path!==tab.path)return;
     return{paneId:owner.id,savedTabId:tab.id,path:actor.path,entryId:actor.entryId};
+  }
+  /** A retained saved view is an initial UI preference, never an instruction
+   * to switch a fresh view after its user has started interacting with it. */
+  private initialAdmissionBaseView(pane:Pane,path:string,vault:Vault):string|undefined {
+    const tab=this.current(pane),aliases=tab&&this.admissionRestoredTabIds.get(tab),scope=vault.adapter.durableWrites?.checkpoints.scope;
+    if(!tab||!aliases||!scope||this.admissionBaseInitialPreferences.has(tab))return;
+    const retained=this.retainedAdmissionRawInputs.filter(candidate=>!candidate.reason&&candidate.input.kind==='base'&&candidate.scope.vaultId===scope.vaultId&&candidate.scope.clientId===scope.clientId
+      &&'savedTabId'in candidate.location&&candidate.location.paneId===pane.id&&aliases.has(candidate.location.savedTabId)&&candidate.location.path===path);
+    if(!retained.length)return;
+    this.admissionBaseInitialPreferences.add(tab);
+    const origins=retained.flatMap(candidate=>candidate.input.kind==='base'?[candidate.input.draft.origin]:[]),buffer=this.buffers.get(path),witness=buffer?.savedDurableWitness,listed=vault.entries.get(path);
+    // prepareBase has already admitted this exact buffer through the fresh Core.
+    // Absence is pending; a known mismatch retains the candidate instead.
+    if(!buffer||!witness||buffer.dirty||buffer.error||buffer.text!==buffer.savedText)return;
+    const conflict=(reason:string)=>{for(const candidate of retained)candidate.reason=reason;};
+    if(witness.path!==path||origins.some(origin=>origin.path!==path||origin.entryId!==witness.entryId||origin.source!==buffer.savedText)
+      ||listed?.entryId&&listed.entryId!==witness.entryId){conflict('The saved Base changed. Your unfinished input is kept below.');return;}
+    const viewId=origins[0]?.viewId;
+    if(!viewId||origins.some(origin=>origin.viewId!==viewId)){conflict('The original Base view is ambiguous. Your unfinished input is kept below.');return;}
+    try{if(BaseDocument.parse(buffer.savedText).views.filter(view=>view.id===viewId).length!==1){conflict('The original Base view changed. Your unfinished input is kept below.');return;}}
+    catch{conflict('The saved Base cannot be read. Your unfinished input is kept below.');return;}
+    return viewId;
   }
   private prepareAdmissionRawInputs(vault:Vault):NonNullable<ReturnType<Workspace['admissionRawPreparations']['get']>> {
     const previous=this.admissionRawPreparations.get(vault);if(previous)return previous;
@@ -849,6 +873,7 @@ export class Workspace {
     if(input.kind==='title')return input.draft.value;
     if(input.kind==='properties')return[...input.draft.rows.map(row=>row.widget?this.admissionRawPropertyText(row.widget):row.controls.map(control=>control.value).join('\n')),input.draft.addForm?.name.value].filter(value=>value!==undefined).join('\n');
     const draft=input.kind==='embeds'?input.draft.draft:input.draft;
+    if(draft.kind==='toolbar')return baseToolbarAdmissionDraftText(draft.raw);
     return draft.kind==='table'?draft.raw.state.value:this.admissionRawPropertyText(draft.raw);
   }
   private admissionRawPropertyText(draft:import('../bases/property-widgets.ts').BasePropertyRawDraft):string {
@@ -1826,7 +1851,8 @@ export class Workspace {
           }else{
             const recovery=el('div','base-source-recovery');recovery.hidden=true;
             recovery.append(el('p','','Edit this Base’s source to repair the configuration.'),textButton('Edit source',()=>this.run(()=>changeBaseSource(true)),'mod-cta'));host.append(recovery);
-            const session=this.createWorkspaceBaseSession(host,path,()=>pane,validate,undefined,undefined,undefined,(error,unavailable)=>{recovery.hidden=!error||!!unavailable;});
+            const preferredView=this.initialAdmissionBaseView(pane,path,vault);
+            const session=this.createWorkspaceBaseSession(host,path,()=>pane,validate,undefined,undefined,undefined,(error,unavailable)=>{recovery.hidden=!error||!!unavailable;},undefined,preferredView);
             pane.baseView=session;await session.ready;
           }
         }catch(error){if(version===pane.renderVersion){host.append(el('p','error-message',error instanceof Error?error.message:String(error)));if(!tab.baseSource)host.append(textButton('Edit source',()=>this.run(()=>changeBaseSource(true))));}}
@@ -3744,7 +3770,7 @@ export class Workspace {
     for(const root of roots)for(const node of root.querySelectorAll<HTMLElement>('[data-hotkey-command]'))this.updateHotkeyLabel(node);
   }
   private executeHotkey(id:string):void{
-    if(this.closing||this.tasksRetiring)return;
+    if(this.closing||this.tasksRetiring||this.root.inert||this.recoveringAdmissionVaults.has(this.vault))return;
     if(this.platform?.editorOnly&&(id.startsWith('tab-')||['new-window','new-tab','close-tab','split-right','split-down','toggle-left','toggle-right','search-all','graph','calendar','tasks','open-vault'].includes(id)))return;
     if(id==='new-window'){if(workspaceWindowBridge(window.zorid))this.run(()=>this.newWindow());return;}
     if(!this.vault)return;
@@ -4068,7 +4094,7 @@ export class Workspace {
   private help():void{const{content}=modal('Help');content.append(el('h2','','Get started'),el('p','',`Link to another note with [[note name]]. Customize workspace shortcuts in Settings → Hotkeys. Create note: ${this.hotkeys.label('new-note')||'not assigned'}. Find file: ${this.hotkeys.label('quick-switcher')||'not assigned'}. Command palette: ${this.hotkeys.label('command-palette')||'not assigned'}.`));
   }
   private hotkeySurfaceBlocked(): boolean {
-    return this.startupFailed||this.closing||this.tasksRetiring||!!document.querySelector('.modal-overlay,[aria-modal="true"],[role="menu"]');
+    return this.startupFailed||this.closing||this.tasksRetiring||this.root.inert||this.recoveringAdmissionVaults.has(this.vault)||!!document.querySelector('.modal-overlay,[aria-modal="true"],[role="menu"]');
   }
   private onKey(event:KeyboardEvent):void{
     if(event.defaultPrevented||event.isComposing||event.getModifierState('AltGraph')||this.hotkeySurfaceBlocked())return;
