@@ -55,8 +55,8 @@ test('owned retirement triggers recovery without more typing and ignores stale c
  const [one,two]=await Promise.all([f.platform.recovery!.recover(),f.platform.recovery!.recover()]);assert.equal(one,two);assert.equal(f.recoveryCalls,1);old.retire();assert.equal(hints,1);assert.equal(old.stopped,true);await f.platform.release!();assert.equal(f.releaseCalls,0,'old release cannot release the new admission');stop();
 });
 
-test('a delayed old durable reply cannot be adopted after the proxy rebind',async t=>{
- const f=await fixture(t),gate=f.holdRead();const pending=f.platform.adapter.durableWrites!.readTextById('one'),rejected=assert.rejects(pending,/recovered|retired|changed/i);assert.ok(f.platform.recovery);await f.platform.recovery!.recover();gate.resolve({...f.row,content:'Obsolete old process response'});await rejected;assert.equal((await f.platform.adapter.durableWrites!.readTextById('one'))!.content,'Saved source');
+test('a delayed old durable reply is discarded and renewed after the proxy rebind',async t=>{
+ const f=await fixture(t),gate=f.holdRead();const pending=f.platform.adapter.durableWrites!.readTextById('one');assert.ok(f.platform.recovery);await f.platform.recovery!.recover();gate.resolve({...f.row,content:'Obsolete old process response'});assert.equal((await pending)!.content,'Saved source');assert.deepEqual(f.calls.filter(call=>call.method==='readTextById').map(call=>call.admission),['old-admission','new-admission']);
 });
 
 test('foreign recovery scope never retargets the retained durable capability',async t=>{
@@ -65,7 +65,7 @@ test('foreign recovery scope never retargets the retained durable capability',as
 
 
 test('ordinary release also fences an already accepted old durable reply and coalesces duplicate release',async t=>{
- const f=await fixture(t),gate=f.holdRead(),pending=f.platform.adapter.durableWrites!.readTextById('one'),rejected=assert.rejects(pending,/retired|changed/i);
+ const f=await fixture(t),gate=f.holdRead(),pending=f.platform.adapter.durableWrites!.readTextById('one'),rejected=assert.rejects(pending,{code:'client_not_admitted'});
  await Promise.all([f.platform.release!(),f.platform.release!()]);assert.equal(f.releaseCalls,1);gate.resolve(f.row);await rejected;
 });
 

@@ -9,12 +9,19 @@ import {scheduleBinaryTransfer} from '../core/binary-transfer-queue.ts';
 import {createDesktopDocumentService,createDesktopDocumentRuntime} from './desktop-document-semantics.ts';
 import {createDesktopDocumentDraftTransport} from './desktop-document-drafts.ts';
 import type {DocumentService} from '../core/document-semantics.ts';
-import type { DurableWrites } from '../core/durable-writes.ts';
+import type { DurableWrites,DurableWriteRead } from '../core/durable-writes.ts';
 import { decodeTextCreateReceipt } from '../core/text-create.ts';
 import { normalizePath } from '../core/types.ts';
 import type { TextCreateReceipt } from '../core/types.ts';
 import type { VaultAdapter } from '../core/types';
 import type { DesktopBridge, DesktopVault, DesktopReconciliation, DesktopDurableContext } from './bridge';
+
+type ReadBudget={retries:number};
+type AdapterReads=Required<Pick<VaultAdapter,'list'|'stat'|'read'|'readBinary'>>;
+// Replacement layers share one caller's retry budget without exposing it to
+// consumers or bypassing any layer's release and generation checks.
+const adapterReadRunners=new WeakMap<VaultAdapter,(method:keyof AdapterReads,path:string|undefined,budget:ReadBudget)=>Promise<unknown>>();
+const noteReadRunners=new WeakMap<DurableWrites,(method:'readText'|'readTextById',key:string,budget:ReadBudget)=>Promise<DurableWriteRead|null>>();
 
 export interface PlatformVault {
   /** Recovery preserves retained durable write identities; derived owners are rebuilt. */
@@ -72,6 +79,11 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
   let recovery:PlatformVault['recovery'];
   let createText: ((path:string,content:string)=>Promise<void>) | undefined;
   let commands:Partial<VaultAdapter>={};
+  let adapterReads:AdapterReads={
+    list:()=>bridge.list(info.path),stat:path=>bridge.stat(info.path,path),
+    read:path=>bridge.read(info.path,path),readBinary:path=>bridge.readBinary(info.path,path),
+  };
+  let registerReadAdapter:((adapter:VaultAdapter)=>void)|undefined;
   let binary:ReturnType<typeof createDesktopBinaryStreams>|undefined;
   let databases:DatabaseService|undefined;
   let workBlocks:ReturnType<typeof createDesktopWorkBlocks>|undefined;
@@ -97,6 +109,66 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
     };
     const stopRecoveryReceiver=()=>{const stop=recoveryStop;recoveryStop=undefined;try{stop?.();}catch{/* A retired receiver cannot undo the backend acknowledgment. */}};
     const unavailable=(code:string,message:string)=>Object.assign(new Error(message),{code,source:'host',commitUncertain:true});
+    let readClosing=false;
+    const readWaiters=new Set<()=>void>();
+    const wakeReads=()=>{for(const wake of readWaiters)wake();};
+    const readActive=()=>{if(readClosing||releasePending||released&&!recovered)throw unavailable('client_not_admitted','This desktop read owner was released.');};
+    const awaitRead=async<T>(pending:Promise<T>):Promise<T>=>{
+      readActive();let cancel!:()=>void;
+      const cancelled=new Promise<never>((_resolve,reject)=>{cancel=()=>{if(readClosing)reject(unavailable('client_not_admitted','This desktop read owner was released.'));};});
+      readWaiters.add(cancel);
+      try{const value=await Promise.race([pending,cancelled]);readActive();return value;}finally{readWaiters.delete(cancel);}
+    };
+    const retiredRead=(error:unknown)=>{
+      if(!error||typeof error!=='object')return false;
+      const value=error as {source?:unknown;code?:unknown;commitUncertain?:unknown};
+      return value.source==='host'&&(['client_not_admitted','client_ownership_lost'].includes(String(value.code))||value.code==='host_exited'&&value.commitUncertain===true);
+    };
+    const waitForReadRecovery=async(error:unknown)=>{
+      readActive();if(!recovery)throw error;
+      let wake!:()=>void;const started=new Promise<void>(resolve=>{wake=resolve;});readWaiters.add(wake);
+      try{
+        // Subscribe before synchronous owner notification. Workspace claims its
+        // exact edits before calling recover, possibly after cancelling a chooser.
+        const delivery=markRetired();
+        if(!recovering&&!recovered){
+          if(!recoveryListeners.size)void recovery.recover().catch(()=>{});
+          else await Promise.race([started,delivery]);
+        }
+        readActive();
+        if(recovering)await awaitRead(recovering);else if(!recovered)throw error;
+        readActive();
+      }finally{readWaiters.delete(wake);}
+    };
+    const readOnly=async<T>(action:(budget:ReadBudget)=>Promise<T>,legacy=false,budget:ReadBudget={retries:0}):Promise<T>=>{
+      const retry=(error:unknown)=>{if(budget.retries>=1)throw error;budget.retries++;};
+      for(let attempt=0;attempt<2;attempt++){
+        readActive();
+        if(recovering){budget.retries=1;await awaitRead(recovering);}
+        else if(recoveryNeeded&&!recovered){
+          const error=unavailable('client_not_admitted','This desktop read admission retired.');retry(error);await waitForReadRecovery(error);
+        }
+        readActive();const epoch=durableEpoch,forwarded=!!recovered;
+        try{
+          const value=await awaitRead(action(budget));readActive();
+          if(epoch===durableEpoch)return value;
+          if(attempt===0&&(recovering||recovered)){retry(unavailable('desktop_recovery_stale_reply','The read admission changed.'));if(recovering)await awaitRead(recovering);continue;}
+          throw unavailable('desktop_recovery_stale_reply','The read admission changed while this result was pending.');
+        }catch(error){
+          readActive();if(attempt||forwarded||budget.retries>=1)throw error;
+          if(epoch!==durableEpoch&&(recovering||recovered)){retry(error);if(recovering)await awaitRead(recovering);continue;}
+          let proof=error;
+          // Legacy IPC errors lose custom fields. Only after a failed read,
+          // obtain an admitted, read-only health proof; healthy reads add no RPC.
+          if(legacy&&!retiredRead(proof)&&!recovering&&!recoveryNeeded)try{await awaitRead(retainedTarget.listUnacknowledged());}catch(healthError){proof=healthError;}
+          readActive();
+          if(epoch!==durableEpoch&&(recovering||recovered)){retry(error);if(recovering)await awaitRead(recovering);continue;}
+          if(!retiredRead(proof)&&!recoveryNeeded&&!recovering)throw error;
+          retry(error);await waitForReadRecovery(error);
+        }
+      }
+      throw unavailable('desktop_recovery_stale_reply','The desktop read could not settle in one admitted generation.');
+    };
     const retainedCall=async<T>(method:keyof DurableWrites,args:unknown[]):Promise<T>=>{
       if(recovering)throw unavailable('desktop_recovery_pending','The desktop context is being recovered.');
       const target=retainedTarget,epoch=durableEpoch,action=target[method];
@@ -172,14 +244,21 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
         list: options => call('checkpoints.list',options), changes: options => call('checkpoints.changes',options)}),
     });
     retainedTarget=originalWrites;
+    const readNote=(method:'readText'|'readTextById',key:string,budget?:ReadBudget)=>readOnly(async shared=>{
+      const runner=noteReadRunners.get(retainedTarget);
+      const value=await(runner?runner(method,key,shared):retainedTarget[method](key));
+      if(method==='readTextById'&&value!==null&&(!value||value.entryId!==key))throw Object.assign(new Error('The note read returned another entry identity.'),{code:'invalid_durable_response',source:'protocol',commitUncertain:false});
+      return value;
+    },false,budget);
     durableWrites=Object.freeze<DurableWrites>({
-      readText:path=>retainedCall('readText',[path]),readTextById:id=>retainedCall('readTextById',[id]),
+      readText:path=>readNote('readText',path) as Promise<DurableWriteRead>,readTextById:id=>readNote('readTextById',id),
       ...(originalWrites.composeNote?{composeNote:(input:import('../core/durable-writes.ts').DurableNoteCompositionInput)=>retainedCall<import('../core/durable-writes.ts').DurableNoteComposition|null>('composeNote',[input])}:{}),
       planWrite:input=>retainedCall('planWrite',[input]),prepare:plan=>retainedCall('prepare',[plan]),commit:ref=>retainedCall('commit',[ref]),query:ref=>retainedCall('query',[ref]),
       listUnacknowledged:()=>retainedCall('listUnacknowledged',[]),acknowledge:(ref,outcome)=>retainedCall('acknowledge',[ref,outcome]),
       captureSavedSource:input=>retainedCall('captureSavedSource',[input]),releaseSavedSource:input=>retainedCall('releaseSavedSource',[input]),
       checkpoints:Object.freeze<DurableWrites['checkpoints']>({scope,load:key=>retainedCheckpoint('load',[key]),compareAndSwap:change=>retainedCheckpoint('compareAndSwap',[change]),list:options=>retainedCheckpoint('list',[options]),changes:options=>retainedCheckpoint('changes',[options])}),
     });
+    noteReadRunners.set(durableWrites,readNote);
     let binaryDrained=false,documentsDrained=false,draftsDrained=false;
     type EntryCommand=Extract<DatabaseRequest,{op:'set_entry'}>;
     type EntryCapsule={command:EntryCommand;fingerprint:string;attempt:number;claims:number;promise?:Promise<DatabaseResponse>;resolve?:(value:DatabaseResponse)=>void;reject?:(error:unknown)=>void;response?:DatabaseResponse;error?:unknown};
@@ -322,6 +401,8 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
               ||Object.keys(next.scope).length!==2)throw unavailable('durable_recovery_scope_changed','The recovered desktop context has another identity or scope.');
             for(const capability of ['conditionalSavedSourceAvailable','databases','documentSemantics','documentMaintenance','metadataRowsAvailable','propertyTargetsAvailable','basePreviewAvailable','draftsAvailable'] as const)
               if(binding[capability]===true&&next[capability]!==true)throw unavailable('durable_recovery_scope_changed','The recovered desktop context is missing an admitted capability.');
+            const selected=await bridge.getVault();
+            if(selected?.path!==info.path)throw unavailable('durable_recovery_scope_changed','The selected vault changed during recovery.');
             const fresh=await desktopVault(bridge,info,next),target=fresh.adapter.durableWrites;
             if(!target||target.checkpoints.scope.vaultId!==scope.vaultId||target.checkpoints.scope.clientId!==scope.clientId)throw unavailable('durable_recovery_scope_changed','The recovered desktop context has another durable scope.');
             // Retained note writes and explicitly claimed collection commands
@@ -334,12 +415,13 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
             return fresh;
           })().catch(error=>{failEntries(error);throw error;});
           recovering=repair;
+          wakeReads();
           void repair.finally(()=>{if(recovering===repair)recovering=undefined;}).catch(()=>{});
           return repair;
         },
       });
     }
-    release=async()=>{
+    const releaseOwned=async()=>{
       if(recovering){await recovering;return;}if(released)return;if(releasePending)return releasePending;
       const retiring=(async()=>{
         if(drafts&&!draftsDrained){await drafts.release();draftsDrained=true;}if(workBlocks)await workBlocks.release();
@@ -350,8 +432,23 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
       })();releasePending=retiring;
       try{await retiring;}catch(error){failEntries(error);throw error;}finally{if(releasePending===retiring)releasePending=undefined;}
     };
+    release=async()=>{
+      readClosing=true;wakeReads();
+      try{await releaseOwned();}catch(error){if(!released&&!recovered&&!releasePending)readClosing=false;throw error;}
+    };
+    const directReads=adapterReads;
+    const readAdapter=<K extends keyof AdapterReads>(method:K,path?:string,budget?:ReadBudget):ReturnType<AdapterReads[K]>=>readOnly(async shared=>{
+      if(recovered){const runner=adapterReadRunners.get(recovered.adapter);if(runner)return runner(method,path,shared);}
+      const target=recovered?.adapter??directReads;
+      return method==='list'?target.list():target[method]!(path!);
+    },true,budget) as ReturnType<AdapterReads[K]>;
+    adapterReads={
+      list:()=>readAdapter('list'),stat:path=>readAdapter('stat',path),
+      read:path=>readAdapter('read',path),readBinary:path=>readAdapter('readBinary',path),
+    };
+    registerReadAdapter=adapter=>adapterReadRunners.set(adapter,(method,path,budget)=>readAdapter(method,path,budget));
   }
-  return {
+  const platform:PlatformVault={
     ...(release ? {release} : {}),
     ...(recovery?{recovery}:{}),
     ...(bridge.recoveryList&&bridge.recoveryRead?{recoveryHistory:{list:(entryId,options)=>bridge.recoveryList!(info.path,entryId,options),read:(entryId,snapshotId)=>bridge.recoveryRead!(info.path,entryId,snapshotId)}}:{}),
@@ -368,10 +465,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
       ...(databases?{databases}:{}),
       ...(binary ? {binaryStreams:binary.streams} : {}),
       ...(createText ? {createText} : {}),
-      list: () => bridge.list(info.path),
-      stat: path => bridge.stat(info.path, path),
-      read: path => bridge.read(info.path, path),
-      readBinary: path => bridge.readBinary(info.path, path),
+      ...adapterReads,
       write: (path, data) => bridge.write(info.path, path, data),
       ...(bridge.compareAndWrite ? { compareAndWrite: (path: string, expectedContent: string, contents: string) => bridge.compareAndWrite!(info.path, path, expectedContent, contents) } : {}),
       writeBinary: (path, data) => bridge.writeBinary(info.path, path, data),
@@ -386,6 +480,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
       subscribe: listener => bridge.onChange(change => { if (!change.vault || change.vault === info.path) listener(change.path ? [change.path] : undefined); }),
     },
   };
+  registerReadAdapter?.(platform.adapter);return platform;
 }
 
 export async function pickDesktopVault(): Promise<PlatformVault | null> {
