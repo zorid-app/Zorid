@@ -162,7 +162,7 @@ test('Workspace admits the captured creation actor through a delayed buffer load
   await assert.rejects(retired,/preview owner changed/,'a runtime owner replacement is not evidence of user cancellation');
 });
 
-for(const retirement of ['pane','host','healthy'] as const)test(`final popup preparation validates its structural owner while allowing its own focus: ${retirement}`,async t=>{
+for(const retirement of ['pane','host','blur','pointer','healthy'] as const)test(`final popup preparation validates its structural owner while allowing its own focus: ${retirement}`,async t=>{
   const{root,workspace,anchor}=await workspaceFixture(t),internal=workspace as any,original=internal.baseBufferFor.bind(internal);
   let entered=false,release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});t.after(()=>release());
   internal.baseBufferFor=async(...args:unknown[])=>{
@@ -172,12 +172,15 @@ for(const retirement of ['pane','host','healthy'] as const)test(`final popup pre
   };
   const host=root.ownerDocument.createElement('section');root.append(host);host.append(anchor);
   const pending=internal.openBaseNewItem('ZCreated.md',anchor,host,false,{entryId:'created-entry'});
-  const result=retirement==='healthy'?pending:assert.rejects(pending,/preview owner changed/);
+  const canceled=retirement==='blur'||retirement==='pointer';
+  const result=retirement==='healthy'||canceled?pending:assert.rejects(pending,/preview owner changed/);
   await until(()=>entered);
   if(retirement==='pane')workspace.activePane.renderVersion++;
   if(retirement==='host')host.remove();
+  if(retirement==='blur')root.ownerDocument.defaultView!.dispatchEvent(new root.ownerDocument.defaultView!.Event('blur'));
+  if(retirement==='pointer')root.ownerDocument.body.dispatchEvent(new root.ownerDocument.defaultView!.Event('pointerdown',{bubbles:true}));
   release();await result;
   if(retirement==='healthy'){
     assert.equal(await pending,true);const popup=root.ownerDocument.querySelector('[aria-label="Page preview"]')!;assert.ok(popup);assert.ok(popup.contains(root.ownerDocument.activeElement));await internal.closeBaseNewItem();
-  }else assert.equal(root.ownerDocument.querySelector('[aria-label="Page preview"]'),null,'a retired owner cannot install or acknowledge the created popup');
+  }else{if(canceled)assert.equal(await pending,false,'explicit late cancellation cannot acknowledge a presentation');assert.equal(root.ownerDocument.querySelector('[aria-label="Page preview"]'),null,'a retired owner cannot install or acknowledge the created popup');}
 });

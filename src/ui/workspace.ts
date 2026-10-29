@@ -2021,7 +2021,12 @@ export class Workspace {
       // The popup focuses its own title before resolving. Its preparation must
       // retain the structural opener without treating that focus as retirement.
       let preparing=true;
-      const validatePresentation=()=>{validateFile();if(preparing&&!owner.contextCurrent())throw new Error('The created note preview owner changed. Its original creation is retained.');};
+      const presentationCanceled=new Error('The created note presentation was canceled.');
+      const validatePresentation=()=>{
+        validateFile();
+        if(preparing&&!owner.contextCurrent())throw new Error('The created note preview owner changed. Its original creation is retained.');
+        if(preparing&&owner.canceled?.())throw presentationCanceled;
+      };
       try{
         popup=await openBaseNewItemPopover({anchor,vault,path,presentation:'side-peek',focusTitle:!existing,bodyExpanded:existing,propertiesExpanded:true,getBuffer:async target=>{validatePresentation();if(target!==shared.path)throw new Error('The new note moved before opening.');return shared;},validate:validatePresentation,
           rename:async(source,destination,validateSelection,witness)=>{
@@ -2053,8 +2058,16 @@ export class Workspace {
         });
         validateFile();
         if(!owner.contextCurrent()){preparing=false;await popup.close();throw new Error('The created note preview owner changed. Its original creation is retained.');}
+        if(owner.canceled?.())throw presentationCanceled;
         preparing=false;popup.element.append(recovery);this.baseNewItem=popup;this.baseNewItemAnchor=ownershipHost;return true;
-      }catch(error){preparing=false;if(popup?.element.isConnected){this.baseNewItem=popup;this.baseNewItemAnchor=ownershipHost;throw error;}cleanup();await sessions.close();throw error;}
+      }catch(error){
+        preparing=false;
+        if(error===presentationCanceled&&popup?.element.isConnected){
+          try{await popup.close();}catch(failure){this.baseNewItem=popup;this.baseNewItemAnchor=ownershipHost;throw failure;}
+        }
+        if(popup?.element.isConnected){this.baseNewItem=popup;this.baseNewItemAnchor=ownershipHost;throw error;}
+        cleanup();await sessions.close();if(error===presentationCanceled)return false;throw error;
+      }
     });
     this.baseNewItemOpening=opening;
     const clear=()=>{owner.release();if(this.baseNewItemOpening===opening)this.baseNewItemOpening=undefined;};void opening.then(clear,clear);
