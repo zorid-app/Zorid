@@ -8,7 +8,7 @@ import { Vault } from '../src/core/vault.ts';
 import { MemoryAdapter } from '../src/core/memory-adapter.ts';
 import type { NoteMetadata } from '../src/core/types.ts';
 import type { CommittedMetadataFrame, CommittedMetadataState } from '../src/core/committed-metadata-frame.ts';
-import type { DocumentEntry } from '../src/core/document-semantics.ts';
+import type { DocumentEntry, DocumentService } from '../src/core/document-semantics.ts';
 
 function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>(done=>{resolve=done;});return {promise,resolve};}
 async function until(predicate:()=>boolean){const end=Date.now()+2000;while(!predicate()){if(Date.now()>end)assert.fail('Timed out waiting for metadata display');await new Promise(resolve=>setTimeout(resolve,2));}}
@@ -29,7 +29,7 @@ function installProjection(vault:Vault,initial:CommittedMetadataState){
   return {publish(next:CommittedMetadataState){state=next;for(const listener of [...listeners])listener(next);},late(next:CommittedMetadataState){state=next;for(const listener of retained)listener(next);},
     failClose(count:number){failures=count;},holdClose(promise:Promise<void>){gate=promise;},get closes(){return closes;},get stops(){return stops;},get subscriptions(){return listeners.size;}};
 }
-async function setup(t:TestContext){
+async function setup(t:TestContext,metadataPage?:{wait:Promise<void>;entered:()=>void}){
   const dom=new JSDOM('<!doctype html><main></main>',{url:'https://zorid.test/',pretendToBeVisual:true}),saved=new Map<string,PropertyDescriptor|undefined>();
   const matchMedia=(media:string)=>({matches:false,media,addListener(){},removeListener(){},addEventListener(){},removeEventListener(){}});
   for(const[key,value]of Object.entries({window:dom.window,document:dom.window.document,localStorage:dom.window.localStorage,navigator:dom.window.navigator,HTMLElement:dom.window.HTMLElement,
@@ -39,6 +39,15 @@ async function setup(t:TestContext){
   }
   dom.window.matchMedia=matchMedia as typeof window.matchMedia;dom.window.HTMLElement.prototype.scrollIntoView=()=>{};
   const root=document.querySelector<HTMLElement>('main')!,adapter=new MemoryAdapter({'Current.md':'#legacy\n[[Target.md]]','Target.md':'Target','Future.md':'#future'});
+  if(metadataPage){
+    const saved=frame(['Current.md']);
+    // This page is intentionally not ready. Starting an editor must depend on
+    // the namespace and its own source, not on full committed metadata delivery.
+    const service={metadataRowsAvailable:true,maintenance:{observeAndSubscribe:async()=>({snapshot:null,unsubscribe(){}})},
+      open:async()=>({snapshot:saved.snapshot,source:saved.source,coverageComplete:true,
+        async metadataRows(){metadataPage.entered();await metadataPage.wait;throw Object.assign(Error('Metadata still pending'),{code:'not_ready'});},async close(){}})} as unknown as DocumentService;
+    Object.defineProperty(adapter,'documentSemantics',{value:service});
+  }
   const workspace=new Workspace(root,(parent,options):EditorHandle=>{const input=document.createElement('textarea');input.value=options.value;parent.append(input);return{getValue:()=>input.value,setValue:value=>{input.value=value;},focus:()=>input.focus(),destroy:()=>input.remove(),insert:value=>{input.value+=value;options.onChange(input.value);}};});
   let releases=0;const platform={adapter,id:'test:workspace-metadata',label:'Metadata test',release:async()=>{releases++;}};
   await workspace.start(platform);const internal=workspace as any;
@@ -50,6 +59,22 @@ async function setup(t:TestContext){
 }
 
 function labels(graph:Element){return [...graph.querySelectorAll('svg g[role="link"]')].map(node=>node.getAttribute('aria-label'));}
+
+test('workspace can open and edit the selected note while committed metadata is still loading',async t=>{
+  const page=deferred<void>();let entered=false,ready=false;
+  t.after(()=>page.resolve());
+  const opening=setup(t,{wait:page.promise,entered:()=>{entered=true;}}).then(ui=>{ready=true;return ui;});
+  await until(()=>entered);
+  await until(()=>ready);
+  const ui=await opening;
+  assert.equal(ui.workspace.vault.metadataFrame?.status,'pending');
+  await ui.workspace.openNote('Current.md');
+  ui.workspace.activePane.editor!.insert('\nTyped before metadata');
+  await ui.workspace.flush();
+  assert.match(await ui.adapter.read('Current.md'),/Typed before metadata/);
+  assert.equal(ui.workspace.vault.metadataFrame?.frame,null,'no incomplete metadata frame is installed');
+  page.resolve();
+});
 
 test('tags and graph use one committed namespace and resolver despite unrelated live entries',async t=>{
   const ui=await setup(t),saved=frame(['Saved.md','OldTarget.md']);ui.project({status:'current',frame:saved});

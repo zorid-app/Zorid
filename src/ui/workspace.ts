@@ -907,13 +907,13 @@ export class Workspace {
     // enter the serialized teardown/install phase. Old views stay usable while
     // a new adapter initializes, and a late request cannot acquire a watcher.
     try{
-    await next.initialize();
+    await next.initialize({metadata:'background'});
     if(request!==this.vaultRequest)return;
     const transition=this.vaultTransition.then(async()=>{if(request===this.vaultRequest){
       this.nativeOpening=platform;
       try{
         let recovered=await this.recoverDurableBuffers(next);
-        if(await platform.recoverCommands?.()){await next.initialize();recovered=await this.recoverDurableBuffers(next);}
+        if(await platform.recoverCommands?.()){await next.initialize({metadata:'background'});recovered=await this.recoverDurableBuffers(next);}
         await this.replaceVault(platform,next,recovered);
         if(request===this.vaultRequest&&this.platform===platform)await this.openNativeInitialNote(platform);
       }finally{if(this.nativeOpening===platform){this.nativeOpening=undefined;if(request===this.vaultRequest&&this.platform===platform)this.flushNativePresentation(this.activePane);}}

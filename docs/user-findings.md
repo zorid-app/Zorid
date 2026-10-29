@@ -1,5 +1,21 @@
 # User findings queue
 
+## Active recovery/performance goal — 2026-10-29
+
+User reiterates that ordinary host/session interruptions must not require manual
+reopen-vault, save-retry or load-retry paths. Prevent these invalid lifetimes or
+automatically renew them while preserving the mounted editor, draft and exact
+operation identity. Removing warning text without fixing recovery is not accepted;
+an unconfirmed save must never be presented as saved. The editor must be usable
+within 800 ms, including first import and large-note restore, while remaining work
+loads lazily. Eliminate unnecessary import/index work as well.
+
+This root owns `.worktrees/instant-editor` / `codex/instant-editor-current`. User
+authorizes self-merge and directs no coordination with the finished other session.
+The built-in goal is active again. See [execution gates](plans/instant-editor-execution.md).
+Implementation/review, native measurement, main integration and installed acceptance
+remain distinct; no complete automatic-recovery or 800 ms claim yet.
+
 ## Current direct user priority: original Notion Bases UX — 2026-10-28
 
 User redirects this session to its ORIGINAL Notion-style Bases task only. Full
