@@ -652,7 +652,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       ||mounted?.hasQueuedConfiguration?.()||settings.hasDraft()||summaryDraft||summaryHasRawDraft?.()
       ||chooser?.hasPendingChanges()||collectionEditor?.hasPendingChanges()||unfinishedNoteCreation()
       ||[...changedBuffers].some(buffer=>buffer.dirty||!!buffer.error))return;
-    const toolbar=toolbarUI.hasDraft();if(toolbar&&!toolbarUI.canCaptureAdmissionDraft())return;
+    const toolbarCapturable=toolbarUI.canCaptureAdmissionDraft(),toolbar=toolbarUI.hasDraft()||toolbarCapturable;if(toolbar&&!toolbarCapturable)return;
     const elements=[...content.querySelectorAll<HTMLElement>('[data-base-editing]')],table=!!content.querySelector('.zorid-bases-table-input');
     if(table&&!mounted?.canCaptureRawDraft?.())return;
     if(!elements.length){

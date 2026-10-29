@@ -122,3 +122,13 @@ test('a fresh explicit view selection conflicts with older raw intent before its
   const result=await fresh.session.restoreAdmissionDrafts!(recovery.rawDrafts!);assert.equal(result.restored.length,0);assert.equal(result.conflicts.length,1,'the new selected view is already authoritative while its derived read is pending');assert.equal(result.pending.length,0);assert.equal(result.conflicts[0].draft,recovery.rawDrafts![0]);assert.equal(fresh.doc.querySelector('[aria-label="New item folder"]'),null);assert.equal(old.adapter.writes.length,0);assert.equal(fresh.adapter.writes.length,0);
  }finally{held?.finished.resolve();await switching;await old.cleanup();await fresh.cleanup();}
 });
+
+test('clean view-search input is retained for host recovery without blocking healthy Session navigation',async()=>{
+ const old=await fixture(),fresh=await fixture(),healthy=await fixture();try{
+  for(const f of [old,healthy]){f.control<HTMLButtonElement>('Views').click();const input=f.edit('Find a view','Prim');input.focus();input.setSelectionRange(1,3,'backward');assert.equal(f.session.hasPendingChanges(),false,'a navigation query is not an authored configuration draft');}
+  await healthy.session.flush({dismissCleanPanels:true});assert.equal(healthy.doc.querySelector('.bases-toolbar-popover'),null);assert.equal(healthy.adapter.writes.length,0,'ordinary clean navigation must not require Apply, retry or reconnect');
+  assert.equal(old.session.canRecoverAdmission!(),true);const recovery=old.session.prepareAdmissionRecovery!();await recovery.settle();assert.equal(recovery.rawDrafts?.length,1,'recovery must capture raw-only query presence despite semantic hasDraft being false');assert.equal(old.adapter.writes.length,0);
+  const result=await fresh.session.restoreAdmissionDrafts!(recovery.rawDrafts!);assert.equal(result.restored.length,1);const input=fresh.control<HTMLInputElement>('Find a view');assert.equal(input.value,'Prim');assert.equal(input.selectionStart,1);assert.equal(input.selectionEnd,3);assert.equal(input.selectionDirection,'backward');assert.equal(fresh.adapter.writes.length,0);assert.equal(fresh.session.hasPendingChanges(),false);
+  await fresh.session.flush({dismissCleanPanels:true});assert.equal(fresh.doc.querySelector('.bases-toolbar-popover'),null);assert.equal(fresh.adapter.writes.length,0);
+ }finally{await old.cleanup();await fresh.cleanup();await healthy.cleanup();}
+});
