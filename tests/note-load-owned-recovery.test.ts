@@ -19,7 +19,7 @@ async function fixture(t:TestContext,{operation=true,onState=undefined as (()=>v
   const encodedState=JSON.stringify(raw);let head:Checkpoint={version:1,...scope,key:'note/v1/entry',revision:'11111111-1111-1111-1111-111111111111',sequence:'1',encodedState,deleted:false,byteLength:Buffer.byteLength(encodedState)};
   const calls:CheckpointChange[]=[],journal:IndependentDraftChange[]=[],admittedAtCAS:boolean[]=[],queries:DurableWriteRef[]=[],plans:DurableWritePlan[]=[],events:string[]=[];
   const intents=new Map<string,DurableWriteIntent>([[ref.token,{state:'committed',ref,acknowledged:false,receipt:{operationId:ref.operationId,entryId:'entry',revision:'r2',sequence:'2'}}]]);
-  let casGate:Promise<void>|undefined,casFault:unknown,readFault:unknown,checkpointFault:unknown,readGate:Promise<void>|undefined,loseCAS=false,checkpointReads=0,sourceReads=0;
+  let casGate:Promise<void>|undefined,casFault:unknown,readFault:unknown,checkpointFault:unknown,readGate:Promise<void>|undefined,inventoryGate:Promise<void>|undefined,loseCAS=false,checkpointReads=0,sourceReads=0;
   const adapter=new MemoryAdapter({'One.md':current.content});
   let note:NoteBuffer;
   const writes:DurableWrites={checkpoints:{scope,load:async()=>{checkpointReads++;if(checkpointFault)throw checkpointFault;return clone(head);},compareAndSwap:async change=>{
@@ -40,11 +40,12 @@ async function fixture(t:TestContext,{operation=true,onState=undefined as (()=>v
   const jscope={...scope,incarnationId:'document'},jheads=new Map<string,IndependentDraftCandidate>();
   if(candidate){const stored={...raw,generation:2,draft:'Journal D2'};jheads.set('prior:canonical-writer',{...scope,incarnationId:'prior',entryId:'entry',writer:raw.writer,revision:'1',generation:2,deleted:false,baseline:{entryId:'entry',path:base.path,revision:base.revision,content:base.content},draft:stored.draft,checkpointRevision:head.revision,
     pendingOperation:JSON.stringify({schemaVersion:1,conflict:false,operation:null,checkpoint:{key:head.key,expectedRevision:head.revision,nextRevision:'33333333-3333-3333-3333-333333333333',encodedState:JSON.stringify(stored)}})});}
-  const provider:IndependentDraftProvider={scope:jscope,list:async()=>[...jheads.values()].map(({baseline,draft,checkpointRevision,pendingOperation,...receipt})=>clone(receipt)),read:async address=>clone(jheads.get(`${address.incarnationId??jscope.incarnationId}:${address.writer}`)??null),compareAndSwap:async change=>{journal.push(clone(change));const saved={...jscope,entryId:change.entryId,writer:change.writer,revision:change.nextRevision,generation:change.generation,deleted:false as const,baseline:change.baseline,draft:change.draft,checkpointRevision:change.checkpointRevision,pendingOperation:change.pendingOperation};jheads.set(`${jscope.incarnationId}:${change.writer}`,saved);const{baseline,draft,checkpointRevision,pendingOperation,...receipt}=saved;return clone(receipt);},retire:async value=>({vaultId:jscope.vaultId,clientId:jscope.clientId,incarnationId:value.incarnationId,entryId:value.entryId,writer:value.writer,revision:value.nextRevision,generation:value.generation,deleted:true})};
+  const provider:IndependentDraftProvider={scope:jscope,list:async()=>{const rows=[...jheads.values()].map(({baseline,draft,checkpointRevision,pendingOperation,...receipt})=>clone(receipt));if(inventoryGate)await inventoryGate;return rows;},read:async address=>clone(jheads.get(`${address.incarnationId??jscope.incarnationId}:${address.writer}`)??null),compareAndSwap:async change=>{journal.push(clone(change));const saved={...jscope,entryId:change.entryId,writer:change.writer,revision:change.nextRevision,generation:change.generation,deleted:false as const,baseline:change.baseline,draft:change.draft,checkpointRevision:change.checkpointRevision,pendingOperation:change.pendingOperation};jheads.set(`${jscope.incarnationId}:${change.writer}`,saved);const{baseline,draft,checkpointRevision,pendingOperation,...receipt}=saved;return clone(receipt);},retire:async value=>({vaultId:jscope.vaultId,clientId:jscope.clientId,incarnationId:value.incarnationId,entryId:value.entryId,writer:value.writer,revision:value.nextRevision,generation:value.generation,deleted:true})};
   Object.assign(adapter,{durableWrites:writes,independentDrafts:provider});const vault=new Vault(adapter);await vault.initialize();note=new NoteBuffer(vault,'One.md',{debounceMs:60000,onState});
   t.after(async()=>{casGate=undefined;casFault=undefined;readGate=undefined;readFault=undefined;try{await note.dispose();}catch{await note.disposeUnadmitted?.().catch(()=>{});}});
   return{note,vault,adapter,writes,calls,journal,admittedAtCAS,queries,plans,raw,ref,submitted,events,get sourceReads(){return sourceReads;},get checkpointReads(){return checkpointReads;},
     holdCAS(promise:Promise<void>){casGate=promise;},failCAS(value:unknown){casFault=value;},loseCAS(){loseCAS=true;},failRead(value:unknown){readFault=value;},failCheckpointRead(value:unknown){checkpointFault=value;},holdRead(value:Promise<void>|undefined){readGate=value;},
+    holdInventory(promise:Promise<void>|undefined){inventoryGate=promise;},
     alterCheckpoint(change:(state:any)=>void){const value=JSON.parse(head.encodedState!);change(value);const encodedState=JSON.stringify(value);head={...head,encodedState,byteLength:Buffer.byteLength(encodedState)};},
     replace(){current={...current,entryId:'replacement',revision:'replacement-r1',content:'Peer replacement'};},takeCheckpoint(){head={...head,revision:'22222222-2222-2222-2222-222222222222'};}};
 }
@@ -164,4 +165,12 @@ test('a cancelled read-only pure-S1 adoption offers no new branch before admissi
   await assert.rejects(f.note.load('entry',()=>{}, {signal:signal.signal}),{code:'note_load_cancelled'});await f.note.disposeUnadmitted();await drain();
   assert.equal(cancelled,true);assert.equal(f.calls.length,0);assert.equal(f.journal.length,0,'a validated but unadmitted D2 already has its prior durable branch');
   const restored=new NoteBuffer(f.vault,'One.md',{debounceMs:60000});await restored.load('entry');assert.equal(restored.text,'Journal D2');assert.equal(restored.draftProtectionStatus?.inventory,'ready');await restored.dispose();
+});
+
+test('inventory arriving after unadmitted disposal cannot start either core or independent writes',async t=>{
+  const f=await fixture(t,{operation:false,candidate:true}),held=gate();f.holdInventory(held.promise);
+  const loading=f.note.load('entry'),cancelled=assert.rejects(loading,{code:'note_load_cancelled'});await drain();assert.equal(f.note.hasAdmittedContent,false);
+  await f.note.disposeUnadmitted();await cancelled;held.resolve();f.holdInventory(undefined);await drain();
+  assert.equal(f.calls.length,0);assert.equal(f.journal.length,0);
+  const restored=new NoteBuffer(f.vault,'One.md',{debounceMs:60000});await restored.load('entry');assert.equal(restored.text,'Journal D2');await restored.dispose();
 });

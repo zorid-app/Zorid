@@ -74,6 +74,8 @@ export class DurableNoteState {
   private protectionCaptureError:Error|null=null;
   private protectionAuthoringStarted=false;
   private protectionStopped=false;
+  private protectionAdmitted=true;
+  private deferredProtectionInventory?:{state:'ready'|'unknown'|'retained';error?:unknown};
   private recoveredIndependent=false;
   private recoveredJournalCandidate?:IndependentDraftCandidate;
   private sourceRetirement?:IndependentDraftRetirement;
@@ -108,13 +110,14 @@ export class DurableNoteState {
     return status&&this.sourceCleanupError?Object.freeze({...status,error:status.error??this.sourceCleanupError}):status;
   }
   async flushDraftProtection():Promise<void>{
+    if(!this.protectionAdmitted)return;
     this.captureProtection();if(this.protectionCaptureError)throw this.protectionCaptureError;
     const owner=this.protection;
     try{await owner?.flush();}catch(error){if(this.protection===owner||this.protectionStopped)throw error;await this.protection?.flush();}
     await this.cleanupRecoveredSource(true);
   }
   stopDraftProtection():void{this.protectionStopped=true;this.candidateTerminal=true;this.candidateRetryWake?.();this.protection?.stop();this.sourceRecovery?.supervisor.stop();}
-  draftProtectionAvailable():void{this.candidateRetryStep=0;this.candidateRetryWake?.();this.protection?.availability();}
+  draftProtectionAvailable():void{if(!this.protectionAdmitted)return;this.candidateRetryStep=0;this.candidateRetryWake?.();this.protection?.availability();}
   retryCanonicalRecovery():void{
     if(this.protectionStopped)return;
     this.sourceRecovery?.supervisor.wake();
@@ -137,7 +140,7 @@ export class DurableNoteState {
   /** Called only AFTER NoteBuffer has made the validated raw draft usable. */
   startLoadRecovery(check:()=>void):void{
     if(this.sourceRecovery||!this.loadPrepared||this.protectionStopped)return;
-    if(!this.sourceRecoveryRequired){if(this.recoveredIndependent)void this.queue(()=>this.persist()).catch(()=>{});return;}
+    if(!this.sourceRecoveryRequired){if(this.recoveredIndependent)void this.queue(()=>this.persist()).catch(()=>{});this.admitProtection();return;}
     const owner={supervisor:new NoteLoadSupervisor(),check,task:undefined as Promise<void>|undefined};this.sourceRecovery=owner;
     const task=this.queue(async()=>{
       check();if(this.state!.operation?.ref)await this.resume(check);
@@ -146,6 +149,13 @@ export class DurableNoteState {
       this.changed();
     });owner.task=task;
     void task.catch(error=>{this.sourceRecoveryTerminal=error instanceof Error?error:failure('source recovery stopped');this.changed();}).finally(()=>{owner.task=undefined;}).catch(()=>{});
+    this.admitProtection();
+  }
+  private admitProtection():void{
+    if(this.protectionStopped)return;
+    this.protectionAdmitted=true;const pending=this.deferredProtectionInventory;this.deferredProtectionInventory=undefined;
+    if(pending)this.protection?.markInventory(pending.state,pending.error);
+    this.captureProtection();
   }
   private sourceIO<T>(operation:()=>Promise<T>):Promise<T>{
     const owner=this.sourceRecovery;
@@ -165,7 +175,7 @@ export class DurableNoteState {
       &&['entryId','path','revision','content'].every(key=>state.base[key as keyof DurableWriteRead]===current.base[key as keyof DurableWriteRead]);
   }
   private captureProtection():void {
-    const state=this.state;if(!state||!this.protection)return;
+    const state=this.state;if(!state||!this.protection||!this.protectionAdmitted)return;
     // An unopened clean baseline needs no independent body copy.
     if(!this.protection.status.sequence&&!state.operation&&!state.conflict&&state.draft===state.base.content
       &&(!this.uncertain||!this.protectionAuthoringStarted&&!this.recoveredIndependent))return;
@@ -231,7 +241,8 @@ export class DurableNoteState {
         ?{entryId:this.base.entryId,writer:this.state!.writer,generation:this.state!.generation,content:this.text,revision:this.base.revision}:undefined,
       retryInventory:inspect});};
     create();
-    this.protection!.markInventory(inventory,inventoryError);this.captureProtection();
+    if(deferRecovery)this.deferredProtectionInventory={state:inventory,error:inventoryError};
+    else{this.protection!.markInventory(inventory,inventoryError);this.captureProtection();}
     if(this.recoveredIndependent&&!deferRecovery)void this.queue(()=>this.persist()).catch(()=>{});
   }
   private validJournalReceipt(value:IndependentDraftReceipt):boolean {
@@ -330,7 +341,7 @@ export class DurableNoteState {
   private cleanupRecoveredSource(retry=false):Promise<void>{
     if(this.sourceCleanupRunning)return this.sourceCleanupRunning;
     const candidate=this.recoveredJournalCandidate,provider=this.vault.adapter.independentDrafts,state=this.state;
-    if(!candidate||!provider||!state||this.protectionStopped||candidate.incarnationId===provider.scope.incarnationId||this.sourceCleanupError&&!retry)return Promise.resolve();
+    if(!candidate||!provider||!state||this.protectionStopped||!this.protectionAdmitted||candidate.incarnationId===provider.scope.incarnationId||this.sourceCleanupError&&!retry)return Promise.resolve();
     if(!this.sourceRetirement){
       if(!this.covered(state)||!this.protection?.status.currentJournalAcknowledged||candidate.writer!==state.writer||candidate.generation!==state.generation||candidate.draft!==state.draft)return Promise.resolve();
       const next=BigInt(candidate.revision)+1n;if(next>18446744073709551615n)return Promise.resolve();
@@ -478,6 +489,7 @@ export class DurableNoteState {
     validate();
     if(this.loadPrepared){if(path!==this.base.path||expectedEntryId!==undefined&&expectedEntryId!==this.base.entryId)throw failure('selected note changed before admission');return;}
     if(this.protection||this.protectionStopped)throw failure('the cancelled initial admission must be disposed before another load');
+    this.protectionAdmitted=!options.deferRecovery;
     this.stateValidated=false;
     if(this.writes.checkpoints.scope.vaultId!==this.noteScope.vaultId||this.writes.checkpoints.scope.clientId!==this.noteScope.clientId)throw failure('selected note scope changed before admission');
     const selected=expectedEntryId??this.initialActor?.entryId;

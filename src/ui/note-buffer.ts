@@ -336,13 +336,13 @@ export class NoteBuffer {
       if (this.disposed) throw new Error('This note buffer is disposed');
       if(this.durable){
         await this.readInitial(check=>this.durable!.load(this.path,admittedEntryId,check,{deferRecovery:true}),validate,options.signal);
-        validate();this.durable.assertLoadScope();this.expectedEntryId=admittedEntryId;this.loaded=true;this.syncDurable();
+        validate();this.durable.assertLoadScope();this.expectedEntryId=admittedEntryId;this.loaded=true;
         const vault=this.vault,adapter=vault.adapter,writes=adapter.durableWrites!,scope={...writes.checkpoints.scope},entryId=this.durable.base.entryId;
         this.durable.startLoadRecovery(()=>{
           const selected=vault.entries.get(this.path);
           if(this.disposed||vault.adapter!==adapter||adapter.durableWrites!==writes||writes.checkpoints.scope.vaultId!==scope.vaultId||writes.checkpoints.scope.clientId!==scope.clientId
             ||this.durable?.base.entryId!==entryId||selected?.entryId&&selected.entryId!==entryId)throw Object.assign(new Error('The admitted note source owner changed; its draft is retained'),{code:'intent_identity_mismatch',source:'host'});
-        });return;
+        });this.syncDurable();return;
       }
       if(admittedEntryId!==undefined)throw new Error('Stable note admission requires durable identity');
       const disk = await this.readInitial(()=>this.vault.read(this.path),validate,options.signal);
