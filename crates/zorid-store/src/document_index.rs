@@ -1470,21 +1470,28 @@ impl Store {
             (admission, b, previous)
         };
         let h = &admission.header;
+        let pending = b.pending_entries();
+        // The admitted header is immutable for this request. Resolve its exact
+        // IDs once rather than searching the whole namespace for every witness.
+        let mut originals = std::collections::HashMap::new();
+        if !pending.is_empty() {
+            originals.try_reserve(h.manifest.entries.len())
+                .map_err(|_| IndexError::GenerationLimit)?;
+            for entry in &h.manifest.entries {
+                #[cfg(test)]
+                PUMP_MANIFEST_ENTRY_VISITS.with(|count| count.set(count.get() + 1));
+                originals.insert(&entry.state.id, entry);
+            }
+        }
         let mut prepared = Vec::new();
         let mut source_bytes = 0usize;
         let mut encoded_bytes = 0usize;
         let mut reused_documents = 0;
         let mut parse_cache = DocumentParseCacheProgress::default();
-        'pending: for witness in b.pending_entries() {
-            let original = h
-                .manifest
-                .entries
-                .iter()
-                .find(|e| {
-                    #[cfg(test)]
-                    PUMP_MANIFEST_ENTRY_VISITS.with(|count| count.set(count.get() + 1));
-                    e.state.id == witness.entry().id
-                })
+        'pending: for witness in pending {
+            let original = originals
+                .get(&witness.entry().id)
+                .copied()
                 .ok_or(DocumentIndexError::RebuildRequired)?;
             let bytes = original.content.as_ref().map_or(0, ContentMetadata::len);
             if !prepared.is_empty() && source_bytes.saturating_add(bytes as usize) > MAX_PUMP_BYTES
@@ -2321,6 +2328,10 @@ mod cache_snapshot_tests {
             previous = progress.prepared_documents;
             if progress.ready { break; }
         }
+        PUMP_MANIFEST_ENTRY_VISITS.with(|count| count.set(0));
+        assert!(store.pump_document_index(&stage).unwrap().ready);
+        assert_eq!(PUMP_MANIFEST_ENTRY_VISITS.with(std::cell::Cell::get), 0,
+            "an already prepared stage needs no original-entry lookup");
         store.publish_document_index(&stage).unwrap();
         check_pump_lookup_output(&store, &expected, 65);
     }
