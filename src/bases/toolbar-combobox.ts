@@ -44,7 +44,8 @@ export function createBaseCombobox(select: HTMLSelectElement, options: BaseCombo
   const listId = `bases-toolbar-combobox-${++nextComboboxId}`;
   let destroyed = false, popup: HTMLDivElement | undefined, list: HTMLDivElement | undefined, search: HTMLInputElement | undefined;
   let visible: HTMLOptionElement[] = [], active = -1;
-  let frozen=false,restoring=false,interacted=false,capturedDraft:BaseComboboxAdmissionDraft|undefined,adoptedDraft:BaseComboboxAdmissionDraft|undefined,disabledBeforeFreeze=false;
+  let frozen=false,restoring=false,interacted=false,capturedDraft:BaseComboboxAdmissionDraft|undefined,adopted=false,disabledBeforeFreeze=false;
+  const adoptedDrafts=new WeakSet<BaseComboboxAdmissionDraft>();
   let composing=false,compositionSettling=false,compositionStart='',compositionUpdate:string|undefined,compositionInput:{value:string;data:string|null;update?:string}|undefined,completeCapture:(()=>void)|undefined;
   const disabled = () => select.disabled || select.matches(':disabled');
   const selectable = (option: HTMLOptionElement) => !option.disabled && !(option.parentElement?.tagName === 'OPTGROUP' && (option.parentElement as HTMLOptGroupElement).disabled);
@@ -213,8 +214,8 @@ export function createBaseCombobox(select: HTMLSelectElement, options: BaseCombo
   }
   function restoreAdmissionDraft(draft:BaseComboboxAdmissionDraft):boolean {
     if(destroyed||frozen||!select.isConnected||!button.isConnected||select.parentElement!==button.parentElement||options.isCurrent?.()===false)return false;
-    if(adoptedDraft===draft)return true;
-    if(interacted||adoptedDraft||!completedComboboxDrafts.has(draft)||select.value!==draft.value||(options.searchable===true)!==draft.searchable)return false;
+    if(adoptedDrafts.has(draft))return true;
+    if(interacted||adopted||!completedComboboxDrafts.has(draft)||select.value!==draft.value||(options.searchable===true)!==draft.searchable)return false;
     const snapshot=draft.state,query=snapshot.query.trim().toLocaleLowerCase();
     const choices=Array.from(select.options).filter(option=>!option.hidden&&!option.closest('optgroup[hidden]')&&(!query||option.label.toLocaleLowerCase().includes(query)));
     if(snapshot.open&&disabled()||snapshot.activeValue!==undefined&&choices.filter(option=>option.value===snapshot.activeValue&&selectable(option)).length!==1)return false;
@@ -224,7 +225,7 @@ export function createBaseCombobox(select: HTMLSelectElement, options: BaseCombo
         if(search&&snapshot.selectionStart!==null&&snapshot.selectionEnd!==null)search.setSelectionRange(snapshot.selectionStart,snapshot.selectionEnd,snapshot.selectionDirection??undefined);
       }
       if(snapshot.focus==='button')button.focus({preventScroll:true});else if(snapshot.focus==='search')search?.focus({preventScroll:true});
-      adoptedDraft=draft;return true;
+      adoptedDrafts.add(draft);adopted=true;return true;
     }finally{restoring=false;}
   }
   return { sync,hasRawInput:()=>!destroyed&&!!popup,canCaptureAdmissionDraft,captureFreeze,restoreAdmissionDraft,destroy() {

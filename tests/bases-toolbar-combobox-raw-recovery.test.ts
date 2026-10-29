@@ -60,3 +60,7 @@ test('pending raw capture keeps its original option presentation when a retired 
 test('an otherwise clean open popup reports raw ownership separately from readiness',async()=>{
  const old=fixture(),fresh=fixture();try{assert.equal(old.combobox.hasRawInput?.(),false);old.button.click();assert.equal(old.combobox.hasRawInput?.(),true);const draft=old.combobox.captureFreeze()!;await draft.ready;assert.equal(fresh.combobox.restoreAdmissionDraft(draft),true);assert.equal(fresh.combobox.hasRawInput?.(),true);fresh.key(fresh.search(),'Escape');assert.equal(fresh.combobox.hasRawInput?.(),false);assert.deepEqual(old.changes,[]);assert.deepEqual(fresh.changes,[]);}finally{old.close();fresh.close();}
 });
+
+test('a transferred custody receipt is idempotent without replacing newer input or accepting another winner',async()=>{
+ const old=fixture(),other=fixture(),fresh=fixture();try{old.button.click();old.type('sta');const draft=old.combobox.captureFreeze()!;other.button.click();other.type('due');const another=other.combobox.captureFreeze()!;await Promise.all([draft.ready,another.ready]);assert.equal(fresh.combobox.restoreAdmissionDraft(draft),true);fresh.type('new local search');assert.equal(fresh.combobox.restoreAdmissionDraft(draft),true);assert.equal(fresh.search().value,'new local search');assert.equal(fresh.combobox.restoreAdmissionDraft(another),false);assert.equal(fresh.search().value,'new local search');assert.deepEqual(fresh.changes,[]);}finally{old.close();other.close();fresh.close();}
+});
