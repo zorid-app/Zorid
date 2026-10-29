@@ -11,19 +11,19 @@ const clone=<T>(value:T):T=>structuredClone(value);
 const drain=()=>new Promise<void>(resolve=>setImmediate(resolve));
 function gate(){let resolve!:()=>void;const promise=new Promise<void>(done=>{resolve=done;});return{promise,resolve};}
 const fault=(code='storage_io_retryable',source='host')=>Object.assign(Error('Actual load provider fault'),{code,source,commitUncertain:true});
-async function fixture(t:TestContext,{operation=true}={}){
+async function fixture(t:TestContext,{operation=true,onState=undefined as (()=>void)|undefined,candidate=false}={}){
   const scope={vaultId:'load-authority',clientId:'load-client'},base:DurableWriteRead={entryId:'entry',path:'One.md',revision:'r1',content:'Original',stat:{ctime:1,mtime:1,size:8}};
   const submitted='Submitted recovered body';let current={...base,revision:operation?'r2':'r1',content:operation?submitted:base.content};
   const ref={...scope,entryId:'entry',operationId:'original-operation',token:'original-token'},plan:DurableWritePlan={version:1,...scope,entryId:'entry',operationId:ref.operationId,encodedPlan:'original opaque plan'};
   const raw={version:1,writer:'canonical-writer',generation:1,base,draft:operation?submitted:base.content,conflict:false,...(operation?{operation:{plan,ref,content:submitted}}:{})};
   const encodedState=JSON.stringify(raw);let head:Checkpoint={version:1,...scope,key:'note/v1/entry',revision:'11111111-1111-1111-1111-111111111111',sequence:'1',encodedState,deleted:false,byteLength:Buffer.byteLength(encodedState)};
-  const calls:CheckpointChange[]=[],journal:IndependentDraftChange[]=[],admittedAtCAS:boolean[]=[],queries:DurableWriteRef[]=[],plans:DurableWritePlan[]=[];
+  const calls:CheckpointChange[]=[],journal:IndependentDraftChange[]=[],admittedAtCAS:boolean[]=[],queries:DurableWriteRef[]=[],plans:DurableWritePlan[]=[],events:string[]=[];
   const intents=new Map<string,DurableWriteIntent>([[ref.token,{state:'committed',ref,acknowledged:false,receipt:{operationId:ref.operationId,entryId:'entry',revision:'r2',sequence:'2'}}]]);
   let casGate:Promise<void>|undefined,casFault:unknown,readFault:unknown,checkpointFault:unknown,readGate:Promise<void>|undefined,loseCAS=false,checkpointReads=0,sourceReads=0;
   const adapter=new MemoryAdapter({'One.md':current.content});
   let note:NoteBuffer;
   const writes:DurableWrites={checkpoints:{scope,load:async()=>{checkpointReads++;if(checkpointFault)throw checkpointFault;return clone(head);},compareAndSwap:async change=>{
-    calls.push(clone(change));admittedAtCAS.push(note.hasAdmittedContent);
+    events.push('checkpoint');calls.push(clone(change));admittedAtCAS.push(note.hasAdmittedContent);
     if(casGate)await casGate;if(casFault)throw casFault;
     if(head.revision===change.nextRevision){assert.equal(head.encodedState,change.encodedState);return clone(head);}
     if(head.revision!==change.expectedRevision)throw fault('checkpoint_conflict');
@@ -34,14 +34,16 @@ async function fixture(t:TestContext,{operation=true}={}){
   readTextById:async id=>{sourceReads++;const captured=clone(current);if(readGate)await readGate;if(readFault)throw readFault;return id===captured.entryId?captured:null;},
   planWrite:async input=>{const value:DurableWritePlan={version:1,...scope,entryId:'entry',operationId:input.operationId,encodedPlan:JSON.stringify(input)};plans.push(value);return clone(value);},
   prepare:async value=>{const next={...scope,entryId:'entry',operationId:value.operationId,token:value.operationId};const intent:DurableWriteIntent={state:'prepared',ref:next,acknowledged:false};intents.set(next.token,intent);return clone(intent);},
-  query:async value=>{queries.push(clone(value));return clone(intents.get(value.token)??null);},
+  query:async value=>{events.push('query');queries.push(clone(value));return clone(intents.get(value.token)??null);},
   commit:async value=>{const input=JSON.parse(plans.find(plan=>plan.operationId===value.operationId)!.encodedPlan);current={...current,content:input.content,revision:'r'+(Number(current.revision.slice(1))+1)};await adapter.write('One.md',current.content);const intent:DurableWriteIntent={state:'committed',ref:value,acknowledged:false,receipt:{operationId:value.operationId,entryId:'entry',revision:current.revision,sequence:current.revision.slice(1)}};intents.set(value.token,intent);return clone(intent);},
   acknowledge:async()=>{},listUnacknowledged:async()=>[]};
   const jscope={...scope,incarnationId:'document'},jheads=new Map<string,IndependentDraftCandidate>();
-  const provider:IndependentDraftProvider={scope:jscope,list:async()=>[],read:async()=>null,compareAndSwap:async change=>{journal.push(clone(change));const saved={...jscope,entryId:change.entryId,writer:change.writer,revision:change.nextRevision,generation:change.generation,deleted:false as const,baseline:change.baseline,draft:change.draft,checkpointRevision:change.checkpointRevision,pendingOperation:change.pendingOperation};jheads.set(change.writer,saved);const{baseline,draft,checkpointRevision,pendingOperation,...receipt}=saved;return clone(receipt);},retire:async value=>({vaultId:jscope.vaultId,clientId:jscope.clientId,incarnationId:value.incarnationId,entryId:value.entryId,writer:value.writer,revision:value.nextRevision,generation:value.generation,deleted:true})};
-  Object.assign(adapter,{durableWrites:writes,independentDrafts:provider});const vault=new Vault(adapter);await vault.initialize();note=new NoteBuffer(vault,'One.md',{debounceMs:60000});
+  if(candidate){const stored={...raw,generation:2,draft:'Journal D2'};jheads.set('prior:canonical-writer',{...scope,incarnationId:'prior',entryId:'entry',writer:raw.writer,revision:'1',generation:2,deleted:false,baseline:{entryId:'entry',path:base.path,revision:base.revision,content:base.content},draft:stored.draft,checkpointRevision:head.revision,
+    pendingOperation:JSON.stringify({schemaVersion:1,conflict:false,operation:null,checkpoint:{key:head.key,expectedRevision:head.revision,nextRevision:'33333333-3333-3333-3333-333333333333',encodedState:JSON.stringify(stored)}})});}
+  const provider:IndependentDraftProvider={scope:jscope,list:async()=>[...jheads.values()].map(({baseline,draft,checkpointRevision,pendingOperation,...receipt})=>clone(receipt)),read:async address=>clone(jheads.get(`${address.incarnationId??jscope.incarnationId}:${address.writer}`)??null),compareAndSwap:async change=>{journal.push(clone(change));const saved={...jscope,entryId:change.entryId,writer:change.writer,revision:change.nextRevision,generation:change.generation,deleted:false as const,baseline:change.baseline,draft:change.draft,checkpointRevision:change.checkpointRevision,pendingOperation:change.pendingOperation};jheads.set(`${jscope.incarnationId}:${change.writer}`,saved);const{baseline,draft,checkpointRevision,pendingOperation,...receipt}=saved;return clone(receipt);},retire:async value=>({vaultId:jscope.vaultId,clientId:jscope.clientId,incarnationId:value.incarnationId,entryId:value.entryId,writer:value.writer,revision:value.nextRevision,generation:value.generation,deleted:true})};
+  Object.assign(adapter,{durableWrites:writes,independentDrafts:provider});const vault=new Vault(adapter);await vault.initialize();note=new NoteBuffer(vault,'One.md',{debounceMs:60000,onState});
   t.after(async()=>{casGate=undefined;casFault=undefined;readGate=undefined;readFault=undefined;try{await note.dispose();}catch{await note.disposeUnadmitted?.().catch(()=>{});}});
-  return{note,vault,adapter,writes,calls,journal,admittedAtCAS,queries,plans,raw,ref,submitted,get sourceReads(){return sourceReads;},get checkpointReads(){return checkpointReads;},
+  return{note,vault,adapter,writes,calls,journal,admittedAtCAS,queries,plans,raw,ref,submitted,events,get sourceReads(){return sourceReads;},get checkpointReads(){return checkpointReads;},
     holdCAS(promise:Promise<void>){casGate=promise;},failCAS(value:unknown){casFault=value;},loseCAS(){loseCAS=true;},failRead(value:unknown){readFault=value;},failCheckpointRead(value:unknown){checkpointFault=value;},holdRead(value:Promise<void>|undefined){readGate=value;},
     alterCheckpoint(change:(state:any)=>void){const value=JSON.parse(head.encodedState!);change(value);const encodedState=JSON.stringify(value);head={...head,encodedState,byteLength:Buffer.byteLength(encodedState)};},
     replace(){current={...current,entryId:'replacement',revision:'replacement-r1',content:'Peer replacement'};},takeCheckpoint(){head={...head,revision:'22222222-2222-2222-2222-222222222222'};}};
@@ -147,4 +149,19 @@ test('a positive same-scope admission also wakes an unadmitted source read witho
   const loading=f.note.load('entry');let admitted=false;void loading.then(()=>{admitted=true;},()=>{});await drain();t.mock.timers.tick(90000);await drain();assert.equal(f.sourceReads,1);assert.equal(f.note.hasAdmittedContent,false);
   f.failRead(undefined);f.note.coreAdmissionAvailable({vaultId:'foreign',clientId:'load-client'});await drain();assert.equal(f.sourceReads,1);
   f.note.coreAdmissionAvailable(f.writes.checkpoints.scope);await drain();assert.equal(admitted,true);await loading;assert.equal(f.sourceReads,2);assert.equal(f.note.text,'Original');assert.equal(f.note.hasAdmittedContent,true);
+});
+
+test('a reentrant admitted onState edit and flush cannot queue a checkpoint before the original ref continuation',async t=>{
+  let owned:Awaited<ReturnType<typeof fixture>>,saving:Promise<void>|undefined,edited=false;
+  const f=owned=await fixture(t,{onState:()=>{if(owned?.note.hasAdmittedContent&&!edited){edited=true;owned.note.update('Reentrant D3');saving=owned.note.flush();}}});
+  await f.note.load('entry');await saving;assert.equal(f.note.savedText,'Reentrant D3');
+  assert.equal(f.events.slice(0,f.events.indexOf('query')).filter(event=>event==='checkpoint').length,1,'no reentrant persist may precede original ref query');
+});
+
+test('a cancelled read-only pure-S1 adoption offers no new branch before admission or after late inventory completion',async t=>{
+  let owned:Awaited<ReturnType<typeof fixture>>,cancelled=false;const signal=new AbortController();
+  const f=owned=await fixture(t,{operation:false,candidate:true,onState:()=>{if(owned&&!owned.note.hasAdmittedContent&&owned.note.draftProtectionStatus&&!cancelled){cancelled=true;signal.abort();}}});
+  await assert.rejects(f.note.load('entry',()=>{}, {signal:signal.signal}),{code:'note_load_cancelled'});await f.note.disposeUnadmitted();await drain();
+  assert.equal(cancelled,true);assert.equal(f.calls.length,0);assert.equal(f.journal.length,0,'a validated but unadmitted D2 already has its prior durable branch');
+  const restored=new NoteBuffer(f.vault,'One.md',{debounceMs:60000});await restored.load('entry');assert.equal(restored.text,'Journal D2');assert.equal(restored.draftProtectionStatus?.inventory,'ready');await restored.dispose();
 });
