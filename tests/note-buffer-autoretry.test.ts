@@ -54,7 +54,7 @@ test('transient autosave failure recovers without more typing and retries its ex
   const calls=f.calls.length;await advance(t,60_000);assert.equal(f.calls.length,calls,'clean idle must do no checkpoint or save work');await f.note.dispose();
 });
 
-for(const [code,source] of [['storage_io','host'],['filesystem_io','host'],['lock_timeout','host'],['durable_transport_lost','transport']] as const)test(`actual ${source} ${code} resumes the retained save automatically`,async t=>{
+for(const [code,source] of [['storage_busy','host'],['storage_io_retryable','host'],['storage_capacity','host'],['filesystem_io_retryable','host'],['lock_timeout','host'],['durable_transport_lost','transport']] as const)test(`actual ${source} ${code} resumes the retained save automatically`,async t=>{
   t.mock.timers.enable({apis:['setTimeout']});const f=await fixture();
   f.failCommit(Object.assign(new Error('Durable editor request failed; retain pending recovery state.'),{code,source}));
   f.note.update('Actual native fault draft');await advance(t,10);
@@ -85,7 +85,7 @@ test('transient retries keep the same intent at a capped interval and recover wi
   assert.equal(f.commits.length,attempts);assert.equal(f.calls.length,calls,'healthy idle must do no work');await f.note.dispose();
 });
 
-for(const code of ['client_not_admitted','durable_scope_changed','revision_conflict','permission_denied','EACCES','corrupt','corrupt_storage','crypto_failed','protocol_failed','invalid_response'])test(`autosave does not retry terminal ${code}`,async t=>{
+for(const code of ['client_not_admitted','durable_scope_changed','revision_conflict','permission_denied','EACCES','corrupt','corrupt_storage','storage_io','filesystem_io','checkpoint_storage','storage_failed','filesystem_failed','file_sync_failed','crypto_failed','protocol_failed','invalid_response'])test(`autosave does not retry terminal ${code}`,async t=>{
   t.mock.timers.enable({apis:['setTimeout']});const f=await fixture();const error=Object.assign(new Error('Durable editor request failed; retain pending recovery state.'),{code});f.failCommit(error);f.note.update('Retained terminal draft');await advance(t,10);
   assert.equal(f.note.autosaveRetryPending,false);await advance(t,60_000);assert.equal(f.commits.length,1);assert.equal(f.note.error?.cause,error);assert.equal(f.note.dirty,true);
   f.failCommit(undefined);await f.note.flush();await f.note.dispose();
@@ -93,7 +93,7 @@ for(const code of ['client_not_admitted','durable_scope_changed','revision_confl
 
 for(const source of ['renderer','main'])test(`unrecognized ${source} provenance cannot authorize transient save retries`,async t=>{
   t.mock.timers.enable({apis:['setTimeout']});const f=await fixture();
-  f.failCommit(Object.assign(new Error('Storage unavailable'),{code:'storage_io',source}));f.note.update('Retained untrusted draft');await advance(t,10);
+  f.failCommit(Object.assign(new Error('Storage unavailable'),{code:'storage_io_retryable',source}));f.note.update('Retained untrusted draft');await advance(t,10);
   assert.equal(f.note.autosaveRetryPending,false);await advance(t,90_000);assert.equal(f.commits.length,1);
   f.failCommit(undefined);await f.note.dispose();
 });

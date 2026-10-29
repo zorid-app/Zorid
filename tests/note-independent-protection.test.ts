@@ -249,6 +249,27 @@ test('a protocol or terminal Core error is not promoted to an automatic reconcil
   invalid=false;gate.resolve();await buffer.dispose();assert.equal(f.current.content,'Raw typing remains protected but planning stays blocked');
 });
 
+for(const [code,retry] of [['storage_busy',true],['storage_io_retryable',true],['checkpoint_storage',false],['storage_io',false],['filesystem_io',false],['corrupt_storage',false]] as const)test(`candidate replay ${code} respects the typed native retry contract`,async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const f=await fixture(t),oldGate=f.first.holdCheckpoint();f.buffer.update('Older exact S1');await until(()=>f.checkpointCalls.length===1);
+  f.buffer.update('Protected D2');await f.buffer.flushDraftProtection();await f.buffer.closeMetadataProjection();f.first.retire();
+  const original=structuredClone(f.checkpointCalls[0]),next=f.context('typed-native-retry'),cas=next.writes.checkpoints.compareAndSwap;
+  let failing=true,attempts=0;const requests:CheckpointChange[]=[];
+  next.writes.checkpoints.compareAndSwap=async change=>{attempts++;requests.push(structuredClone(change));if(failing)throw Object.assign(Error('Native checkpoint unavailable'),{code,source:'host',commitUncertain:true});return cas(change);};
+  const vault=new Vault(next.owned);await vault.initialize();const buffer=new NoteBuffer(vault,'One.md',{debounceMs:60000});t.after(()=>buffer.closeMetadataProjection());
+  await buffer.load('entry');await until(()=>attempts===1);await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(buffer.text,'Protected D2');assert.equal(buffer.pendingCanonicalRecovery,retry);
+  buffer.update('D3 protected during native fault');await buffer.flushDraftProtection();
+  if(retry){
+    assert.equal(buffer.error,null);t.mock.timers.tick(499);await new Promise(resolve=>setImmediate(resolve));assert.equal(attempts,1);
+    failing=false;t.mock.timers.tick(1);await until(()=>!buffer.pendingCanonicalRecovery);assert.deepEqual(requests[0],original);assert.deepEqual(requests[1],original);
+  }else{
+    await until(()=>!!buffer.error);buffer.draftProtectionAvailable();t.mock.timers.tick(120000);await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(attempts,1);assert.equal(buffer.pendingCanonicalRecovery,false);assert.equal(f.commits,0);failing=false;
+  }
+  oldGate.resolve();await buffer.dispose();assert.equal(f.current.content,'D3 protected during native fault');
+});
+
 test('a held pure replay leaves D2 usable and D3 journal acknowledgement independent from the Core tail',async t=>{
   const f=await fixture(t),oldGate=f.first.holdCheckpoint();f.buffer.update('Older S1');await until(()=>f.checkpointCalls.length===1);f.buffer.update('Protected D2');await f.buffer.flushDraftProtection();await f.buffer.closeMetadataProjection();f.first.retire();
   const next=f.context('held-replay'),replay=next.holdCheckpoint(),vault=new Vault(next.owned);await vault.initialize();const buffer=new NoteBuffer(vault,'One.md',{debounceMs:60000});t.after(()=>buffer.closeMetadataProjection());await buffer.load('entry');

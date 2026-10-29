@@ -271,8 +271,10 @@ export class DurableNoteState {
         const value=error&&typeof error==='object'?error as {code?:unknown;source?:unknown}:undefined,code=String(value?.code??'');
         const provenance=value?.source===undefined||value.source==='host'||value.source==='transport';
         const admission=provenance&&['host_exited','host_unavailable','client_not_admitted','client_ownership_lost','desktop_recovery_pending'].includes(code);
-        const transient=provenance&&['outcome_unknown','durable_transport_lost','transport_io','host_timeout','transport_error','transport_lost','timeout','request_timeout',
-          'checkpoint_storage','storage_io','filesystem_io','busy','io','checkpoint_unavailable','temporarily_unavailable'].includes(code);
+        const nativeTransient=value?.source==='host'&&['storage_busy','storage_io_retryable','storage_capacity','filesystem_io_retryable','lock_timeout'].includes(code);
+        const transportTransient=value?.source==='transport'&&code==='durable_transport_lost';
+        const transient=nativeTransient||transportTransient||provenance&&['outcome_unknown','transport_io','host_timeout','transport_error','transport_lost','timeout','request_timeout',
+          'busy','io','checkpoint_unavailable','temporarily_unavailable'].includes(code);
         if(!admission&&!transient){this.candidateTerminal=true;this.candidateTerminalError=error;throw error;}
         await this.waitForCandidateRetry(admission?undefined:[500,1500,4000,30000][Math.min(this.candidateRetryStep++,3)]);
       }

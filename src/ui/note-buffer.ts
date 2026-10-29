@@ -24,7 +24,8 @@ export interface NoteBufferOptions {
 }
 interface Draft { base: string; content: string; pending?: string }
 const autosaveRetryDelays=[500,1500,4000,30000] as const;
-const transientSaveCodes=new Set(['busy','io','storage_io','filesystem_io','lock_timeout','timeout','request_timeout','outcome_unknown','durable_transport_lost','transport_error','transport_lost','planning_transport_lost','temporarily_unavailable','checkpoint_unavailable','EAGAIN','EBUSY','EIO','ETIMEDOUT','ECONNRESET','ECONNREFUSED','EPIPE']);
+const nativeRetryCodes=new Set(['storage_busy','storage_io_retryable','storage_capacity','filesystem_io_retryable','lock_timeout']);
+const transientSaveCodes=new Set([...nativeRetryCodes,'busy','io','timeout','request_timeout','outcome_unknown','durable_transport_lost','transport_error','transport_lost','planning_transport_lost','temporarily_unavailable','checkpoint_unavailable','EAGAIN','EBUSY','EIO','ETIMEDOUT','ECONNRESET','ECONNREFUSED','EPIPE']);
 function retryableSaveError(error:unknown):boolean {
   const seen=new Set<unknown>();
   // Vault wraps commit uncertainty with its original cause. A terminal inner
@@ -36,6 +37,7 @@ function retryableSaveError(error:unknown):boolean {
     if(value.source!==undefined&&value.source!=='host'&&value.source!=='transport')return false;
     if(typeof value.code==='string'){
       if(!transientSaveCodes.has(value.code))return false;
+      if(nativeRetryCodes.has(value.code)&&value.source!=='host'||value.code==='durable_transport_lost'&&value.source!=='transport')return false;
     }else if(typeof value.message!=='string'||!/^Durable(?: editor)? request failed(?:; retain pending recovery state\.)?\.?$/.test(value.message))return false;
     if(value.cause===undefined)return true;
     error=value.cause;
