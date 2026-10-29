@@ -20,7 +20,7 @@ async function fixture(onState?:()=>void){
     calls.push(structuredClone(change));
     if(head?.revision===change.nextRevision){assert.equal(head.encodedState,change.encodedState);return structuredClone(head);}
     assert.equal(change.expectedRevision,head?.revision??null);
-    head={version:1,...scope,key:change.key,revision:change.nextRevision,encodedState:change.encodedState,sequence:String(calls.length),deleted:false,byteLength:change.encodedState?.length??0};
+    head={version:1,...scope,key:change.key,revision:change.nextRevision,encodedState:change.encodedState,sequence:String(calls.length),deleted:false,byteLength:change.encodedState===null?0:Buffer.byteLength(change.encodedState,'utf8')};
     if(failCheckpoint&&JSON.parse(change.encodedState!).operation?.plan){failCheckpoint=false;throw transient();}
     return structuredClone(head);
   },list:async()=>({items:[],cursor:null,highWater:'0'}),changes:async()=>({items:[],cursor:null,highWater:'0'})},
