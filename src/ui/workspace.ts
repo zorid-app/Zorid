@@ -606,14 +606,14 @@ export class Workspace {
     const retirement=this.admissionRetirement;
     const owns=()=>this.platform===platform&&this.vault===vault&&this.vaultGeneration===generation;
     const current=()=>owns()&&!this.platformReleased;
-    const receive=()=>{
+    const receive=():void|Promise<void>=>{
       if(!current())return;
       this.recoveringAdmissionVaults.add(vault);clearTimeout(this.reloadTimer);
       retirement.retired=true;retirement.retire();
       const transition=this.choosingVault??this.destroying??this.releasingPlatform;
-      if(transition){void transition.catch(()=>{}).then(()=>{if(current())receive();});return;}
+      if(transition)return transition.catch(()=>{}).then(()=>{if(current())return receive();});
       if(this.closing||this.platformDraining)return;
-      void this.recoverAdmission(platform,vault,generation).catch(()=>{if(owns()){this.showLifecycleRecovery(()=>this.recoverAdmission(platform,vault,generation));this.renderStatus();}});
+      return this.recoverAdmission(platform,vault,generation).catch(error=>{if(owns()){this.showLifecycleRecovery(()=>this.recoverAdmission(platform,vault,generation));this.renderStatus();}throw error;});
     };
     this.disposers.push(platform.recovery.subscribe(receive));
   }

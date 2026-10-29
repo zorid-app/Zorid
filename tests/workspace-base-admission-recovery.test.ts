@@ -136,3 +136,13 @@ test('ordinary native close keeps waiting for an accepted Base save and succeeds
  const f=await fixture(t);f.withholdDatabaseAck(false);editRating(f.root,'9');await until(()=>f.applied.size===1);let finished=false;const closing=f.close().then(()=>{finished=true;});await new Promise(resolve=>setImmediate(resolve));assert.equal(finished,false);assert.equal(f.recoveries,0);
  f.releaseOldAck();await closing;assert.equal(finished,true);assert.equal(f.member().values[propertyId],9);assert.equal(f.databaseRequests.filter(call=>call.command.op==='set_entry').length,1);assert.equal(f.recoveries,0);assert.deepEqual(f.notices,[]);
 });
+
+for(const transition of ['choose','close'] as const)test(`a typed host failure before any hint completes the ${transition} retirement handoff without a visible edit failure`,async t=>{
+ const f=await fixture(t),old=f.workspace.platform,recover=gate();f.withholdDatabaseAck();editRating(f.root,'9');await until(()=>f.applied.size===1);const original=f.databaseRequests.find(call=>call.command.op==='set_entry')!.command;
+ let finished=false;const operation=transition==='choose'?f.workspace.chooseVault():f.close(),outcome=operation.then(()=>{finished=true;return{ok:true as const};},error=>{finished=true;return{ok:false as const,error};});await new Promise(resolve=>setImmediate(resolve));assert.equal(finished,false);f.holdRecovery(recover.promise);f.releaseOldAck();
+ try{
+  await until(()=>f.recoveries===1,'the typed error itself must initiate the owned retirement handoff');await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(f.notices,[]);assert.deepEqual(f.repairErrors,[],'the first failure notification already belongs to automatic repair');
+  recover.resolve();await until(()=>f.workspace.platform!==old&&!f.internal.lifecycleRecovery);const result=await outcome;if(transition==='choose')assert.equal(result.ok,true);else{assert.equal(result.ok,false);if(!result.ok)assert.equal(result.error.code,'workspace_admission_retired');}
+  const requests=f.databaseRequests.filter(call=>call.command.op==='set_entry');assert.equal(requests.length,2);assert.deepEqual(requests[1].command,original);assert.equal(requests[1].admission,'admission-2');assert.equal(f.applied.size,1);assert.equal(f.member().values[propertyId],9);assert.equal(f.pickers,0);assert.deepEqual(f.notices,[]);assert.deepEqual(f.repairErrors,[]);assert.equal(f.internal.closing,false);assert.notEqual(f.root.inert,true);
+ }finally{recover.resolve();f.releaseOldAck();if(!finished)await old.recovery!.recover().catch(()=>{});await outcome;await new Promise(resolve=>setImmediate(resolve));await until(()=>!f.internal.lifecycleRecovery);}
+});
