@@ -73,11 +73,12 @@ the original fixture, verified against physical files and read-only Core reads.
 No CodeMirror transaction, bridge write or direct filesystem edit simulates input
 or restoration.
 
-An 800 ms success requires conservative clock bounds to meet the target. A valid
-miss requires a continuously installed observer to show the correct editor was
-not ready at the deadline, followed by actual trusted input. If the inspector or
-observer was not ready to observe the deadline, the result is **indeterminate**;
-later successful input is a diagnostic, not a fabricated valid miss or success.
+An 800 ms success requires actual trusted accepted input within conservative
+clock bounds. Mutation/snapshot observations do not establish continuous coverage
+of silent property or layout changes, so a ready-null deadline snapshot remains
+**indeterminate**, including when it is currently ineligible. Later successful
+input is diagnostic; this harness does not manufacture a valid target miss from
+those incomplete observations.
 
 Base timing is separately labeled: visible enabled controls, a current/non-busy
 grid, exact expected row count, a known fixture row and two frames. It does not
@@ -116,4 +117,4 @@ node --test scripts/packaged-startup-profile/*.test.mjs
 
 Observer snapshots request a fresh readiness check so property or layout changes without a DOM mutation cannot leave the probe asleep. Exact source, selected editor, editability and viewport checks run before and after the two-frame observation. Failed launches retain observer state plus the actual selected CodeMirror identity, prefix, size, editability, bounds and visible line/widget diagnostics; these diagnostics do not establish input acceptance.
 
-A deadline snapshot with instantaneous eligibility or pending frame validation is indeterminate while readiness is unresolved; it cannot manufacture a target miss from an observer that had no intervening mutation. A valid miss requires a deadline snapshot that is actually ineligible with no frame validation pending.
+Instantaneous eligibility and pending-frame state are retained as deadline diagnostics. They do not establish continuous readiness coverage, so unresolved readiness remains indeterminate and never manufactures a valid target miss.

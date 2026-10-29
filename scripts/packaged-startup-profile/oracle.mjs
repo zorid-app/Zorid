@@ -36,12 +36,11 @@ export function assessNote(value){
   }
   require(probes.length===new Set(probes.map(p=>p.name)).size,'Repeated input probe');
   const firstInput=[...probes].sort((a,b)=>a.appliedAt-b.appliedAt)[0];
-  let input=null,viewport=null,installed=null,deadlineObserved=null;
+  let input=null,viewport=null,installed=null;
   try{
     if(firstInput)input=clockInterval(firstInput.appliedAt,value.clockSamples);
     viewport=clockInterval(value.observed?.ready?.at,value.clockSamples);
     installed=clockInterval(value.observed?.installedAt,value.clockSamples);
-    if(deadline[0]?.observation)deadlineObserved=clockInterval(deadline[0].observation.at,value.clockSamples);
   }catch(error){errors.push(error.message);}
   require(firstInput?.appliedAt>=value.observed?.ready?.at,'Input preceded verified first viewport');
   if(deadline[0]?.status==='sent')require(probes.filter(p=>p.name==='deadline').length===1,'Sent fixed probe was not observed exactly once');
@@ -50,11 +49,10 @@ export function assessNote(value){
   const end=value.originMs+DEADLINE_MS;
   if(deadline[0].status==='unobservable'||!installed||installed.upper>end)return {valid:false,outcome:'indeterminate',usableByDeadline:false,inputMs:diagnosticInput,errors:['Deadline not continuously observable; attachment overhead cannot establish an app miss']};
   if(input.upper<=end&&viewport.upper<=end)return {valid:true,outcome:'target-met',usableByDeadline:true,inputMs:diagnosticInput,viewportMs:{lower:viewport.lower-value.originMs,upper:viewport.upper-value.originMs},errors:[]};
-  // A snapshot can discover silent property/layout eligibility and begin its
-  // two frames at the deadline. Pending/eligible checks cannot prove an app
-  // miss; require an actual ineligible snapshot with no pending validation.
-  if(deadline[0].status==='observed-not-ready'&&deadline[0].observation?.ready===null&&deadline[0].observation.readinessCheck?.eligible===false&&deadline[0].observation.readinessCheck.framesPending===false&&deadlineObserved?.lower>=end)return {valid:true,outcome:'target-missed',usableByDeadline:false,inputMs:diagnosticInput,errors:[]};
-  return {valid:false,outcome:'indeterminate',usableByDeadline:false,inputMs:diagnosticInput,errors:['Clock uncertainty or automation dispatch delay overlaps the deadline; no app latency verdict']};
+  // Mutation/snapshot observations do not cover every silent property/layout
+  // interval. A ready-null deadline snapshot cannot reconstruct whether the
+  // editor was usable earlier, even when it is currently ineligible.
+  return {valid:false,outcome:'indeterminate',usableByDeadline:false,inputMs:diagnosticInput,errors:['No continuous eligibility coverage or clock-safe accepted input by the deadline; later input remains diagnostic']};
 }
 export function planCampaign(repetitions=1,seed=1){
   if(!Number.isSafeInteger(repetitions)||repetitions<1||repetitions>5||!Number.isSafeInteger(seed)||seed<0||seed>0xffffffff)throw Error('Invalid repetitions or seed');
