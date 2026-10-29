@@ -40,11 +40,38 @@ export function createLayoutSettings(doc: Document, parent: HTMLElement, view: B
     slider('imageAspectRatio', 'Image aspect ratio', .25, 2.5, .05, view.type === 'cards' ? 1 : .5);
   }
   if (view.type === 'list') {
-    dropdown('markers', 'Markers', [['bullet', 'Bullet'], ['number', 'Number'], ['none', 'None']], 'bullet');
-    const indent = doc.createElement('input'); indent.type = 'checkbox'; indent.checked = view.indentProperties === true; row('Indent properties', indent);
-    const separator = doc.createElement('input'); separator.value = typeof view.separator === 'string' ? view.separator : ', '; const separatorRow = row('Property separator', separator); separatorRow.hidden = indent.checked;
-    indent.addEventListener('change', () => { patch.indentProperties = indent.checked; separatorRow.hidden = indent.checked; changed(); });
-    separator.addEventListener('input', () => { patch.separator = separator.value; changed(); });
+    // Missing presentation keys select the renderer's database page rows, not
+    // its legacy bullet/separator flow. This choice only edits existing keys.
+    const pageRows = !view.indentProperties && !['bullet', 'number', 'none'].includes(String(view.markers)) && view.separator === undefined;
+    const rows = doc.createElement('select');
+    for (const [value, text] of [['page', 'Page rows (default)'], ['custom', 'Custom list rows']]) {
+      const option = doc.createElement('option'); option.value = value; option.textContent = text; rows.append(option);
+    }
+    rows.value = pageRows ? 'page' : 'custom'; row('Rows', rows);
+    const custom: BaseViewPatch = { markers: typeof view.markers === 'string' ? view.markers : 'bullet', indentProperties: view.indentProperties, separator: view.separator };
+    const markers = dropdown('markers', 'Markers', [['bullet', 'Bullet'], ['number', 'Number'], ['none', 'None']], 'bullet');
+    const indent = doc.createElement('input'); indent.type = 'checkbox'; indent.checked = view.indentProperties === true; const indentRow = row('Indent properties', indent);
+    const separator = doc.createElement('input'); separator.value = typeof view.separator === 'string' ? view.separator : ', '; const separatorRow = row('Property separator', separator);
+    const sync = () => {
+      const page = rows.value === 'page';
+      markers.parentElement!.hidden = indentRow.hidden = page;
+      separatorRow.hidden = page || indent.checked;
+      markers.disabled = indent.disabled = separator.disabled = page;
+    };
+    rows.addEventListener('change', () => {
+      if (rows.value === 'page') Object.assign(patch, { markers: undefined, indentProperties: undefined, separator: undefined });
+      else {
+        // A retained unknown marker alone still renders as page rows. Choosing
+        // custom rows must actually enter the existing marked-list flow.
+        if (!custom.indentProperties && custom.separator === undefined && !['bullet', 'number', 'none'].includes(String(custom.markers))) custom.markers = 'bullet';
+        markers.value = String(custom.markers); Object.assign(patch, custom);
+      }
+      sync(); changed();
+    });
+    markers.addEventListener('change', () => { custom.markers = markers.value || undefined; });
+    indent.addEventListener('change', () => { custom.indentProperties = patch.indentProperties = indent.checked; sync(); changed(); });
+    separator.addEventListener('input', () => { custom.separator = patch.separator = separator.value; changed(); });
+    sync();
   }
   return () => patch;
 }

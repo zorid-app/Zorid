@@ -182,7 +182,7 @@ test('Add view exposes every layout setting and commits its initial draft in one
   {type:'table',defaults:{'Row height':''},edits:[['Row height','tall','change']],patch:{rowHeight:'tall'}},
   {type:'cards',defaults:{'Card size':'200','Image property':'','Image fit':'','Image aspect ratio':'1'},edits:[['Card size','320','input'],['Image property','note.score','change'],['Image fit','contain','change'],['Image aspect ratio','1.5','input']],patch:{cardSize:320,image:'note.score',imageFit:'contain',imageAspectRatio:1.5}},
   {type:'kanban',defaults:{'Column width':'276','Image property':'','Image fit':'','Image aspect ratio':'0.5'},edits:[['Column width','360','input'],['Image aspect ratio','0.75','input']],patch:{columnWidth:360,imageAspectRatio:.75}},
-  {type:'list',defaults:{'Markers':'bullet','Property separator':', '},edits:[['Markers','number','change'],['Property separator',' • ','input']],patch:{markers:'number',separator:' • ',indentProperties:true}},
+  {type:'list',defaults:{'Rows':'page'},edits:[['Markers','number','change'],['Property separator',' • ','input']],patch:{markers:'number',separator:' • ',indentProperties:true}},
  ] as const;
  for(const scenario of cases){
   const f=fixture(true);try{
@@ -190,6 +190,7 @@ test('Add view exposes every layout setting and commits its initial draft in one
    f.doc.querySelector<HTMLButtonElement>('[role="combobox"][aria-label="Layout"]')!.focus();
    f.input('Layout',scenario.type,'change');await tick();assert.equal(f.calls.length,0,'internal controls must not create a partly configured view');
    for(const [label,value] of Object.entries(scenario.defaults))assert.equal(f.get<HTMLInputElement>(label).value,value);
+   if(scenario.type==='list'){f.input('Rows','custom','change');assert.equal(f.get<HTMLInputElement>('Markers').disabled,false);assert.equal(f.get<HTMLInputElement>('Property separator').closest('label')?.hidden,false);}
    for(const [label,value,event] of scenario.edits)f.input(label,value,event);
    if(scenario.type==='list'){const indent=f.get<HTMLInputElement>('Indent properties');assert.equal(indent.checked,false);indent.click();assert.equal(f.get<HTMLInputElement>('Property separator').closest('label')?.hidden,true);}
    await new Promise(resolve=>setTimeout(resolve,270));assert.equal(f.calls.length,0,'layout edits stay local until explicit creation');
