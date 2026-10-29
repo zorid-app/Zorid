@@ -758,6 +758,9 @@ export class Workspace {
         const result=await opening;if(!result.ok)throw result.error;const fresh=result.value;current();
         const previous=vault.adapter.durableWrites?.checkpoints.scope,next=fresh.adapter.durableWrites?.checkpoints.scope;
         if(!previous||!next||previous.vaultId!==next.vaultId||previous.clientId!==next.clientId)throw new Error('The recovered note authority changed.');
+        // Wake exact retained note IO only after positive same-scope admission,
+        // before derived Base settlements can wait on those note continuations.
+        for(const buffer of this.buffers.values())if(buffer.vault===vault)buffer.coreAdmissionAvailable(next);
         this.retiredAdmissionVaults.add(vault);this.releaseDocumentSearchOwner(vault);
         const settled=await Promise.allSettled(prepared.settlements.map(recovery=>Promise.resolve().then(()=>recovery.settle())));current();
         for(const result of settled)if(result.status==='rejected')throw result.reason;
@@ -1628,7 +1631,7 @@ export class Workspace {
     const admitted=buffer;
     const loading=(async()=>{
       try{await admitted.load(expectedEntryId,check);check();return admitted;}
-      catch(error){if(this.buffers.get(path)===admitted&&!admitted.savedDurableWitness){await admitted.closeMetadataProjection();if(this.buffers.get(path)===admitted)this.buffers.delete(path);}throw error;}
+      catch(error){if(this.buffers.get(path)===admitted&&!admitted.hasAdmittedContent){await admitted.disposeUnadmitted();if(this.buffers.get(path)===admitted)this.buffers.delete(path);}throw error;}
     })();
     this.bufferLoads.set(admitted,loading);
     try{return await loading;}finally{if(this.bufferLoads.get(admitted)===loading)this.bufferLoads.delete(admitted);}

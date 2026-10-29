@@ -237,3 +237,18 @@ test('an already started watcher body read cannot flash a failure after its admi
  finally{finish.resolve();recover.resolve();await until(()=>f.workspace.platform!==old&&!f.internal.lifecycleRecovery);}
  assert.deepEqual(duringNotices,[]);assert.deepEqual(f.notices,[]);assert.equal(f.root.querySelector<HTMLTextAreaElement>('.pane.is-active textarea')!.value,'Latest external body');assert.notEqual(f.root.inert,true);
 });
+
+test('positive matching admission wakes retained note IO before derived view settlement',async t=>{
+ const f=await fixture(t),old=f.workspace.platform,buffer=f.workspace.buffers.get('One.md')!;
+ const wake=buffer.coreAdmissionAvailable.bind(buffer),scopes:{vaultId:string;clientId:string}[]=[];
+ buffer.coreAdmissionAvailable=scope=>{scopes.push({...scope});wake(scope);};
+ const prepare=f.internal.prepareAdmissionRawInputs.bind(f.internal);let settled=false;
+ f.internal.prepareAdmissionRawInputs=(vault:unknown)=>{
+  const prepared=prepare(vault);
+  return{...prepared,settlements:[...prepared.settlements,{settle:async()=>{
+   assert.deepEqual(scopes,[{vaultId:'lifecycle-store',clientId:'lifecycle-client'}],'retained UI must not wait ahead of the matching note wake');settled=true;
+  }}]};
+ };
+ f.signalRetirement();await until(()=>f.workspace.platform!==old&&!f.internal.lifecycleRecovery);
+ assert.equal(settled,true);assert.deepEqual(f.notices,[]);
+});
