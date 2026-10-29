@@ -3,6 +3,16 @@
 ## Execution checkpoint — shared-core coordinator
 
 
+**005 pre-hint error ordering repair named ACK — 2026-10-28.**
+save_platform_rebind/checkpoint_review owns focused platform/index +dedicated tests;
+no competing writer in main team (read-only triage complete). Actual typedhost_exited
+uncertainty-beforeRetire RED mustretain eligibleORIGINALpromise through positive
+same-scope exactreplay; mark/claim before settlement, notjustcode-list extension.
+Preserve definite/unselected/cancel/release/foreign/failedrepair semantics. Independent
+startup_audit review pending; no native/build/package until reviewed successor.
+Protected71549/realbackups untouched; all realfreeze/apply/installholds remain.
+
+
 **Strict005 stillfails Baseflash after finalsource058be655 — 2026-10-28.**
 Workspace25e->058, main64/64zeroSkip/fullTS/frontendbuildPASS, package356verified/
 ASARcfd8d4e9/hosta1c/Electron44.9.1. Correctedoracle MDexactCAS/noFlash phasepasses;

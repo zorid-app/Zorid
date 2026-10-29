@@ -3,6 +3,29 @@
 ## URGENT: real-session automatic save failure — 2026-10-28
 
 
+**Focused pre-hint transport ordering lane ACK — 2026-10-28.**
+Named save_platform_rebind under checkpoint_review resumes ONLY
+src/platform/index.ts +dedicated platform recovery tests for005 rejection-before-
+markRetired and explicit typed terminal host_exited classification. No main-session
+worker edits platform; this thread's notion_table_interactions triage was READONLY
+and completed with no edits/tests/build/apps. Independent startup_audit delta review
+required before handoff. No new native run/build/package until reviewed red-capable
+fix; unit RED/regressions are the implementation lane's required work.
+
+Regression must use actual platform adapter request/capsule path, inject host_exited
+with commitUncertain=true BEFORE onDocumentRuntimeNudge Retire, retain ORIGINAL
+eligible promise pending through positive same-scope readmission and exact command
+replay, and assert no widget/status error paint. Mere extra code in retired list
+while settleEntry still precedes markRetired is insufficient. Preserve definite
+collection/idempotency/revision errors, unselected/foreign/changed/cancelled ownership,
+release/late callback and final failed-recovery behavior; do not classify every
+uncertain semantic/IO error as terminal or suppress global UI diagnostics.
+
+Main still owns integration/nativeGUI/install. 005 failed evidence and normal
+owned cleanup preserved. Protected71549 and all real pending-state copies remain
+untouched; no real freeze/apply/termination/install authorized by this lane ACK.
+
+
 **Final source composed; strict GUI005 still fails Base error paint — 2026-10-28.**
 Reviewed Workspace/embed25e1e6be ->main058be655; exact tracked runtime equals reviewed
 final composition. Actual main64/64 focused composition tests PASS0skip/exit0,
