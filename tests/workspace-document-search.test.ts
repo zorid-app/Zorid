@@ -307,9 +307,10 @@ test('failed platform release preserves old-owner close retries', async t => {
   ui.workspace.platform.release = async () => { throw new Error('Release failed'); };
   await assert.rejects(ui.internal.releasePlatform(), /Release failed/);
   const before = closes; await ui.search('retry');
-  assert.ok(closes > before, 'no final cleanup ACK means ownership must remain retryable');
+  assert.equal(closes,before,'a retired view cannot resume public search while its platform release is unresolved');
   assert.equal(f.pins.length, 1, 'failed closes still block replacement pins from the same service');
   ui.workspace.platform.release = async () => {};
+  await ui.internal.releasePlatform();assert.ok(closes>before,'the exact retirement still retries retained close ownership');
 });
 
 function richFixture(){

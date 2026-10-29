@@ -280,8 +280,10 @@ export class Workspace {
   }); }
   private sessionKey(): string { return this.storageScope.sessionKey(this.platform.id); }
 
-  async start(platform: PlatformVault | null): Promise<void> {
+  async start(platform: PlatformVault | null,lifecycleOwner?:symbol): Promise<void> {
     if (!this.initialized) {
+      this.closeCleanup?.();this.closeCleanup=undefined;
+      this.hotkeyCleanup?.();this.hotkeyCleanup=undefined;
       const native = workspaceWindowBridge(window.zorid);
       if (native) {
         const identity = validateWorkspaceWindowInfo(await native.getWindowInfo());
@@ -299,9 +301,9 @@ export class Workspace {
       window.addEventListener('beforeunload', this.unloadListener);
       this.initialized = true;
       this.closeCleanup=window.zorid?.onBeforeClose?.(async()=>{
-        if(this.closing)throw new Error('Window close already pending');
+        if(this.closing||this.choosingVault||this.lifecycleRecovery)throw new Error('Window close already pending');
         this.closing=true;const inert=this.root.inert;this.root.inert=true;
-        try{await this.destroy();}catch(error){this.closing=false;this.root.inert=inert;throw error;}
+        try{await this.destroy();}catch(error){this.closing=false;if(this.platformDraining||this.platformDrained||this.platformReleased){try{await this.reconnectRetiredPlatform();this.root.inert=inert;}catch{this.showLifecycleRecovery();}}else this.root.inert=inert;throw error;}
       });
     }
     try {
@@ -312,7 +314,7 @@ export class Workspace {
     } catch { /* Defaults survive corrupt preferences. */ }
     this.applySettings();
     if (!platform) { this.showVaultPicker(); return; }
-    await this.openVault(platform);
+    await this.openVault(platform,lifecycleOwner);
   }
 
   private showVaultPicker(): void {
@@ -511,33 +513,174 @@ export class Workspace {
   private closing=false;
   private platformReleased=false;
   private platformDrained=false;
+  private platformDraining=false;
+  private vaultLifecycleOwner?:symbol;
+  private releasingPlatform?:Promise<void>;
+  private choosingVault?:Promise<void>;
+  private lifecycleRecovery?:Promise<void>;
+  private lifecycleRecoveryView?:HTMLElement;
+  private retiredAdmissionVaults=new WeakSet<Vault>();
   private async releasePlatform():Promise<void>{
+    if(this.releasingPlatform)return this.releasingPlatform;
     if(this.platformReleased||!this.platform?.release)return;
+    const platform=this.platform,vault=this.vault,inert=this.root.inert;
+    this.root.inert=true;
+    const release=this.releaseOwnedPlatform(platform,vault);
+    this.releasingPlatform=release;
+    try{await release;}
+    catch(error){if(!this.platformDraining&&!this.platformDrained&&!this.platformReleased)this.root.inert=inert;throw error;}
+    finally{if(this.releasingPlatform===release)this.releasingPlatform=undefined;}
+  }
+  private async releaseOwnedPlatform(platform:PlatformVault,vault:Vault):Promise<void>{
+    const current=()=>{if(this.platform!==platform||this.vault!==vault)throw new Error('The vault changed during retirement.');};
     const searchWasSuspended=this.documentSearchSuspended;
     this.documentSearchSuspended=true;this.clearDocumentSearch();
     let cancelTasksClose:(recover?:boolean)=>void=()=>{};
     try{
-    this.vaultRequest++;await this.vaultTransition;
-    if(!this.platformDrained){await this.flush();await this.closeBaseNewItem();await this.sidebarBase?.session.close();this.sidebarBase=undefined;this.sidebarBaseIntent++;cancelTasksClose=await this.prepareTasksViewsClose();await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();this.platformDrained=true;}
-    this.clearDocumentBacklinks();
-    await this.closeDocumentSearchPins().catch(()=>{});
-    await this.drainMetadataOpenings();
-    await this.closeVaultMetadata(this.vault);
-    await this.closeRetiredVaultMetadata();
-    await this.platform.release();this.releaseDocumentSearchOwner(this.vault);this.platformReleased=true;cancelTasksClose(false);
-    }catch(error){cancelTasksClose();this.documentSearchSuspended=searchWasSuspended;throw error;}
+      this.vaultRequest++;await this.vaultTransition;current();
+      if(!this.platformDrained){
+        await this.flush();await this.closeBaseNewItem();await this.sidebarBase?.session.close();this.sidebarBase=undefined;this.sidebarBaseIntent++;
+        cancelTasksClose=await this.prepareTasksViewsClose();current();this.saveSession();
+        this.platformDraining=true;
+        await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();this.platformDrained=true;
+      }
+      this.clearDocumentBacklinks();await this.closeDocumentSearchPins().catch(()=>{});
+      await this.drainMetadataOpenings();await this.closeVaultMetadata(vault);await this.closeRetiredVaultMetadata();current();
+      await platform.release!();current();this.platformReleased=true;this.releaseDocumentSearchOwner(vault);cancelTasksClose(false);
+    }catch(error){cancelTasksClose();if(!this.platformDraining)this.documentSearchSuspended=searchWasSuspended;throw error;}
   }
-  async chooseVault(): Promise<void> {
+  /** Retirement cannot be rolled back by re-enabling disposed buffers. Finish
+   * its exact release, then recover through a newly admitted platform instead. */
+  private async reconnectRetiredPlatform(lifecycleOwner?:symbol):Promise<void>{
+    if(this.lifecycleRecovery)return this.lifecycleRecovery;
+    if(!window.zorid)throw new Error('This retired vault must be opened again.');
+    this.root.inert=true;
+    const owner=lifecycleOwner??this.vaultLifecycleOwner??Symbol('vault recovery'),ownsLifecycle=this.vaultLifecycleOwner===undefined;
+    this.vaultLifecycleOwner=owner;
+    const recovery=(async()=>{
+      let failure:unknown;
+      for(let attempt=0;attempt<3;attempt++){
+        let candidate:PlatformVault|null=null;
+        try{
+          if(!this.platformReleased)await this.releasePlatform();
+          candidate=await createPlatformAdapter();if(!candidate)throw new Error('The previous vault is not available yet.');
+          this.closing=false;await this.start(candidate,owner);
+          this.lifecycleRecoveryView?.remove();this.lifecycleRecoveryView=undefined;
+          return;
+        }catch(error){
+          failure=error;
+          // A failed, uninstalled candidate still owns its admission. Retire it
+          // before another attempt; never accidentally release the active one.
+          if(candidate&&this.platform!==candidate)try{await candidate.release?.();}catch{throw error;}
+        }
+      }
+      throw failure;
+    })();
+    this.lifecycleRecovery=recovery;
+    try{await recovery;}finally{if(this.lifecycleRecovery===recovery)this.lifecycleRecovery=undefined;if(ownsLifecycle&&this.vaultLifecycleOwner===owner)this.vaultLifecycleOwner=undefined;}
+  }
+  private subscribeAdmissionRecovery(platform:PlatformVault,vault:Vault):void{
+    if(!platform.recovery)return;
+    const generation=this.vaultGeneration;
+    const current=()=>this.platform===platform&&this.vault===vault&&this.vaultGeneration===generation&&!this.platformReleased;
+    const receive=()=>{
+      if(!current())return;
+      const transition=this.choosingVault??this.destroying??this.releasingPlatform;
+      if(transition){void transition.catch(()=>{}).then(()=>{if(current())receive();});return;}
+      if(this.closing||this.platformDraining)return;
+      void this.recoverAdmission(platform,vault,generation).catch(()=>{if(current()){this.showLifecycleRecovery(()=>this.recoverAdmission(platform,vault,generation));this.renderStatus();}});
+    };
+    this.disposers.push(platform.recovery.subscribe(receive));
+  }
+  /** A backend recovery ACK retires the old derived owners, but deliberately
+   * does not replay editor writes. Their existing buffers must settle first. */
+  private async recoverAdmission(platform:PlatformVault,vault:Vault,generation:number):Promise<void>{
+    if(this.lifecycleRecovery)return this.lifecycleRecovery;
+    if(!platform.recovery)return;
+    const current=()=>{if(this.platform!==platform||this.vault!==vault||this.vaultGeneration!==generation)throw new Error('The recovering vault changed.');};
+    const pendingViews=()=>this.hasPendingBaseCreation()||this.baseNewItemOpening||this.baseNewItem?.hasPendingChanges()||this.sidebarBase?.session.hasPendingChanges()
+      ||[...this.panes,...this.cachedViews.values()].some(pane=>pane.properties?.hasPendingChanges()||pane.tasksView?.hasPendingChanges()||pane.calendarView?.hasPendingChanges()||pane.canvasView?.hasPendingChanges()||pane.baseView?.hasPendingChanges()||pane.baseEmbeds?.hasPendingChanges());
+    if(pendingViews()){this.root.inert=true;throw new Error('Pending view changes are retained while storage reconnects.');}
+    const inert=this.root.inert,owner=Symbol('admission recovery');this.root.inert=true;this.vaultLifecycleOwner=owner;
+    this.documentSearchSuspended=true;this.clearDocumentSearch();this.saveSession();
+    const recovery=(async()=>{
+      let failure:unknown;
+      for(let attempt=0;attempt<3;attempt++)try{
+        current();const fresh=await platform.recovery!.recover();current();
+        const previous=vault.adapter.durableWrites?.checkpoints.scope,next=fresh.adapter.durableWrites?.checkpoints.scope;
+        if(!previous||!next||previous.vaultId!==next.vaultId||previous.clientId!==next.clientId)throw new Error('The recovered note authority changed.');
+        this.retiredAdmissionVaults.add(vault);this.releaseDocumentSearchOwner(vault);
+        // The proxy was rebound by the checked adapter. SAME buffers, retained
+        // plans and uncertain checkpoint IDs resume through their normal queue.
+        for(const buffer of this.buffers.values()){await buffer.flush({autoRetry:false});current();if(buffer.dirty||buffer.error)throw new Error('A retained note write is not settled yet.');}
+        this.platformDraining=true;this.platformDrained=true;this.platformReleased=true;
+        await this.disposeRetiredAdmissionViews(vault);
+        await this.openVault(fresh,owner);
+        this.lifecycleRecoveryView?.remove();this.lifecycleRecoveryView=undefined;
+        return;
+      }catch(error){failure=error;}
+      throw failure;
+    })();
+    this.lifecycleRecovery=recovery;this.renderStatus();
+    try{await recovery;}
+    finally{
+      if(this.lifecycleRecovery===recovery)this.lifecycleRecovery=undefined;
+      if(this.vaultLifecycleOwner===owner)this.vaultLifecycleOwner=undefined;
+      if(this.platform!==platform)this.root.inert=inert;
+      this.renderStatus();
+    }
+  }
+  private async disposeRetiredAdmissionViews(vault:Vault):Promise<void>{
+    if(!this.retiredAdmissionVaults.has(vault))throw new Error('Derived ownership has not been retired.');
+    // The backend ACK already retired these exact read-only handles. A close
+    // reply from the old process cannot authorize or block a new admission.
+    try{await this.closeBaseNewItem();}catch{this.baseNewItem?.element.remove();this.baseNewItem=undefined;}
+    try{await this.sidebarBase?.session.close();}catch{/* Old provider is retired. */}this.sidebarBase=undefined;this.sidebarBaseIntent++;
+    for(const pane of [...this.panes,...this.cachedViews.values()]){
+      try{await this.disposePaneViews(pane);}catch{
+        const content=pane.content;
+        try{if(content)this.releasePaneView(pane,content);}catch{this.clearPaneViewFields(pane);content?.remove();}
+      }
+    }
+    this.cachedViews.clear();await this.closeVaultMetadata(vault);
+  }
+  private showLifecycleRecovery(recover:()=>Promise<void>=()=>this.reconnectRetiredPlatform()):void{
+    this.root.inert=true;
+    if(this.lifecycleRecoveryView?.isConnected)return;
+    const view=el('section','workspace-reconnect-recovery');view.setAttribute('role','status');
+    view.append(el('p','','Your notes are kept here while Zorid reconnects.'));
+    const retry=textButton('Reconnect notes',()=>this.run(async()=>{
+      retry.disabled=true;
+      try{await recover();this.root.inert=false;this.lifecycleRecoveryView?.remove();this.lifecycleRecoveryView=undefined;}
+      finally{retry.disabled=false;}
+    }));
+    const backup=textButton('Copy retained drafts',()=>this.run(async()=>{await navigator.clipboard.writeText(JSON.stringify({version:1,notes:[...this.buffers.values()].map(buffer=>({path:buffer.path,text:buffer.text,savedText:buffer.savedText,witness:buffer.savedDurableWitness}))},null,2));}));
+    view.append(retry,backup);this.root.parentElement?.append(view);this.lifecycleRecoveryView=view;
+  }
+  async chooseVault():Promise<void>{
+    if(this.choosingVault)return this.choosingVault;
     if(this.closing)throw new Error('Window close is pending');
-    await this.flush();
-    const releasing=!!this.platform?.release;
-    if(releasing)await this.releasePlatform();
-    let next:PlatformVault|null=null,pickerError:unknown;
-    try{next=await pickDesktopVault();}catch(error){pickerError=error;}
-    if(releasing&&!next)next=await createPlatformAdapter();
-    if(next)await this.openVault(next);
-    else if(!window.zorid)notice('This vault is stored on this device. Folder selection requires the desktop app.');
-    if(pickerError)throw pickerError;
+    const owner=Symbol('vault selection');this.vaultLifecycleOwner=owner;
+    const choosing=this.chooseVaultOnce(owner);this.choosingVault=choosing;
+    try{await choosing;}finally{if(this.choosingVault===choosing)this.choosingVault=undefined;if(this.vaultLifecycleOwner===owner)this.vaultLifecycleOwner=undefined;}
+  }
+  private async chooseVaultOnce(owner:symbol):Promise<void>{
+    const inert=this.root.inert;this.root.inert=true;
+    try{
+      await this.flush();this.saveSession();
+      const releasing=!!this.platform?.release;
+      if(releasing)await this.releasePlatform();
+      let next:PlatformVault|null=null,pickerError:unknown;
+      try{next=await pickDesktopVault();}catch(error){pickerError=error;}
+      if(releasing&&!next)next=await createPlatformAdapter();
+      if(next)await this.openVault(next,owner);
+      else if(!window.zorid)notice('This vault is stored on this device. Folder selection requires the desktop app.');
+      if(pickerError)throw pickerError;
+    }catch(error){
+      if(this.platformDraining||this.platformDrained||this.platformReleased){
+        try{await this.reconnectRetiredPlatform(owner);}catch{this.showLifecycleRecovery();throw error;}
+      }else throw error;
+    }finally{if(!this.platformDraining&&!this.platformDrained&&!this.platformReleased)this.root.inert=inert;}
   }
 
   private async recoverDurableBuffers(vault:Vault):Promise<Map<string,NoteBuffer>>{
@@ -712,7 +855,16 @@ export class Workspace {
     await this.openNote(platform.initialPath,false,this.activePane,true,'',undefined,undefined,platform.adapter.durableWrites?platform.initialEntryId:undefined);
   }
 
-  async openVault(platform: PlatformVault): Promise<void> {
+  async openVault(platform: PlatformVault,lifecycleOwner?:symbol): Promise<void> {
+    // A new caller cannot install a vault underneath an older retirement or
+    // recovery. Only that transition's private token may perform its rebind.
+    if(this.vaultLifecycleOwner&&this.vaultLifecycleOwner!==lifecycleOwner){
+      const pending=this.choosingVault??this.lifecycleRecovery??this.releasingPlatform;
+      if(pending)await pending.catch(()=>{});
+      if(this.vaultLifecycleOwner&&this.vaultLifecycleOwner!==lifecycleOwner)throw new Error('A vault transition is already in progress.');
+    }
+    if(this.releasingPlatform)await this.releasingPlatform;
+    if(this.closing&&(!lifecycleOwner||this.vaultLifecycleOwner!==lifecycleOwner))throw new Error('Window close is pending');
     const request=++this.vaultRequest,next=new Vault(platform.adapter);
     let settled!:()=>void;const opening=new Promise<void>(resolve=>{settled=resolve;});this.metadataOpenings.add(opening);
     // Initialization is read-only and can overlap; only the latest request may
@@ -755,7 +907,8 @@ export class Workspace {
     if(this.metadataSubscription?.vault===vault){this.metadataSubscription.stop();this.metadataSubscription=undefined;}
     this.retiredMetadataVaults.add(vault);
     // A failed close retains this exact retired owner for a later retry.
-    await vault.closeMetadataProjection();this.retiredMetadataVaults.delete(vault);
+    try{await vault.closeMetadataProjection();}catch(error){if(!this.retiredAdmissionVaults.has(vault))throw error;}
+    this.retiredMetadataVaults.delete(vault);
   }
 
   private subscribeVaultMetadata(vault:Vault):void{
@@ -794,13 +947,14 @@ export class Workspace {
     await this.sidebarBase?.session.close();this.sidebarBase=undefined;this.sidebarBaseIntent++;
     cancelTasksClose=await this.prepareTasksViewsClose();
     this.saveSession();
+    this.platformDraining=true;
     for (const dispose of this.disposers) dispose(); this.disposers = [];
     clearTimeout(this.reloadTimer);
     this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();
     for(const pane of this.panes)await this.disposePaneViews(pane);if(!this.platformReleased)for(const buffer of this.buffers.values())await buffer.dispose(); this.buffers.clear();
     await this.closeVaultMetadata(searchVault);
     await this.closeRetiredVaultMetadata();
-    if(!this.platformReleased&&this.platform?.release){await this.platform.release();this.releaseDocumentSearchOwner(this.vault);}
+    if(!this.platformReleased&&this.platform?.release){await this.platform.release();this.platformReleased=true;this.releaseDocumentSearchOwner(this.vault);}
     this.attachments?.destroy();
     this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;
     this.treeDrag?.destroy(); this.treeDrag=undefined; this.treeRename?.session.dispose(); this.treeRename=undefined; this.folderCreationIntent++;
@@ -809,7 +963,8 @@ export class Workspace {
     this.hideNativeEditorToolbar();this.nativeEditorCleanup?.();this.nativeEditorCleanup=undefined;
     cancelTasksClose(false);cancelTasksClose=()=>{};
     this.nativeDocumentCleanup?.();this.nativeDocumentCleanup=undefined;
-    this.platform = platform; this.vault = next; this.platformReleased=false;this.platformDrained=false;this.buffers=recovered; this.recoveredBufferBindings=new WeakSet(recovered.values()); this.vaultGeneration++;
+    this.platform = platform; this.vault = next; this.platformReleased=false;this.platformDrained=false;this.platformDraining=false;this.buffers=recovered; this.recoveredBufferBindings=new WeakSet(recovered.values()); this.vaultGeneration++;
+    this.subscribeAdmissionRecovery(platform,next);
     this.attachments=new AttachmentResources(this.vault);
     this.attachmentImporter=new AttachmentImporter(this.vault);
     this.splitLayout?.destroy(); this.splitLayout=undefined; this.restoringLayout=true;
@@ -2722,6 +2877,7 @@ export class Workspace {
       // Current-note conflicts already have the full shared recovery banner.
       if(conflict&&this.activePane?.viewPath===path)continue;
       if(!buffer.error&&!conflict)continue;
+      if(!conflict&&(buffer.autosaveRetryPending||this.lifecycleRecovery))continue;
       const row=el('div','native-document-notice');
       row.append(el('p','',conflict?`Retained draft for “${nameOf(path)}” needs attention.`:`Could not save “${nameOf(path)}”. Keep this note open and try again.`));
       const current=()=>generation===this.vaultGeneration&&this.buffers.get(path)===buffer&&!this.platformReleased;
@@ -2749,8 +2905,8 @@ export class Workspace {
     if(!this.activePane)return;const tab=this.current();const buffer=tab?.path?this.buffers.get(tab.path):undefined;const text=buffer?.text||'';
     this.status.replaceChildren(...(this.importStatusHost?[this.importStatusHost]:[]));
     if(tab?.kind!=='note')return;
-    if(tab?.path&&!isMarkdown(tab.path)){if(/\.base$/i.test(tab.path))this.status.append(el('span','save-state',buffer?.error?'Couldn’t save — keep this Base open':buffer?.dirty?'Saving…':''));this.status.append(el('span','',`${this.vault.entries.get(tab.path)?.size??0} bytes`));return;}
-    this.status.append(el('span','save-state',buffer?.error?'Couldn’t save — keep this note open':buffer?.dirty?'Saving…':''));
+    if(tab?.path&&!isMarkdown(tab.path)){if(/\.base$/i.test(tab.path))this.status.append(el('span','save-state',buffer?.error&&!buffer.autosaveRetryPending&&!this.lifecycleRecovery?'Couldn’t save — keep this Base open':buffer?.dirty?'Saving…':''));this.status.append(el('span','',`${this.vault.entries.get(tab.path)?.size??0} bytes`));return;}
+    this.status.append(el('span','save-state',buffer?.error&&!buffer.autosaveRetryPending&&!this.lifecycleRecovery?'Couldn’t save — keep this note open':buffer?.dirty?'Saving…':''));
     const mode=textButton(tab?.mode==='reading'?'Reading view':'Live Edit',()=>this.modeMenu(mode),'status-mode');
     this.status.append(mode,el('span','',`${text.trim()?text.trim().split(/\s+/u).length:0} words`),el('span','',`${[...text].length} characters`));
   }
@@ -3352,5 +3508,37 @@ export class Workspace {
   }
   private async flushPane(pane:Pane):Promise<void>{await this.finishInlinePublicationAt(this.current(pane)?.path);await pane.properties?.flush();await pane.tasksView?.flush();await pane.calendarView?.flush();await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flushForNavigation();}
   async flush():Promise<void>{if(this.platformReleased||this.platformDrained)return;if(this.hasPendingBaseCreation())throw new Error('Base creation is unconfirmed. Retry New base in its original folder before closing or switching vaults.');await this.finishInlinePublications();await this.flushBaseNewItem();await this.sidebarBase?.session.flush();for(const pane of [...this.panes,...this.cachedViews.values()]){await pane.properties?.flush();await pane.tasksView?.flush();if(pane.tasksView?.hasPendingChanges())throw new Error('Tasks has unsaved or unconfirmed changes. Save, discard, or resolve them before closing.');await pane.calendarView?.flush();await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();}await this.flushBaseNewItem();for(const buffer of this.buffers.values())await buffer.flush();}
-  async destroy():Promise<void>{let cancelTasksClose:(recover?:boolean)=>void=()=>{};const searchWasSuspended=this.documentSearchSuspended;this.documentSearchSuspended=true;this.clearDocumentSearch();try{this.hideNativeEditorToolbar();this.nativeEditorCleanup?.();this.nativeEditorCleanup=undefined;this.nativeDocumentCleanup?.();this.nativeDocumentCleanup=undefined;this.mobileLifecycleCleanup?.();this.mobileLifecycleCleanup=undefined;this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();await this.closeBaseNewItem();await this.sidebarBase?.session.close();this.sidebarBase=undefined;this.sidebarBaseIntent++;cancelTasksClose=await this.prepareTasksViewsClose();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();await this.drainMetadataOpenings();await this.closeVaultMetadata(this.vault);await this.closeRetiredVaultMetadata();if(!this.platformReleased&&this.platform?.release){await this.platform.release();this.releaseDocumentSearchOwner(this.vault);}this.platformReleased=true;this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;this.hotkeyCleanup?.();this.hotkeyCleanup=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.closeCleanup?.();this.closeCleanup=undefined;this.disposeShell();this.root.replaceChildren();cancelTasksClose(false);}catch(error){cancelTasksClose();if(!this.platformReleased)this.documentSearchSuspended=searchWasSuspended;throw error;}}
+  private destroying?:Promise<void>;
+  async destroy():Promise<void>{
+    if(this.destroying)return this.destroying;
+    if(this.choosingVault||this.lifecycleRecovery)throw new Error('A vault transition is pending.');
+    const platform=this.platform,vault=this.vault,inert=this.root.inert,wasClosing=this.closing;
+    this.closing=true;this.root.inert=true;
+    const current=()=>{if(this.platform!==platform||this.vault!==vault)throw new Error('The vault changed while closing.');};
+    const closing=this.destroyOwnedPlatform(current,platform,vault);this.destroying=closing;
+    try{await closing;}
+    catch(error){if(!this.platformDraining&&!this.platformDrained&&!this.platformReleased){this.closing=wasClosing;this.root.inert=inert;}throw error;}
+    finally{if(this.destroying===closing)this.destroying=undefined;}
+  }
+  private async destroyOwnedPlatform(current:()=>void,platform:PlatformVault,vault:Vault):Promise<void>{
+    let cancelTasksClose:(recover?:boolean)=>void=()=>{};
+    const searchWasSuspended=this.documentSearchSuspended;this.documentSearchSuspended=true;this.clearDocumentSearch();
+    try{
+      this.hideNativeEditorToolbar();this.nativeEditorCleanup?.();this.nativeEditorCleanup=undefined;this.nativeDocumentCleanup?.();this.nativeDocumentCleanup=undefined;this.mobileLifecycleCleanup?.();this.mobileLifecycleCleanup=undefined;
+      this.vaultRequest++;await this.vaultTransition;current();this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);
+      await this.flush();await this.closeBaseNewItem();await this.sidebarBase?.session.close();this.sidebarBase=undefined;this.sidebarBaseIntent++;
+      cancelTasksClose=await this.prepareTasksViewsClose();current();this.saveSession();this.platformDraining=true;
+      this.disposers.forEach(dispose=>dispose());this.disposers=[];clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;
+      await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();
+      await this.drainMetadataOpenings();await this.closeVaultMetadata(vault);await this.closeRetiredVaultMetadata();current();
+      if(!this.platformReleased&&platform?.release){await platform.release();current();this.platformReleased=true;this.releaseDocumentSearchOwner(vault);}
+      this.platformReleased=true;this.vaultGeneration++;
+      this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;
+      // Reinstallation must restore all bindings even if a later cleanup throws.
+      this.initialized=false;this.hotkeyCleanup?.();this.hotkeyCleanup=undefined;
+      document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);
+      this.closeCleanup?.();this.closeCleanup=undefined;this.disposeShell();this.root.replaceChildren();cancelTasksClose(false);
+    }catch(error){cancelTasksClose();if(!this.platformDraining&&!this.platformReleased)this.documentSearchSuspended=searchWasSuspended;throw error;}
+  }
+
 }
