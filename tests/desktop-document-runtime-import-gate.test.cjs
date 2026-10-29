@@ -22,19 +22,19 @@ const reply=(value,turn=null)=>({work:value,turn:turn===null?null:{state:turn}})
 /** Fixed native replies; no stage, priority, retry or freshness policy is
  * implemented by this fixture. Only production deferred turns are advanced. */
 function fixture({initial=state(),steps=[],ownerReplies=[],composite=false,workReplies=[],retire=state(null,{releasing:true})}={}){
-  let pending=true,current=clone(initial),readFailure=null,sequence=0;
+  let pending=true,current=clone(initial),readFailure=null,readGate=null,sequence=0;
   const calls=[],errors=[],queued=new Map();
   const host={
     async documentRuntime(clientId,op,args){
       calls.push({op,clientId,args:clone(args)});
-      if(op==='runtime_snapshot'){if(readFailure)throw readFailure;return {snapshot:clone(current)};}
+      if(op==='runtime_snapshot'){if(readGate)await readGate;if(readFailure)throw readFailure;return {snapshot:clone(current)};}
       if(op==='runtime_owner'){
         if(args.command.kind==='retire')current=clone(retire);
         else if(ownerReplies.length)current=clone(ownerReplies.shift());
         return {...clone(args),snapshot:clone(current)};
       }
       if(op==='runtime_owner_ack')return true;
-      if(op==='runtime_control')return {...clone(args),snapshot:clone(current),frame:{scope:{clientId,localStoreId:'store'},update:clone(current.update),outcomes:[]}};
+      if(op==='runtime_control')return {...clone(args),snapshot:clone(current),frame:{version:1,scope:{clientId,localStoreId:'store'},update:clone(current.update),outcomes:[]}};
       if(op==='runtime_step'){
         assert.deepEqual(args,{lifetime:current.inFlight.lifetime,effectId:current.inFlight.effectId});
         calls.at(-1).effect=clone(current.inFlight);
@@ -46,6 +46,7 @@ function fixture({initial=state(),steps=[],ownerReplies=[],composite=false,workR
       calls.push(clone(request));assert.ok(workReplies.length,'unexpected work turn');
       const next=workReplies.shift();assert.equal(request.op,next.op);
       if(next.ticket)assert.deepEqual(request.ticket,next.ticket);
+      if(next.runtimeSnapshot)current=clone(next.runtimeSnapshot);
       return clone(next.value);
     },
   };
@@ -55,12 +56,12 @@ function fixture({initial=state(),steps=[],ownerReplies=[],composite=false,workR
     now:()=>17,onError:error=>errors.push(error),
   });
   const addOwner=()=>scheduler.addOwner({host,clientId:'client',localStoreId:'store',assertActive(){}});
-  const addDraft=()=>scheduler.addDraftOwner({clientId:'draft-client',localStoreId:'store',assertActive(){}});
+  const addDraft=(assertActive=()=>{})=>scheduler.addDraftOwner({clientId:'draft-client',localStoreId:'store',assertActive});
   async function settled(){for(let i=0;i<80;i++)await Promise.resolve();}
   async function turn(){assert.ok(queued.size,'expected a deferred turn');const [id,callback]=queued.entries().next().value;queued.delete(id);callback();await settled();}
   async function drain(){for(let i=0;queued.size&&i<64;i++)await turn();assert.equal(queued.size,0,'must wait without polling');}
   return {scheduler,host,calls,errors,addOwner,addDraft,turn,drain,settled,
-    queued:()=>queued.size,setPending(value){pending=value;},setState(value){current=clone(value);},failRead(value){readFailure=value;}};
+    queued:()=>queued.size,setPending(value){pending=value;},setState(value){current=clone(value);},failRead(value){readFailure=value;},holdRead(value){readGate=value;}};
 }
 const effectSteps=f=>f.calls.filter(call=>call.op==='runtime_step');
 const workSteps=f=>f.calls.filter(call=>call.op==='step');
@@ -135,7 +136,7 @@ test('composite-only committed tickets use one exact guarded descriptor read and
 });
 
 test('composite foreground, ready publication, cleanup and draft Drop tickets are never import-gated',async()=>{
-  for(const [kind,options,lane] of [['pump',{foreground:true},'committed'],['publish',{},'committed'],['discard',{},'committed'],['pump',{},'draft']]){
+  for(const [kind,options,lane] of [['pump',{foreground:true},'committed'],['begin',{priority:'foreground'},'committed'],['pump',{releasing:true},'committed'],['publish',{},'committed'],['discard',{},'committed'],['pump',{},'draft']]){
     const selected=ticket('1',lane),f=fixture({composite:true,initial:state(kind,options),workReplies:[
       {op:'next_turn',value:reply(work(selected),'ready')},
       {op:'step',ticket:selected,value:reply(work(null,{settled:selected}))},
@@ -143,6 +144,57 @@ test('composite foreground, ready publication, cleanup and draft Drop tickets ar
     ]});const owner=activateDraft(f);await f.drain();
     assert.equal(workSteps(f).length,1,`${lane} ${kind}`);assert.deepEqual(f.errors,[]);owner.revoke();
   }
+});
+
+test('an active committed owner supplies the exact composite descriptor through its existing snapshot path',async()=>{
+  const selected=ticket(),f=fixture({composite:true,initial:state('pump'),workReplies:[
+    {op:'next_turn',value:reply(work(selected),'ready')},
+    {op:'step',ticket:selected,runtimeSnapshot:state(),value:reply(work(null,{settled:selected}))},
+    {op:'next_turn',value:reply(work(),'waiting')},
+  ]});const committed=f.addOwner(),draft=activateDraft(f);await f.drain();
+  assert.equal(workSteps(f).length,0);
+  assert.ok(f.calls.some(call=>call.op==='runtime_snapshot'&&call.clientId==='client'));
+  assert.ok(!f.calls.some(call=>call.op==='runtime_snapshot'&&call.clientId==='draft-client'));
+  f.setPending(false);f.scheduler.sourceImportProgress();await f.drain();
+  assert.deepEqual(workSteps(f).map(call=>call.ticket),[selected]);assert.deepEqual(f.errors,[]);
+  committed.release();draft.revoke();
+});
+
+test('a descriptor from another effect cannot invent a background pause for the selected ticket',async()=>{
+  const selected=ticket(),f=fixture({composite:true,initial:state('pump',{id:'9'}),workReplies:[
+    {op:'next_turn',value:reply(work(selected),'ready')},
+    {op:'step',ticket:selected,value:reply(work(null,{settled:selected}))},
+    {op:'next_turn',value:reply(work(),'waiting')},
+  ]});const owner=activateDraft(f);await f.drain();
+  assert.deepEqual(workSteps(f).map(call=>call.ticket),[selected]);
+  assert.equal(f.calls.filter(call=>call.op==='runtime_snapshot').length,1);
+  assert.equal(f.scheduler.current,null,'workHost observations never become another owner snapshot');
+  assert.deepEqual(f.errors,[]);owner.revoke();
+});
+
+test('a foreign-store descriptor is held without adopting its identity or losing the selected ticket',async()=>{
+  const foreign=state('pump');foreign.update.source.localStoreId='foreign';foreign.inFlight.targetSource.localStoreId='foreign';foreign.inFlight.effect.snapshot.localStoreId='foreign';
+  const selected=ticket(),f=fixture({composite:true,initial:foreign,workReplies:[
+    {op:'next_turn',value:reply(work(selected),'ready')},
+  ]});const owner=activateDraft(f);await f.drain();
+  assert.equal(workSteps(f).length,0);assert.equal(f.scheduler.current,null);
+  assert.deepEqual(f.scheduler.work.selected,selected);assert.equal(f.scheduler.needsRetry(),false);
+  assert.deepEqual(f.errors.map(error=>error.code),['client_scope_mismatch']);owner.revoke();
+});
+
+test('descriptor lookup rechecks the draft owner after an asynchronous read before trusting metadata',async()=>{
+  let releaseRead,active=true,checks=0;
+  const read=new Promise(resolve=>{releaseRead=resolve;}),selected=ticket();
+  const f=fixture({composite:true,initial:state('pump'),workReplies:[
+    {op:'next_turn',value:reply(work(selected),'ready')},
+  ]});f.holdRead(read);
+  const owner=f.addDraft(()=>{checks++;if(!active)throw {code:'client_ownership_lost'};});
+  owner.notify({op:'cancel'},{result:{state:{}}});
+  await f.turn();await f.turn();assert.equal(f.calls.filter(call=>call.op==='runtime_snapshot').length,1);
+  active=false;releaseRead();await f.settled();await f.drain();
+  assert.equal(checks,3,'notify, before read, after read');assert.equal(workSteps(f).length,0);
+  assert.equal(f.scheduler.current,null);assert.deepEqual(f.scheduler.work.selected,selected);
+  assert.equal(f.scheduler.needsRetry(),false);owner.revoke();
 });
 
 test('failed composite descriptor read holds the exact ticket without poisoning transport retry or spinning',async()=>{

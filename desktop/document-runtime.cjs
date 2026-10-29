@@ -35,6 +35,7 @@ function issued(v){if(!keys(v,['lifetime','effectId','priority','targetSource','
 }
 function reduction(v){return keys(v,['effect','update','requestOutcomes','execution'])&&(v.effect===null||issued(v.effect))&&update(v.update)&&Array.isArray(v.requestOutcomes)&&v.requestOutcomes.length<=32&&v.requestOutcomes.every(outcome)&&new Set(v.requestOutcomes.map(o=>o.id)).size===v.requestOutcomes.length&&execution(v.execution)&&(v.effect===null||v.effect.lifetime===v.update.lifetime)&&(v.execution==='dispatch')===(v.effect!==null);}
 function privateSnapshot(v){return v===null||keys(v,['update','inFlight','lastStep','execution'])&&update(v.update)&&(v.inFlight===null||issued(v.inFlight)&&v.inFlight.lifetime===v.update.lifetime)&&execution(v.execution)&&(v.execution!=='dispatch'||v.inFlight!==null)&&(v.execution!=='quiesced'||v.inFlight===null)&&(v.lastStep===null||keys(v.lastStep,['lifetime','effectId','reduction'])&&v.lastStep.lifetime===v.update.lifetime&&positive(v.lastStep.effectId)&&reduction(v.lastStep.reduction)&&v.lastStep.reduction.update.lifetime===v.lastStep.lifetime);}
+function snapshotScope(value,localStoreId){if(value){const visit=v=>{if(!v||typeof v!=='object')return;if(Object.hasOwn(v,'localStoreId')&&v.localStoreId!==localStoreId)throw fail('client_scope_mismatch');for(const child of Object.values(v))visit(child);};visit(value);}}
 function captureRuntimeRequest(op,input={}){
   if(!RUNTIME_OPS.has(op))throw fail('invalid_document_runtime');
   if(PUBLIC[op]){const args=captureDocumentRuntimeRequest(PUBLIC[op],op==='runtime_observe'?[]:[input]);return args[0]??{};}
@@ -70,9 +71,11 @@ function validRuntimeReply(command,marker,bytes){try{decodeRuntimeReply(command.
 /** Exactly one native-selected effect per event-loop turn. The existing host
  * FIFO remains the only RPC queue. No stage/retry/priority planner lives here. */
 class DocumentRuntimeScheduler{
-  constructor({defer=setImmediate,cancel=clearImmediate,now=()=>Math.floor(performance.now()),onError=()=>{},workHost}={}){
+  constructor({defer=setImmediate,cancel=clearImmediate,now=()=>Math.floor(performance.now()),onError=()=>{},workHost,isSourceImportPending=()=>false}={}){
     this.defer=defer;this.cancel=cancel;this.now=now;this.onError=onError;this.owners=new Set();this.current=null;this.scheduled=null;this.running=null;this.wakePending=false;this.hintPending=false;this.needsSnapshot=false;this.blocked=false;this.closed=false;this.sequence=1n;this.ownerCommand=null;this.retiring=false;this.retirementLifetime=null;
     if(workHost&&typeof workHost.documentWork!=='function')throw fail('unsupported_host_capability');
+    if(typeof isSourceImportPending!=='function')throw fail('unsupported_host_capability');
+    this.isSourceImportPending=isSourceImportPending;this.droppingClients=0;this.importObservationOwner={};this.importObservation=null;this.importReadHeld=null;
     this.workHost=workHost;this.composite=false;this.work=null;this.workWanted=false;this.workNeedsSnapshot=false;this.workWake=0;this.draftOwners=new Set();this.progress=0;this.progressTicket=null;this.progressWaiters=new Set();this.closePromise=null;
   }
   addDraftOwner({clientId,localStoreId,assertActive}){
@@ -85,12 +88,46 @@ class DocumentRuntimeScheduler{
       release:remove,revoke:remove,
     });
   }
-  wakeWork(){if(this.closed||!this.workHost)return;this.workWake++;this.workWanted=true;this.blocked=false;this.schedule();}
+  wakeWork(){if(this.closed||!this.workHost)return;this.resetImportObservation();this.workWake++;this.workWanted=true;this.blocked=false;this.schedule();}
+  resetImportObservation(){this.importObservationOwner={};this.importObservation=null;this.importReadHeld=null;}
+  sourceImportProgress(){this.sourceHint();}
+  // Import availability delays speculative generation-building IO only. It is
+  // never a replacement for native source/publication fences or cleanup policy.
+  importPending(){return !this.retiring&&!this.work?.closing&&!this.droppingClients&&this.isSourceImportPending()===true;}
+  importPauses(effect,latest){return this.importPending()&&effect?.priority==='background'&&!latest?.hasForegroundDemand&&latest?.phase!=='releasing'&&['begin','pump'].includes(effect.effect.kind);}
+  workImportDescriptor(selected){
+    const value=this.select()?this.current:sameTicket(this.importObservation?.ticket,selected)?this.importObservation.snapshot:null;
+    return value?.inFlight?.lifetime===selected.lifetime&&value.inFlight.effectId===selected.id?value:null;
+  }
+  importPausesWork(){
+    const selected=this.work?.selected;
+    if(!this.importPending()||selected?.lane!=='committed')return false;
+    if(sameTicket(this.importReadHeld,selected))return true;
+    const value=this.workImportDescriptor(selected);return !!value&&this.importPauses(value.inFlight,value.update);
+  }
+  async observeImportWork(selected){
+    if(!this.importPending()||selected.lane!=='committed'||this.select()||sameTicket(this.importObservation?.ticket,selected)||typeof this.workHost?.documentRuntime!=='function')return false;
+    const owner=[...this.draftOwners].find(owner=>!owner.released);if(!owner)return false;
+    const observationOwner=this.importObservationOwner;
+    try{
+      owner.assertActive();
+      const raw=await this.workHost.documentRuntime(owner.clientId,'runtime_snapshot',{});
+      if(owner.released||this.closed)throw fail('client_not_admitted');owner.assertActive();
+      const value=rawRuntimeValue('runtime_snapshot',{},copy(raw)).snapshot;snapshotScope(value,owner.localStoreId);
+      if(this.importObservationOwner===observationOwner&&sameTicket(this.work?.selected,selected))this.importObservation={ticket:structuredClone(selected),snapshot:value};
+    }catch(error){
+      // This optional read cannot revoke the work owner or lose its selected
+      // ticket. Retry only after an actual wake; close/Drop drain bypasses it.
+      if(this.importObservationOwner===observationOwner)this.importReadHeld=structuredClone(selected);
+      try{this.onError(error);}catch{}
+    }
+    return true;
+  }
   progressAfter(sequence){if(this.progress!==sequence)return Promise.resolve();if(this.closed||this.blocked)return Promise.reject(fail('document_runtime_unavailable'));return new Promise((resolve,reject)=>this.progressWaiters.add({resolve,reject}));}
   settleProgress(){this.progress++;for(const waiter of this.progressWaiters)waiter.resolve();this.progressWaiters.clear();}
   rejectProgress(error){for(const waiter of this.progressWaiters)waiter.reject(error);this.progressWaiters.clear();}
   adoptWork(value,settled=null){
-    const wasReady=this.work?.close_ready;this.work=value;if(value!==null)this.composite=true;
+    const wasReady=this.work?.close_ready;if(!sameTicket(this.work?.selected,value?.selected))this.resetImportObservation();this.work=value;if(value!==null)this.composite=true;
     if(settled&&!sameTicket(this.progressTicket,settled)){this.progressTicket=structuredClone(settled);this.settleProgress();}
     if(value?.close_ready&&!wasReady)this.settleProgress();
     this.nudge();
@@ -107,6 +144,7 @@ class DocumentRuntimeScheduler{
     const wake=this.workWake;
     if(this.work?.selected){
       const ticket=this.work.selected,pending=this.work;let reply;
+      if(this.importPausesWork()||await this.observeImportWork(ticket))return;
       try{reply=await this.workCall({op:'step',ticket});}
       catch(error){
         const actual=await this.workCall({op:'snapshot'});
@@ -124,14 +162,18 @@ class DocumentRuntimeScheduler{
   }
   async releaseDraftClient(reference){
     if(!this.workHost)throw fail('unsupported_host_capability');
-    for(;;){
-      const before=this.progress;
-      try{return await this.workHost.releaseClient(reference);}
-      catch(error){if(error?.code!=='document_drafts_draining')throw error;}
-      // Revoked clients/listener absence cannot stop actual core Drop. Retry
-      // only following an actual settled effect or actual close-ready proof.
-      this.composite=true;this.wakeWork();await this.progressAfter(before);
-    }
+    let dropping=false;
+    try{
+      for(;;){
+        const before=this.progress;
+        try{return await this.workHost.releaseClient(reference);}
+        catch(error){if(error?.code!=='document_drafts_draining')throw error;}
+        if(!dropping){dropping=true;this.droppingClients++;}
+        // Revoked clients/listener absence cannot stop actual core Drop. Retry
+        // only following an actual settled effect or actual close-ready proof.
+        this.composite=true;this.wakeWork();await this.progressAfter(before);
+      }
+    }finally{if(dropping){this.droppingClients--;this.schedule();}}
   }
   addOwner({host,clientId,localStoreId,assertActive}){
     if(this.closed||!host||typeof host.documentRuntime!=='function'||!id(clientId)||!id(localStoreId)||typeof assertActive!=='function')throw fail('invalid_admission');
@@ -176,14 +218,14 @@ class DocumentRuntimeScheduler{
   select(){for(const owner of this.owners)if(!owner.paused&&!owner.released)return owner;return null;}
   assertOwner(owner){try{owner.assertActive();}catch(error){this.remove(owner);throw error;}}
   async call(owner,op,args={}){if(owner.released||this.closed)throw fail('client_not_admitted');this.assertOwner(owner);const captured=captureRuntimeRequest(op,args);const value=await owner.host.documentRuntime(owner.clientId,op,captured);if(owner.released||this.closed)throw fail('client_not_admitted');this.assertOwner(owner);const decoded=rawRuntimeValue(op,captured,copy(value));if(op==='runtime_control')captureDocumentRuntimeReply('documentRuntimeControl',[captured],{sequence:decoded.sequence,command:decoded.command,frame:decoded.frame},{localStoreId:owner.localStoreId,clientId:owner.clientId});if(op==='runtime_observe')return captureDocumentRuntimeReply('documentRuntimeObserve',[],decoded,{localStoreId:owner.localStoreId,clientId:owner.clientId});return decoded;}
-  adopt(value,owner){if(!privateSnapshot(value))throw fail('invalid_document_response');if(value){const visit=v=>{if(!v||typeof v!=='object')return;if(Object.hasOwn(v,'localStoreId')&&v.localStoreId!==owner.localStoreId)throw fail('client_scope_mismatch');for(const child of Object.values(v))visit(child);};visit(value);}this.current=value;this.needsSnapshot=false;if(this.composite&&this.work?.close_ready&&value&&value.update.phase!=='releasing'){this.workNeedsSnapshot=true;this.workWanted=true;}else if(this.composite&&(value?.inFlight||value?.execution==='yield'))this.workWanted=true;}
+  adopt(value,owner){if(!privateSnapshot(value))throw fail('invalid_document_response');snapshotScope(value,owner.localStoreId);this.resetImportObservation();this.current=value;this.needsSnapshot=false;if(this.composite&&this.work?.close_ready&&value&&value.update.phase!=='releasing'){this.workNeedsSnapshot=true;this.workWanted=true;}else if(this.composite&&(value?.inFlight||value?.execution==='yield'))this.workWanted=true;}
   nudge(){for(const owner of [...this.owners,...this.draftOwners])if(!owner.released)for(const slot of owner.listeners)try{slot.listener();}catch{/* Observation delivery never undoes work. */}}
   remove(owner){if(owner.released)return;owner.released=true;this.owners.delete(owner);for(const slot of owner.listeners)try{slot.onRetire();}catch{}owner.listeners.clear();if(!this.owners.size){if(!this.composite||!this.workWanted)this.unschedule();else this.schedule();}else{this.needsSnapshot=true;this.schedule();}}
   needsRetry(){return !this.closed&&(this.blocked||this.current?.update.error!=null);}
-  wake(){if(this.closed)return;this.wakePending=true;if(this.composite)this.workWanted=true;this.blocked=false;this.schedule();}
-  sourceHint(){if(this.closed)return;this.hintPending=true;if(this.composite)this.workWanted=true;this.schedule();}
+  wake(){if(this.closed)return;this.resetImportObservation();this.wakePending=true;if(this.composite)this.workWanted=true;this.blocked=false;this.schedule();}
+  sourceHint(){if(this.closed)return;this.resetImportObservation();this.hintPending=true;if(this.composite)this.workWanted=true;this.schedule();}
   unschedule(){if(this.scheduled!==null){this.cancel(this.scheduled);this.scheduled=null;}}
-  hasWork(){return this.select()&&(this.retiring||this.ownerCommand!==null||this.wakePending||this.hintPending||this.needsSnapshot)|| (this.composite?this.workWanted:this.current?.inFlight!==null&&!!this.current||this.current?.execution==='yield');}
+  hasWork(){return this.select()&&(this.retiring||this.ownerCommand!==null||this.wakePending||this.hintPending||this.needsSnapshot)|| (this.composite?this.workWanted&&!this.importPausesWork():this.current?.inFlight!==null&&!!this.current&&!this.importPauses(this.current.inFlight,this.current.update)||this.current?.execution==='yield');}
   schedule(){if(this.closed||this.blocked||this.running||this.scheduled!==null||(!this.select()&&!this.composite)||!this.hasWork())return;this.scheduled=this.defer(()=>{this.scheduled=null;if(this.closed||this.blocked||this.running)return;const owner=this.select();if(!owner&&!this.composite)return;const run=this.turn(owner);this.running=run;void run.catch(error=>{if(owner?.released&&this.select()||this.composite&&owner&&(owner.released||owner.paused)&&['client_not_admitted','client_ownership_lost','grant_retired','durable_scope_changed'].includes(error?.code)){this.needsSnapshot=!!this.select();this.blocked=false;}else{this.blocked=true;this.rejectProgress(error);}try{this.onError(error);}catch{}}).finally(()=>{if(this.running===run)this.running=null;this.schedule();});});}
   async controlOwner(owner,command){
     if(!this.ownerCommand){if(this.sequence>MAX_U64)throw fail('document_runtime_capacity');this.ownerCommand={sequence:String(this.sequence++),command:freeze(copy(command)),accepted:false};}
@@ -218,7 +260,7 @@ class DocumentRuntimeScheduler{
     if(this.hintPending){this.hintPending=false;await this.controlOwner(owner,{kind:'sourceHint'});return;}
     if(this.needsSnapshot){this.adopt((await this.call(owner,'runtime_snapshot')).snapshot,owner);this.nudge();return;}
     if(this.composite){if(this.workWanted)await this.workTurn();return;}
-    if(this.current?.inFlight){await this.step(owner);return;}
+    if(this.current?.inFlight){if(!this.importPauses(this.current.inFlight,this.current.update))await this.step(owner);return;}
     if(this.current?.execution==='yield')await this.controlOwner(owner,{kind:'continue'});
   }
   close(){
