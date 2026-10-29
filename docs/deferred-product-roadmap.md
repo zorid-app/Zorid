@@ -3,6 +3,16 @@
 ## Execution checkpoint — shared-core coordinator
 
 
+**Stable Base layers on main; no build until Workspace final — 2026-10-28.**
+Sourcec526/59c1/56e0/2758 ->main1719ffff/7045cebe/e6deb743/a4aa7434, duplicate3968
+SKIPPED. Actualmain dedicated33/33,0skip,exit0; receipt/log under save-recovery task.
+Independent source2758 reviewACCEPT/root15/15reported separately. Lower-layer
+progress only; Workspace outerchooser/close/release preflightcycle +wrapperflush
+ownership finalpin/review stillpending. FullBase/nativeGUI/strictpixeloracle not
+accepted. Build/package/GUI/realfreeze/apply/installheld asexplicitlyrequested.
+Protected71549/realexports untouched, main+GUI soleownerhere. No scope expansion.
+
+
 **Outer chooser/close/release cycle OPEN — 2026-10-28.**
 Reviewfound transition preflightflush awaitsheldBasewrite while retired-admission
 receiver awaitstransition. ParentchooserRED andnarrowWorkspace+Sessionclose-first

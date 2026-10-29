@@ -3,6 +3,27 @@
 ## URGENT: real-session automatic save failure — 2026-10-28
 
 
+**Stable platform/Session layers integrated; Workspace final still required — 2026-10-28.**
+Reviewed ordered sourcec526d9e0 ->59c1bafb ->56e0ca5b ->2758b79c integrated on
+main as1719ffff ->7045cebe ->e6deb743 ->a4aa7434. Duplicate platform3968f51d
+explicitly skipped. Relevant pre-integration source baselines were unchanged.
+Actual main dedicated platform-database/Session recovery checks33/33 PASS,0skip,
+exit0 (~1.24s), log main-base-layer-validation001.log and composition receipt in
+ignored tmp/save-recovery-20261028. This is focused lower-layer validation, not
+complete Workspace/native/GUI/save acceptance. TS author pass and independent
+root15/15 for source2758 remain separately reported evidence.
+
+2758 addresses repeated same-value retry ownership and close/capsule races including
+close-first; ordinary healthy close waiting, repeated9/cancel/new9 exact IDs,
+checkbox controlled rollback and losing-old-settle fences covered by reviewed
+source/targeted tests. Parent Workspace reversible preflight/retirement-signal
+chooser/close cycle and wrapper flush ownership still being completed/reviewed;
+startup_audit independent delta review pending. Do not build before that final
+coherent Workspace pin is ready. No native claim, build, package, GUI, real freeze/
+apply or install performed here. Protected71549 and real draft backups untouched;
+complete Base recovery and strict painted-error oracle remain required.
+
+
 **Outer lifecycle dependency cycle found; coherent successor required — 2026-10-28.**
 Bounded source review reports a real cycle when retirement arrives during
 chooseVault/destroy/release preflight: transition flush awaits the held submitted
