@@ -14,7 +14,7 @@ import { createBaseClockHost } from './clock.ts';
 import type { BaseClockHost } from './clock.ts';
 import { BaseToolbarSaveError, createBaseToolbar } from './toolbar.ts';
 import { mountBaseTooltips } from './tooltips.ts';
-import type { BaseFilterOperandsSnapshot, BaseFilterPropertyDescriptor, BaseToolbarState } from './toolbar.ts';
+import type { BaseFilterOperandsSnapshot, BaseFilterPropertyDescriptor, BaseToolbarState, BaseToolbarAdmissionDraft } from './toolbar.ts';
 import { createBaseViewActions } from './view-actions.ts';
 import { createBaseTableView } from './table-view.ts';
 import type { BaseTableRawDraft } from './table-view.ts';
@@ -237,7 +237,7 @@ export interface BaseSessionDraftOrigin {
   readonly collectionId?:string;readonly schemaFingerprint?:string;
 }
 /** Raw controls are presentation custody, never authoring commands or old pin authority. */
-export type BaseSessionRawDraft={readonly origin:BaseSessionDraftOrigin;readonly kind:'property';readonly raw:BasePropertyRawDraft}|{readonly origin:BaseSessionDraftOrigin;readonly kind:'table';readonly raw:BaseTableRawDraft};
+export type BaseSessionRawDraft={readonly origin:BaseSessionDraftOrigin;readonly kind:'property';readonly raw:BasePropertyRawDraft}|{readonly origin:BaseSessionDraftOrigin;readonly kind:'table';readonly raw:BaseTableRawDraft}|{readonly origin:BaseSessionDraftOrigin;readonly kind:'toolbar';readonly raw:BaseToolbarAdmissionDraft};
 export interface BaseAdmissionDraftRestore {readonly restored:readonly BaseSessionRawDraft[];readonly pending:readonly BaseSessionRawDraft[];readonly conflicts:readonly {readonly draft:BaseSessionRawDraft;readonly reason:string}[]}
 export interface BaseAdmissionRecovery {readonly rawDrafts?:readonly BaseSessionRawDraft[];settle():Promise<void>}
 export interface BaseSession {
@@ -646,15 +646,19 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     return{entryId:read.entryId,path:read.path,revision:read.revision,source:read.source,viewId:read.viewId,viewIndex:read.viewIndex,
       ...(presentedCollection?{collectionId:presentedCollection.id,schemaFingerprint:JSON.stringify(presentedCollection.properties)}:{})};
   }
-  function recoverableCollectionAttempts():{edits:CollectionAttempt[];rawElements:HTMLElement[];table:boolean}|undefined {
+  function recoverableCollectionAttempts():{edits:CollectionAttempt[];rawElements:HTMLElement[];table:boolean;toolbar:boolean}|undefined {
     try{alive();}catch{return;}
     if(disposed||closing&&!interruptFinish||pendingCollectionRestore||pendingCollectionCreate||optionCreations.size||configurationLifecycle||controller.hasPendingViewReferences
-      ||mounted?.hasQueuedConfiguration?.()||toolbarUI.hasDraft()||settings.hasDraft()||summaryDraft||summaryHasRawDraft?.()
+      ||mounted?.hasQueuedConfiguration?.()||settings.hasDraft()||summaryDraft||summaryHasRawDraft?.()
       ||chooser?.hasPendingChanges()||collectionEditor?.hasPendingChanges()||unfinishedNoteCreation()
       ||[...changedBuffers].some(buffer=>buffer.dirty||!!buffer.error))return;
+    const toolbar=toolbarUI.hasDraft();if(toolbar&&!toolbarUI.canCaptureAdmissionDraft())return;
     const elements=[...content.querySelectorAll<HTMLElement>('[data-base-editing]')],table=!!content.querySelector('.zorid-bases-table-input');
     if(table&&!mounted?.canCaptureRawDraft?.())return;
-    if(!elements.length)return activeDraft()?undefined:{edits:[],rawElements:[],table:false};
+    if(!elements.length){
+      if(propertyDraft()||toolbar&&(pending.size||!rawDraftOrigin(false)))return;
+      return{edits:[],rawElements:[],table:false,toolbar};
+    }
     const selected:CollectionAttempt[]=[],rawElements:HTMLElement[]=[];
     for(const element of elements){
       if(table&&element.querySelector('.zorid-bases-table-input'))continue;
@@ -665,18 +669,19 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       if(!attempt?.release||!options.canRecoverDatabaseEntry(attempt.request))return;
       selected.push(attempt);
     }
-    if(pending.size>selected.length||((rawElements.length||table)&&!rawDraftOrigin(false)))return;
-    return{edits:selected,rawElements,table};
+    if(pending.size>selected.length||((rawElements.length||table||toolbar)&&!rawDraftOrigin(false)))return;
+    return{edits:selected,rawElements,table,toolbar};
   }
   function prepareAdmissionRecovery():BaseAdmissionRecovery {
     if(admissionRecovery)return admissionRecovery.capsule;
     const selected=recoverableCollectionAttempts();if(!selected)throw new Error('Unsubmitted Base changes must be retained before reconnecting.');
-    const {edits,rawElements,table}=selected,origin=rawDraftOrigin(false),rawDrafts:BaseSessionRawDraft[]=[];
+    const {edits,rawElements,table,toolbar}=selected,origin=rawDraftOrigin(false),rawDrafts:BaseSessionRawDraft[]=[];
     const releases:(()=>void)[]=[];
     try{
       for(const edit of edits)releases.push(options.claimRecoverDatabaseEntry!(edit.request));
       for(const element of rawElements){const raw=captureBasePropertyRawDraft(element);if(!raw||!origin)throw new Error('The raw property changed while reconnecting; it is retained.');rawDrafts.push({kind:'property',origin,raw});}
       if(table){const raw=mounted?.captureRawDraft?.();if(!raw||!origin)throw new Error('The raw title changed while reconnecting; it is retained.');rawDrafts.push({kind:'table',origin,raw});}
+      if(toolbar){const raw=toolbarUI.captureFreeze();if(!raw||!origin)throw new Error('The raw Base settings changed while reconnecting; they are retained.');rawDrafts.push({kind:'toolbar',origin,raw});}
     }catch(error){for(const release of releases)release();throw error;}
     const recovery:{capsule:BaseAdmissionRecovery;edits:CollectionAttempt[];settled:boolean;settling?:Promise<void>}={edits,settled:false,capsule:{rawDrafts,settle(){
       if(recovery.settled)return Promise.resolve();if(recovery.settling)return recovery.settling;
@@ -706,9 +711,16 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     for(const draft of drafts){
       await draft.raw.ready;alive();
       if(restoredRawDrafts.has(draft)){restored.push(draft);continue;}
-      const fresh=rawDraftOrigin(),state=controller.state,origin=draft.origin;
+      const origin=draft.origin,selectedViewId=controller.selectedViewIdentity;
+      if(origin.viewId!==undefined&&selectedViewId!==undefined&&origin.viewId!==selectedViewId){conflicts.push({draft,reason:'The selected Base view changed. Your raw input is retained.'});continue;}
+      const fresh=rawDraftOrigin(),state=controller.state;
       if(!fresh||!state.result||state.error||state.updating||definitionsLoading||definitionsError||mountedResult!==state.result){waiting.push(draft);continue;}
       if(origin.entryId!==fresh.entryId||origin.path!==fresh.path||origin.source!==fresh.source||origin.viewId!==fresh.viewId||origin.viewIndex!==fresh.viewIndex||origin.collectionId!==fresh.collectionId||origin.schemaFingerprint!==fresh.schemaFingerprint){conflicts.push({draft,reason:'The Base source, selected view, or collection schema changed. Your raw input is retained.'});continue;}
+      if(draft.kind==='toolbar'){
+        const result=toolbarUI.restoreAdmissionDraft(draft.raw);
+        if(result==='restored'){restoredRawDrafts.add(draft);restored.push(draft);}else if(result==='pending')waiting.push(draft);else conflicts.push({draft,reason:'The Base settings target or configuration changed. Your raw input is retained.'});
+        continue;
+      }
       const target=draft.raw.target,actor=options.vault.entries.get(target.path),row=state.result.rows.find(row=>row.entryId===target.entryId&&row.path===target.path);
       if(!row){if(sharedBasePreview(state.result)){waiting.push(draft);continue;}conflicts.push({draft,reason:'The edited note is no longer in this saved view. Your raw input is retained.'});continue;}
       if(!target.entryId||actor?.entryId!==target.entryId||actor.revision!==row.revision){conflicts.push({draft,reason:'The edited note identity changed. Your raw input is retained.'});continue;}
