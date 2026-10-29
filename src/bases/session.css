@@ -211,7 +211,7 @@
 }
 
 /* Database settings stay beside the active view and expose only supported controls. */
-.bases-toolbar-popover.is-immediate[data-settings-flow] { width: 300px; padding: 6px; font-size: var(--font-ui-small, 13px); line-height: 1.4; border-radius: 10px; background: var(--background-secondary); }
+.bases-toolbar-popover.is-immediate[data-settings-flow] { width: 290px; padding: 6px; font-size: var(--font-ui-small, 14px); line-height: 1.4; border-radius: 10px; background: var(--background-secondary); }
 .bases-toolbar-popover.is-immediate[data-settings-flow][data-panel="Filter"] { width: 520px; }
 .bases-toolbar-popover[data-settings-flow] h3 { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 4px 8px 8px; color: var(--text-muted); font-size: 12px; font-weight: 500; }
 .bases-toolbar-popover[data-settings-flow] h3 [data-panel-action="close"] { margin-inline-start: auto; }
@@ -220,6 +220,7 @@
 .bases-settings-name > .svg-icon { flex: none; color: var(--text-muted); }
 .bases-settings-name input { min-width: 0; width: 100%; padding: 4px 8px; border: 1px solid var(--background-modifier-border); border-radius: 5px; background: var(--background-modifier-form-field, var(--background-primary)); box-shadow: none; }
 .bases-settings-row { display: flex; align-items: center; gap: 8px; box-sizing: border-box; min-height: 32px; width: 100%; padding: 6px 8px; border: 0; border-radius: 5px; background: transparent; color: var(--text-normal); box-shadow: none; text-align: start; font: inherit; cursor: pointer; }
+.bases-toolbar-popover.is-immediate[data-settings-flow] [data-settings-menu] .bases-settings-row { min-height: 28px; padding: 4px 8px; }
 .bases-settings-row > .svg-icon { flex: none; color: var(--text-muted); }
 .bases-settings-row:hover, .bases-settings-row.is-active, .bases-settings-row:focus-visible { background: var(--background-modifier-hover); }
 .bases-settings-row:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: -2px; }
