@@ -40,11 +40,11 @@ test('backoff holds newer captures locally then retries the original uncertain C
   t.mock.timers.enable({apis:['setTimeout']});const f=fixture();f.fail();f.helper.markInventory('ready');f.helper.capture(capture('First',1));
   await until(()=>!!f.helper.status.error);const first=f.writes[0];
   for(let generation=2;generation<=100;generation++)f.helper.capture(capture('Latest '+generation,generation));
-  await drain();assert.equal(f.writes.length,1);assert.equal(f.helper.status.sequence,100);assert.equal(f.helper.status.currentProtected,false);assert.equal(f.helper.status.pending,true);
+  await drain();assert.equal(f.writes.length,1);assert.equal(f.helper.status.sequence,100);assert.equal(f.helper.status.currentProtected,false);assert.equal(f.helper.status.currentJournalAcknowledged,false);assert.equal(f.helper.status.pending,true);
   t.mock.timers.tick(499);await drain();assert.equal(f.writes.length,1);
   f.fail(undefined);t.mock.timers.tick(1);await until(()=>f.helper.status.currentProtected);
   assert.equal(f.writes[1],first);assert.deepEqual(f.writes.map(write=>[write.expectedRevision,write.nextRevision,write.draft]),[[null,'1','First'],[null,'1','First'],['1','2','Latest 100']]);
-  assert.equal(f.helper.status.retryPending,false);const count=f.writes.length;t.mock.timers.tick(300_000);await drain();assert.equal(f.writes.length,count,'healthy protection never polls');f.helper.stop();
+  assert.equal(f.helper.status.retryPending,false);assert.equal(f.helper.status.currentJournalAcknowledged,true);const count=f.writes.length;t.mock.timers.tick(300_000);await drain();assert.equal(f.writes.length,count,'healthy protection never polls');f.helper.stop();
 });
 
 test('one failure timer uses 500,1500,4000 then repeated 30 second retries',async t=>{
@@ -104,8 +104,31 @@ test('real core commit protects its changed clean baseline before retiring the f
   f.helper.capture(clean);await f.helper.flush();
   assert.equal(f.writes.length,2);assert.equal(f.writes[0].pendingOperation,'{"ref":"original-core-operation"}');
   assert.equal(f.writes[1].baseline.revision,'core-r2');assert.equal(f.writes[1].baseline.content,'Final exact body');assert.equal(f.writes[1].checkpointRevision,'confirmed-checkpoint');assert.equal(f.writes[1].pendingOperation,null);
-  assert.equal(f.retirements.length,1);assert.equal(f.retirements[0].expectedRevision,f.writes[1].nextRevision);assert.equal(f.helper.status.protection?.retiredSequence,2);f.helper.stop();
-  const startup=fixture({coreCovered:()=>true});startup.helper.markInventory('ready');startup.helper.capture(clean);await startup.helper.flush();assert.equal(startup.writes.length,0);assert.equal(startup.retirements.length,0);startup.helper.stop();
+  assert.equal(f.retirements.length,1);assert.equal(f.retirements[0].expectedRevision,f.writes[1].nextRevision);assert.equal(f.helper.status.protection?.retiredSequence,2);assert.equal(f.helper.status.currentJournalAcknowledged,true);f.helper.stop();
+  const startup=fixture({coreCovered:()=>true});startup.helper.markInventory('ready');startup.helper.capture(clean);await startup.helper.flush();assert.equal(startup.writes.length,0);assert.equal(startup.retirements.length,0);assert.equal(startup.helper.status.currentProtected,true);assert.equal(startup.helper.status.currentJournalAcknowledged,false);startup.helper.stop();
+});
+
+test('core coverage with an older generic journal acknowledgement cannot authorize latest-capture cleanup',async()=>{
+  let clean=false;const f=fixture({coreCovered:()=>clean});f.helper.markInventory('ready');f.helper.capture(capture('Earlier',1));await f.helper.flush();
+  assert.equal(f.helper.status.protection?.acknowledgedSequence,1);f.fail();f.helper.capture(capture('Latest',2));await until(()=>!!f.helper.status.error);
+  clean=true;f.helper.coreSettled();await assert.rejects(f.helper.flush(),{code:'draft_storage_failure'});
+  assert.equal(f.helper.status.currentProtected,true);assert.equal(f.helper.status.protection?.acknowledgedSequence,1);assert.equal(f.helper.status.currentJournalAcknowledged,false);f.helper.stop();
+});
+
+test('a recovered transient journal error clears after exact clean core state is acknowledged and retired',async()=>{
+  let clean=false;const f=fixture({coreCovered:()=>clean,getCleanWitness:current=>({entryId:'note',writer:current.writer,generation:current.snapshot.generation,content:current.snapshot.draft,revision:'core-r2'})});
+  f.fail();f.helper.markInventory('ready');const dirty=capture('Saved final body',3);f.helper.capture(dirty);await until(()=>!!f.helper.status.error);
+  const uncertain=f.writes[0];clean=true;f.fail(undefined);f.helper.capture({...dirty,snapshot:{...dirty.snapshot,baseline:{...dirty.snapshot.baseline,revision:'core-r2',content:dirty.snapshot.draft},checkpointRevision:'core-confirmed'}});
+  await f.helper.flush();assert.equal(f.writes[1],uncertain);assert.equal(f.writes.at(-1)!.baseline.revision,'core-r2');assert.equal(f.retirements.length,1);assert.equal(f.helper.status.error,null);f.helper.stop();
+});
+
+test('a helper-owned witness failure clears only after the same exact clean journal acknowledgement retires',async()=>{
+  let clean=false,failWitness=true;const failure=error();
+  const f=fixture({coreCovered:()=>clean,getCleanWitness:current=>{if(failWitness)throw failure;return{entryId:'note',writer:current.writer,generation:current.snapshot.generation,content:current.snapshot.draft,revision:'core-r2'};}});
+  f.helper.markInventory('ready');const dirty=capture('Saved final body',3);f.helper.capture(dirty);await f.helper.flush();clean=true;
+  f.helper.capture({...dirty,snapshot:{...dirty.snapshot,baseline:{...dirty.snapshot.baseline,revision:'core-r2',content:dirty.snapshot.draft},checkpointRevision:'core-confirmed'}});
+  await assert.rejects(f.helper.flush(),value=>value===failure);assert.equal(f.helper.status.error,failure);assert.equal(f.retirements.length,0);
+  failWitness=false;await f.helper.flush();assert.equal(f.writes.length,2);assert.equal(f.retirements.length,1);assert.equal(f.helper.status.error,null);f.helper.stop();
 });
 
 test('clean retirement requires a fresh matching witness and newer input stays independently unprotected',async()=>{

@@ -9,6 +9,9 @@ export interface NoteDraftProtectionStatus {
   /** Local capture sequence, including snapshots not yet offered during backoff. */
   readonly sequence:number;
   readonly currentProtected:boolean;
+  /** Real journal acknowledgement of this exact latest capture, even if retired.
+   * Core coverage alone and an older generic acknowledgement do not satisfy it. */
+  readonly currentJournalAcknowledged:boolean;
   readonly pending:boolean;
   readonly inventory:NoteDraftInventory;
   readonly inventoryError:Error|null;
@@ -67,9 +70,10 @@ export class NoteDraftProtection {
     if(options.provider.scope.vaultId!==options.writesScope.vaultId||options.provider.scope.clientId!==options.writesScope.clientId)throw failure('draft_scope_mismatch');
   }
   get status():NoteDraftProtectionStatus {
-    const protection=this.protection?.status,currentProtected=!this.latest||this.covered(this.latest)
-      ||this.offered?.capture===this.latest&&!!protection&&protection.acknowledgedSequence>=this.offered.sequence;
-    return Object.freeze({sequence:this.sequence,currentProtected,pending:this.inventory==='unknown'||!currentProtected,
+    const protection=this.protection?.status,currentJournalAcknowledged=!!this.latest&&this.offered?.capture===this.latest
+      &&!!protection&&protection.acknowledgedSequence>=this.offered.sequence;
+    const currentProtected=!this.latest||this.covered(this.latest)||currentJournalAcknowledged;
+    return Object.freeze({sequence:this.sequence,currentProtected,currentJournalAcknowledged,pending:this.inventory==='unknown'||!currentProtected,
       inventory:this.inventory,inventoryError:this.inventoryError,error:this.errorValue??protection?.error??null,protection,retryPending:this.timer!==undefined});
   }
   capture(input:NoteDraftCapture):void {
@@ -164,7 +168,8 @@ export class NoteDraftProtection {
     if(!ack||this.latest!==capture||!this.covered(capture))return;
     const witness=this.options.getCleanWitness?.(capture);
     if(!witness||this.latest!==capture||!this.covered(capture))return;
-    await protection.retireKnownClean(ack,witness);this.assertActive();
+    const retired=await protection.retireKnownClean(ack,witness);this.assertActive();
+    if(retired&&this.latest===capture&&this.covered(capture))this.errorValue=null;
   }
   private finished(operation:Promise<void>,error?:unknown):void {
     if(this.running===operation)this.running=undefined;
