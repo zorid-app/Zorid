@@ -119,3 +119,14 @@ test('an unchanged natural composition cancellation settles without inventing a 
     await Promise.race([draft.ready,tick().then(()=>{throw Error('An unchanged cancellation has no missing input event');})]);assert.equal(draft.state.input,'before');assert.deepEqual(old.edits,[]);
   }finally{old.close();}
 });
+
+test('raw custody retains the original mounted actor after its write authority becomes stale',async()=>{
+  let current=true;const old=fixture(1,{type:'number'},'actor-A',1,{isCurrent:()=>current}),replacement=fixture(1,{type:'number'},'actor-B',2);
+  try{
+    const input=old.open();input.value='9.';input.setSelectionRange(1,2,'backward');current=false;
+    assert.equal(widgets.canCaptureBasePropertyRawDraft(old.element),true,'stale write authority must not discard an unsubmitted local draft');
+    const draft=widgets.captureBasePropertyRawDraft(old.element)!;assert.ok(draft);await draft.ready;assert.equal(draft.target.entryId,'actor-A');assert.equal(draft.state.input,'9.');
+    old.key(input,'Enter');old.outside.focus();await tick();assert.deepEqual(old.edits,[]);
+    assert.equal(widgets.restoreBasePropertyRawDraft(replacement.element,draft),false,'same path never transfers actor-A raw state into actor-B');assert.equal(replacement.element.querySelector('.metadata-input'),null);assert.deepEqual(replacement.edits,[]);assert.equal(draft.state.input,'9.');
+  }finally{old.close();replacement.close();}
+});

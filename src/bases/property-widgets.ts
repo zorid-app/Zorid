@@ -697,7 +697,9 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     if (Array.from(event.key).length === 1 && !/[\u0000-\u001f\u007f]/.test(event.key)) begin(event, event.key);
   };
   const fingerprints=()=>{const raw=rawDraftFingerprint(value),schema=rawDraftFingerprint(definition);return raw!==undefined&&schema!==undefined?{value:raw,definition:schema}:undefined;};
-  const canCapture=()=>!!rawDraft||(!rawFrozen&&current()&&editable&&editing&&!!input&&!pending&&!propertyEditRecoveries.has(element)&&element.dataset.baseEditing==='draft'&&!!fingerprints());
+  // Custody of an existing local editor does not grant current write authority:
+  // even a replaced actor's raw text must survive for an explicit conflict view.
+  const canCapture=()=>!!rawDraft||(!rawFrozen&&!disposed&&element.isConnected&&editable&&editing&&!!input?.isConnected&&!pending&&!propertyEditRecoveries.has(element)&&element.dataset.baseEditing==='draft'&&!!fingerprints());
   const rawOwner:RawPropertyOwner={canCapture,capture(){
     if(rawDraft)return rawDraft;if(!canCapture())return;
     const baseline=fingerprints()!;rawFrozen=true;
