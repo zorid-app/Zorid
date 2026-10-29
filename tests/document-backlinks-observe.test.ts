@@ -60,6 +60,16 @@ for(const code of ['not_ready','index_not_ready','stale_source'] as const)test(`
   const f=fixture();f.failOpen(code);const ui=mount(t,f);await ui.view.ready;
   assert.equal(ui.view.element.dataset.state,'indexing');assert.match(ui.container.textContent!,/updating/i);assert.equal(ui.container.querySelector('button'),null);assert.deepEqual(maintenanceCalls(f.calls),[]);
 });
+for(const code of ['missing_source','not_found'] as const)test(`passive ${code} waits for publication without reporting a failed import or requesting work`,async t=>{
+  const f=fixture();f.failRead(code);const ui=mount(t,f);await ui.view.ready;
+  assert.equal(ui.view.element.dataset.state,'indexing');assert.match(ui.container.textContent!,/updating/i);
+  assert.equal(ui.container.querySelector('[role="alert"]'),null);assert.equal(ui.container.querySelector('button'),null);assert.equal(f.pins[0].closes,1);assert.deepEqual(maintenanceCalls(f.calls),[]);
+});
+for(const code of ['missing_source','not_found'] as const)test(`request-mode ${code} retains its existing unavailable and explicit refresh behavior`,async t=>{
+  const f=fixture();Object.assign(f.service,{maintenance:undefined});f.failRead(code);const ui=mount(t,f,{freshness:'request'});await ui.view.ready;
+  assert.equal(ui.view.element.dataset.state,'unavailable');assert.ok(ui.container.querySelector('[role="alert"]'));
+  assert.equal(ui.container.querySelector('button')?.textContent,'Refresh linked mentions');assert.equal(f.pins[0].closes,1);
+});
 for(const code of ['snapshot_expired','document_invalid_response','rebuild_required'] as const)test(`passive ${code} stays honest and actionable with exact pin cleanup`,async t=>{
   const f=fixture();f.failRead(code);const ui=mount(t,f);await ui.view.ready;
   assert.equal(ui.view.element.dataset.state,'unavailable');assert.equal(ui.container.querySelector('[role="alert"]')?.textContent?.length!>0,true);

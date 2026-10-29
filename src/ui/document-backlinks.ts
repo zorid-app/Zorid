@@ -138,7 +138,8 @@ export function mountDocumentBacklinks(container: HTMLElement, options: Document
       show(run, 'unavailable', 'The note index needs to be rebuilt before linked mentions are available.', false, true);
       action(run, 'Rebuild index', true); return;
     }
-    if (code === 'stale_source' || code === 'stale_index' || code === 'index_not_ready' || code === 'document_request_cancelled' || !requesting && code === 'not_ready') {
+    if (code === 'stale_source' || code === 'stale_index' || code === 'index_not_ready' || code === 'document_request_cancelled'
+      || !requesting && (code === 'not_ready' || code === 'missing_source' || code === 'not_found')) {
       show(run, 'indexing', requesting ? 'The note index is still updating. Continue indexing to refresh linked mentions.' : 'The note index is still updating. Linked mentions will refresh when a saved snapshot is available.');
       if (requesting) action(run, 'Continue indexing'); return;
     }
