@@ -9,7 +9,7 @@ mod retry_fault_tests {
     }
 }
 fn uncertain(error: Error) -> CheckpointError {
-    CheckpointError::ExternalStorage(std::io::Error::other(error.to_string()))
+    CheckpointError::ExternalStorage(std::io::Error::other(error))
 }
 impl NativeVault {
     pub fn checkpoint_load(

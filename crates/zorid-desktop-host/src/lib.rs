@@ -231,31 +231,104 @@ fn core_code(error: &zorid_core::ContractError) -> &'static str {
         _ => "invalid_request",
     }
 }
-fn native_fault(error: zorid_native::Error) -> Value {
+fn sql_fault_code(error: &rusqlite::Error) -> &'static str {
+    use rusqlite::{ffi, ErrorCode};
+    let rusqlite::Error::SqliteFailure(error, _) = error else {
+        return "storage_failed";
+    };
+    // The primary IOERR code also covers authentication, corrupt filesystems,
+    // codec failures and invalid data. Only named syscall failures may retry.
+    match error.code {
+        ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked => "storage_busy",
+        ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase => "corrupt_storage",
+        ErrorCode::DiskFull | ErrorCode::OutOfMemory => "storage_capacity",
+        _ => match error.extended_code {
+            ffi::SQLITE_IOERR_DATA | ffi::SQLITE_IOERR_CORRUPTFS => "corrupt_storage",
+            ffi::SQLITE_IOERR_NOMEM => "storage_capacity",
+            ffi::SQLITE_IOERR_READ
+            | ffi::SQLITE_IOERR_WRITE
+            | ffi::SQLITE_IOERR_FSYNC
+            | ffi::SQLITE_IOERR_DIR_FSYNC
+            | ffi::SQLITE_IOERR_TRUNCATE
+            | ffi::SQLITE_IOERR_FSTAT
+            | ffi::SQLITE_IOERR_UNLOCK
+            | ffi::SQLITE_IOERR_RDLOCK
+            | ffi::SQLITE_IOERR_BLOCKED
+            | ffi::SQLITE_IOERR_CHECKRESERVEDLOCK
+            | ffi::SQLITE_IOERR_LOCK
+            | ffi::SQLITE_IOERR_CLOSE
+            | ffi::SQLITE_IOERR_DIR_CLOSE
+            | ffi::SQLITE_IOERR_SHMSIZE
+            | ffi::SQLITE_IOERR_SHMLOCK
+            | ffi::SQLITE_IOERR_SHMMAP
+            | ffi::SQLITE_IOERR_SEEK
+            | ffi::SQLITE_IOERR_MMAP
+            | ffi::SQLITE_IOERR_BEGIN_ATOMIC
+            | ffi::SQLITE_IOERR_COMMIT_ATOMIC
+            | ffi::SQLITE_IOERR_ROLLBACK_ATOMIC => "storage_io_retryable",
+            _ => "storage_failed",
+        },
+    }
+}
+fn filesystem_fault_code(error: &io::Error) -> &'static str {
+    #[cfg(unix)]
+    if matches!(error.raw_os_error(), Some(libc::EIO | libc::EAGAIN | libc::EBUSY | libc::ENOSPC
+        | libc::EDQUOT | libc::EMFILE | libc::ENFILE | libc::ENOMEM | libc::ESTALE)) {
+        return "filesystem_io_retryable";
+    }
+    match error.kind() {
+        io::ErrorKind::Interrupted
+        | io::ErrorKind::WouldBlock
+        | io::ErrorKind::TimedOut
+        | io::ErrorKind::WriteZero
+        | io::ErrorKind::StorageFull
+        | io::ErrorKind::QuotaExceeded
+        | io::ErrorKind::ResourceBusy
+        | io::ErrorKind::OutOfMemory => "filesystem_io_retryable",
+        _ => "filesystem_failed",
+    }
+}
+fn store_fault_code(error: &zorid_store::StoreError) -> &'static str {
+    use zorid_store::StoreError::*;
+    match error {
+        Contract(error) => core_code(error),
+        StreamRequired { .. } => "stream_required",
+        UnsupportedSchema(_) => "unsupported_schema",
+        ReloadRequired(_) => "reload_required",
+        Corrupt(_) | Json(_) => "corrupt_storage",
+        Sync(_) => "sync_failed",
+        Crypto(_) => "crypto_failed",
+        Protocol(_) => "protocol_failed",
+        FileSync(_) => "file_sync_failed",
+        Sql(error) => sql_fault_code(error),
+    }
+}
+fn native_fault_code(error: &zorid_native::Error) -> &'static str {
     use zorid_native::Error::*;
-    fault(match error {
+    match error {
         DatabaseCommitted(_) => "collection_publication_pending",
         ConditionalSource(zorid_native::ConditionalSourceError::Changed) => "conditional_source_changed",
         ConditionalSource(zorid_native::ConditionalSourceError::Owner) => "source_capture_owner",
         ConditionalSource(zorid_native::ConditionalSourceError::Limit) => "source_capture_limit",
-        Contract(ref e) | Store(zorid_store::StoreError::Contract(ref e)) => core_code(e),
+        Contract(error) => core_code(error),
         UnsafePath(_) => "unsafe_path",
         Busy(_) => "filesystem_changed",
         Unsupported(_) => "unsupported",
         LockTimeout => "lock_timeout",
-        Store(zorid_store::StoreError::StreamRequired { .. }) => "stream_required",
-        Store(zorid_store::StoreError::UnsupportedSchema(_)) => "unsupported_schema",
-        Store(zorid_store::StoreError::ReloadRequired(_)) => "reload_required",
-        Store(zorid_store::StoreError::Corrupt(_)) | Store(zorid_store::StoreError::Json(_)) => {
-            "corrupt_storage"
-        }
-        Store(zorid_store::StoreError::Sync(_)) => "sync_failed",
-        Store(zorid_store::StoreError::Crypto(_)) => "crypto_failed",
-        Store(zorid_store::StoreError::Protocol(_)) => "protocol_failed",
-        Store(_) => "storage_io",
-        Io(_) => "filesystem_io",
+        Store(error) => store_fault_code(error),
+        Io(error) => filesystem_fault_code(error),
         Recovery(_) => "local_recovery_unavailable",
-    })
+    }
+}
+fn native_fault(error: zorid_native::Error) -> Value {
+    let mut value = fault(native_fault_code(&error));
+    // A terminal diagnosis does not prove that an earlier mutation did not
+    // commit. Keep the uncertainty previously attached to these error sources.
+    if matches!(error, zorid_native::Error::Io(_) | zorid_native::Error::Store(
+        zorid_store::StoreError::Sql(_) | zorid_store::StoreError::FileSync(_))) {
+        value["commit_uncertain"] = json!(true);
+    }
+    value
 }
 
 fn optional_source_capture<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<OperationId>, D::Error> {
@@ -542,9 +615,10 @@ fn checkpoint_fault(error: CheckpointError) -> Value {
         CheckpointError::Invalid => ("checkpoint_invalid", false),
         CheckpointError::Limit => ("checkpoint_limit", false),
         CheckpointError::ScopeMismatch => ("checkpoint_scope_mismatch", false),
-        CheckpointError::Store(_) | CheckpointError::ExternalStorage(_) => {
-            ("checkpoint_storage", true)
-        }
+        CheckpointError::Store(ref error) => (store_fault_code(error), true),
+        CheckpointError::ExternalStorage(ref error) => (error.get_ref()
+            .and_then(|inner| inner.downcast_ref::<zorid_native::Error>())
+            .map(native_fault_code).unwrap_or_else(|| filesystem_fault_code(error)), true),
     };
     json!({"code":code,"commit_uncertain":uncertain,"message":"Checkpoint request failed; retain the exact checkpoint request"})
 }

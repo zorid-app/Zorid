@@ -34,10 +34,11 @@ fn native(error: zorid_native::Error) -> wire::ErrorCode {
         Some("idempotency_conflict") => wire::ErrorCode::IdempotencyConflict,
         Some("entry_not_found" | "not_found") => wire::ErrorCode::NotFound,
         Some("client_scope_mismatch" | "client_not_admitted") => wire::ErrorCode::OwnerMismatch,
-        Some("busy" | "filesystem_changed" | "lock_timeout") => wire::ErrorCode::Busy,
+        Some("busy" | "filesystem_changed" | "lock_timeout" | "storage_busy") => wire::ErrorCode::Busy,
         Some("stream_required" | "request_limit" | "too_large") => wire::ErrorCode::TooLarge,
         Some("storage_corrupt" | "store_corrupt" | "corrupt_storage") => wire::ErrorCode::Corrupt,
-        Some("io" | "io_error" | "storage_io" | "filesystem_io") => wire::ErrorCode::Io,
+        Some("io" | "io_error" | "storage_io" | "filesystem_io" | "storage_io_retryable"
+            | "storage_capacity" | "filesystem_io_retryable") => wire::ErrorCode::Io,
         _ => wire::ErrorCode::OutcomeUnknown,
     }
 }
