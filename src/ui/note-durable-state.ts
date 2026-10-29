@@ -1,8 +1,8 @@
 import type { Vault } from '../core/vault.ts';
 import {DurableWritePlanningError} from '../core/durable-writes.ts';
 import type { DurableWrites, DurableWriteRead, DurableWritePlan, DurableWriteRef, DurableWriteOutcome, DurableWriteInput, ConditionalSavedSourceWitness, ConditionalSavedSourceCapture, ConditionalSavedSourceStatus } from '../core/durable-writes.ts';
-import type { CheckpointChange } from '../core/durable-checkpoints.ts';
-import { boundedUtf8,checkpointRevision,snapshotCheckpointChange } from '../core/checkpoint-input.ts';
+import type { Checkpoint,CheckpointChange } from '../core/durable-checkpoints.ts';
+import { boundedUtf8,checkpointRevision,checkpointStateLimit,snapshotCheckpointChange } from '../core/checkpoint-input.ts';
 import {NoteDraftProtection} from './note-draft-protection.ts';
 import type {NoteDraftCapture,NoteDraftProtectionStatus} from './note-draft-protection.ts';
 import type {IndependentDraftReceipt,IndependentDraftCandidate,IndependentDraftRetirement} from '../core/independent-drafts.ts';
@@ -263,8 +263,7 @@ export class DurableNoteState {
         this.candidateTerminal=true;this.candidateTerminalError=journalError('draft_lease_revoked');throw this.candidateTerminalError;
       }
       try{
-        const result=await this.writes.checkpoints.compareAndSwap(exact);
-        if(result.key!==exact.key||result.revision!==exact.nextRevision||result.encodedState!==exact.encodedState||result.vaultId!==scope.vaultId||result.clientId!==scope.clientId||result.deleted)throw journalError('invalid_draft_checkpoint_receipt');
+        const result=this.acceptCheckpoint(await this.writes.checkpoints.compareAndSwap(exact),exact);
         this.revision=result.revision;this.confirmedState=exact.encodedState;this.coverage={...this.coverageFor(canonical),revision:result.revision};this.uncertain=undefined;this.uncertainCoverage=undefined;
         this.candidateCanonical=undefined;this.candidateRetryStep=0;if(this.error===this.candidateTerminalError)this.error=null;this.candidateTerminalError=undefined;
         this.coreProtectionProgress();this.captureProtection();this.protectionChanged();return;
@@ -383,11 +382,30 @@ export class DurableNoteState {
     if(!op.pendingAck&&(input.path!==this.base.path||input.expectedRevision!==this.base.revision||input.expectedContent!==this.base.content))throw failure('saved conditional input does not match its retained baseline');
     if(op.planningRejected!==undefined&&(!['revision_conflict','source_capture_expired','conditional_source_changed'].includes(op.planningRejected)||op.ref))throw failure('invalid saved conditional planning rejection');
   }
+  /** A returned revision alone proves neither this note's head nor the bytes
+   * requested by a CAS. Validate the complete receipt before advancing any
+   * local ownership/coverage state, including on an exact uncertain retry. */
+  private acceptCheckpoint(value:unknown,change?:CheckpointChange):Checkpoint {
+    try{
+      const keys=['version','vaultId','clientId','key','revision','sequence','deleted','byteLength','encodedState'];
+      if(!object(value)||Reflect.ownKeys(value).length!==keys.length||!keys.every(key=>Object.hasOwn(value,key)&&Object.hasOwn(Object.getOwnPropertyDescriptor(value,key)!,'value'))
+        ||this.writes.checkpoints.scope.vaultId!==this.noteScope.vaultId||this.writes.checkpoints.scope.clientId!==this.noteScope.clientId
+        ||value.version!==1||value.vaultId!==this.noteScope.vaultId||value.clientId!==this.noteScope.clientId||value.key!==this.key
+        ||typeof value.deleted!=='boolean'||!Number.isSafeInteger(value.byteLength)||value.byteLength<0||value.byteLength>checkpointStateLimit
+        ||typeof value.sequence!=='string'||!/^[1-9][0-9]{0,19}$/.test(value.sequence)||BigInt(value.sequence)>18446744073709551615n)throw Error();
+      checkpointRevision(value.revision);
+      if(value.encodedState===null?!value.deleted||value.byteLength!==0:value.deleted||boundedUtf8(value.encodedState,checkpointStateLimit)!==value.byteLength)throw Error();
+      if(change&&(change.key!==this.key||value.revision!==change.nextRevision||value.encodedState!==change.encodedState||value.deleted!==(change.encodedState===null)))throw Error();
+      return Object.freeze({version:1,...this.noteScope,key:this.key,revision:value.revision,sequence:value.sequence,deleted:value.deleted,byteLength:value.byteLength,encodedState:value.encodedState}) as Checkpoint;
+    }catch{
+      throw Object.assign(failure('checkpoint reply did not prove the requested note state; exact recovery retained'),{code:'invalid_durable_response',source:'protocol',commitUncertain:!!change});
+    }
+  }
   private async persist(state=this.state):Promise<void>{
     if(this.candidateCanonical&&this.candidateTerminal)throw this.candidateTerminalError;
     if(this.candidateCanonical&&this.uncertain)await this.settleCandidateCheckpoint();
     this.captureProtection();
-    if(this.uncertain){const result=await this.writes.checkpoints.compareAndSwap(this.uncertain);this.revision=result.revision;this.confirmedState=this.uncertain.encodedState;
+    if(this.uncertain){const result=this.acceptCheckpoint(await this.writes.checkpoints.compareAndSwap(this.uncertain),this.uncertain);this.revision=result.revision;this.confirmedState=this.uncertain.encodedState;
       if(this.uncertainCoverage)this.coverage={...this.uncertainCoverage,revision:result.revision};this.uncertain=undefined;this.uncertainCoverage=undefined;if(this.protectionAuthoringStarted)this.candidateCanonical=undefined;this.captureProtection();this.coreProtectionProgress();}
     const encodedState=JSON.stringify(state);boundedUtf8(encodedState,32*1024*1024,'checkpoint_too_large');
     // Unchanged drafts can reuse a confirmed checkpoint, but retained operations
@@ -396,7 +414,7 @@ export class DurableNoteState {
     if(!state?.operation&&encodedState===this.confirmedState)return;
     this.uncertain={key:this.key,expectedRevision:this.revision,nextRevision:crypto.randomUUID(),encodedState};
     if(state)this.uncertainCoverage=this.coverageFor(state);this.captureProtection();
-    const result=await this.writes.checkpoints.compareAndSwap(this.uncertain);this.revision=result.revision;this.confirmedState=encodedState;
+    const result=this.acceptCheckpoint(await this.writes.checkpoints.compareAndSwap(this.uncertain),this.uncertain);this.revision=result.revision;this.confirmedState=encodedState;
     if(this.uncertainCoverage)this.coverage={...this.uncertainCoverage,revision:result.revision};this.uncertain=undefined;this.uncertainCoverage=undefined;if(this.protectionAuthoringStarted)this.candidateCanonical=undefined;this.captureProtection();this.coreProtectionProgress();
   }
   load(path:string,expectedEntryId?:string,validate:()=>void=()=>{}):Promise<void>{return this.queue(async()=>{
@@ -407,7 +425,7 @@ export class DurableNoteState {
     // A rename is retried by its caller, never admitted under an old path key.
     if(!observed||observed.path!==path||expectedEntryId!==undefined&&observed.entryId!==expectedEntryId)throw failure('selected note changed before admission');
     this.key=`note/v1/${observed.entryId}`;
-    const head=await this.writes.checkpoints.load(this.key);validate();this.revision=head?.revision??null;this.confirmedState=head?.encodedState;
+    const loaded=await this.writes.checkpoints.load(this.key);validate();const head=loaded===null?null:this.acceptCheckpoint(loaded);this.revision=head?.revision??null;this.confirmedState=head?.encodedState;
     this.state={version:1,writer:crypto.randomUUID(),generation:0,base:observed,draft:observed.content,conflict:false};
     if(head?.encodedState!==null&&head?.encodedState!==undefined){
       const raw=JSON.parse(head.encodedState) as State;
