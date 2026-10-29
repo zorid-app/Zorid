@@ -10,14 +10,14 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 import {CDP} from '../../tests/tasks-electron-integration/cdp.mjs';
 import {assessNote,baseFixtureSource,clockInterval,DEADLINE_MS,fixtureText,planCampaign,reopenPrepared} from './oracle.mjs';
 import {navigateFileTree} from './file-navigation.mjs';
-import {observerSource} from './observer.mjs';
+import {captureObserverFailure,observerSource,sampleObserverSource} from './observer.mjs';
 import {installMainObserver} from './main-observer.mjs';
 import {stopOwned} from './cleanup.mjs';
 import {appPins,currentBrowserEndpoint,hash,hashFile,journalHeads,launchEnvironment,ownedOutput,ownedProcesses} from './support.mjs';
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const getOption=(args,name,fallback)=>{const index=args.indexOf(name);return index<0?fallback:args[index+1];};
-const serializableState=`(()=>{const value=window.__zoridPackagedProbe;if(!value)return null;const {dispose,...state}=value;return{...state,sampledAt:performance.now()};})()`;
+const serializableState=sampleObserverSource;
 export async function main(args=process.argv.slice(2)){
   const root=fileURLToPath(new URL('../..',import.meta.url)),require=createRequire(import.meta.url);
   const candidate=await fs.realpath(getOption(args,'--candidate-app','')),baseline=await fs.realpath(getOption(args,'--baseline-app',''));
@@ -199,7 +199,7 @@ export async function main(args=process.argv.slice(2)){
         await bounded(async()=>assert.equal(await active.renderer.evaluate("(()=>{const n=document.querySelector('.pane.is-active .cm-content');return(n?.cmTile?.root?.view??n?.cmView?.view)?.state.doc.toString();})()"),pair.sources.get('Note 0000.md')),launch);
         launch.returnToStartupNoteVerified=true;
         launch.mainClockSamples.push(await clock(active.main,launch));
-      }catch(error){launch.errors.push(error.stack??String(error));report.errors.push({pairId:scheduled.pairId,mode:scheduled.mode,error:String(error)});try{if(active.renderer){const image=await active.renderer.call('Page.captureScreenshot',{format:'png'});await fs.writeFile(path.join(directory,'failure.png'),Buffer.from(image.data,'base64'));}}catch{}}
+      }catch(error){launch.errors.push(error.stack??String(error));report.errors.push({pairId:scheduled.pairId,mode:scheduled.mode,error:String(error)});await captureObserverFailure(active.renderer,launch);try{if(active.renderer){const image=await active.renderer.call('Page.captureScreenshot',{format:'png'});await fs.writeFile(path.join(directory,'failure.png'),Buffer.from(image.data,'base64'));}}catch{}}
       finally{
         for(const record of launch.cases){
           record.cancelled=true;

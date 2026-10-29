@@ -12,19 +12,22 @@ export function installObserver(config){
     if(title!==expectedTitle)return null;
     return {pane,node,view};
   };
+  const eligible=()=>{
+    const item=current();if(!item)return null;
+    const {node,view}=item,bounds=node.getBoundingClientRect();
+    if(view.state.doc.length!==config.characters||view.state.doc.sliceString(0,config.prefix.length)!==config.prefix||node.getAttribute('contenteditable')!=='true'||node.closest('[inert]')||bounds.width<=0||bounds.height<=0||bounds.bottom<=0||bounds.top>=innerHeight)return null;
+    return item;
+  };
   function check(){
     if(stopped||state.ready||framing)return;
-    const item=current();if(!item)return;
-    const {node,view}=item,bounds=node.getBoundingClientRect();
-    const prefixMatches=view.state.doc.sliceString(0,config.prefix.length)===config.prefix;
-    if(view.state.doc.length!==config.characters||!prefixMatches||node.getAttribute('contenteditable')!=='true'||node.closest('[inert]')||bounds.width<=0||bounds.height<=0||bounds.bottom<=0||bounds.top>=innerHeight)return;
+    const item=eligible();if(!item)return;
     framing=true;
     requestAnimationFrame(()=>requestAnimationFrame(()=>{
       framing=false;if(stopped||state.ready)return;
-      const actual=current();if(!actual||actual.view!==view||view.state.doc.length!==config.characters)return;
-      const firstLines=[...item.pane.querySelectorAll('.cm-line')].slice(0,6).map(n=>n.textContent).join('\n');
+      const actual=eligible();if(!actual||actual.view!==item.view)return;
+      const firstLines=[...actual.pane.querySelectorAll('.cm-line')].slice(0,6).map(n=>n.textContent).join('\n');
       if(!firstLines.includes(config.visibleText)){state.errors.push('First viewport did not contain fixture marker');return;}
-      state.initial={length:view.state.doc.length,prefixMatches};state.ready={at:now(),visible:true,editable:true,visibleText:firstLines};
+      state.initial={length:actual.view.state.doc.length,prefixMatches:true};state.ready={at:now(),visible:true,editable:true,visibleText:firstLines};
     }));
   }
   function applied(item){
@@ -54,6 +57,30 @@ export function installObserver(config){
   document.addEventListener('beforeinput',beforeinput,true);document.addEventListener('DOMContentLoaded',domReady);window.addEventListener('load',loaded);
   mutation.observe(document.documentElement??document,{subtree:true,childList:true,characterData:true,attributes:true});
   state.dispose=()=>{stopped=true;pending.clear();mutation.disconnect();document.removeEventListener('beforeinput',beforeinput,true);document.removeEventListener('DOMContentLoaded',domReady);window.removeEventListener('load',loaded);};
+  // DOM properties and completed layout can become eligible without another
+  // observed mutation. Each harness snapshot requests a fresh observational
+  // check; readiness still requires its original two animation frames.
+  state.sample=()=>{check();return {...Object.fromEntries(Object.entries(state).filter(([,value])=>typeof value!=='function')),sampledAt:now()};};
   window.__zoridPackagedProbe=state;check();return true;
 }
 export const observerSource=config=>`(${installObserver.toString()})(${JSON.stringify(config)})`;
+
+export const sampleObserverSource=`(()=>{const value=window.__zoridPackagedProbe;if(!value)return null;return value.sample();})()`;
+/** Diagnostic reads only. Preserve actual editor predicates and visible DOM even
+ * when readiness never succeeds, without pretending this is acceptance proof. */
+export function selectedEditorDiagnostics(){
+  const pane=document.querySelector('.pane.is-active'),node=pane?.querySelector('.cm-content'),view=node?.cmTile?.root?.view??node?.cmView?.view;
+  const rect=n=>{if(!n)return null;const value=n.getBoundingClientRect();return {top:value.top,bottom:value.bottom,left:value.left,width:value.width,height:value.height};};
+  return {sampledAt:performance.now(),probe:window.__zoridPackagedProbe?.sample?.()??null,
+    title:pane?.querySelector('.note-title')?.value??null,contentFound:!!node,viewFound:!!view,contentDOMMatches:!!view&&view.contentDOM===node,
+    characters:view?.state.doc.length??null,prefix:view?.state.doc.sliceString(0,160)??null,bounds:rect(node),editable:node?.getAttribute('contenteditable')??null,
+    inert:!!node?.closest('[inert]'),focused:!!node&&document.activeElement===node,viewportHeight:innerHeight,
+    firstLines:[...pane?.querySelectorAll('.cm-line')??[]].slice(0,6).map(n=>({text:n.textContent,bounds:rect(n)})),
+    visibleContent:[...node?.children??[]].filter(n=>{const r=n.getBoundingClientRect();return r.height>0&&r.bottom>0&&r.top<innerHeight;}).slice(0,12).map(n=>({text:n.textContent,html:n.outerHTML?.slice(0,4096),bounds:rect(n)}))};
+}
+export async function captureObserverFailure(renderer,launch){
+  if(!renderer)return;
+  try{launch.failureObservation=await renderer.evaluate(`(${selectedEditorDiagnostics.toString()})()`);
+    const record=launch.cases?.find(record=>record.identity===launch.failureObservation?.probe?.identity);if(record)record.failureObservation=launch.failureObservation;
+  }catch(error){launch.failureObservation={error:String(error)};}
+}

@@ -113,3 +113,5 @@ Pure protocol/oracle checks do not launch Electron, compile Rust or package:
 ```sh
 node --test scripts/packaged-startup-profile/*.test.mjs
 ```
+
+Observer snapshots request a fresh readiness check so property or layout changes without a DOM mutation cannot leave the probe asleep. Exact source, selected editor, editability and viewport checks run before and after the two-frame observation. Failed launches retain observer state plus the actual selected CodeMirror identity, prefix, size, editability, bounds and visible line/widget diagnostics; these diagnostics do not establish input acceptance.
