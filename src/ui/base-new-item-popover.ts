@@ -3,6 +3,7 @@ import type { Vault } from '../core/vault.ts';
 import { readProperties } from '../core/properties.ts';
 import { icon } from './icons.ts';
 import { renderProperties } from './properties.ts';
+import { mountBaseTooltips } from '../bases/tooltips.ts';
 import type { PropertiesOptions } from './properties.ts';
 import type { NoteBuffer } from './note-buffer.ts';
 import type { EditorHandle, EditorOptions } from './editor.ts';
@@ -77,16 +78,16 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
   if (buffer.path !== path || (entryId && options.vault.entries.get(path)?.entryId !== entryId)) throw new Error('The new note identity changed before opening.');
   const sidePeek = options.presentation === 'side-peek';
   const root = document.createElement('div'); root.className = 'popover hover-popover is-editing bases-new-item-popover'; root.classList.toggle('is-side-peek', sidePeek); root.setAttribute('role', 'dialog'); root.setAttribute('aria-label', sidePeek ? 'Page preview' : 'New item'); root.tabIndex = -1;
-  const title = document.createElement('div'); title.className = 'inline-title'; title.contentEditable = 'true'; title.spellcheck = true; title.tabIndex = -1; title.setAttribute('role', 'textbox'); title.setAttribute('aria-label', 'Note title'); title.setAttribute('aria-multiline', 'false'); title.setAttribute('enterkeyhint', 'done'); title.textContent = noteName(path);
+  const title = document.createElement('div'); title.className = 'inline-title'; title.contentEditable = 'true'; title.spellcheck = true; title.tabIndex = sidePeek ? 0 : -1; title.setAttribute('role', 'textbox'); title.setAttribute('aria-label', 'Note title'); title.setAttribute('aria-multiline', 'false'); title.setAttribute('enterkeyhint', 'done'); title.textContent = noteName(path);
   const propertiesHost = document.createElement('div'); propertiesHost.className = 'bases-new-item-properties';
   const body = document.createElement('div'); body.className = 'bases-new-item-body';
   const preview = document.createElement('div'); preview.className = 'bases-new-item-body-preview'; preview.tabIndex = 0; preview.setAttribute('role', 'button'); preview.setAttribute('aria-label', 'Edit note body');
   const editorHost = document.createElement('div'); editorHost.className = 'editor-host markdown-source-view is-live-preview'; editorHost.hidden = true;
-  const open = document.createElement('button'); open.type = 'button'; open.className = 'markdown-embed-link clickable-icon'; open.setAttribute('aria-label', sidePeek ? 'Open as full page' : 'Open link'); open.append(icon('maximize', 16, document));
+  const open = document.createElement('button'); open.type = 'button'; open.className = 'markdown-embed-link clickable-icon'; open.setAttribute('aria-label', sidePeek ? 'Open as full page' : 'Open link'); open.dataset.baseTooltip = sidePeek ? 'Open as full page' : 'Open link'; open.append(icon('maximize', 16, document));
   const closeButton = sidePeek ? document.createElement('button') : undefined;
   if (closeButton) {
     const header = document.createElement('div'); header.className = 'bases-page-peek-header';
-    closeButton.type = 'button'; closeButton.className = 'clickable-icon'; closeButton.setAttribute('aria-label', 'Close preview'); closeButton.append(icon('close', 16, document));
+    closeButton.type = 'button'; closeButton.className = 'clickable-icon'; closeButton.setAttribute('aria-label', 'Close preview'); closeButton.dataset.baseTooltip = 'Close preview'; closeButton.append(icon('close', 16, document));
     header.append(closeButton, open); root.append(header);
   }
   const error = document.createElement('div'); error.className = 'bases-new-item-error'; error.setAttribute('role', 'alert'); error.hidden = true;
@@ -238,7 +239,7 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
     const focused = document.activeElement, focusOwned = !focused || focused === document.body || focused === document.documentElement || root.contains(focused) || ownedPortal(focused);
     closed = true;
     const release = (operation: () => void) => { try { operation(); } catch (failure) { try { options.onError(failure); } catch {} } };
-    release(() => properties.destroy()); release(() => editor?.destroy()); editor = undefined; unsubscribers.forEach(stop => release(stop));
+    release(() => tooltips.destroy()); release(() => properties.destroy()); release(() => editor?.destroy()); editor = undefined; unsubscribers.forEach(stop => release(stop));
     document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', escape); document.removeEventListener('contextmenu', contextOwner, true); document.removeEventListener('focusin', observeFocus, true); win?.removeEventListener('resize', position); win?.removeEventListener('scroll', position, true); win?.removeEventListener('blur', retireCloseFocus); observer?.disconnect(); root.remove();
     if (restoreFocus && !closeFocusRetired && focusOwned && options.anchor.isConnected) options.anchor.focus({ preventScroll: true });
     try { options.onClose?.(); } catch (failure) { try { options.onError(failure); } catch {} }
@@ -278,6 +279,7 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
   open.addEventListener('mousedown', event => event.preventDefault()); open.addEventListener('click', event => { void close().then(() => options.openFile(path, event)).catch(report); });
   closeButton?.addEventListener('click', () => { void close({ restoreFocus: true }).catch(() => {}); });
   retry.addEventListener('click', () => { void flush().catch(report); });
+  const tooltips = mountBaseTooltips(root);
   document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', escape); document.addEventListener('contextmenu', contextOwner, true); document.addEventListener('focusin', observeFocus, true); win?.addEventListener('resize', position); win?.addEventListener('scroll', position, true); win?.addEventListener('blur', retireCloseFocus);
   const observer = win?.ResizeObserver ? new win.ResizeObserver(position) : undefined; observer?.observe(root);
   for (const event of ['modify', 'rename', 'delete'] as const) unsubscribers.push(options.vault.on(event, change => { if (change.path === path || change.oldPath === path) refresh(); }));

@@ -47,6 +47,61 @@ test('side peek uses a viewport pane and opens existing rows without selecting o
   }finally{await s.cleanup();}
 });
 
+test('existing peek title participates in sequential focus without changing initial focus or selection',async()=>{
+  const s=await setup(undefined,{presentation:'side-peek',focusTitle:false,bodyExpanded:true});
+  try{
+    assert.equal(s.dom.window.document.activeElement,s.handle.element);
+    assert.equal(s.dom.window.getSelection()?.toString(),'');
+    const stops=[...s.handle.element.querySelectorAll<HTMLElement>('button,input,textarea,[contenteditable="true"],[tabindex]')]
+      .filter(node=>node.tabIndex>=0&&!node.closest('[hidden]'));
+    const close=s.handle.element.querySelector<HTMLElement>('[aria-label="Close preview"]')!;
+    const open=s.handle.element.querySelector<HTMLElement>('[aria-label="Open as full page"]')!;
+    assert.deepEqual(stops.slice(0,3),[close,open,s.title]);
+    s.title.focus();assert.equal(s.dom.window.document.activeElement,s.title);
+    assert.equal(s.handle.hasPendingChanges(),false);assert.equal(s.buffer.path,'Untitled.md');
+  }finally{await s.cleanup();}
+});
+
+test('peek command hints survive a rejected close and release on successful close',async()=>{
+  let rejectClose=true;
+  const s=await setup(undefined,{presentation:'side-peek',focusTitle:false,closeEditor:async()=>{if(rejectClose)throw new Error('Child draft retained');}});
+  try{
+    const doc=s.dom.window.document;
+    await assert.rejects(s.handle.close(),/Child draft retained/);
+    assert.equal(s.handle.element.isConnected,true);rejectClose=false;
+    for(const label of ['Close preview','Open as full page']){
+      const control=s.handle.element.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!;
+      control.focus();
+      const hint=doc.querySelector<HTMLElement>('[role="tooltip"]');assert.ok(hint);
+      assert.equal(hint.querySelector('.bases-tooltip-label')!.textContent,label);
+      assert.equal(control.getAttribute('aria-describedby'),hint.id);
+      assert.equal(doc.activeElement,control);assert.equal(control.hasAttribute('title'),false);
+    }
+    const open=doc.activeElement as HTMLElement;
+    await s.handle.close();assert.equal(doc.querySelector('[role="tooltip"]'),null);
+    assert.equal(open.hasAttribute('aria-describedby'),false);
+    doc.body.append(s.handle.element);open.focus();
+    assert.equal(doc.querySelector('[role="tooltip"]'),null,'closed previews release delegated hint listeners');
+    s.handle.element.remove();
+  }finally{await s.cleanup();}
+});
+
+test('peek hover hints appear and closing cancels pending hover work',async()=>{
+  const s=await setup(undefined,{presentation:'side-peek',focusTitle:false});
+  try{
+    const close=s.handle.element.querySelector<HTMLElement>('[aria-label="Close preview"]')!;
+    close.dispatchEvent(new s.dom.window.MouseEvent('pointerover',{bubbles:true}));
+    assert.equal(s.dom.window.document.querySelector('[role="tooltip"]'),null);
+    await new Promise(resolve=>setTimeout(resolve,450));
+    assert.equal(s.dom.window.document.querySelector('[role="tooltip"]')?.textContent,'Close preview');
+    close.dispatchEvent(new s.dom.window.MouseEvent('pointerout',{bubbles:true,relatedTarget:s.title}));
+    assert.equal(s.dom.window.document.querySelector('[role="tooltip"]'),null);
+    close.dispatchEvent(new s.dom.window.MouseEvent('pointerover',{bubbles:true}));
+    await s.handle.close();await new Promise(resolve=>setTimeout(resolve,450));
+    assert.equal(s.dom.window.document.querySelector('[role="tooltip"]'),null);
+  }finally{await s.cleanup();}
+});
+
 test('side peek Close retains failed body drafts and closes only after the same shared save succeeds',async()=>{
   const s=await setup(undefined,{presentation:'side-peek',focusTitle:false,bodyExpanded:true});
   const write=s.adapter.write.bind(s.adapter);let fail=true;s.adapter.write=async(path,text)=>{if(fail)throw new Error('Peek disk unavailable');await write(path,text);};
