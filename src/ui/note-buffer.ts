@@ -1,5 +1,6 @@
 import { assertNoteTextChange } from '../core/note-text-limit.ts';
 import { DurableNoteState } from './note-durable-state.ts';
+import {NoteLoadSupervisor} from './note-load-supervisor.ts';
 import type { Vault } from '../core/vault.ts';
 import { isMarkdown, normalizePath } from '../core/types.ts';
 import type { NoteMetadata } from '../core/types.ts';
@@ -56,6 +57,7 @@ export class NoteBuffer {
   private options: NoteBufferOptions;
   private durable?: DurableNoteState;
   private loaded = false;
+  private initialLoad?:{controller:AbortController;supervisor:NoteLoadSupervisor};
   private disposed = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private autosaveEpoch=0;
@@ -121,6 +123,14 @@ export class NoteBuffer {
   flushDraftProtection():Promise<void>{return this.durable?.flushDraftProtection()??Promise.resolve();}
   draftProtectionAvailable():void{this.durable?.draftProtectionAvailable();}
   get pendingCanonicalRecovery():boolean{return this.durable?.pendingCanonicalRecovery??false;}
+  /** Only this proof permits mounting an editor or retaining a source operation. */
+  get hasAdmittedContent():boolean{return this.loaded;}
+  cancelInitialLoad():void{this.initialLoad?.controller.abort();}
+  async disposeUnadmitted():Promise<void>{
+    if(this.loaded)throw new Error('An admitted note must use its durable close barrier');
+    this.disposed=true;this.cancelInitialLoad();this.durable?.stopDraftProtection();await this.closeMetadataProjection();
+  }
+  coreAdmissionAvailable(scope:{vaultId:string;clientId:string}):void{this.durable?.coreAdmissionAvailable(scope);}
 
   private validateWrite(): void { for (const validate of this.writeValidators) validate(); }
 
@@ -167,6 +177,7 @@ export class NoteBuffer {
     return `${this.options.storageKey ?? 'zorid:draft'}:${encodeURIComponent(path)}`;
   }
   private notify(): void {
+    if(this.disposed)return;
     this.observeMetadata();
     try { this.options.onState?.(); } catch (error) { console.error('Note state listener failed', error); }
   }
@@ -229,7 +240,7 @@ export class NoteBuffer {
     this.cancelTimer();this.autosaveEpoch++;this.autosaveRetries=0;
     this.autosaveRequested=false;this.retryingAutosave=false;this.recoverableFlushEpoch=undefined;
   }
-  private canAutosave():boolean{return this.loaded&&!this.disposed&&!this.disposing;}
+  private canAutosave():boolean{return this.loaded&&!this.disposed&&!this.disposing&&!this.durable?.terminalCanonicalRecovery;}
   private scheduleAutosave(delay:number):void {
     if(!this.canAutosave()||!this.dirty||this.timer!==undefined)return;
     const epoch=this.autosaveEpoch;
@@ -304,9 +315,17 @@ export class NoteBuffer {
   }
 
   private expectedEntryId?:string;
-  load(expectedEntryId?:string,validate:()=>void=()=>{}): Promise<void> {
+  private async readInitial<T>(operation:(check:()=>void)=>Promise<T>,validate:()=>void,signal?:AbortSignal):Promise<T>{
+    const owner={controller:new AbortController(),supervisor:new NoteLoadSupervisor()};this.initialLoad=owner;
+    const abort=()=>owner.controller.abort();signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)abort();
+    const check=()=>{if(owner.controller.signal.aborted||this.disposed)throw Object.assign(new Error('The note load was cancelled'),{code:'note_load_cancelled'});validate();};
+    try{return await owner.supervisor.run(()=>operation(check),check,{signal:owner.controller.signal,onError:error=>{this.rememberError(error);this.notify();}});}
+    finally{signal?.removeEventListener('abort',abort);owner.supervisor.stop();if(this.initialLoad===owner)this.initialLoad=undefined;}
+  }
+  load(expectedEntryId?:string,validate:()=>void=()=>{},options:{signal?:AbortSignal}={}): Promise<void> {
     return this.enqueue(async () => {
       validate();
+      this.durable?.assertLoadScope();
       if(expectedEntryId!==undefined&&this.expectedEntryId!==undefined&&this.expectedEntryId!==expectedEntryId)throw new Error('This note buffer belongs to another entry');
       const admittedEntryId=expectedEntryId??this.expectedEntryId;
       if (this.loaded) {
@@ -315,9 +334,18 @@ export class NoteBuffer {
         return;
       }
       if (this.disposed) throw new Error('This note buffer is disposed');
-      if(this.durable){await this.durable.load(this.path,admittedEntryId,validate);this.expectedEntryId=admittedEntryId;this.loaded=true;this.syncDurable();return;}
+      if(this.durable){
+        await this.readInitial(check=>this.durable!.load(this.path,admittedEntryId,check,{deferRecovery:true}),validate,options.signal);
+        validate();this.durable.assertLoadScope();this.expectedEntryId=admittedEntryId;this.loaded=true;this.syncDurable();
+        const vault=this.vault,adapter=vault.adapter,writes=adapter.durableWrites!,scope={...writes.checkpoints.scope},entryId=this.durable.base.entryId;
+        this.durable.startLoadRecovery(()=>{
+          const selected=vault.entries.get(this.path);
+          if(this.disposed||vault.adapter!==adapter||adapter.durableWrites!==writes||writes.checkpoints.scope.vaultId!==scope.vaultId||writes.checkpoints.scope.clientId!==scope.clientId
+            ||this.durable?.base.entryId!==entryId||selected?.entryId&&selected.entryId!==entryId)throw Object.assign(new Error('The admitted note source owner changed; its draft is retained'),{code:'intent_identity_mismatch',source:'host'});
+        });return;
+      }
       if(admittedEntryId!==undefined)throw new Error('Stable note admission requires durable identity');
-      const disk = await this.vault.read(this.path);
+      const disk = await this.readInitial(()=>this.vault.read(this.path),validate,options.signal);
       this.text = this.savedText = disk;
       this.error = null;
       let draft: Draft | undefined;
@@ -400,6 +428,7 @@ export class NoteBuffer {
   }
 
   flush(options:{autoRetry?:boolean}={}): Promise<void> {
+    if(!this.loaded)return Promise.resolve(); // No authoring or source mutation is admitted yet.
     this.cancelAutosave();
     this.durable?.retryCanonicalRecovery();
     // A completed retirement already saved this immutable buffer. Workspace
@@ -422,6 +451,7 @@ export class NoteBuffer {
 
   /** Retained conflicts stay navigable without turning navigation into a save. */
   flushForNavigation(options:{autoRetry?:boolean}={}):Promise<void> {
+    if(this.durable?.pendingCanonicalRecovery&&this.draftProtectionStatus)return this.flushDraftProtection();
     if(!this.hasRecoveryConflict)return this.flush(options);
     this.cancelAutosave();
     if(this.draftProtectionStatus)return this.durable!.preserveDraft().then(()=>this.syncDurable());
@@ -519,6 +549,7 @@ export class NoteBuffer {
   }
 
   dispose(): Promise<void> {
+    if(!this.loaded)return this.disposeUnadmitted();
     if(this.disposing)return this.disposing;
     this.cancelAutosave();
     this.durable?.retryCanonicalRecovery();

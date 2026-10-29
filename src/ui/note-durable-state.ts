@@ -4,6 +4,7 @@ import type { DurableWrites, DurableWriteRead, DurableWritePlan, DurableWriteRef
 import type { Checkpoint,CheckpointChange } from '../core/durable-checkpoints.ts';
 import { boundedUtf8,checkpointRevision,checkpointStateLimit,snapshotCheckpointChange } from '../core/checkpoint-input.ts';
 import {NoteDraftProtection} from './note-draft-protection.ts';
+import {NoteLoadSupervisor} from './note-load-supervisor.ts';
 import type {NoteDraftCapture,NoteDraftProtectionStatus} from './note-draft-protection.ts';
 import type {IndependentDraftReceipt,IndependentDraftCandidate,IndependentDraftRetirement} from '../core/independent-drafts.ts';
 interface Operation { plan?:DurableWritePlan; input?:DurableWriteInput; content:string; ref?:DurableWriteRef; pendingAck?:DurableWriteOutcome; planningRejected?:string }
@@ -88,9 +89,15 @@ export class DurableNoteState {
   private phase?:{operation?:Operation;input?:DurableWriteInput;plan?:DurableWritePlan;ref?:DurableWriteRef;ack?:DurableWriteOutcome;rejected?:string;conflict:boolean;checkpoint?:CheckpointChange;capture:Readonly<object>|null};
   private coverage?:CoreCoverage;
   private uncertainCoverage?:Omit<CoreCoverage,'revision'>;
+  private loadPrepared=false;
+  private stateValidated=false;
+  private initialActor?:{entryId:string;path:string};
+  private sourceRecovery?:{supervisor:NoteLoadSupervisor;check:()=>void;task?:Promise<void>};
+  private sourceRecoveryTerminal?:Error;
+  private sourceRecoveryRequired=false;
   constructor(vault:Vault,writes:DurableWrites,changed:()=>void){this.vault=vault;this.writes=writes;this.noteScope=Object.freeze({...writes.checkpoints.scope});this.changed=()=>{this.captureProtection();this.protection?.coreSettled();changed();};this.protectionChanged=changed;}
   private protectionChanged:()=>void;
-  get ready(){return !!this.state;}
+  get ready(){return this.stateValidated;}
   get text(){return this.state!.draft;}
   get conflicted(){return !!this.state?.conflict;}
   get base(){return this.state!.base;}
@@ -106,14 +113,45 @@ export class DurableNoteState {
     try{await owner?.flush();}catch(error){if(this.protection===owner||this.protectionStopped)throw error;await this.protection?.flush();}
     await this.cleanupRecoveredSource(true);
   }
-  stopDraftProtection():void{this.protectionStopped=true;this.candidateTerminal=true;this.candidateRetryWake?.();this.protection?.stop();}
+  stopDraftProtection():void{this.protectionStopped=true;this.candidateTerminal=true;this.candidateRetryWake?.();this.protection?.stop();this.sourceRecovery?.supervisor.stop();}
   draftProtectionAvailable():void{this.candidateRetryStep=0;this.candidateRetryWake?.();this.protection?.availability();}
   retryCanonicalRecovery():void{
     if(this.protectionStopped)return;
+    this.sourceRecovery?.supervisor.wake();
     if(this.candidateCanonical&&this.candidateTerminal){this.candidateTerminal=false;void this.queue(()=>this.persist()).catch(()=>{});}
     this.draftProtectionAvailable();
   }
-  get pendingCanonicalRecovery():boolean{return !!this.candidateCanonical&&!this.candidateTerminal;}
+  get pendingCanonicalRecovery():boolean{return this.sourceRecoveryRequired||!!this.sourceRecovery?.task||!!this.candidateCanonical&&!this.candidateTerminal;}
+  get terminalCanonicalRecovery():boolean{return !!this.sourceRecoveryTerminal;}
+  assertLoadScope():void{
+    if(this.vault.adapter.durableWrites!==this.writes||this.writes.checkpoints.scope.vaultId!==this.noteScope.vaultId||this.writes.checkpoints.scope.clientId!==this.noteScope.clientId)
+      throw Object.assign(failure('selected note scope changed before admission'),{code:'intent_identity_mismatch',source:'host'});
+  }
+  /** Only a positively admitted SAME local authority may wake a retired source
+   * wait. Independent-journal availability is not a replacement admission. */
+  coreAdmissionAvailable(scope:{vaultId:string;clientId:string}):void{
+    if(scope.vaultId!==this.noteScope.vaultId||scope.clientId!==this.noteScope.clientId||this.writes.checkpoints.scope.vaultId!==scope.vaultId||this.writes.checkpoints.scope.clientId!==scope.clientId)return;
+    this.sourceRecovery?.supervisor.admissionAvailable();
+  }
+  /** Called only AFTER NoteBuffer has made the validated raw draft usable. */
+  startLoadRecovery(check:()=>void):void{
+    if(this.sourceRecovery||!this.loadPrepared||this.protectionStopped)return;
+    if(!this.sourceRecoveryRequired){if(this.recoveredIndependent)void this.queue(()=>this.persist()).catch(()=>{});return;}
+    const owner={supervisor:new NoteLoadSupervisor(),check,task:undefined as Promise<void>|undefined};this.sourceRecovery=owner;
+    const task=this.queue(async()=>{
+      check();if(this.state!.operation?.ref)await this.resume(check);
+      this.sourceRecoveryRequired=false;
+      if(!this.state!.conflict)this.error=null;
+      this.changed();
+    });owner.task=task;
+    void task.catch(error=>{this.sourceRecoveryTerminal=error instanceof Error?error:failure('source recovery stopped');this.changed();}).finally(()=>{owner.task=undefined;}).catch(()=>{});
+  }
+  private sourceIO<T>(operation:()=>Promise<T>):Promise<T>{
+    const owner=this.sourceRecovery;
+    if(!owner?.task)return operation();
+    return owner.supervisor.run(operation,()=>{owner.check();if(this.writes.checkpoints.scope.vaultId!==this.noteScope.vaultId||this.writes.checkpoints.scope.clientId!==this.noteScope.clientId)throw failure('source recovery scope changed');},
+      {onError:error=>{this.error=error instanceof Error?error:failure('source recovery is waiting');this.changed();}});
+  }
   get coreCoversCurrentDraft():boolean{return !!this.state&&this.covered(this.state);}
   get recoveredIndependentDraft():boolean{return this.recoveredIndependent;}
   private coverageFor(state:State):Omit<CoreCoverage,'revision'> {return{writer:state.writer,generation:state.generation,base:{...state.base,stat:{...state.base.stat}},draft:state.draft,clean:!state.conflict&&!state.operation&&state.draft===state.base.content};}
@@ -141,7 +179,7 @@ export class DurableNoteState {
         checkpointRevision:this.uncertain?this.uncertain.expectedRevision:this.revision,pendingOperation:this.phase!.capture}});this.protectionCaptureError=null;
     }catch{this.protectionCaptureError=failure('independent capture failed; current draft remains in memory');}
   }
-  private async initializeProtection(validate:()=>void):Promise<void>{
+  private async initializeProtection(validate:()=>void,deferRecovery=false):Promise<void>{
     const provider=this.vault.adapter.independentDrafts;if(!provider)return;
     if(provider.scope.vaultId!==this.writes.checkpoints.scope.vaultId||provider.scope.clientId!==this.writes.checkpoints.scope.clientId)throw journalError('draft_scope_mismatch');
     let initialReceipt:IndependentDraftReceipt|undefined,inventory:'ready'|'unknown'|'retained'='unknown',inventoryError:unknown;
@@ -185,6 +223,7 @@ export class DurableNoteState {
       this.protection?.markInventory(inventory);this.captureProtection();
     };
     try{await inspect();}catch(error){inventory='unknown';inventoryError=error;}
+    validate();if(this.protectionStopped)throw journalError('draft_lease_revoked');
     const create=()=>{this.protection=new NoteDraftProtection({provider,writesScope:this.writes.checkpoints.scope,initialReceipt,onStatus:()=>{this.protectionChanged();void this.cleanupRecoveredSource().catch(()=>{});},
       coreCovered:(capture:NoteDraftCapture)=>this.covered({writer:capture.writer,generation:capture.snapshot.generation,draft:capture.snapshot.draft,base:{...capture.snapshot.baseline,stat:this.base.stat}}),
       getCleanWitness:capture=>this.covered({writer:capture.writer,generation:capture.snapshot.generation,draft:capture.snapshot.draft,base:{...capture.snapshot.baseline,stat:this.base.stat}})
@@ -192,7 +231,7 @@ export class DurableNoteState {
       retryInventory:inspect});};
     create();
     this.protection!.markInventory(inventory,inventoryError);this.captureProtection();
-    if(this.recoveredIndependent)void this.queue(()=>this.persist()).catch(()=>{});
+    if(this.recoveredIndependent&&!deferRecovery)void this.queue(()=>this.persist()).catch(()=>{});
   }
   private validJournalReceipt(value:IndependentDraftReceipt):boolean {
     const scope=this.writes.checkpoints.scope;
@@ -372,7 +411,7 @@ export class DurableNoteState {
   private async releaseOperationCapture(op:Operation):Promise<void>{
     const guard=op.input?.conditionalSavedSource;if(!guard)return;
     if(!this.writes.releaseSavedSource)throw failure('conditional source release is unavailable');
-    await this.writes.releaseSavedSource(guard.captureId);
+    await this.sourceIO(()=>this.writes.releaseSavedSource!(guard.captureId));
     const capture=this.activeCaptures.get(guard.captureId);
     if(capture){this.captures.set(capture,'settled');this.activeCaptures.delete(guard.captureId);}
   }
@@ -404,10 +443,11 @@ export class DurableNoteState {
     }
   }
   private async persist(state=this.state):Promise<void>{
+    if(this.sourceRecoveryTerminal)throw this.sourceRecoveryTerminal;
     if(this.candidateCanonical&&this.candidateTerminal)throw this.candidateTerminalError;
     if(this.candidateCanonical&&this.uncertain)await this.settleCandidateCheckpoint();
     this.captureProtection();
-    if(this.uncertain){const result=this.acceptCheckpoint(await this.writes.checkpoints.compareAndSwap(this.uncertain),this.uncertain);this.revision=result.revision;this.confirmedState=this.uncertain.encodedState;
+    if(this.uncertain){const exact=this.uncertain,result=await this.sourceIO(async()=>this.acceptCheckpoint(await this.writes.checkpoints.compareAndSwap(exact),exact));this.revision=result.revision;this.confirmedState=exact.encodedState;
       if(this.uncertainCoverage)this.coverage={...this.uncertainCoverage,revision:result.revision};this.uncertain=undefined;this.uncertainCoverage=undefined;if(this.protectionAuthoringStarted)this.candidateCanonical=undefined;this.captureProtection();this.coreProtectionProgress();}
     const encodedState=JSON.stringify(state);boundedUtf8(encodedState,32*1024*1024,'checkpoint_too_large');
     // Unchanged drafts can reuse a confirmed checkpoint, but retained operations
@@ -416,30 +456,54 @@ export class DurableNoteState {
     if(!state?.operation&&encodedState===this.confirmedState)return;
     this.uncertain={key:this.key,expectedRevision:this.revision,nextRevision:crypto.randomUUID(),encodedState};
     if(state)this.uncertainCoverage=this.coverageFor(state);this.captureProtection();
-    const result=this.acceptCheckpoint(await this.writes.checkpoints.compareAndSwap(this.uncertain),this.uncertain);this.revision=result.revision;this.confirmedState=encodedState;
+    const exact=this.uncertain,result=await this.sourceIO(async()=>this.acceptCheckpoint(await this.writes.checkpoints.compareAndSwap(exact),exact));this.revision=result.revision;this.confirmedState=encodedState;
     if(this.uncertainCoverage)this.coverage={...this.uncertainCoverage,revision:result.revision};this.uncertain=undefined;this.uncertainCoverage=undefined;if(this.protectionAuthoringStarted)this.candidateCanonical=undefined;this.captureProtection();this.coreProtectionProgress();
   }
-  load(path:string,expectedEntryId?:string,validate:()=>void=()=>{}):Promise<void>{return this.queue(async()=>{
+  private validateLoadedOperation(op:Operation):void{
+    if(!object(op)||Object.keys(op).some(key=>!['input','plan','ref','content','pendingAck','planningRejected'].includes(key))||typeof op.content!=='string'||!op.plan&&!op.input)throw failure('invalid saved operation');
+    if(op.input!==undefined)this.checkInput(op);
+    if(op.plan!==undefined){if(!object(op.plan)||op.plan.version!==1||typeof op.plan.encodedPlan!=='string')throw failure('invalid saved operation');this.checkPlan(op.plan);}
+    if(op.ref!==undefined){if(!object(op.ref)||Object.keys(op.ref).length!==5||!['vaultId','clientId','entryId','operationId','token'].every(key=>validId(op.ref![key as keyof DurableWriteRef])))throw failure('invalid saved reference');this.checkIdentity(op.ref);if(!op.plan||op.ref.operationId!==op.plan.operationId)throw failure('plan/ref mismatch');}
+    if(op.planningRejected!==undefined&&(!op.input||!['revision_conflict','source_capture_expired','conditional_source_changed'].includes(op.planningRejected)||op.ref||op.pendingAck))throw failure('invalid saved planning rejection');
+    if(op.pendingAck!==undefined){
+      if(!object(op.pendingAck))throw failure('invalid pending acknowledgment');
+      const ack=op.pendingAck,keys=ack.status==='committed'?['status','operationId','sequence']:['status','operationId','code'];
+      if(!object(ack)||Object.keys(ack).length!==keys.length||!keys.every(key=>Object.hasOwn(ack,key))||!op.ref||ack.operationId!==op.ref.operationId
+        ||!(ack.status==='committed'&&typeof ack.sequence==='string'&&/^[1-9][0-9]{0,19}$/.test(ack.sequence)&&BigInt(ack.sequence)<=18446744073709551615n
+          ||ack.status==='rejected'&&typeof ack.code==='string'&&/^[a-z_]{1,64}$/.test(ack.code)))throw failure('invalid pending acknowledgment');
+    }
+  }
+  load(path:string,expectedEntryId?:string,validate:()=>void=()=>{},options:{deferRecovery?:boolean}={}):Promise<void>{return this.queue(async()=>{
     validate();
-    const observed=expectedEntryId===undefined?await this.vault.readDurableText(path):await this.vault.readDurableTextById(expectedEntryId);
+    if(this.loadPrepared){if(path!==this.base.path||expectedEntryId!==undefined&&expectedEntryId!==this.base.entryId)throw failure('selected note changed before admission');return;}
+    if(this.protection||this.protectionStopped)throw failure('the cancelled initial admission must be disposed before another load');
+    this.stateValidated=false;
+    if(this.writes.checkpoints.scope.vaultId!==this.noteScope.vaultId||this.writes.checkpoints.scope.clientId!==this.noteScope.clientId)throw failure('selected note scope changed before admission');
+    const selected=expectedEntryId??this.initialActor?.entryId;
+    if(this.initialActor&&(this.initialActor.path!==path||selected!==this.initialActor.entryId))throw failure('selected note changed before admission');
+    const observed=selected===undefined?await this.vault.readDurableText(path):await this.vault.readDurableTextById(selected);
     validate();
     // Check immutable identity BEFORE checkpoint adoption or resuming an intent.
     // A rename is retried by its caller, never admitted under an old path key.
-    if(!observed||observed.path!==path||expectedEntryId!==undefined&&observed.entryId!==expectedEntryId)throw failure('selected note changed before admission');
+    if(!observed||observed.path!==path||selected!==undefined&&observed.entryId!==selected)throw failure('selected note changed before admission');
+    this.initialActor={entryId:observed.entryId,path};
     this.key=`note/v1/${observed.entryId}`;
     const loaded=await this.writes.checkpoints.load(this.key);validate();const head=loaded===null?null:this.acceptCheckpoint(loaded);this.revision=head?.revision??null;this.confirmedState=head?.encodedState;
     this.state={version:1,writer:crypto.randomUUID(),generation:0,base:observed,draft:observed.content,conflict:false};
     if(head?.encodedState!==null&&head?.encodedState!==undefined){
       const raw=JSON.parse(head.encodedState) as State;
-      if(raw.version!==1||typeof raw.writer!=='string'||!Number.isSafeInteger(raw.generation)||raw.generation<0||typeof raw.draft!=='string'||typeof raw.conflict!=='boolean'||!raw.base||raw.base.entryId!==observed.entryId||typeof raw.base.content!=='string'||typeof raw.base.revision!=='string'||typeof raw.base.path!=='string')throw failure('malformed or unsupported checkpoint; retained');
+      if(!object(raw)||raw.version!==1||!validId(raw.writer)||!validGeneration(raw.generation)||typeof raw.draft!=='string'||typeof raw.conflict!=='boolean'||!object(raw.base)||raw.base.entryId!==observed.entryId||typeof raw.base.content!=='string'||!validId(raw.base.revision)||typeof raw.base.path!=='string'
+        ||!object(raw.base.stat)||!['ctime','mtime','size'].every(key=>typeof raw.base.stat[key as keyof typeof raw.base.stat]==='number'&&Number.isFinite(raw.base.stat[key as keyof typeof raw.base.stat])&&raw.base.stat[key as keyof typeof raw.base.stat]>=0)||!Number.isSafeInteger(raw.base.stat.size))throw failure('malformed or unsupported checkpoint; retained');
+      if(options.deferRecovery&&raw.base.path!==path)throw failure('checkpoint belongs to another selected path; retained');
       this.state=raw;
       this.coverage={...this.coverageFor(raw),revision:head!.revision};
-      if(raw.operation){const op=raw.operation;if(typeof op.content!=='string'||!op.plan&&!op.input)throw failure('invalid saved operation');if(op.input!==undefined)this.checkInput(op);if(op.plan!==undefined){if(!op.plan||op.plan.version!==1||typeof op.plan.encodedPlan!=='string')throw failure('invalid saved operation');this.checkPlan(op.plan);}if(op.ref){this.checkIdentity(op.ref);if(!op.plan||op.ref.operationId!==op.plan.operationId)throw failure('plan/ref mismatch');}}
-      if(raw.operation?.ref)await this.resume(validate);
+      if(raw.operation!==undefined)this.validateLoadedOperation(raw.operation);
+      if(raw.operation?.ref){if(options.deferRecovery)this.sourceRecoveryRequired=true;else await this.resume(validate);}
       else if(observed.revision!==raw.base.revision){if(!raw.operation&&raw.draft===raw.base.content){raw.base=observed;raw.draft=observed.content;}else raw.conflict=true;}
     }
-    if(this.state.conflict)this.error=failure('file changed elsewhere; your draft is retained');
-    await this.initializeProtection(validate);validate();
+    this.error=this.state.conflict?failure('file changed elsewhere; your draft is retained'):null;
+    this.stateValidated=true;
+    await this.initializeProtection(validate,options.deferRecovery);validate();this.loadPrepared=true;
     this.changed();
   });}
   update(text:string,capture?:ConditionalSavedSourceCapture):void{
@@ -453,9 +517,9 @@ export class DurableNoteState {
     }
     const changed=text!==this.state!.draft||!!capture;
     this.state!.draft=text;if(changed){this.state!.generation++;this.protectionAuthoringStarted=true;}
-    this.captureProtection();void this.queue(()=>this.persist()).catch(()=>{});
+    this.captureProtection();if(!this.sourceRecoveryTerminal)void this.queue(()=>this.persist()).catch(()=>{});
   }
-  flush(validate:()=>void):Promise<void>{return this.queue(async()=>{
+  flush(validate:()=>void):Promise<void>{if(this.sourceRecoveryTerminal)return Promise.reject(this.sourceRecoveryTerminal);return this.queue(async()=>{
     // A retained uncertain checkpoint must settle under its original identity
     // before a recovered admission may plan any new source mutation.
     if(this.uncertain)await this.persist();
@@ -519,6 +583,7 @@ export class DurableNoteState {
     this.state=adopted;this.error=null;this.changed();return{path,resolved:true};
   });}
   private async resume(validate:()=>void):Promise<void>{
+    if(this.sourceRecoveryTerminal)throw this.sourceRecoveryTerminal;
     const op=this.state!.operation!;
     // Persist the exact retained phase before any authorizing continuation.
     // Deterministic serialization/budget failures happen before `uncertain`
@@ -544,19 +609,19 @@ export class DurableNoteState {
         !(op.pendingAck.status==='committed'&&typeof op.pendingAck.sequence==='string'||op.pendingAck.status==='rejected'&&typeof op.pendingAck.code==='string'))throw failure('invalid pending acknowledgment');
       // Provider validates the exact terminal outcome and retries ACK idempotently.
       // No new reconciliation may reinterpret an already reconciled draft/base.
-      await this.writes.acknowledge(op.ref,op.pendingAck);
+      const ref=op.ref,ack=op.pendingAck;await this.sourceIO(()=>this.writes.acknowledge(ref,ack));
       await this.releaseOperationCapture(op);
       this.state!.operation=undefined;await this.persist();this.changed();return;
     }
     if(!op.ref){const prepared=await this.writes.prepare(op.plan);this.checkIdentity(prepared.ref);if(prepared.ref.operationId!==op.plan.operationId)throw failure('prepare returned another operation');op.ref=prepared.ref;await this.persist();}
-    let outcome=await this.writes.query(op.ref);
+    const ref=op.ref;let outcome=await this.sourceIO(()=>this.writes.query(ref));
     if(!outcome)throw failure('checkpointed intent missing');
-    if(outcome.state==='prepared'||outcome.state==='commit_requested'){validate();outcome=await this.vault.commitDurableWrite(op.ref,{validate});}
+    if(outcome.state==='prepared'||outcome.state==='commit_requested'){validate();outcome=await this.sourceIO(()=>this.vault.commitDurableWrite(ref,{validate}));}
     if(outcome.state!=='committed'&&outcome.state!=='rejected')throw failure('outcome remains unknown');
     this.checkIdentity(outcome.ref);
     for(const key of ['vaultId','clientId','token','operationId','entryId'] as const)if(outcome.ref[key]!==op.ref[key])throw failure('terminal outcome mismatch');
     if(outcome.state==='committed'){
-      const result=await this.vault.reconcileDurableWrite(op.ref,outcome.receipt);
+      const receipt=outcome.receipt,result=await this.sourceIO(()=>this.vault.reconcileDurableWrite(ref,receipt));
       if(result.status==='current'){
         this.state!.base=result.current;
         const canonical=op.plan!.canonicalContent;
@@ -568,7 +633,7 @@ export class DurableNoteState {
       }else this.state!.conflict=true;
       op.pendingAck={status:'committed',operationId:outcome.receipt.operationId,sequence:outcome.receipt.sequence};
     }else{if(outcome.error.operationId!==op.ref.operationId)throw failure('rejection identity mismatch');this.state!.conflict=true;op.pendingAck={status:'rejected',operationId:outcome.error.operationId,code:outcome.error.code};}
-    await this.persist();await this.writes.acknowledge(op.ref,op.pendingAck);
+    await this.persist();const ack=op.pendingAck;await this.sourceIO(()=>this.writes.acknowledge(ref,ack));
     await this.releaseOperationCapture(op);
     this.state!.operation=undefined;await this.persist();this.changed();
   }
