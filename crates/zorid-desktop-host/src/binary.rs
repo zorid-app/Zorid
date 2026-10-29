@@ -37,8 +37,12 @@ fn native(error: zorid_native::Error) -> wire::ErrorCode {
         Some("busy" | "filesystem_changed" | "lock_timeout" | "storage_busy") => wire::ErrorCode::Busy,
         Some("stream_required" | "request_limit" | "too_large") => wire::ErrorCode::TooLarge,
         Some("storage_corrupt" | "store_corrupt" | "corrupt_storage") => wire::ErrorCode::Corrupt,
+        // JSON distinguishes terminal diagnoses from retryable IO. The binary
+        // protocol retains their previous IO category rather than inventing an
+        // unknown outcome; its existing Busy/Corrupt categories stay specific.
         Some("io" | "io_error" | "storage_io" | "filesystem_io" | "storage_io_retryable"
-            | "storage_capacity" | "filesystem_io_retryable") => wire::ErrorCode::Io,
+            | "storage_capacity" | "filesystem_io_retryable" | "storage_failed"
+            | "filesystem_failed" | "file_sync_failed") => wire::ErrorCode::Io,
         _ => wire::ErrorCode::OutcomeUnknown,
     }
 }
@@ -473,5 +477,20 @@ mod retry_fault_tests {
         assert_eq!(classify(rusqlite::ffi::SQLITE_IOERR_WRITE), wire::ErrorCode::Io);
         assert_eq!(classify(rusqlite::ffi::SQLITE_FULL), wire::ErrorCode::Io);
         assert_eq!(classify(rusqlite::ffi::SQLITE_CORRUPT), wire::ErrorCode::Corrupt);
+    }
+    #[test]
+    fn retry_fault_binary_preserves_terminal_io_category_and_commit_uncertainty() {
+        let check = |error: &dyn Fn() -> zorid_native::Error| {
+            assert_eq!(native(error()), wire::ErrorCode::Io);
+            assert_eq!(native_fault(error())["commit_uncertain"], true);
+        };
+        for code in [rusqlite::ffi::SQLITE_READONLY, rusqlite::ffi::SQLITE_CONSTRAINT,
+            rusqlite::ffi::SQLITE_IOERR_AUTH] {
+            check(&|| zorid_native::Error::Store(zorid_store::StoreError::Sql(
+                rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(code), None))));
+        }
+        check(&|| zorid_native::Error::Io(io::ErrorKind::PermissionDenied.into()));
+        check(&|| zorid_native::Error::Store(zorid_store::StoreError::FileSync(
+            zorid_file_sync::Error::AuthenticationFailed)));
     }
 }
