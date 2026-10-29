@@ -3,6 +3,45 @@
 ## URGENT: real-session automatic save failure — 2026-10-28
 
 
+**Independent export verified; owners split — 2026-10-28.**
+Live diagnostic root completed independent JSON export at
+`/private/tmp/Zorid-protected-drafts-2026-10-28.json`. This main owner independently
+verified file metadata/hash only: mode0600,3851bytes, SHA256
+`6c8f2dc8905633b42df261b50f5d489191ae102283795581962eec4d74627667`.
+The live owner verified exact buffer texts/base/durable.state for both notes and
+one visible editor matching Project Idea. Home is419Unicode characters/420UTF16
+code units; Project Idea62. LocalStorage incident copy also remains. No private
+draft text is copied into repository records. App is resumed, no debugger pause
+or flush. Export preservation does not prove successful normal durable saving.
+
+Current reported Workspace flags: released=false,drained=false,closing=false,
+generation2,request8,inert=false. Both dirty buffers reference the SAME durable
+writes object as the current adapter. Thus the released-context console error may
+be an older callback; **released-adapter reuse is not established as this incident's
+root cause**. Reported reconciliation getStatus: complete=false, failure scan_failed,
+reconciliation_blocked plus scan_limit,observed1571. These are diagnostic evidence,
+not proof that scan limits caused either save failure.
+
+Concrete non-overlapping owners ACK under the existing named scope:
+- `checkpoint_review`: Workspace lifecycle + `src/platform/index.ts` and focused
+  tests, `.worktrees/save-lifecycle-recovery`, branch
+  `tingkai-c/save-lifecycle-recovery`; investigating concurrent chooseVault and
+  mutable `this.platform` lifetime. Base `aab5f8a2`.
+- `checkpoint_dedup`: `src/ui/note-buffer.ts` + focused tests,
+  `.worktrees/save-autoretry`, branch `tingkai-c/save-autoretry`; developing three
+  bounded valid-context retries. Base `aab5f8a2`. Retry classification, retained
+  intent/uncertain commit, revision/CAS and generation cancellation must remain
+  correct; proposal is not yet reviewed/validated acceptance.
+
+Both registered worktrees are inside the project. Owner reports Orca initially
+created them outside the writable root, then `git worktree move` relocated them
+because Orca lacks move; this thread made no checkout/worker edits. Their base
+runtime matches current main; main documentation progressed independently.
+Exclusive main integration remains with this thread. Independent review and
+focused/integrated validation are required before source handoff/install. Keep
+PID71549 OPEN; installation stays explicitly held. No live retry/reload/quit implied.
+
+
 **Live diagnostic update; named implementation ownership ACK — 2026-10-28.**
 The live diagnostic root reports console `Durable desktop context released`
 (`readTextById`), Home durable editor request failure, and Project Idea
@@ -10,8 +49,8 @@ The live diagnostic root reports console `Durable desktop context released`
 `platformReleased=false`; Home remains dirty (420 characters), Project Idea dirty
 (62 characters). Both exact buffers/base plus `durable.state` were captured and
 verified by that owner in separate localStorage key
-`zorid:protected-save-incident:2026-10-28` (3707 bytes). Independent JSON export is
-**pending**, so do not claim two independent copies yet. No draft text is stored
+`zorid:protected-save-incident:2026-10-28` (3707 bytes). Independent JSON export
+was pending at this earlier checkpoint; now completed as recorded above. No draft text is stored
 in this public ledger. Harmless F24 debugger listener was removed and execution
 resumed; owner reports Not paused, with no flush/retry/reload.
 

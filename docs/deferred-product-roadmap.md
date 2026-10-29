@@ -3,6 +3,27 @@
 ## Execution checkpoint — shared-core coordinator
 
 
+**Live draft export COMPLETE; concrete worker ownership — 2026-10-28.**
+Export `/private/tmp/Zorid-protected-drafts-2026-10-28.json` verified locally:
+mode0600,3851bytes,SHA2566c8f2dc8905633b42df261b50f5d489191ae102283795581962eec4d74627667.
+Live owner verifies both exact texts/base/durable.state +visible ProjectIdea editor;
+Home419Unicode/420UTF16,ProjectIdea62. No private content in ledger. App resumed,
+not paused/no flush. Current flags released=false/drained=false/closing=false,
+gen2/request8/inert=false; both buffers use current adapter's same durableWrites.
+Prior released-context console may be old callback; root cause remains unconfirmed.
+Reconciliation complete=false/scan_failed/reconciliation_blocked+scan_limit,
+observed1571 is evidence, not established save-failure cause.
+Named scopes split: `checkpoint_review`, Workspace lifecycle/platform index/tests,
+`.worktrees/save-lifecycle-recovery` (`tingkai-c/save-lifecycle-recovery`);
+`checkpoint_dedup`, NoteBuffer/tests, `.worktrees/save-autoretry`
+(`tingkai-c/save-autoretry`), proposed3bounded valid-context retries. Both baseaab5f8a2
+with runtime matching main; isolated source work only, review/validation pending.
+Registered project paths confirmed; owner used git worktree move from initial
+Orca-created outside paths, no main mutation. This thread retains exclusive main
+integration. Keep protected PID71549 OPEN and install HELD, regardless of export.
+See urgent queue for exact ownership/invariants. No retry/reload/quit in this thread.
+
+
 **Live save diagnostic update + named scope ACK — 2026-10-28.**
 Live diagnostic root reports released durable desktop context/readTextById,
 Home editor request failure and Project Idea `client_not_admitted`, despite

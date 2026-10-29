@@ -460,3 +460,21 @@ diagnostic root owns isolated Workspace lifecycle/NoteBuffer/platform index +
 focused tests; this thread retains exclusive main integration. See current roadmap
 and urgent queue for exact files, preservation constraints and required regression
 scope. Installation remains HELD; no real-session mutation or warning hiding.
+
+
+### Independent draft export and split owners — 2026-10-28
+
+Live owner completed `/private/tmp/Zorid-protected-drafts-2026-10-28.json`;
+this main owner verified0600/3851bytes/SHA256
+6c8f2dc8905633b42df261b50f5d489191ae102283795581962eec4d74627667 without
+copying private contents to docs. Owner verified both draft/base/durable states
+and visible ProjectIdea editor. Current buffer durableWrites equals current
+adapter, released/drained/closing=false,gen2/request8/inert=false; old released
+console need not describe current state. Reconciliation incomplete scan_failed/
+reconciliation_blocked+scan_limit observed1571; no causal conclusion yet.
+Worker checkpoint_review owns Workspace lifecycle/platform index/tests in
+.worktrees/save-lifecycle-recovery; checkpoint_dedup owns NoteBuffer/tests in
+.worktrees/save-autoretry for bounded valid-context retry. Both baseaab5f8a2,
+registered inside project, no main source edits; review/validation pending.
+Main integration remains exclusive here. Protected app stays open, installation
+held, no live flush/retry/reload/quit. See latest urgent finding for full scope.
