@@ -23,7 +23,7 @@ export interface NoteBufferOptions {
   onMetadata?: () => void;
 }
 interface Draft { base: string; content: string; pending?: string }
-const autosaveRetryDelays=[500,1500,4000] as const;
+const autosaveRetryDelays=[500,1500,4000,30000] as const;
 const transientSaveCodes=new Set(['busy','io','timeout','request_timeout','outcome_unknown','transport_error','transport_lost','planning_transport_lost','temporarily_unavailable','checkpoint_unavailable','EAGAIN','EBUSY','EIO','ETIMEDOUT','ECONNRESET','ECONNREFUSED','EPIPE']);
 function retryableSaveError(error:unknown):boolean {
   const seen=new Set<unknown>();
@@ -106,14 +106,13 @@ export class NoteBuffer {
    * close remains owned by this buffer and is retried by calling again. */
   async closeMetadataProjection():Promise<void>{this.metadataRetired=true;this.cancelAutosave();await this.metadataProjection?.close();}
 
-  /** A bounded retry is scheduled or running; the original error stays visible
+  /** A retry at a bounded interval is scheduled or running; the original error stays visible
    * to callers until the durable save actually succeeds. */
   get autosaveRetryPending():boolean {
     if(!this.error||!this.canAutosave()||!this.dirty||this.conflict||this.hasRecoveryConflict||!retryableSaveError(this.error))return false;
     // Durable state can publish its error before the outer save promise rejects.
     // Its first notification already belongs to this admitted automatic attempt.
-    return this.retryingAutosave||this.autosaveRetries<autosaveRetryDelays.length
-      &&(this.timer!==undefined||this.autosaveRunningEpoch===this.autosaveEpoch||this.recoverableFlushEpoch===this.autosaveEpoch);
+    return this.retryingAutosave||this.timer!==undefined||this.autosaveRunningEpoch===this.autosaveEpoch||this.recoverableFlushEpoch===this.autosaveEpoch;
   }
   /** Independent protection never clears dirty or claims a domain save. */
   get draftProtectionStatus():NoteDraftProtectionStatus|undefined{return this.durable?.draftProtectionStatus;}
@@ -257,8 +256,10 @@ export class NoteBuffer {
   }
   private retryAutosave(error:unknown):boolean {
     if(this.canAutosave()&&this.dirty&&!this.conflict&&!this.hasRecoveryConflict
-      &&retryableSaveError(error)&&this.autosaveRetries<autosaveRetryDelays.length){
-      this.retryingAutosave=true;this.scheduleAutosave(autosaveRetryDelays[this.autosaveRetries++]);
+      &&retryableSaveError(error)){
+      const step=Math.min(this.autosaveRetries,autosaveRetryDelays.length-1);
+      this.autosaveRetries=Math.min(step+1,autosaveRetryDelays.length-1);
+      this.retryingAutosave=true;this.scheduleAutosave(autosaveRetryDelays[step]);
       this.notify();return true;
     }
     return false;

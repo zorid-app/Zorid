@@ -61,19 +61,33 @@ test('lost commit reply resumes its retained intent through query before conside
   assert.equal(f.events[boundary],'query');assert.equal(f.plans.length,1);assert.deepEqual(f.commits,[held]);assert.equal(f.note.savedText,'Submitted body');assert.equal(f.note.dirty,false);await f.note.dispose();
 });
 
-test('retry backoff is bounded, retains errors/drafts, and explicit flush remains available',async t=>{
-  t.mock.timers.enable({apis:['setTimeout']});const f=await fixture();const error=new Error('Durable editor request failed; retain pending recovery state.');f.failCommit(error);f.note.update('Retained draft');await advance(t,10);
+test('transient retries keep the same intent at a capped interval and recover without user action',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});const f=await fixture();const error=transient();f.failCommit(error);f.note.update('Retained draft');await advance(t,10);
   for(const delay of [500,1500,4000]){assert.equal(f.note.autosaveRetryPending,true);await advance(t,delay);}
-  assert.equal(f.commits.length,4);assert.equal(f.note.autosaveRetryPending,false);assert.equal(f.note.error?.cause,error);assert.equal(f.note.dirty,true);assert.equal(f.note.text,'Retained draft');
-  await advance(t,60_000);assert.equal(f.commits.length,4);
-  assert.equal(new Set(f.commits.map(ref=>JSON.stringify(ref))).size,1,'all retries keep the original retained intent');
-  f.failCommit(undefined);await f.note.flush();assert.equal(f.note.dirty,false);assert.equal(f.note.error,null);assert.equal(await f.adapter.read('One.md'),'Retained draft');await f.note.dispose();
+  assert.equal(f.commits.length,4);assert.equal(f.note.autosaveRetryPending,true);assert.equal(f.note.error?.cause,error);assert.equal(f.note.dirty,true);
+  await advance(t,29_999);assert.equal(f.commits.length,4,'the capped retry must not spin');
+  await advance(t,1);assert.equal(f.commits.length,5);assert.equal(f.note.autosaveRetryPending,true);
+  await advance(t,30_000);assert.equal(f.commits.length,6);
+  assert.equal(new Set(f.commits.map(ref=>JSON.stringify(ref))).size,1,'all retries retain the original intent');
+  f.failCommit(undefined);await advance(t,30_000);
+  assert.equal(f.note.dirty,false);assert.equal(f.note.error,null);assert.equal(await f.adapter.read('One.md'),'Retained draft');
+  const attempts=f.commits.length,calls=f.calls.length;await advance(t,90_000);
+  assert.equal(f.commits.length,attempts);assert.equal(f.calls.length,calls,'healthy idle must do no work');await f.note.dispose();
 });
 
 for(const code of ['client_not_admitted','durable_scope_changed','revision_conflict','permission_denied','EACCES','corrupt','invalid_response'])test(`autosave does not retry terminal ${code}`,async t=>{
   t.mock.timers.enable({apis:['setTimeout']});const f=await fixture();const error=Object.assign(new Error('Durable editor request failed; retain pending recovery state.'),{code});f.failCommit(error);f.note.update('Retained terminal draft');await advance(t,10);
   assert.equal(f.note.autosaveRetryPending,false);await advance(t,60_000);assert.equal(f.commits.length,1);assert.equal(f.note.error?.cause,error);assert.equal(f.note.dirty,true);
   f.failCommit(undefined);await f.note.flush();await f.note.dispose();
+});
+
+for(const code of ['io','outcome_unknown'])test(`protocol ${code} never enters the continued transient retry loop`,async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});const f=await fixture();
+  const error=Object.assign(new Error('Protocol response failed'),{code,source:'protocol'});
+  f.failCommit(error);f.note.update('Protocol draft retained');await advance(t,10);
+  assert.equal(f.note.autosaveRetryPending,false);await advance(t,300_000);
+  assert.equal(f.commits.length,1);assert.equal(f.note.dirty,true);assert.equal(f.note.text,'Protocol draft retained');
+  f.failCommit(undefined);await f.note.dispose();
 });
 
 test('typing during an automatic retry keeps one save loop and persists the latest draft',async t=>{
