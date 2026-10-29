@@ -275,6 +275,33 @@ pub(super) struct ProgressScan {
     active: bool,
 }
 impl ProgressScan {
+    /// A no-op must retain the old CAS's scope/revision/corruption fence without
+    /// allocating another durable revision. This is a fresh checked read, never
+    /// a cached admission. The caller still holds the outer native vault lock.
+    fn check_unchanged_inventory(&self, vault: &mut NativeVault) -> Result<()> {
+        vault.paths.verify()?;
+        self.inventory.validate()?;
+        let (revision, durable) = vault.store.external_scan_progress::<Inventory>()?;
+        if revision != self.checkpoint_revision {
+            return Err(zorid_store::StoreError::Sync(
+                zorid_client_sync::SyncError::VersionConflict,
+            )
+            .into());
+        }
+        let durable =
+            durable.ok_or_else(|| corrupt("active external inventory checkpoint missing"))?;
+        durable.validate()?;
+        // A stable revision cannot bless changed materialized cursor bytes.
+        // Serialization is deterministic: sets/maps are ordered, vectors retain
+        // their durable ordering, and both values use this exact versioned type.
+        let before = serde_json::to_vec(&self.inventory).map_err(zorid_store::StoreError::from)?;
+        let current = serde_json::to_vec(&durable).map_err(zorid_store::StoreError::from)?;
+        if before != current {
+            return Err(corrupt("external inventory checkpoint state changed"));
+        }
+        vault.paths.verify()
+    }
+
     /// A fresh physical baseline invalidates old absence-binding fences. Retire
     /// only this derived cursor BEFORE the binding CAS, so a crash cannot resume
     /// old namespace authority after successful rebinding. History stays intact.
@@ -316,6 +343,7 @@ impl ProgressScan {
                 Err(Error::Busy("external inventory cursor is no longer active"))
             };
         }
+        let mut changed = false;
         for path in paths {
             if !matches!(
                 self.proofs.get(path),
@@ -323,11 +351,13 @@ impl ProgressScan {
             ) {
                 return Err(corrupt("processed external path has no present proof"));
             }
-            self.inventory.processed.insert(path.clone());
+            changed |= self.inventory.processed.insert(path.clone());
         }
         if !retain && self.inventory.ready && self.pending_paths().is_empty() {
             vault.save_inventory(&mut self.checkpoint_revision, None)?;
             self.active = false;
+        } else if !changed {
+            self.check_unchanged_inventory(vault)?;
         } else {
             vault.save_inventory(&mut self.checkpoint_revision, Some(&self.inventory))?;
         }
@@ -347,6 +377,9 @@ impl ProgressScan {
         vault: &mut NativeVault,
         ids: BTreeSet<EntryId>,
     ) -> Result<()> {
+        if self.inventory.namespace_processed == ids {
+            return self.check_unchanged_inventory(vault);
+        }
         self.inventory.namespace_processed = ids;
         vault.save_inventory(&mut self.checkpoint_revision, Some(&self.inventory))
     }
@@ -358,6 +391,7 @@ impl ProgressScan {
         vault: &mut NativeVault,
         issues: &[ScanIssue],
     ) -> Result<()> {
+        let mut changed = false;
         for issue in issues {
             if !self
                 .inventory
@@ -366,7 +400,11 @@ impl ProgressScan {
                 .any(|old| old.path == issue.path && old.reason == issue.reason)
             {
                 self.inventory.reconciliation_issues.push(issue.clone());
+                changed = true;
             }
+        }
+        if !changed {
+            return self.check_unchanged_inventory(vault);
         }
         vault.save_inventory(&mut self.checkpoint_revision, Some(&self.inventory))
     }
