@@ -16,6 +16,17 @@ node scripts/startup-editor-floor/run.mjs
 
 Default matrix: 8 KiB ordinary, 0.5 MiB and 5 MiB, each with normal-reopen and
 first-folder-selection clocks. Each case gets a fresh process and owned profile.
+The matrix is shuffled with a recorded unsigned 32-bit seed. `--seed` reproduces
+the planned order; `--repetitions` accepts 1 through 5, defaulting to 1. Planned
+and actual launch order, repetition, case identifier and PID are retained. For a
+separately authorized repeated pass, for example:
+
+```sh
+node scripts/startup-editor-floor/run.mjs --sizes ordinary --repetitions 3 --seed 23
+```
+
+Changing the seed changes the case order, not the separate launch/selection clock
+definitions. No in-process editor is reused as a fresh launch.
 The command builds a release bundle, packages `app.asar`, clones the frozen
 runtime, generates owned fixtures, runs the matrix, and retains its report under
 `/private/tmp/zorid-editor-floor-*`. A failed deadline is a recorded failure, not a
@@ -71,8 +82,11 @@ or trusted input.
 A receipt is `target-met`, `target-missed`, or `invalid-receipt`. Missing the fixed
 800 ms probe makes a receipt invalid, even when a later trusted readiness probe
 provides a useful elapsed-time diagnostic. `diagnosticReadyInputMs` never turns
-such an incomplete receipt into a valid latency failure or acceptance. Valid
-receipts additionally require every ordered construction marker.
+such an incomplete receipt into a valid latency failure or acceptance. When finish
+was already requested before the editor became ready, finalization explicitly
+joins that single readiness probe's journal and post-paint caret diagnostics. It
+does not resend the missed fixed probe. Valid receipts additionally require every
+ordered construction marker.
 
 The app captures its viewport and records startup events, runtime/source/asset
 pins, journal receipts and memory metrics. Successful evidence requires ordinary

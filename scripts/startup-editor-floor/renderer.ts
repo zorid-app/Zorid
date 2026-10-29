@@ -1,4 +1,5 @@
 import {EditorView} from '@codemirror/view';
+import {createDiagnosticLatch} from './diagnostics.mjs';
 import {createEditor} from '../../src/ui/editor.ts';
 import type {EditorHandle} from '../../src/ui/editor.ts';
 import '../../src/ui/styles.css';
@@ -21,6 +22,7 @@ const mark=(kind:string,data:Record<string,unknown>={})=>{rendererEvents.push({k
 mark('renderer-module-entry',{at:rendererModuleEntryEpoch});
 const bridge=(window as any).editorFloor,host=document.querySelector<HTMLElement>('#editor')!,status=document.querySelector('#status')!;
 const epoch=()=>performance.timeOrigin+performance.now(),frames=()=>new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())));
+const diagnostics=createDiagnosticLatch();
 const errors:string[]=[],probes:any[]=[],trusted:{data:string;at:number;trusted:boolean;type:string}[]=[];
 let editor:EditorHandle|undefined,view:EditorView|undefined,fixture:any,ready=false,disposed=false,firstViewportEpoch:number|undefined,finishing=false;
 const guard=()=>ready&&!disposed&&!!view&&view.contentDOM.isConnected&&fixture?.id===identity;
@@ -48,6 +50,7 @@ const startup=(async()=>{
    mark('input-applied',probe);
    probe.journalPending=bridge.journal({name,insert,sequence,identity,from:fixture.caret+sequence-1,caret,beforeLength:fixture.bytes+sequence-1,afterLength:view!.state.doc.length,appliedEpoch:probe.appliedEpoch}).then((ack:any)=>{probe.journal=ack;mark('journal-ack',{name,at:epoch(),ackEpoch:ack.ackEpoch});},fail);
    probe.paintPending=frames().then(()=>{probe.caretAfterPaint=view?.state.selection.main.head;probe.expectedCaretAfterPaint=fixture.caret+probes.length;mark('input-painted',{name,at:epoch(),caret:probe.caretAfterPaint});});
+   diagnostics.trackProbe(name,[probe.journalPending,probe.paintPending]);
   }});
  mark('create-editor-end',{at:epoch()});
  view=EditorView.findFromDOM(host.querySelector('.cm-editor')!)!;if(!view)throw Error('Production EditorView not found');
@@ -66,7 +69,7 @@ const startup=(async()=>{
 bridge.onFinish(async()=>{
  if(finishing)return;finishing=true;
  try{
-  const initial=await startup;await Promise.allSettled(probes.flatMap(probe=>[probe.journalPending,probe.paintPending]));await frames();
+  const initial=await diagnostics.finish(startup);await frames();
   // Full-body materialization and hashing are deliberately outside the deadline
   // path. They prove later text was not truncated to make first paint look fast.
   const checkedEpoch=epoch(),value=editor?.getValue()??'',inserted=probes.map(probe=>probe.insert).join('');

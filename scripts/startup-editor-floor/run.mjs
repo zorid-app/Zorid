@@ -6,6 +6,7 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 import {createHash,randomUUID} from 'node:crypto';
 import {spawn,execFileSync} from 'node:child_process';
 import {assessFloor,fixtureText,FLOOR_LABEL} from './oracle.mjs';
+import {planCases} from './order.mjs';
 
 const directory=path.dirname(fileURLToPath(import.meta.url)),root=path.resolve(directory,'../..');
 const option=(name,fallback)=>{const index=process.argv.indexOf(name);return index<0?fallback:process.argv[index+1];};
@@ -16,6 +17,8 @@ const sizes=option('--sizes','ordinary,0.5,5').split(',').map(value=>value==='or
 assert.ok(sizes.every(value=>[8192,524288,5242880,52428800].includes(value)),'Sizes: ordinary,0.5,5,50 (MiB)');
 assert.ok(!sizes.includes(52428800)||process.argv.includes('--allow-50mb'),'50 MiB needs its separate bounded run and memory inspection');
 const modes=option('--modes','normal-reopen,first-folder-selection').split(',');assert.ok(modes.every(mode=>['normal-reopen','first-folder-selection'].includes(mode)));
+const repetitions=Number(option('--repetitions','1')),seed=Number(option('--seed',String(Date.now()>>>0)));
+const caseOrder=planCases({sizes,modes,repetitions,seed}).map((item,index)=>({...item,order:index+1}));
 const deadlineMs=800,timeoutMs=Number(option('--timeout-ms','15000')),diagnosticMs=Number(option('--diagnostic-ms','1800'));
 assert.ok(Number.isSafeInteger(timeoutMs)&&timeoutMs>=4000&&timeoutMs<=60000);assert.ok(Number.isSafeInteger(diagnosticMs)&&diagnosticMs>=250&&diagnosticMs<=5000);
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms)),hash=value=>createHash('sha256').update(value).digest('hex'),hashFile=async file=>hash(await fs.readFile(file));
@@ -25,7 +28,7 @@ assert.equal(git('diff','--name-only','HEAD','--','src','desktop','package.json'
 const productionPin=async()=>{const rows=[];for(const name of sourceNames)rows.push([name,await hashFile(path.join(root,name))]);return{sha256:hash(JSON.stringify(rows)),files:rows};};
 async function treePins(folder,prefix=''){const rows=[];for(const entry of await fs.readdir(folder,{withFileTypes:true})){if(entry.name==='node_modules')continue;const name=path.join(prefix,entry.name),file=path.join(folder,entry.name);if(entry.isDirectory())rows.push(...await treePins(file,name));else if(entry.isFile())rows.push([name,await hashFile(file)]);}return rows.sort((a,b)=>a[0].localeCompare(b[0]));}
 await fs.mkdir(out,{recursive:false,mode:0o700});
-const report={version:1,label:FLOOR_LABEL,floorOnly:true,out,head:git('rev-parse','HEAD'),started:new Date().toISOString(),production:await productionPin(),harness:await treePins(directory),cases:[],errors:[],limitations:[
+const report={version:1,label:FLOOR_LABEL,floorOnly:true,out,head:git('rev-parse','HEAD'),started:new Date().toISOString(),production:await productionPin(),harness:await treePins(directory),repetitions,seed,orderAlgorithm:'mulberry32-fisher-yates-v1',caseOrder,actualOrder:[],cases:[],errors:[],limitations:[
  'No production Workspace, vault, Rust core, import, metadata, recovery, real-file write authority, or sync is exercised.',
  'Actual production createEditor runs in live mode with Base/embed extension slots enabled; declared plain Markdown fixtures contain no embeds, tables, math or databases.',
  'The fixture journal append/fsync/readback acknowledgment is independent test I/O, not a production save or a power-loss durability proof.',
@@ -70,13 +73,14 @@ try{
   const pages=name=>Number(new RegExp(name+':\\s+(\\d+)').exec(memory)?.[1]??0),available=(pages('Pages free')+pages('Pages inactive')+pages('Pages speculative'))*page;
   report.memoryBefore50={raw:memory,availableEstimate:available};assert.ok(available>=1536*1024*1024,'Less than 1.5 GiB free/inactive/speculative estimate; do not launch 50 MiB');
  }
- for(const bytes of sizes)for(const mode of modes){
-  const caseDirectory=path.join(out,`${bytes}-${mode}`),profile=path.join(caseDirectory,'profile');await fs.mkdir(caseDirectory);await fs.mkdir(profile);
+ for(const scheduled of caseOrder){
+  const {bytes,mode,repetition,caseId,order}=scheduled;
+  const caseDirectory=path.join(out,caseId),profile=path.join(caseDirectory,'profile');await fs.mkdir(caseDirectory);await fs.mkdir(profile);
   const text=fixtureText(bytes),fixturePath=path.join(caseDirectory,'Fixture.md'),sha256=hash(text),caret=text.indexOf('first paragraph');await fs.writeFile(fixturePath,text,{flag:'wx',mode:0o600});
-  const config={directory:caseDirectory,profile,mode,deadlineMs,timeoutMs,diagnosticMs,electronVersion:version,fixture:{id:'fixture-'+sha256,path:fixturePath,bytes,sha256,caret,prefix:text.slice(0,96)}};await fs.writeFile(path.join(caseDirectory,'case.json'),JSON.stringify(config),{mode:0o600});
-  const record={bytes,mode,directory:caseDirectory,spawnEpoch:null,forced:false,stdout:'',stderr:''};report.cases.push(record);await save();
+  const config={directory:caseDirectory,profile,mode,repetition,caseId,order,deadlineMs,timeoutMs,diagnosticMs,electronVersion:version,fixture:{id:'fixture-'+sha256,path:fixturePath,bytes,sha256,caret,prefix:text.slice(0,96)}};await fs.writeFile(path.join(caseDirectory,'case.json'),JSON.stringify(config),{mode:0o600});
+  const record={bytes,mode,repetition,caseId,order,directory:caseDirectory,spawnEpoch:null,forced:false,stdout:'',stderr:''};report.cases.push(record);await save();
   const env={...process.env,ZORID_EDITOR_FLOOR_CONFIG:JSON.stringify(config)};delete env.ELECTRON_RUN_AS_NODE;record.spawnEpoch=Date.now();env.ZORID_EDITOR_FLOOR_SPAWN_EPOCH=String(record.spawnEpoch);
-  child=spawn(executable,['--user-data-dir='+profile],{cwd:out,env,stdio:['ignore','pipe','pipe']});record.pid=child.pid;process.stdout.write(JSON.stringify({event:'case-start',pid:child.pid,bytes,mode,out:caseDirectory})+'\n');
+  child=spawn(executable,['--user-data-dir='+profile],{cwd:out,env,stdio:['ignore','pipe','pipe']});record.pid=child.pid;report.actualOrder.push({order,caseId,pid:child.pid,spawnEpoch:record.spawnEpoch});process.stdout.write(JSON.stringify({event:'case-start',pid:child.pid,bytes,mode,repetition,caseId,order,seed,out:caseDirectory})+'\n');
   child.stdout.on('data',chunk=>{record.stdout=(record.stdout+chunk.toString()).slice(-100000);});child.stderr.on('data',chunk=>{record.stderr=(record.stderr+chunk.toString()).slice(-100000);});
   let done=false;const exited=activeExit=new Promise(resolve=>{child.once('exit',(code,signal)=>{done=true;record.exitCode=code;record.signal=signal;resolve();});child.once('error',error=>{record.launchError=error.message;done=true;resolve();});});
   const end=Date.now()+timeoutMs+5000;while(!done&&Date.now()<end)await sleep(25);
@@ -89,7 +93,7 @@ try{
   const validationErrors=[];if(observed.body?.editedSha!==hash(edited))validationErrors.push('Independent edited-body hash mismatch');
   try{const rows=(await fs.readFile(path.join(caseDirectory,'fixture-journal.jsonl'),'utf8')).trim().split('\n').map(row=>JSON.parse(row));record.journalReadback=rows.length===2&&rows.every((row,index)=>row.identity===config.fixture.id&&row.sequence===index+1&&row.name===inputOrder[index]?.name&&row.insert===inputOrder[index]?.insert&&row.from===caret+index);if(!record.journalReadback)validationErrors.push('Independent journal readback mismatch');}catch(error){validationErrors.push('Independent journal readback: '+error.message);}
   record.assessment=assessFloor({...observed,...record,floorOnly:true,expectedBytes:bytes,expectedElectronVersion:version,fixtureId:config.fixture.id,errors:[...(observed.errors??[]),...validationErrors,...(record.reportError?[record.reportError]:[]),...(record.launchError?[record.launchError]:[])]});
-  await fs.writeFile(path.join(caseDirectory,'result.json'),JSON.stringify(record,null,2));await save();process.stdout.write(JSON.stringify({event:'case-complete',pid:record.pid,bytes,mode,...record.assessment})+'\n');
+  await fs.writeFile(path.join(caseDirectory,'result.json'),JSON.stringify(record,null,2));await save();process.stdout.write(JSON.stringify({event:'case-complete',pid:record.pid,bytes,mode,repetition,caseId,order,...record.assessment})+'\n');
  }
  assert.equal((await productionPin()).sha256,report.production.sha256,'Production source changed during benchmark');assert.equal(hash(JSON.stringify(await treePins(directory))),hash(JSON.stringify(report.harness)),'Harness source changed during benchmark');assert.equal(await hashFile(path.join(report.package.app,'Contents/Resources/app.asar')),report.package.asarSha256,'Packaged assets changed');
  report.complete=true;await save();if(report.cases.some(record=>!record.assessment.valid||!record.assessment.usableByDeadline))process.exitCode=1;
