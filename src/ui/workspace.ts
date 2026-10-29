@@ -152,9 +152,12 @@ function transientAdmissionFailure(error:unknown):boolean {
   const seen=new Set<object>();let transient=false;
   for(let depth=0;error&&typeof error==='object'&&depth<16;depth++){
     if(seen.has(error))return false;seen.add(error);
-    const value=error as {code?:unknown;cause?:unknown},code=String(value.code??'');
+    const value=error as {code?:unknown;cause?:unknown;source?:unknown},code=String(value.code??'');
+    if(value.source!==undefined&&value.source!=='host'&&value.source!=='transport')return false;
     if(/scope|corrupt|permission|integrity|protocol|invalid|conflict/.test(code)||code==='recovery_not_available')return false;
     if(['host_exited','client_not_admitted','client_ownership_lost','desktop_recovery_pending','desktop_recovery_stale_reply','ETIMEDOUT','ECONNRESET','EPIPE'].includes(code))transient=true;
+    if(value.source==='host'&&['storage_busy','storage_io_retryable','storage_capacity','filesystem_io_retryable','lock_timeout'].includes(code))transient=true;
+    if(value.source==='transport'&&code==='durable_transport_lost')transient=true;
     error=value.cause;
   }
   return transient;
