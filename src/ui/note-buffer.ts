@@ -57,6 +57,7 @@ export class NoteBuffer {
   private autosaveEpoch=0;
   private autosaveRetries=0;
   private autosaveRunningEpoch?:number;
+  private recoverableFlushEpoch?:number;
   private autosaveRequested=false;
   private retryingAutosave=false;
   private pending: Promise<unknown> = Promise.resolve();
@@ -109,7 +110,7 @@ export class NoteBuffer {
     // Durable state can publish its error before the outer save promise rejects.
     // Its first notification already belongs to this admitted automatic attempt.
     return this.retryingAutosave||this.autosaveRetries<autosaveRetryDelays.length
-      &&(this.timer!==undefined||this.autosaveRunningEpoch===this.autosaveEpoch);
+      &&(this.timer!==undefined||this.autosaveRunningEpoch===this.autosaveEpoch||this.recoverableFlushEpoch===this.autosaveEpoch);
   }
 
   private validateWrite(): void { for (const validate of this.writeValidators) validate(); }
@@ -215,7 +216,7 @@ export class NoteBuffer {
   }
   private cancelAutosave():void {
     this.cancelTimer();this.autosaveEpoch++;this.autosaveRetries=0;
-    this.autosaveRequested=false;this.retryingAutosave=false;
+    this.autosaveRequested=false;this.retryingAutosave=false;this.recoverableFlushEpoch=undefined;
   }
   private canAutosave():boolean{return this.loaded&&!this.disposed&&!this.disposing;}
   private scheduleAutosave(delay:number):void {
@@ -236,17 +237,21 @@ export class NoteBuffer {
     const requested=this.autosaveRequested;this.autosaveRequested=false;
     if(epoch!==this.autosaveEpoch){if(requested)this.scheduleAutosave(this.options.debounceMs??400);return;}
     const wasRetrying=this.retryingAutosave;
-    if(error!==undefined&&this.canAutosave()&&this.dirty&&!this.conflict&&!this.hasRecoveryConflict
-      &&retryableSaveError(error)&&this.autosaveRetries<autosaveRetryDelays.length){
-      this.retryingAutosave=true;this.scheduleAutosave(autosaveRetryDelays[this.autosaveRetries++]);
-      this.notify();return;
-    }
+    if(error!==undefined&&this.retryAutosave(error))return;
     this.retryingAutosave=false;
     if(error===undefined){
       this.autosaveRetries=0;
       if(!this.dirty)this.cancelTimer();else this.scheduleAutosave(this.options.debounceMs??400);
     }
     if(wasRetrying)this.notify();
+  }
+  private retryAutosave(error:unknown):boolean {
+    if(this.canAutosave()&&this.dirty&&!this.conflict&&!this.hasRecoveryConflict
+      &&retryableSaveError(error)&&this.autosaveRetries<autosaveRetryDelays.length){
+      this.retryingAutosave=true;this.scheduleAutosave(autosaveRetryDelays[this.autosaveRetries++]);
+      this.notify();return true;
+    }
+    return false;
   }
   private enqueue(operation: () => Promise<void>): Promise<void> {
     const result = this.pending.then(async () => {
@@ -354,7 +359,9 @@ export class NoteBuffer {
     if (this.writeIntent !== undefined || this.conflict) {
       const disk = await this.readForReconciliation();
       this.validateWrite();
+      const previousError=this.error;
       this.reconcileWrite(disk);
+      if(this.dirty)this.error=previousError;
       if (!this.dirty) { this.writeValidators.clear(); this.persist(); this.notify(); return; }
     }
     // Retry cleanup after a successful file save. Dirty states below checkpoint
@@ -379,19 +386,29 @@ export class NoteBuffer {
     this.writeValidators.clear();
   }
 
-  flush(): Promise<void> {
+  flush(options:{autoRetry?:boolean}={}): Promise<void> {
     this.cancelAutosave();
     // A completed retirement already saved this immutable buffer. Workspace
     // teardown may retry after a later buffer's independent close failed.
     if(this.disposed)return Promise.resolve();
-    return this.enqueue(() => this.save()).then(()=>{if(!this.dirty)this.cancelTimer();});
+    const epoch=this.autosaveEpoch;
+    // Irreversible platform drains opt out; a failed live-editor preflight keeps
+    // its caller's rejection while recovery continues on this exact buffer.
+    if(options.autoRetry!==false)this.recoverableFlushEpoch=epoch;
+    return this.enqueue(() => this.save()).then(()=>{
+      if(this.recoverableFlushEpoch===epoch)this.recoverableFlushEpoch=undefined;
+      if(!this.dirty)this.cancelTimer();
+    },error=>{
+      if(this.recoverableFlushEpoch===epoch){this.recoverableFlushEpoch=undefined;if(epoch===this.autosaveEpoch)this.retryAutosave(error);}
+      throw error;
+    });
   }
 
   get hasRecoveryConflict():boolean { return !!this.durable?.conflicted; }
 
   /** Retained conflicts stay navigable without turning navigation into a save. */
-  flushForNavigation():Promise<void> {
-    if(!this.hasRecoveryConflict)return this.flush();
+  flushForNavigation(options:{autoRetry?:boolean}={}):Promise<void> {
+    if(!this.hasRecoveryConflict)return this.flush(options);
     this.cancelAutosave();
     return this.enqueue(async()=>{await this.durable!.preserveDraft();this.syncDurable();});
   }

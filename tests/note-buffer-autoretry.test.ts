@@ -133,3 +133,37 @@ for(const code of ['io','client_not_admitted'])test(`first ${code} autosave erro
   assert.ok(observations.length>0);assert.equal(observations[0],code==='io','the initial failure notification must already distinguish bounded recovery from terminal rejection');
   f.failCommit(undefined);await f.note.flush();await f.note.dispose();
 });
+
+test('public flush failure rejects its caller but recovers automatically without more typing',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});const f=await fixture();f.failCheckpoint();f.note.update('Owned public-flush draft');
+  await assert.rejects(f.note.flush());const failed=f.calls.at(-1)!;await advance(t,500);
+  assert.equal(await f.adapter.read('One.md'),'Owned public-flush draft');assert.equal(f.note.dirty,false);assert.equal(f.note.error,null);
+  assert.deepEqual(f.calls[f.calls.indexOf(failed)+1],failed);assert.equal(f.plans.length,1);await f.note.dispose();
+});
+
+test('legacy retry retains its prior failure while the next submitted write is still pending',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
+  class Adapter extends MemoryAdapter {writes=0;override async write(path:string,content:string){if(++this.writes===1)throw transient();await gate;return super.write(path,content);}}
+  const adapter=new Adapter({'One.md':'Original'}),vault=new Vault(adapter);await vault.initialize();const note=new NoteBuffer(vault,'One.md',{debounceMs:10});await note.load();note.update('Legacy draft');await advance(t,10);const error=note.error;
+  try{await advance(t,500);assert.equal(adapter.writes,2);assert.equal(note.error,error,'a baseline readback is not a successful save of the pending draft');assert.equal(note.autosaveRetryPending,true);assert.equal(note.dirty,true);}
+  finally{release();await drain();await note.dispose();}
+  assert.equal(await adapter.read('One.md'),'Legacy draft');assert.equal(note.dirty,false);assert.equal(note.error,null);
+});
+
+for(const autoRetry of [true,false])test(`public flush autoRetry=${autoRetry} classifies its first failure notification and respects drain policy`,async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});const observations:boolean[]=[];let f:Awaited<ReturnType<typeof fixture>>;
+  f=await fixture(()=>{if(f?.note.error)observations.push(f.note.autosaveRetryPending);});f.failCheckpoint();f.note.update('Preflight draft');await assert.rejects(f.note.flush({autoRetry}));
+  assert.equal(observations[0],autoRetry);assert.equal(f.note.autosaveRetryPending,autoRetry);await advance(t,500);
+  assert.equal(f.note.dirty,!autoRetry);assert.equal(f.commits.length,autoRetry?1:0);await f.note.flush();await f.note.dispose();
+});
+
+test('navigation preflight failure keeps its draft and recovers automatically after returning to the editor',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});const f=await fixture();f.failCheckpoint();f.note.update('Navigation draft');await assert.rejects(f.note.flushForNavigation());await advance(t,500);
+  assert.equal(f.note.dirty,false);assert.equal(await f.adapter.read('One.md'),'Navigation draft');assert.equal(f.plans.length,1);await f.note.dispose();
+});
+
+test('retiring an in-flight public save cancels its later recovery scheduling',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});const f=await fixture();let release!:()=>void;f.holdCommit(new Promise<void>(resolve=>{release=resolve;}));f.failCommit(transient());f.note.update('Public save at retirement');
+  const saving=f.note.flush();await drain();await f.note.closeMetadataProjection();release();await assert.rejects(saving);const attempts=f.commits.length;await advance(t,60_000);
+  assert.equal(f.note.autosaveRetryPending,false);assert.equal(f.commits.length,attempts);assert.equal(f.note.dirty,true);f.failCommit(undefined);await f.note.dispose();
+});
