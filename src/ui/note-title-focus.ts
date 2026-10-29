@@ -36,17 +36,17 @@ export function bindNoteTitleFocus(title: HTMLInputElement, options: NoteTitleFo
   const restoredDrafts = new WeakSet<NoteTitleRawDraft>();
   let frozen = false, destroyed = false, composing = false, restoredPassive = false;
   let compositionDone: (() => void) | undefined, recovery: NoteTitleAdmissionRecovery | undefined;
-  let composition:{start:string;update?:string;lastValue?:string;lastData?:string|null;lastFinal?:boolean;end?:string;cancelled?:boolean}|undefined;
+  let composition:{start:string;update?:string;lastValue?:string;lastData?:string|null;lastFinal?:boolean;end?:string}|undefined;
   const finishComposition=()=>{
     if(!composition||composition.end===undefined)return;
     const value=title.value,ended=composition.end;
     const finalInput=composition.lastFinal&&composition.lastValue===value;
     const priorInput=!!ended&&composition.lastValue===value&&(ended===composition.update||ended===composition.lastData);
-    const cancelled=ended===''&&value===composition.start&&(composition.cancelled||!composition.update&&!composition.lastValue);
+    const cancelled=ended===''&&value===composition.start;
     if(!finalInput&&!priorInput&&!cancelled)return;
-    composing=false;composition=undefined;compositionDone?.();compositionDone=undefined;
+    composing=false;composition=undefined;if(frozen)title.readOnly=true;compositionDone?.();compositionDone=undefined;
   };
-  const compositionStart = () => { if (!destroyed){composing=true;composition={start:title.value};} };
+  const compositionStart = () => { if (!destroyed&&!(frozen&&title.readOnly)){composing=true;composition={start:title.value};} };
   const compositionUpdate = (event:CompositionEvent) => { if(composition)composition.update=event.data; };
   const compositionEnd = (event:CompositionEvent) => { if(composition){composition.end=event.data;finishComposition();} };
   const compositionInput=(event:Event)=>{if(composition){const input=event as InputEvent;composition.lastValue=title.value;composition.lastData=input.data;composition.lastFinal=input.isComposing===false;finishComposition();}};
@@ -85,7 +85,6 @@ export function bindNoteTitleFocus(title: HTMLInputElement, options: NoteTitleFo
     });
   };
   const keydown = title.onkeydown = event => {
-    if(event.key==='Escape'&&composition)composition.cancelled=true;
     if (!frozen && !destroyed) restoredPassive = false;
     if (event.key !== 'Enter' || event.isComposing) return;
     event.preventDefault(); commit(true);
@@ -101,7 +100,7 @@ export function bindNoteTitleFocus(title: HTMLInputElement, options: NoteTitleFo
       if (destroyed || pending) throw new Error('The submitted title rename is still pending.');
       // Freeze before the workspace changes focus or makes its old root inert.
       // Natural composition is allowed to finish; no input/blur event is replayed.
-      let raw = capture(); frozen = true;
+      let raw = capture(); frozen = true;if(!composing)title.readOnly=true;
       const ready = composing ? new Promise<void>(resolve => { compositionDone = resolve; }) : Promise.resolve();
       const settled = ready.then(() => new Promise<void>(resolve => setTimeout(resolve, 0))).then(() => { raw = {...capture(),focused:raw.focused}; });
       return recovery = {get rawDrafts(){return raw;},settle:()=>settled};
