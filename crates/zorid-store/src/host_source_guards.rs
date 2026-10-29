@@ -115,9 +115,10 @@ fn capture_corrupt() -> StoreError {
 pub(super) fn pending(tx: &Connection, capture: &OperationId) -> Result<Option<HostSourceCapture>> {
     let raw = tx.query_row(
         "SELECT client_id,lease_token,source_length,record FROM host_source_captures WHERE capture_id=?1",
-        [capture.as_str()], |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,u64>(2)?,row.get::<_,String>(3)?)),
+        [capture.as_str()], |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,i64>(2)?,row.get::<_,String>(3)?)),
     ).optional()?;
     raw.map(|(client,token,length,json)| {
+        let length=u64::try_from(length).map_err(|_|capture_corrupt())?;
         if json.len() > 65536 { return Err(capture_corrupt()); }
         let value: HostSourceCapture = serde_json::from_str(&json).map_err(|_| capture_corrupt())?;
         if value.client_id.as_str()!=client || value.lease_token.as_str()!=token
@@ -214,7 +215,8 @@ impl Store {
         if count>=MAX_HOST_SOURCE_CAPTURES || guard.length>MAX_HOST_SOURCE_TOTAL_BYTES.saturating_sub(bytes) { tx.commit()?;return Ok(false); }
         let encoded=serde_json::to_string(&value)?;
         if encoded.len()>65536 { return Err(ContractError::InvalidMutation {reason:"conditional source evidence exceeds bound".into()}.into()); }
-        tx.execute("INSERT INTO host_source_captures(capture_id,client_id,lease_token,source_length,record) VALUES(?1,?2,?3,?4,?5)",params![guard.capture_id.as_str(),client.as_str(),token.as_str(),guard.length,encoded])?;
+        let length=i64::try_from(guard.length).map_err(|_|capture_corrupt())?;
+        tx.execute("INSERT INTO host_source_captures(capture_id,client_id,lease_token,source_length,record) VALUES(?1,?2,?3,?4,?5)",params![guard.capture_id.as_str(),client.as_str(),token.as_str(),length,encoded])?;
         tx.commit()?;Ok(true)
     }
     pub fn host_source_capture(&self, capture:&OperationId) -> Result<Option<HostSourceCapture>> {
