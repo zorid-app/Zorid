@@ -700,6 +700,11 @@ test('ambiguous protected versions stay accessible as exact read-only copies wit
   Object.assign(recovered.adapter,{independentDrafts:provider});
   const f=await setup(t,{editorOnly:true},false,{},undefined,recovered.adapter),buffer=f.workspace.buffers.get('One.md')!;assert.ok(buffer);
   await buffer.flushDraftProtection();const mutationsBefore=mutations.length,readsBefore=reads.length;
+  for(const flag of ['closing','platformDraining']){
+    const internal=f.workspace as any,opening=internal.showProtectedDrafts('One.md',buffer);internal[flag]=true;
+    try{await opening;assert.equal(document.querySelector('.note-journal-recovery'),null,'a late import cannot open a retiring owner');assert.equal(reads.length,readsBefore);}
+    finally{internal[flag]=false;internal.noteJournalPanel?.close();}
+  }
   let copied='';Object.defineProperty(f.dom.window.navigator,'clipboard',{configurable:true,value:{writeText:async(text:string)=>{copied=text;}}});
   const versions=[...document.querySelectorAll<HTMLButtonElement>('.native-document-status button')].find(button=>button.textContent==='Protected drafts');assert.ok(versions);versions.click();
   for(let n=0;n<100&&!document.querySelector('.note-journal-recovery .version-history-version');n++)await new Promise(done=>setTimeout(done,5));

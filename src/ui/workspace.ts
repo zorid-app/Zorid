@@ -3271,7 +3271,7 @@ export class Workspace {
     const vault=this.vault,generation=this.vaultGeneration,provider=vault.adapter.independentDrafts,witness=buffer.savedDurableWitness;
     if(!provider||!witness)return;
     const entryId=witness.entryId;
-    const current=()=>this.vault===vault&&this.vaultGeneration===generation&&!this.platformReleased&&!this.platformDrained
+    const current=()=>this.vault===vault&&this.vaultGeneration===generation&&!this.closing&&!this.platformDraining&&!this.platformReleased&&!this.platformDrained
       &&this.buffers.get(path)===buffer&&buffer.path===path&&buffer.savedDurableWitness?.entryId===entryId
       &&vault.entries.get(path)?.type==='file'&&(vault.entries.get(path)?.entryId??entryId)===entryId;
     const {mountNoteJournalRecovery}=await import('./note-journal-recovery.ts');
