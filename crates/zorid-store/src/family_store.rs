@@ -619,3 +619,7 @@ impl Store {
         Ok(count == 1)
     }
 }
+
+#[cfg(test)]
+#[path = "family_readiness_tests.rs"]
+mod family_readiness_tests;
