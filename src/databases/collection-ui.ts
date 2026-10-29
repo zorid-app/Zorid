@@ -359,7 +359,23 @@ export function mountCollectionEditor(container: HTMLElement, options: Collectio
     const confirmation = element(doc, 'div'); confirmation.className = 'collection-delete-confirmation';
     confirmation.append(element(doc, 'p', `Remove ${label}? This changes ${count} ${count === 1 ? 'entry' : 'entries'}.`), button(doc, 'Cancel', () => confirmation.remove()), button(doc, 'Remove', () => { destructiveConfirmed = true; remove(); changed(); render(); })); host.append(confirmation);
   }
-  function render() {
+  type MoveFocus = { property: DatabasePropertyInput; option?: NonNullable<DatabasePropertyInput['options']>[number]; direction: 'up' | 'down' };
+  function moveProperty(index: number, delta: -1 | 1, control: HTMLButtonElement) {
+    const next = index + delta; if (next < 0 || next >= properties.length) return;
+    const property = properties[index], restore = doc.activeElement === control;
+    [properties[index], properties[next]] = [properties[next], properties[index]];
+    changed(); render(restore ? { property, direction: delta === -1 ? 'up' : 'down' } : undefined);
+  }
+  function moveOption(index: number, optionIndex: number, delta: -1 | 1, control: HTMLButtonElement) {
+    const next = [...properties[index].options ?? []], destination = optionIndex + delta;
+    if (destination < 0 || destination >= next.length) return;
+    const option = next[optionIndex], restore = doc.activeElement === control;
+    [next[optionIndex], next[destination]] = [next[destination], next[optionIndex]];
+    const property = properties[index] = { ...properties[index], options: next };
+    changed(); render(restore ? { property, option, direction: delta === -1 ? 'up' : 'down' } : undefined);
+  }
+  function render(moveFocus?: MoveFocus) {
+    let focusTarget: HTMLButtonElement | undefined;
     list.replaceChildren();
     properties.forEach((property, index) => {
       if (focusedProperty && property.id !== focusedProperty.id) return;
@@ -393,7 +409,10 @@ export function mountCollectionEditor(container: HTMLElement, options: Collectio
           }); types.append(choice);
         }); row.append(toggle, types);
       }
-      row.append(button(doc,'Move property up',()=>{if(index===0)return;[properties[index-1],properties[index]]=[properties[index],properties[index-1]];changed();render();}),button(doc,'Move property down',()=>{if(index===properties.length-1)return;[properties[index+1],properties[index]]=[properties[index],properties[index+1]];changed();render();}), button(doc, 'Remove property', () => confirmRemoval(`“${label.value}”`, count, () => { properties.splice(index, 1); }, row)));
+      const moveUp = button(doc, 'Move property up', () => moveProperty(index, -1, moveUp));
+      const moveDown = button(doc, 'Move property down', () => moveProperty(index, 1, moveDown));
+      if (moveFocus?.property === property && !moveFocus.option) focusTarget = moveFocus.direction === 'up' ? moveUp : moveDown;
+      row.append(moveUp, moveDown, button(doc, 'Remove property', () => confirmRemoval(`“${label.value}”`, count, () => { properties.splice(index, 1); }, row)));
       if (['select', 'multi-select', 'status'].includes(property.datatype)) {
         const choices = element(doc, 'div'); choices.className = 'collection-option-list';
         (property.options ?? []).forEach((option, optionIndex) => {
@@ -407,7 +426,10 @@ export function mountCollectionEditor(container: HTMLElement, options: Collectio
           const color=element(doc,'select');color.setAttribute('aria-label',`${option.name} color`);
           for(const value of ['', 'gray','red','orange','yellow','green','blue','purple','pink']){const item=element(doc,'option',value?value[0].toUpperCase()+value.slice(1):'Default color');item.value=value;color.append(item);}color.value=option.color??'';
           color.addEventListener('change',()=>{const next=[...properties[index].options??[]];next[optionIndex]={...next[optionIndex],color:color.value||undefined};properties[index]={...properties[index],options:next};changed();});optionRow.append(color);
-          optionRow.append(button(doc,'Move option up',()=>{if(optionIndex===0)return;const next=[...properties[index].options??[]];[next[optionIndex-1],next[optionIndex]]=[next[optionIndex],next[optionIndex-1]];properties[index]={...properties[index],options:next};changed();render();}),button(doc,'Move option down',()=>{const next=[...properties[index].options??[]];if(optionIndex===next.length-1)return;[next[optionIndex+1],next[optionIndex]]=[next[optionIndex],next[optionIndex+1]];properties[index]={...properties[index],options:next};changed();render();}));
+          const moveOptionUp = button(doc, 'Move option up', () => moveOption(index, optionIndex, -1, moveOptionUp));
+          const moveOptionDown = button(doc, 'Move option down', () => moveOption(index, optionIndex, 1, moveOptionDown));
+          if (moveFocus?.property === property && moveFocus.option === option) focusTarget = moveFocus.direction === 'up' ? moveOptionUp : moveOptionDown;
+          optionRow.append(moveOptionUp, moveOptionDown);
           const used = options.entries.filter(entry => property.id && option.id && (entry.values[property.id] === option.id || Array.isArray(entry.values[property.id]) && (entry.values[property.id] as unknown[]).includes(option.id))).length;
           optionRow.append(button(doc, 'Remove option', () => confirmRemoval(`“${optionName.value}”`, used, () => { const next = [...properties[index].options ?? []]; next.splice(optionIndex, 1); const previousDefault=properties[index].default; const selectedDefault=Array.isArray(previousDefault)?previousDefault.filter(id=>id!==option.id):previousDefault===option.id?undefined:previousDefault;properties[index] = { ...properties[index], options: next,default:selectedDefault }; }, optionRow))); choices.append(optionRow);
         });
@@ -429,6 +451,9 @@ export function mountCollectionEditor(container: HTMLElement, options: Collectio
       }
       row.append(defaultLabel);list.append(row);
     });
+    // Object identity is local to this synchronous render, so duplicate names
+    // and unsaved fields/options need no fake schema IDs or index-based rebinding.
+    if (focusTarget && live() && root.isConnected && (doc.activeElement === doc.body || doc.activeElement === doc.documentElement)) focusTarget.focus();
   }
   const add = button(doc, 'Add property', () => { properties.push({ name: 'New property', datatype: 'text', options: [] }); changed(); render(); list.lastElementChild?.querySelector('input')?.focus(); });
   add.hidden = !!focusedProperty;
