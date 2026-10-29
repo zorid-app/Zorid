@@ -70,12 +70,17 @@ No other session is involved. No 800 ms, recovery completion or installation cla
 
 | Scope | Owner / branch | State |
 | --- | --- | --- |
-| Floor benchmark | checkpoint_review / startup-editor-floor | `032c95b3`; independent review requires buffered event reporting and finer phase markers before reruns |
-| Cooperative import/publication | maintenance_triggers / import-quantum | Actual old production-host RED; green implementation pending |
-| Pump manifest lookup | index_redundancy / pump-manifest-lookup | `5352e93c`, `ff82369d`; 25 unit and 22 integration reported, independent review pending |
-| Typed error transport | file_open_audit / durable-error-transport | `01076cf1`; focused 124 tests and independent source review accepted; packaged contextBridge gate pending |
-| Creation continuation | checkpoint_dedup / managed-creation-continuation | `ecfb16cc`; reviewer found final async presentation retirement gap, successor pending; nested fire-and-forget path remains open |
-| Independent reviews | startup_audit, binding_inventory_review, native_enrollment_review | Read-only review scopes; no overlapping implementation |
+| Packaged benchmark | index_redundancy / packaged harness | Real-app harness in progress; no 800 ms production acceptance |
+| Cooperative import/publication | maintenance_triggers / import-quantum | Reviewed `27628f75` composed; paired new-release-host measurements running |
+| Pump and background index scheduling | root composition | Reviewed lookup and import-aware scheduling composed; real idle/freshness gates pending |
+| Typed transport/read renewal | root composition | Reviewed and focused checks passed; packaged interruption gate pending |
+| Creation continuation | root composition | Reviewed regular/nested handoff fixes composed; packaged gate pending |
+| Independent note protection | file_open_audit / note-independent-protection | `8c644e04` composed; 75 composed checks + TS pass; independent review requires receipt/protection-drain corrections |
+| Continued transient autosave | root `175b9400` | Controlled RED then 58 green checks; independent source review accepted; no healthy idle work |
+| Raw form admission recovery | startup_audit / raw-admission-recovery | Mounted unsubmitted-value regression RED; component implementation in progress |
+| Package workspace isolation | checkpoint_review `3643433d` → root `40c668a4` | Actual collector regression fixed; 19 author checks and independent source review clear; real packaging retry pending |
+| Deferred note counts | native_enrollment_review / workspace-deferred-status-counts | Mounted critical-path regression RED; bounded scanner implementation in progress |
+| Renderer editor split | checkpoint_dedup | Optional eager import audit complete; small concurrent prewarm experiment in progress |
 
 Heavy builds are serialized on the 8 GB machine. Focused desktop checks need no
 per-check permission. No agent may mutate or discard another branch's work.
