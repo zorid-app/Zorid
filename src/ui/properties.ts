@@ -119,6 +119,7 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
   const globalError = element('div', 'metadata-error'); globalError.setAttribute('role', 'alert'); globalError.hidden = true;
   const addButton = button('Add property', 'metadata-add-button');
   root.append(heading, rowsContainer, globalError, addButton); container.append(root);
+  const restoredPassiveRows=new Set<Row>();
   const rows = new Map<string, Row>(), selectedTypes = new Map<string, PropertyType>();
   let frozen = false;
   let recovery:PropertiesAdmissionRecovery|undefined;
@@ -586,12 +587,37 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
   root.addEventListener('keydown', keyboardMenu);
   // Freeze at the component boundary before making its containing workspace
   // inert: browser-generated change/blur must not accept raw values on retire.
-  const blockFrozen=(event:Event)=>{if(frozen){event.preventDefault();event.stopImmediatePropagation();}};
+  const blockFrozen=(event:Event)=>{
+    const target=event.target as HTMLElement|null,row=target?[...rows.values()].find(row=>row.element.contains(target)):undefined;
+    if(event.type==='keydown'&&(event as KeyboardEvent).key==='Escape'&&event.target){const state=compositions.get(event.target);if(state)state.cancelled=true;}
+    if(frozen||event.type==='change'&&row&&restoredPassiveRows.has(row)){event.preventDefault();event.stopImmediatePropagation();return;}
+    if(row&&['keydown','click'].includes(event.type))restoredPassiveRows.delete(row);
+  };
+  const activateRestored=(event:Event)=>{
+    if(frozen)return;const target=event.target as Node|null;
+    for(const row of restoredPassiveRows)if(target&&row.element.contains(target)||event.type==='pointerdown'&&row.element.contains(document.activeElement))restoredPassiveRows.delete(row);
+  };
+  root.addEventListener('input',activateRestored,true);document.addEventListener('pointerdown',activateRestored,true);
   for(const type of ['change','click','keydown','contextmenu'])root.addEventListener(type,blockFrozen,true);
   const composing=new Set<EventTarget>();let compositionDone:(()=>void)|undefined;
-  const compositionStart=(event:Event)=>{if(event.target)composing.add(event.target);};
-  const compositionEnd=(event:Event)=>{if(event.target)composing.delete(event.target);if(!composing.size){compositionDone?.();compositionDone=undefined;}};
+  type RawComposition={start:string;update?:string;lastValue?:string;lastData?:string|null;lastFinal?:boolean;end?:string;cancelled?:boolean};
+  const compositions=new Map<EventTarget,RawComposition>();
+  const finishComposition=(target:EventTarget)=>{
+    const state=compositions.get(target);if(!state||state.end===undefined)return;
+    const value=(target as HTMLInputElement).value,ended=state.end;
+    const finalInput=state.lastFinal&&state.lastValue===value;
+    const priorInput=!!ended&&state.lastValue===value&&(ended===state.update||ended===state.lastData);
+    const cancelled=ended===''&&value===state.start&&(state.cancelled||!state.update&&!state.lastValue);
+    if(!finalInput&&!priorInput&&!cancelled)return;
+    composing.delete(target);compositions.delete(target);if(!composing.size){compositionDone?.();compositionDone=undefined;}
+  };
+  const compositionStart=(event:Event)=>{if(event.target){composing.add(event.target);compositions.set(event.target,{start:(event.target as HTMLInputElement).value});}};
+  const compositionUpdate=(event:Event)=>{const state=event.target?compositions.get(event.target):undefined;if(state)state.update=(event as CompositionEvent).data;};
+  const compositionEnd=(event:Event)=>{const state=event.target?compositions.get(event.target):undefined;if(state){state.end=(event as CompositionEvent).data;finishComposition(event.target!);}};
+  const compositionInput=(event:Event)=>{const state=event.target?compositions.get(event.target):undefined;if(state){const input=event as InputEvent;state.lastValue=(event.target as HTMLInputElement).value;state.lastData=input.data;state.lastFinal=input.isComposing===false;finishComposition(event.target!);}};
+  const compositionEscape=(event:KeyboardEvent)=>{const state=event.target?compositions.get(event.target):undefined;if(state&&event.key==='Escape')state.cancelled=true;};
   root.addEventListener('compositionstart',compositionStart,true);root.addEventListener('compositionend',compositionEnd,true);
+  root.addEventListener('compositionupdate',compositionUpdate,true);root.addEventListener('input',compositionInput,true);root.addEventListener('keydown',compositionEscape,true);
 
   addButton.addEventListener('click', () => {
     const addOwnerCurrent = () => { try { return live(); } catch { return false; } };
@@ -685,7 +711,7 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
     if(recovery)return recovery;
     if(!canRecoverAdmission())throw new Error('Submitted property changes must settle before storage reconnects.');
     const identity={path:options.path,entryId:options.path?options.vault?.entries.get(options.path)?.entryId:undefined,revision:options.path?options.vault?.entries.get(options.path)?.revision:undefined};
-    const drafts=[...rows.values()].filter(hasDraft).map(row=>({row,key:row.key,valueFingerprint:row.renderedValue??JSON.stringify(row.property.value),definitionFingerprint:row.renderedDefinition,
+    const drafts=[...rows.values()].filter(row=>hasDraft(row)||[...composing].some(target=>row.element.contains(target as Node))).map(row=>({row,key:row.key,valueFingerprint:row.renderedValue??JSON.stringify(row.property.value),definitionFingerprint:row.renderedDefinition,
       type:row.renderedType??typeFor(row.property),widget:row.value.hasAttribute('data-base-editing')?captureBasePropertyRawDraft(row.value):undefined}));
     if(drafts.some(draft=>draft.row.value.hasAttribute('data-base-editing')&&!draft.widget))throw new Error('The property draft changed before it could be retained.');
     const formBaseline=addForm?JSON.stringify(readProperties(options.getSource())):undefined;
@@ -717,7 +743,7 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
     for(const item of draft.rows){const row=rows.get(item.key)!;
       if(item.widget){if(!restoreBasePropertyRawDraft(row.value,item.widget))return conflict(`Property ${item.key} could not restore its raw editor.`);}
       else {const controls=controlsFor(row);for(const state of item.controls)restoreControl(state.kind==='key'?controls[0]:controls[state.index+1],state,restoreOptions?.focus!==false);}
-      if(!item.widget){row.dirty=true;row.revision++;}
+      if(!item.widget){row.dirty=true;row.revision++;restoredPassiveRows.add(row);}
     }
     if(draft.addForm){addButton.click();const name=addForm?.querySelector<HTMLInputElement>('input'),selector=addForm?.querySelector<HTMLSelectElement>('select');if(!name||!selector)return conflict('The new-property form is unavailable.');selector.value=draft.addForm.type;restoreControl(name,draft.addForm.name,restoreOptions?.focus!==false);}
     restoredDrafts.add(draft);return {restored:true,pending:false,conflicts:[]};
@@ -736,6 +762,8 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
     root.removeEventListener('contextmenu', contextMenu); root.removeEventListener('keydown', keyboardMenu);
     for(const type of ['change','click','keydown','contextmenu'])root.removeEventListener(type,blockFrozen,true);
     root.removeEventListener('compositionstart',compositionStart,true);root.removeEventListener('compositionend',compositionEnd,true);
+    root.removeEventListener('compositionupdate',compositionUpdate,true);root.removeEventListener('input',compositionInput,true);root.removeEventListener('keydown',compositionEscape,true);
+    root.removeEventListener('input',activateRestored,true);document.removeEventListener('pointerdown',activateRestored,true);restoredPassiveRows.clear();
     if (menuPending) void (options.dismissMenu ?? dismissContextMenu)(document).catch(problem => { try { options.onError?.(problem); } catch { /* The owner is already disposed. */ } });
     menuPending = false; definitionLoad++; editObserver?.disconnect(); unsubscribers.forEach(unsubscribe => unsubscribe()); for (const row of rows.values()) row.disposeWidget?.(); rows.clear();retainedOptionFailures.clear();releasedWidgetRows.clear(); selectedTypes.clear(); root.remove();
   } };
