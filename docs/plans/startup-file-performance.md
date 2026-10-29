@@ -446,3 +446,17 @@ edit scopes are required before implementation. Exact passive installed identity
 and endpoint absence are in protected-live-save-failure-handoff.json under the
 existing task evidence directory. Previous disposable CDP ports are not live
 handles for the protected session. See urgent user-findings entry.
+
+
+### Live preservation and scoped ownership update — 2026-10-28
+
+Live diagnostic owner reports released-context/readTextById and client_not_admitted
+errors with dirty Home420chars/ProjectIdea62chars, Workspace.platformReleased=false.
+Both exact buffers/base +durable.state verified in separate localStorage incident
+record3707bytes; independent JSON export pending. Debug resumed/listener removed;
+no flush/retry/reload. chooseVault release-before-picker/failure shell reuse and
+host absence are observations, not established root cause. Named live-save
+diagnostic root owns isolated Workspace lifecycle/NoteBuffer/platform index +
+focused tests; this thread retains exclusive main integration. See current roadmap
+and urgent queue for exact files, preservation constraints and required regression
+scope. Installation remains HELD; no real-session mutation or warning hiding.

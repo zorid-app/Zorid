@@ -2,6 +2,42 @@
 
 ## URGENT: real-session automatic save failure — 2026-10-28
 
+
+**Live diagnostic update; named implementation ownership ACK — 2026-10-28.**
+The live diagnostic root reports console `Durable desktop context released`
+(`readTextById`), Home durable editor request failure, and Project Idea
+`DurableWritePlanningError` code `client_not_admitted`. Inspected Workspace has
+`platformReleased=false`; Home remains dirty (420 characters), Project Idea dirty
+(62 characters). Both exact buffers/base plus `durable.state` were captured and
+verified by that owner in separate localStorage key
+`zorid:protected-save-incident:2026-10-28` (3707 bytes). Independent JSON export is
+**pending**, so do not claim two independent copies yet. No draft text is stored
+in this public ledger. Harmless F24 debugger listener was removed and execution
+resumed; owner reports Not paused, with no flush/retry/reload.
+
+The audit found `chooseVault` can release the previous adapter before the picker
+and leave the visible shell on a failed transition; host absence was also
+observed. These are confirmed reported observations and a candidate causal path,
+**not an established root cause** or proof of on-disk draft loss.
+
+Named owner ACK: requesting **live-save diagnostic root** owns scoped
+`src/ui/workspace.ts` lifecycle, `src/ui/note-buffer.ts`,
+`src/platform/index.ts` and focused regression tests in an isolated branch/worktree.
+This thread retains exclusive main integrate/test/commit/install ownership. The
+owner must report branch/worktree, ordered commits, validation and independent
+review before handoff. No other Workspace/NoteBuffer/platform author may edit
+concurrently. Rust/core, unrelated editor polish, and durable-state seam changes
+outside these named files require further named scope coordination.
+
+Required behavior: prevent released adapter/context reuse; preserve drafts, base
+and durable intent; provide autonomous safe retry through a valid admitted
+context. Preserve identity/revision/CAS and uncertain-commit semantics. Do not
+mask warnings or equate clearing UI errors with saving bytes. Required regressions
+should cover picker cancellation/failure and lifecycle admission loss with dirty
+buffers; prove preserved draft plus durable save after valid recovery. The real
+session remains protected with no quit/reload/replace or uncoordinated flush/retry.
+Live owner controls further preservation/diagnostic steps; installation hold stays.
+
 **OPEN; live draft preservation takes priority over installation.** User reports
 screenshot messages “Could not save Home”, “Could not save Project Idea” and
 “Folder needs attention”. User requires reliable automatic saving without this
@@ -11,10 +47,9 @@ Protected default-profile main PID71549 and renderer44315 must stay OPEN. Do not
 quit, reload, replace, force-close or discard. Previous requests for user closure
 are superseded. Preserve both installed fallback and staged replacement bundles.
 
-Ownership: this main integration owner records the ledger/handoff only. The
-requesting live diagnostic root owns read-only inspection and draft preservation;
-Workspace, NoteBuffer and core changes require explicit named scope coordination
-before edits. No runtime edit scope is granted by this finding.
+Earlier initial ownership was read-only; the named lifecycle/NoteBuffer/platform
+scope above supersedes that restriction only for isolated implementation. This
+thread continues main ledger/integration ownership; other core scopes remain held.
 
 Passive handoff receipt:
 `tmp/bases-edit-performance-20261028/protected-live-save-failure-handoff.json`.
