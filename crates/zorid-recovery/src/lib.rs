@@ -129,6 +129,21 @@ pub enum CaptureOutcome {
     IntervalNotElapsed,
 }
 
+/// A metadata-only periodic decision. It does not verify the retained BLOB;
+/// explicit reads and captures still verify stored content before using it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PeriodicCaptureEligibility {
+    CaptureRequired,
+    Unchanged,
+    IntervalNotElapsed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PruneProgress {
+    pub deleted: u16,
+    pub pending: bool,
+}
+
 /// Cursor from the last item in the preceding page; stable under new inserts.
 #[derive(Clone, Copy, Debug)]
 pub struct SnapshotCursor {
@@ -171,6 +186,7 @@ impl std::error::Error for RecoveryError {}
 pub struct RecoveryStore {
     connection: Connection,
     policy: RecoveryPolicy,
+    deferred_expiry: bool,
 }
 
 impl RecoveryStore {
@@ -187,6 +203,36 @@ impl RecoveryStore {
         scope: &RecoveryScope,
         policy: RecoveryPolicy,
         now_ms: i64,
+    ) -> Result<Self, RecoveryError> {
+        Self::open_mode(path, scope, policy, now_ms, false)
+    }
+
+    /// Admit schema and scope without deleting old snapshots on the foreground
+    /// path. Captures retain their own transaction and never perform a global
+    /// expiry sweep in this mode; the owner must schedule bounded idle pruning.
+    pub fn open_deferred(
+        path: impl AsRef<Path>,
+        scope: &RecoveryScope,
+        now_ms: i64,
+    ) -> Result<Self, RecoveryError> {
+        Self::open_deferred_with_policy(path, scope, RecoveryPolicy::default(), now_ms)
+    }
+
+    pub fn open_deferred_with_policy(
+        path: impl AsRef<Path>,
+        scope: &RecoveryScope,
+        policy: RecoveryPolicy,
+        now_ms: i64,
+    ) -> Result<Self, RecoveryError> {
+        Self::open_mode(path, scope, policy, now_ms, true)
+    }
+
+    fn open_mode(
+        path: impl AsRef<Path>,
+        scope: &RecoveryScope,
+        policy: RecoveryPolicy,
+        now_ms: i64,
+        deferred_expiry: bool,
     ) -> Result<Self, RecoveryError> {
         validate_identity(&scope.vault_id, "vault identity")?;
         validate_identity(&scope.replica_id, "replica identity")?;
@@ -209,16 +255,23 @@ impl RecoveryStore {
             transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
-        transaction.execute(
-            "DELETE FROM snapshots WHERE captured_at_ms < ?1",
-            [now_ms.saturating_sub(policy.retention_ms)],
-        )?;
+        if !deferred_expiry {
+            transaction.execute(
+                "DELETE FROM snapshots WHERE captured_at_ms < ?1",
+                [now_ms.saturating_sub(policy.retention_ms)],
+            )?;
+        }
         transaction.commit()?;
-        Ok(Self { connection, policy })
+        Ok(Self {
+            connection,
+            policy,
+            deferred_expiry,
+        })
     }
 
-    /// Captures are transactional with expiry cleanup. Save-failure captures
-    /// bypass cadence, but identical latest content never creates another row.
+    /// Captures are transactional. Default stores include expiry cleanup;
+    /// deferred stores leave it to idle maintenance. Save-failure captures bypass
+    /// cadence, but identical latest unexpired content never creates another row.
     pub fn capture(
         &mut self,
         input: SnapshotInput<'_>,
@@ -233,11 +286,19 @@ impl RecoveryStore {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        transaction.execute(
-            "DELETE FROM snapshots WHERE captured_at_ms < ?1",
-            [now_ms.saturating_sub(self.policy.retention_ms)],
+        let retained_after = now_ms.saturating_sub(self.policy.retention_ms);
+        if !self.deferred_expiry {
+            transaction.execute(
+                "DELETE FROM snapshots WHERE captured_at_ms < ?1",
+                [retained_after],
+            )?;
+        }
+        let previous = read_latest(
+            &transaction,
+            input.entry_id,
+            self.policy.max_snapshot_bytes,
+            retained_after,
         )?;
-        let previous = read_latest(&transaction, input.entry_id, self.policy.max_snapshot_bytes)?;
         if let Some(previous) = previous {
             if previous.content == input.content {
                 transaction.commit()?;
@@ -274,6 +335,56 @@ impl RecoveryStore {
         };
         transaction.commit()?;
         Ok(CaptureOutcome::Captured(info))
+    }
+
+    /// Decide whether periodic work needs a body without selecting either the
+    /// current source or retained snapshot BLOB. The caller supplies a coherent
+    /// source metadata witness; a skip never asserts retained-BLOB integrity.
+    pub fn periodic_capture_eligibility(
+        &self,
+        entry_id: &str,
+        content_bytes: u64,
+        content_hash: &[u8; 32],
+        now_ms: i64,
+    ) -> Result<PeriodicCaptureEligibility, RecoveryError> {
+        validate_identity(entry_id, "entry identity")?;
+        validate_time(now_ms)?;
+        if content_bytes > self.policy.max_snapshot_bytes as u64 {
+            return Err(RecoveryError::SnapshotTooLarge);
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT id,
+                 CASE WHEN length(CAST(entry_id AS BLOB)) BETWEEN 1 AND 1024 THEN entry_id END,
+                 CASE WHEN length(CAST(historical_path AS BLOB)) BETWEEN 1 AND 4096 THEN historical_path END,
+                 captured_at_ms,
+                 CASE WHEN provenance IN ('periodic', 'save_failure') THEN provenance END,
+                 length(content), length(content_hash),
+                 CASE WHEN length(content_hash) = 32 THEN content_hash END
+             FROM snapshots WHERE entry_id = ?1 AND captured_at_ms >= ?2
+             ORDER BY captured_at_ms DESC, id DESC LIMIT 1",
+        )?;
+        let mut rows = statement.query(params![
+            entry_id,
+            now_ms.saturating_sub(self.policy.retention_ms)
+        ])?;
+        let Some(row) = rows.next()? else {
+            return Ok(PeriodicCaptureEligibility::CaptureRequired);
+        };
+        let previous = read_info(row, self.policy.max_snapshot_bytes)?;
+        if previous.entry_id != entry_id || row.get::<_, i64>(6)? != 32 {
+            return Err(RecoveryError::CorruptRecord);
+        }
+        let digest: Vec<u8> = row.get(7)?;
+        if digest.len() != 32 {
+            return Err(RecoveryError::CorruptRecord);
+        }
+        if previous.byte_length as u64 == content_bytes && digest.as_slice() == content_hash {
+            return Ok(PeriodicCaptureEligibility::Unchanged);
+        }
+        if now_ms.saturating_sub(previous.captured_at_ms) < self.policy.interval_ms {
+            return Ok(PeriodicCaptureEligibility::IntervalNotElapsed);
+        }
+        Ok(PeriodicCaptureEligibility::CaptureRequired)
     }
 
     /// Lists bounded metadata only; read verifies the stored content hash.
@@ -318,7 +429,38 @@ impl RecoveryStore {
             "id = ?1",
             snapshot_id,
             self.policy.max_snapshot_bytes,
+            None,
         )
+    }
+
+    /// Make one bounded expiry turn. The ordering uses the expiry index and
+    /// never selects snapshot bodies. A later turn resumes from remaining rows.
+    pub fn prune_batch(&mut self, now_ms: i64, limit: u16) -> Result<PruneProgress, RecoveryError> {
+        validate_time(now_ms)?;
+        if limit == 0 || limit > 64 {
+            return Err(RecoveryError::InvalidInput("prune batch limit"));
+        }
+        let cutoff = now_ms.saturating_sub(self.policy.retention_ms);
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let deleted = transaction.execute(
+            "DELETE FROM snapshots WHERE id IN (
+                 SELECT id FROM snapshots WHERE captured_at_ms < ?1
+                 ORDER BY captured_at_ms, id LIMIT ?2
+             )",
+            params![cutoff, limit],
+        )?;
+        let pending = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM snapshots WHERE captured_at_ms < ?1)",
+            [cutoff],
+            |row| row.get(0),
+        )?;
+        transaction.commit()?;
+        Ok(PruneProgress {
+            deleted: deleted as u16,
+            pending,
+        })
     }
 
     pub fn prune(&mut self, now_ms: i64) -> Result<usize, RecoveryError> {
@@ -438,8 +580,15 @@ fn read_latest(
     connection: &Connection,
     entry_id: &str,
     max_bytes: usize,
+    retained_after: i64,
 ) -> Result<Option<Snapshot>, RecoveryError> {
-    read_snapshot(connection, "entry_id = ?1", entry_id, max_bytes)
+    read_snapshot(
+        connection,
+        "entry_id = ?1",
+        entry_id,
+        max_bytes,
+        Some(retained_after),
+    )
 }
 
 fn read_snapshot<P: rusqlite::ToSql>(
@@ -447,14 +596,16 @@ fn read_snapshot<P: rusqlite::ToSql>(
     predicate: &str,
     value: P,
     max_bytes: usize,
+    retained_after: Option<i64>,
 ) -> Result<Option<Snapshot>, RecoveryError> {
     // Predicate is exclusively one of the two private static strings above.
     let mut statement = connection.prepare(&format!(
         "SELECT id, entry_id, historical_path, captured_at_ms, provenance, length(content),
          content_hash, content FROM snapshots WHERE {predicate}
+           AND (?2 IS NULL OR captured_at_ms >= ?2)
          ORDER BY captured_at_ms DESC, id DESC LIMIT 1"
     ))?;
-    let mut rows = statement.query([value])?;
+    let mut rows = statement.query(params![value, retained_after])?;
     let Some(row) = rows.next()? else {
         return Ok(None);
     };
@@ -518,6 +669,283 @@ mod tests {
             CaptureOutcome::Captured(info) => info,
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn deferred_open_and_capture_preserve_expired_rows_until_bounded_pruning() {
+        let fixture = Fixture::new();
+        let policy = RecoveryPolicy {
+            interval_ms: 5,
+            retention_ms: 10,
+            ..RecoveryPolicy::default()
+        };
+        let mut store =
+            RecoveryStore::open_with_policy(fixture.path(), &scope(), policy, 0).unwrap();
+        let expired = captured(
+            store
+                .capture(input(b"old", SnapshotProvenance::Periodic), 0)
+                .unwrap(),
+        );
+        let boundary = captured(
+            store
+                .capture(input(b"boundary", SnapshotProvenance::SaveFailure), 1)
+                .unwrap(),
+        );
+        drop(store);
+        let mut store =
+            RecoveryStore::open_deferred_with_policy(fixture.path(), &scope(), policy, 11).unwrap();
+        assert!(store.read(expired.id).unwrap().is_some());
+        let current = captured(
+            store
+                .capture(input(b"new", SnapshotProvenance::Periodic), 12)
+                .unwrap(),
+        );
+        assert!(store.read(expired.id).unwrap().is_some());
+        assert!(store.read(boundary.id).unwrap().is_some());
+        assert_eq!(
+            store.prune_batch(12, 1).unwrap(),
+            PruneProgress {
+                deleted: 1,
+                pending: true
+            }
+        );
+        assert_eq!(store.read(expired.id).unwrap(), None);
+        assert!(store.read(boundary.id).unwrap().is_some());
+        assert_eq!(
+            store.prune_batch(12, 1).unwrap(),
+            PruneProgress {
+                deleted: 1,
+                pending: false
+            }
+        );
+        assert_eq!(store.read(current.id).unwrap().unwrap().content, b"new");
+        assert!(store.prune_batch(12, 0).is_err());
+        assert!(store.prune_batch(12, 65).is_err());
+    }
+
+    #[test]
+    fn deferred_open_rejects_foreign_scope_before_any_expiry_cleanup() {
+        let fixture = Fixture::new();
+        let mut store = RecoveryStore::open(fixture.path(), &scope(), 0).unwrap();
+        let info = captured(
+            store
+                .capture(input(b"keep", SnapshotProvenance::Periodic), 0)
+                .unwrap(),
+        );
+        drop(store);
+        let wrong = RecoveryScope {
+            vault_id: "foreign-vault".into(),
+            ..scope()
+        };
+        assert!(matches!(
+            RecoveryStore::open_deferred(fixture.path(), &wrong, DEFAULT_RETENTION_MS + 1),
+            Err(RecoveryError::WrongScope)
+        ));
+        let store =
+            RecoveryStore::open_deferred(fixture.path(), &scope(), DEFAULT_RETENTION_MS + 1)
+                .unwrap();
+        assert_eq!(store.read(info.id).unwrap().unwrap().content, b"keep");
+    }
+
+    #[test]
+    fn expired_identical_body_requires_a_fresh_snapshot_before_idle_prune() {
+        let fixture = Fixture::new();
+        let policy = RecoveryPolicy {
+            interval_ms: 50,
+            retention_ms: 10,
+            ..RecoveryPolicy::default()
+        };
+        let mut store =
+            RecoveryStore::open_deferred_with_policy(fixture.path(), &scope(), policy, 0).unwrap();
+        let old = captured(
+            store
+                .capture(input(b"same", SnapshotProvenance::Periodic), 0)
+                .unwrap(),
+        );
+        assert_eq!(
+            store
+                .periodic_capture_eligibility("entry-1", 4, &Sha256::digest(b"same").into(), 11)
+                .unwrap(),
+            PeriodicCaptureEligibility::CaptureRequired
+        );
+        let new = captured(
+            store
+                .capture(input(b"same", SnapshotProvenance::Periodic), 11)
+                .unwrap(),
+        );
+        assert_ne!(old.id, new.id);
+        assert_eq!(new.captured_at_ms, 11);
+        assert_eq!(
+            store.prune_batch(11, 1).unwrap(),
+            PruneProgress {
+                deleted: 1,
+                pending: false
+            }
+        );
+        assert_eq!(store.read(new.id).unwrap().unwrap().content, b"same");
+    }
+
+    struct SqlTrace {
+        handle: *mut rusqlite::ffi::sqlite3,
+        statements: Box<std::cell::RefCell<Vec<String>>>,
+    }
+    impl SqlTrace {
+        fn attach(store: &RecoveryStore) -> Self {
+            unsafe extern "C" fn observe(
+                event: std::os::raw::c_uint,
+                context: *mut std::os::raw::c_void,
+                _statement: *mut std::os::raw::c_void,
+                sql: *mut std::os::raw::c_void,
+            ) -> std::os::raw::c_int {
+                if event == rusqlite::ffi::SQLITE_TRACE_STMT && !context.is_null() && !sql.is_null()
+                {
+                    let rows = &*(context.cast::<std::cell::RefCell<Vec<String>>>());
+                    rows.borrow_mut().push(
+                        std::ffi::CStr::from_ptr(sql.cast())
+                            .to_string_lossy()
+                            .into_owned(),
+                    );
+                }
+                0
+            }
+            let trace = Self {
+                handle: unsafe { store.connection.handle() },
+                statements: Box::default(),
+            };
+            assert_eq!(
+                unsafe {
+                    rusqlite::ffi::sqlite3_trace_v2(
+                        trace.handle,
+                        rusqlite::ffi::SQLITE_TRACE_STMT,
+                        Some(observe),
+                        (&*trace.statements as *const std::cell::RefCell<Vec<String>>)
+                            .cast_mut()
+                            .cast(),
+                    )
+                },
+                rusqlite::ffi::SQLITE_OK
+            );
+            trace
+        }
+        fn body_reads(&self) -> usize {
+            self.statements
+                .borrow()
+                .iter()
+                .filter(|sql| {
+                    sql.to_ascii_lowercase()
+                        .contains("content_hash, content from snapshots")
+                })
+                .count()
+        }
+    }
+    impl Drop for SqlTrace {
+        fn drop(&mut self) {
+            unsafe {
+                rusqlite::ffi::sqlite3_trace_v2(self.handle, 0, None, std::ptr::null_mut());
+            }
+        }
+    }
+
+    #[test]
+    fn periodic_metadata_revisit_reads_no_retained_blob_or_mutates_latest_provenance() {
+        let fixture = Fixture::new();
+        let mut store = RecoveryStore::open_deferred(fixture.path(), &scope(), 0).unwrap();
+        captured(
+            store
+                .capture(input(b"old", SnapshotProvenance::Periodic), 0)
+                .unwrap(),
+        );
+        let latest = captured(
+            store
+                .capture(input(b"new", SnapshotProvenance::SaveFailure), 1)
+                .unwrap(),
+        );
+        let trace = SqlTrace::attach(&store);
+        assert_eq!(
+            store
+                .periodic_capture_eligibility("entry-1", 3, &Sha256::digest(b"new").into(), 2)
+                .unwrap(),
+            PeriodicCaptureEligibility::Unchanged
+        );
+        assert_eq!(
+            store
+                .periodic_capture_eligibility("entry-1", 3, &Sha256::digest(b"old").into(), 2)
+                .unwrap(),
+            PeriodicCaptureEligibility::IntervalNotElapsed
+        );
+        assert_eq!(trace.body_reads(), 0);
+        assert_eq!(store.list("entry-1", None, 1).unwrap(), [latest.clone()]);
+        assert_eq!(store.read(latest.id).unwrap().unwrap().content, b"new");
+        assert_eq!(
+            trace.body_reads(),
+            1,
+            "positive control must observe the explicit body read"
+        );
+    }
+
+    #[test]
+    fn metadata_skip_is_not_a_blob_integrity_claim_and_new_capture_still_verifies() {
+        let fixture = Fixture::new();
+        let mut store = RecoveryStore::open_deferred(fixture.path(), &scope(), 0).unwrap();
+        let latest = captured(
+            store
+                .capture(input(b"good", SnapshotProvenance::Periodic), 0)
+                .unwrap(),
+        );
+        store
+            .connection
+            .execute(
+                "UPDATE snapshots SET content = ?1 WHERE id = ?2",
+                params![b"evil".as_slice(), latest.id],
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .periodic_capture_eligibility("entry-1", 4, &Sha256::digest(b"good").into(), 1)
+                .unwrap(),
+            PeriodicCaptureEligibility::Unchanged
+        );
+        assert!(matches!(
+            store.read(latest.id),
+            Err(RecoveryError::CorruptRecord)
+        ));
+        assert!(matches!(
+            store.capture(input(b"next", SnapshotProvenance::SaveFailure), 1),
+            Err(RecoveryError::CorruptRecord)
+        ));
+        assert_eq!(store.list("entry-1", None, 10).unwrap(), [latest]);
+    }
+
+    #[test]
+    fn periodic_metadata_validates_latest_shape_and_retains_save_failure_bypass() {
+        let fixture = Fixture::new();
+        let mut store = RecoveryStore::open_deferred(fixture.path(), &scope(), 0).unwrap();
+        captured(
+            store
+                .capture(input(b"a", SnapshotProvenance::Periodic), 0)
+                .unwrap(),
+        );
+        assert_eq!(
+            store
+                .periodic_capture_eligibility("entry-1", 1, &Sha256::digest(b"b").into(), 1)
+                .unwrap(),
+            PeriodicCaptureEligibility::IntervalNotElapsed
+        );
+        let latest = captured(
+            store
+                .capture(input(b"b", SnapshotProvenance::SaveFailure), 1)
+                .unwrap(),
+        );
+        assert_eq!(latest.provenance, SnapshotProvenance::SaveFailure);
+        store.connection.execute_batch("PRAGMA ignore_check_constraints=ON; UPDATE snapshots SET content_hash=zeroblob(31) WHERE id=(SELECT max(id) FROM snapshots);").unwrap();
+        assert!(matches!(
+            store.periodic_capture_eligibility("entry-1", 1, &Sha256::digest(b"b").into(), 2),
+            Err(RecoveryError::CorruptRecord)
+        ));
+        assert!(matches!(
+            store.periodic_capture_eligibility("entry-1", 16 * 1024 * 1024 + 1, &[0; 32], 2),
+            Err(RecoveryError::SnapshotTooLarge)
+        ));
     }
 
     #[test]

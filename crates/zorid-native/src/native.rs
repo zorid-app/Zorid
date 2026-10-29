@@ -100,7 +100,7 @@ pub struct NativeVault {
     store: Store,
     options: Options,
     recovery: Option<zorid_recovery::RecoveryStore>,
-    recovery_queue: Option<std::collections::VecDeque<EntryId>>,
+    recovery_queue: Option<local_recovery::MaintenanceCursor>,
     external_publication: Option<external_scan_quantum::PublicationCursor>,
     external_rebaseline: Option<external_namespace::RebaselineCursor>,
     // Optional immutable Base data belongs to this vault handle, never to a

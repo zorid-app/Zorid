@@ -306,6 +306,7 @@ impl NativeVault {
     pub fn list_local_recovery(&self, _: &EntryId, _: Option<LocalRecoveryCursor>, _: usize) -> Result<Vec<LocalRecoveryVersion>> { unsupported() }
     pub fn read_local_recovery(&self, _: &EntryId, _: i64) -> Result<Option<LocalRecoverySnapshot>> { unsupported() }
     pub fn enable_local_recovery(&mut self, _: impl AsRef<std::path::Path>, _: i64) -> Result<()> { unsupported() }
+    pub fn enable_local_recovery_deferred(&mut self, _: impl AsRef<std::path::Path>, _: i64) -> Result<()> { unsupported() }
     pub fn snapshot_local_recovery(&mut self, _: i64) -> Result<()> { unsupported() }
     pub fn maintain_local_recovery(&mut self, _: i64, _: u16) -> Result<RecoveryMaintenance> { unsupported() }
     pub fn open(_: impl AsRef<std::path::Path>) -> Result<Self> {

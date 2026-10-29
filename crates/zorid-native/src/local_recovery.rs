@@ -1,6 +1,13 @@
 //! App-local history is optional for embedders and never participates in sync.
 use super::*;
-use zorid_recovery::{RecoveryScope, RecoveryStore, SnapshotInput, SnapshotProvenance};
+use zorid_recovery::{
+    PeriodicCaptureEligibility, RecoveryScope, RecoveryStore, SnapshotInput, SnapshotProvenance,
+};
+
+pub(super) enum MaintenanceCursor {
+    Scanning(Option<i64>),
+    Pruning,
+}
 
 pub(super) fn now_ms() -> i64 {
     std::time::SystemTime::now()
@@ -53,8 +60,26 @@ impl NativeVault {
     /// The host supplies an app-owned path outside the vault. Tests and native
     /// shells can inject their private data directory without global environment.
     pub fn enable_local_recovery(&mut self, path: impl AsRef<Path>, now_ms: i64) -> Result<()> {
+        self.enable_local_recovery_mode(path.as_ref(), now_ms, false)
+    }
+
+    /// Desktop owners opt in before saves, then schedule periodic work explicitly.
+    /// Admission validates the same private path/scope without an expiry sweep.
+    pub fn enable_local_recovery_deferred(
+        &mut self,
+        path: impl AsRef<Path>,
+        now_ms: i64,
+    ) -> Result<()> {
+        self.enable_local_recovery_mode(path.as_ref(), now_ms, true)
+    }
+
+    fn enable_local_recovery_mode(
+        &mut self,
+        path: &Path,
+        now_ms: i64,
+        deferred: bool,
+    ) -> Result<()> {
         self.paths.verify()?;
-        let path = path.as_ref();
         let parent = path
             .parent()
             .ok_or_else(|| Error::UnsafePath("recovery parent missing".into()))?
@@ -72,7 +97,11 @@ impl NativeVault {
         let name = path
             .file_name()
             .ok_or_else(|| Error::UnsafePath("recovery filename missing".into()))?;
-        self.recovery = Some(RecoveryStore::open(parent.join(name), &scope, now_ms)?);
+        self.recovery = Some(if deferred {
+            RecoveryStore::open_deferred(parent.join(name), &scope, now_ms)?
+        } else {
+            RecoveryStore::open(parent.join(name), &scope, now_ms)?
+        });
         self.recovery_queue = None;
         Ok(())
     }
@@ -104,9 +133,9 @@ impl NativeVault {
         Ok(())
     }
 
-    /// Incremental secondary maintenance for interactive hosts. Take a metadata
-    /// inventory once per cycle, then bound body reads to at most 64 notes per
-    /// call. Renames/deletions are revalidated against source before each capture.
+    /// Explicit secondary maintenance. Each unit visits one physical metadata
+    /// row or prunes one expired snapshot; no complete inventory is materialized.
+    /// The host controls scheduling and normally requests a single unit.
     pub fn maintain_local_recovery(
         &mut self,
         now_ms: i64,
@@ -119,47 +148,51 @@ impl NativeVault {
             return Ok(RecoveryMaintenance::default());
         }
         self.paths.verify()?;
-        if self.recovery_queue.is_none() {
-            self.recovery_queue = Some(
-                self.store
-                    .list()?
-                    .into_iter()
-                    .filter(|entry| {
-                        entry.kind == EntryKind::File
-                            && entry.path.as_str().to_ascii_lowercase().ends_with(".md")
-                    })
-                    .map(|entry| entry.id)
-                    .collect(),
-            );
-        }
         let mut failed_notes = 0;
         for _ in 0..limit {
-            let Some(id) = self
+            let cursor = self
                 .recovery_queue
-                .as_mut()
-                .and_then(|queue| queue.pop_front())
-            else {
-                break;
-            };
-            if self
-                .capture_local_recovery(&id, now_ms, SnapshotProvenance::Periodic)
-                .is_err()
-            {
-                failed_notes += 1;
-            }
-        }
-        let pending = self
-            .recovery_queue
-            .as_ref()
-            .is_some_and(|queue| !queue.is_empty());
-        if !pending {
-            self.recovery_queue = None;
-            if let Some(recovery) = &mut self.recovery {
-                recovery.prune(now_ms)?;
+                .take()
+                .unwrap_or(MaintenanceCursor::Scanning(None));
+            match cursor {
+                MaintenanceCursor::Scanning(after) => {
+                    // Preserve the scheduling obligation even if metadata admission fails.
+                    self.recovery_queue = Some(MaintenanceCursor::Scanning(after));
+                    let (next, candidate, finished) = self.store.recovery_candidate_page(after)?;
+                    self.recovery_queue = Some(if finished {
+                        MaintenanceCursor::Pruning
+                    } else {
+                        MaintenanceCursor::Scanning(next)
+                    });
+                    if let Some(metadata) = candidate {
+                        if self
+                            .capture_local_recovery_metadata(
+                                metadata,
+                                now_ms,
+                                SnapshotProvenance::Periodic,
+                            )
+                            .is_err()
+                        {
+                            failed_notes += 1;
+                        }
+                    }
+                }
+                MaintenanceCursor::Pruning => {
+                    self.recovery_queue = Some(MaintenanceCursor::Pruning);
+                    let progress = self
+                        .recovery
+                        .as_mut()
+                        .expect("enabled recovery")
+                        .prune_batch(now_ms, 1)?;
+                    if !progress.pending {
+                        self.recovery_queue = None;
+                        break;
+                    }
+                }
             }
         }
         Ok(RecoveryMaintenance {
-            pending,
+            pending: self.recovery_queue.is_some(),
             failed_notes,
         })
     }
@@ -214,6 +247,15 @@ impl NativeVault {
         let Some(metadata) = self.store.read_metadata(id)? else {
             return Ok(());
         };
+        self.capture_local_recovery_metadata(metadata, now_ms, provenance)
+    }
+
+    fn capture_local_recovery_metadata(
+        &mut self,
+        metadata: zorid_store::StoredEntryMetadata,
+        now_ms: i64,
+        provenance: SnapshotProvenance,
+    ) -> Result<()> {
         if metadata.state.kind != EntryKind::File
             || !metadata
                 .state
@@ -232,16 +274,45 @@ impl NativeVault {
         {
             return Ok(());
         }
-        let Some(entry) = self.store.read(id)? else {
+        let content = metadata.content.as_ref().expect("file content checked");
+        if provenance == SnapshotProvenance::Periodic {
+            match self
+                .recovery
+                .as_ref()
+                .expect("enabled recovery")
+                .periodic_capture_eligibility(
+                    metadata.state.id.as_str(),
+                    content.len(),
+                    &content.digest().0,
+                    now_ms,
+                )? {
+                PeriodicCaptureEligibility::Unchanged
+                | PeriodicCaptureEligibility::IntervalNotElapsed => return Ok(()),
+                PeriodicCaptureEligibility::CaptureRequired => {}
+            }
+        }
+        // This fresh Store read revalidates its own selected metadata and bytes.
+        // Never combine an old digest/path witness with a newly selected body.
+        let Some(entry) = self.store.read(&metadata.state.id)? else {
             return Ok(());
         };
+        if entry.state.kind != EntryKind::File
+            || !entry
+                .state
+                .path
+                .as_str()
+                .to_ascii_lowercase()
+                .ends_with(".md")
+        {
+            return Ok(());
+        }
         let Some(content) = entry.content else {
             return Ok(());
         };
         if let Some(recovery) = &mut self.recovery {
             recovery.capture(
                 SnapshotInput {
-                    entry_id: id.as_str(),
+                    entry_id: entry.state.id.as_str(),
                     historical_path: entry.state.path.as_str(),
                     content: &content,
                     provenance,
@@ -269,6 +340,193 @@ mod tests {
                 },
             })
             .unwrap()
+    }
+    mod body_trace {
+        use rusqlite::ffi;
+        use std::{
+            cell::Cell,
+            ffi::{c_char, c_int, c_void, CStr},
+            sync::{Mutex, MutexGuard},
+        };
+        thread_local! {
+            static ATTACH:Cell<bool>=const{Cell::new(false)};
+            static MEASURING:Cell<bool>=const{Cell::new(false)};
+            static READS:Cell<[usize;2]>=const{Cell::new([0;2])};
+        }
+        static REGISTRATION: Mutex<()> = Mutex::new(());
+        unsafe extern "C" fn trace(
+            event: u32,
+            _: *mut c_void,
+            _: *mut c_void,
+            sql: *mut c_void,
+        ) -> c_int {
+            if event == ffi::SQLITE_TRACE_STMT && !sql.is_null() && MEASURING.with(Cell::get) {
+                let text = unsafe { CStr::from_ptr(sql.cast()) }
+                    .to_string_lossy()
+                    .to_ascii_lowercase();
+                let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+                let selected = [
+                    compact.starts_with("selectcontentfromentries"),
+                    compact.contains("content_hash,contentfromsnapshots"),
+                ];
+                READS.with(|reads| {
+                    let mut value = reads.get();
+                    for (index, yes) in selected.into_iter().enumerate() {
+                        if yes {
+                            value[index] += 1;
+                        }
+                    }
+                    reads.set(value);
+                });
+            }
+            0
+        }
+        unsafe extern "C" fn attach(
+            db: *mut ffi::sqlite3,
+            _: *mut *mut c_char,
+            _: *const ffi::sqlite3_api_routines,
+        ) -> c_int {
+            if ATTACH.with(Cell::get) {
+                unsafe {
+                    ffi::sqlite3_trace_v2(
+                        db,
+                        ffi::SQLITE_TRACE_STMT,
+                        Some(trace),
+                        std::ptr::null_mut(),
+                    );
+                }
+            }
+            ffi::SQLITE_OK
+        }
+        pub struct Register {
+            _serial: MutexGuard<'static, ()>,
+        }
+        impl Register {
+            pub fn new() -> Self {
+                let serial = REGISTRATION.lock().unwrap();
+                ATTACH.with(|v| v.set(true));
+                assert_eq!(
+                    unsafe { ffi::sqlite3_auto_extension(Some(attach)) },
+                    ffi::SQLITE_OK
+                );
+                Self { _serial: serial }
+            }
+        }
+        impl Drop for Register {
+            fn drop(&mut self) {
+                ATTACH.with(|v| v.set(false));
+                unsafe {
+                    ffi::sqlite3_cancel_auto_extension(Some(attach));
+                }
+            }
+        }
+        pub fn measure<T>(run: impl FnOnce() -> T) -> (T, [usize; 2]) {
+            struct Stop;
+            impl Drop for Stop {
+                fn drop(&mut self) {
+                    MEASURING.with(|v| v.set(false));
+                }
+            }
+            READS.with(|v| v.set([0; 2]));
+            MEASURING.with(|v| v.set(true));
+            let _stop = Stop;
+            let result = run();
+            (result, READS.with(Cell::get))
+        }
+    }
+    #[test]
+    fn unchanged_periodic_revisit_selects_neither_current_nor_retained_body() {
+        let root = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let trace = body_trace::Register::new();
+        let mut vault = NativeVault::open(root.path()).unwrap();
+        let note = EntryId::new("note").unwrap();
+        create(&mut vault, "note", "note.md", b"same body");
+        vault
+            .enable_local_recovery_deferred(data.path().join("history.sqlite"), 0)
+            .unwrap();
+        drop(trace);
+        assert!(vault.maintain_local_recovery(0, 1).unwrap().pending);
+        assert!(!vault.maintain_local_recovery(0, 1).unwrap().pending);
+        let before = vault.list_local_recovery(&note, None, 10).unwrap();
+        assert_eq!(before.len(), 1);
+        let (progress, reads) =
+            body_trace::measure(|| vault.maintain_local_recovery(301_000, 1).unwrap());
+        assert!(progress.pending);
+        assert_eq!(progress.failed_notes, 0);
+        assert_eq!(reads, [0, 0]);
+        let (_, positive) = body_trace::measure(|| {
+            vault.read(&note).unwrap();
+            vault.read_local_recovery(&note, before[0].id).unwrap();
+        });
+        assert_eq!(
+            positive,
+            [1, 1],
+            "the same real connections must count explicit current/history body reads"
+        );
+        assert_eq!(vault.list_local_recovery(&note, None, 10).unwrap(), before);
+    }
+    #[test]
+    fn deferred_expired_same_content_is_renewed_before_bounded_idle_pruning() {
+        let root = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let mut vault = NativeVault::open(root.path()).unwrap();
+        let note = EntryId::new("note").unwrap();
+        create(&mut vault, "note", "note.md", b"retained");
+        vault
+            .enable_local_recovery_deferred(data.path().join("history.sqlite"), 0)
+            .unwrap();
+        vault
+            .capture_local_recovery(&note, 0, SnapshotProvenance::Periodic)
+            .unwrap();
+        let later = zorid_recovery::DEFAULT_RETENTION_MS + 1;
+        vault
+            .capture_local_recovery(&note, later, SnapshotProvenance::Periodic)
+            .unwrap();
+        let versions = vault.list_local_recovery(&note, None, 10).unwrap();
+        assert_eq!(versions.len(), 2);
+        assert_eq!(versions[0].captured_at_ms, later);
+        assert!(vault.maintain_local_recovery(later, 1).unwrap().pending);
+        assert!(!vault.maintain_local_recovery(later, 1).unwrap().pending);
+        let kept = vault.list_local_recovery(&note, None, 10).unwrap();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0], versions[0]);
+        assert_eq!(
+            vault
+                .read_local_recovery(&note, kept[0].id)
+                .unwrap()
+                .unwrap()
+                .content,
+            b"retained"
+        );
+    }
+    #[test]
+    fn first_maintenance_unit_does_not_decode_a_later_corrupt_candidate() {
+        let root = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let mut vault = NativeVault::open(root.path()).unwrap();
+        create(&mut vault, "one", "one.md", b"one");
+        create(&mut vault, "two", "two.md", b"two");
+        vault
+            .enable_local_recovery_deferred(data.path().join("history.sqlite"), 0)
+            .unwrap();
+        let connection =
+            rusqlite::Connection::open(root.path().join(".zorid/vault.sqlite")).unwrap();
+        connection
+            .execute("UPDATE entries SET state='invalid' WHERE id='two'", [])
+            .unwrap();
+        drop(connection);
+        let first = vault.maintain_local_recovery(0, 1).unwrap();
+        assert!(first.pending);
+        assert_eq!(first.failed_notes, 0);
+        assert_eq!(
+            vault
+                .list_local_recovery(&EntryId::new("one").unwrap(), None, 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(vault.maintain_local_recovery(0, 1).is_err());
     }
     #[test]
     fn entry_scoped_history_reads_exact_bytes_and_rejects_foreign_versions() {
@@ -620,8 +878,10 @@ mod tests {
         let second = vault.maintain_local_recovery(now_ms(), 1).unwrap();
         assert!(second.pending);
         let third = vault.maintain_local_recovery(now_ms(), 1).unwrap();
-        assert!(!third.pending);
+        assert!(third.pending); // Expiry pruning is its own next maintenance unit.
         assert_eq!(third.failed_notes, 0);
+        let fourth = vault.maintain_local_recovery(now_ms(), 1).unwrap();
+        assert!(!fourth.pending);
         for id in ["one", "two", "three"] {
             assert_eq!(
                 vault

@@ -384,6 +384,53 @@ pub(super) fn read_path_metadata_row(
 }
 
 impl Store {
+    /// One physical inventory row per read-only history-maintenance unit. The
+    /// rowid cursor is private scheduling state, never entry or write authority.
+    /// New rows behind a live cursor are revisited on the next periodic cycle.
+    pub fn recovery_candidate_page(
+        &self,
+        after_rowid: Option<i64>,
+    ) -> Result<(Option<i64>, Option<StoredEntryMetadata>, bool)> {
+        let tx = self.connection.unchecked_transaction()?;
+        let selected: Option<(i64, Option<String>, i64, i64)> = if let Some(after) = after_rowid {
+            tx.query_row(
+                "SELECT rowid,CASE WHEN visible=1 AND deleted=0 THEN id END,visible,deleted FROM entries WHERE rowid>?1 ORDER BY rowid LIMIT 1",
+                [after],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?
+        } else {
+            tx.query_row(
+                "SELECT rowid,CASE WHEN visible=1 AND deleted=0 THEN id END,visible,deleted FROM entries ORDER BY rowid LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?
+        };
+        let Some((rowid, id, visible, deleted)) = selected else {
+            tx.commit()?;
+            return Ok((after_rowid, None, true));
+        };
+        if !matches!(visible, 0 | 1) || !matches!(deleted, 0 | 1) {
+            return Err(corrupt("invalid entry visibility"));
+        }
+        let candidate = if visible == 1 && deleted == 0 {
+            read_metadata_row(
+                &tx,
+                &EntryId::new(id.ok_or_else(|| corrupt("live entry identity missing"))?)?,
+            )?
+        } else {
+            None
+        };
+        let more: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM entries WHERE rowid>?1 LIMIT 1)",
+            [rowid],
+            |row| row.get(0),
+        )?;
+        tx.commit()?;
+        Ok((Some(rowid), candidate, !more))
+    }
+
     pub fn read_metadata(&self, id: &EntryId) -> Result<Option<StoredEntryMetadata>> {
         let tx = self.connection.unchecked_transaction()?;
         let result = read_metadata_row(&tx, id)?.filter(|entry| !entry.state.deleted);
@@ -431,6 +478,70 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path().join("store.sqlite")).unwrap();
         (dir, store)
+    }
+    #[test]
+    fn recovery_candidate_pages_visit_one_row_without_decoding_later_corruption() {
+        let (_dir, mut store) = store();
+        for name in ["one", "two", "three"] {
+            store
+                .apply(&MutationRequest {
+                    operation_id: OperationId::new(format!("create-{name}")).unwrap(),
+                    mutation: Mutation::Create {
+                        id: EntryId::new(name).unwrap(),
+                        path: VaultPath::new(format!("{name}.md")).unwrap(),
+                        kind: EntryKind::File,
+                        content: Some(name.as_bytes().to_vec()),
+                    },
+                })
+                .unwrap();
+        }
+        store
+            .connection
+            .execute(
+                "UPDATE entries SET visible=0,state='invalid hidden' WHERE id='two'",
+                [],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute("UPDATE entries SET state='invalid' WHERE id='three'", [])
+            .unwrap();
+        let (first, entry, finished) = store.recovery_candidate_page(None).unwrap();
+        assert_eq!(entry.unwrap().state.id.as_str(), "one");
+        assert!(!finished);
+        let (second, entry, finished) = store.recovery_candidate_page(first).unwrap();
+        assert!(entry.is_none());
+        assert!(!finished);
+        assert!(second > first);
+        assert!(store.recovery_candidate_page(second).is_err());
+    }
+    #[test]
+    fn recovery_candidate_pages_preserve_empty_and_deleted_row_progress() {
+        let (_dir, mut store) = store();
+        assert_eq!(
+            store.recovery_candidate_page(None).unwrap(),
+            (None, None, true)
+        );
+        store.apply(&create(b"body".to_vec())).unwrap();
+        let state = store.read_metadata(&id()).unwrap().unwrap().state;
+        store
+            .apply(&MutationRequest {
+                operation_id: OperationId::new("delete").unwrap(),
+                mutation: Mutation::Delete {
+                    id: id(),
+                    expected: state.revision,
+                    recursive: false,
+                },
+            })
+            .unwrap();
+        let (cursor, entry, finished) = store.recovery_candidate_page(None).unwrap();
+        assert!(cursor.is_some());
+        assert!(entry.is_none());
+        assert!(finished);
+        assert_eq!(
+            store.recovery_candidate_page(cursor).unwrap(),
+            (cursor, None, true)
+        );
     }
     #[test]
     fn stat_path_is_targeted_fresh_and_filters_missing_hidden_deleted_entries() {
