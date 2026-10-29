@@ -106,7 +106,8 @@ class CoreVaultFixtureService {
       if (familyMode) {
         if(options.initializeLocal){
           if(!host.capabilities.includes('local_family_status')||!host.capabilities.includes('reconciliation_status')||!host.reconciliation)throw error('unsupported_host_capability');
-          await host.localFamilyStatus();
+          // Successful initialize-local hello already admitted the family and
+          // reconciliation state. Full status remains an explicit diagnostic.
         }else{
           if(!host.capabilities.includes('fixture_family_status'))throw error('unsupported_host_capability');
           await host.fixtureFamilyStatus();

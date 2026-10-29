@@ -137,7 +137,7 @@ test('family watcher is installed before native startup and retains startup hint
   const host={root:'/unused-early-watch',capabilities:['read_path','list_snapshot','changes_after','rescan','prepare_intent','commit_intent','query_intent','list_intents','acknowledge_intent','local_family_status','reconciliation_status'],reconciliation:{complete:true},async localFamilyStatus(){calls.push('status');},async listSnapshot(){return{entries:[],cursor:'0'};},async close(){calls.push('close');}};
   RustVaultService.open=async()=>{calls.push('native');callback('change','During startup.md');return host;};t.after(()=>{RustVaultService.open=original;});
   const service=await CoreVaultFixtureService.open(host.root,{fixture:true,familyMode:true,initializeLocal:true,watchRootIdentity:async path=>({path,identity:'root'}),watchFactory(_root,_options,onEvent){calls.push('watch');callback=onEvent;const watcher=new EventEmitter();watcher.close=()=>{closed=true;};return watcher;}});
-  assert.deepEqual(calls,['watch','native','status']);assert.deepEqual([...service.hints],['During startup.md']);await service.close();assert.equal(closed,true);
+  assert.deepEqual(calls,['watch','native']);assert.deepEqual([...service.hints],['During startup.md']);await service.close();assert.equal(closed,true);
 });
 
 test('failed native startup closes its buffered watcher',async t=>{
