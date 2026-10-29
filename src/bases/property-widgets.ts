@@ -36,6 +36,7 @@ export interface BasePropertyWidgetAcknowledgement {
 /** The exact submitted editor generation, never an unsubmitted replacement. */
 export interface BasePropertyEditRecovery {
   readonly element: HTMLElement;
+  readonly owner: object;
   readonly edit: BasePropertyWidgetEdit;
   readonly pending: boolean;
   isCurrent(): boolean;
@@ -138,6 +139,8 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   let acceptedPresentation = presentation;
   element.dataset.baseWidgetVersion = String(acceptedPresentation.version);
   let disposed = false, pending = false, editing = false, composing = false;
+  let editOwner={};
+  let refreshRetainedInput:(()=>void)|undefined;
   let blurDuringComposition = false, compositionEpoch = 0;
   let finishAfterPending = false, editingIndex: number | undefined;
   let pendingCompletionIntent: BasePropertyEditorCompletionIntent | undefined;
@@ -246,11 +249,12 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     pending = true; let accepted = false; mark('pending'); if (input) input.disabled = true;
     const submittedPresentation=acceptedPresentation,edit={...acceptedPresentation,path:acceptedPresentation.row.path,value:next};
     const inputState=()=>JSON.stringify([input?.value,draft.map(item=>[item.text,item.value]),[...element.querySelectorAll('input')].map(item=>[item.type,item.value,item.checked,item.indeterminate])]);
-    const submittedInput=inputState();
-    const retained:BasePropertyEditRecovery={element,edit,get pending(){return pending;},
-      isCurrent:()=>propertyEditRecoveries.get(element)===retained&&current()&&element.isConnected&&element.hasAttribute('data-base-editing')&&!composing&&acceptedPresentation===submittedPresentation&&inputState()===submittedInput,
+    let submittedInput=inputState();const owner=editOwner;
+    const retained:BasePropertyEditRecovery={element,owner,edit,get pending(){return pending;},
+      isCurrent:()=>propertyEditRecoveries.get(element)===retained&&owner===editOwner&&current()&&element.isConnected&&element.hasAttribute('data-base-editing')&&!composing&&acceptedPresentation===submittedPresentation&&inputState()===submittedInput,
       acknowledge(){if(pending||!this.isCurrent())return false;pendingCompletionIntent=undefined;finishAfterPending=false;acceptSaved(next,undefined,false);return true;}};
     propertyEditRecoveries.set(element,retained);
+    refreshRetainedInput=()=>{if(propertyEditRecoveries.get(element)===retained&&owner===editOwner)submittedInput=inputState();};
     try {
       const acknowledgement = await options.commit(edit);
       acceptSaved(next,acknowledgement,keepOpen);accepted = true;
@@ -312,7 +316,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   }
   function draw() {
     if (disposed) return;
-    propertyEditRecoveries.delete(element);
+    propertyEditRecoveries.delete(element);editOwner={};refreshRetainedInput=undefined;
     disposeRich?.(); disposeRich = undefined;
     input = undefined; mark(); element.replaceChildren();
     element.classList.add('bases-metadata-value', 'metadata-property-value'); element.dataset.propertyType = type;
@@ -345,6 +349,9 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
         try {
           if (!await commit({ type: 'boolean', value: next })) {
             checkbox.disabled = !editable; checkbox.checked = value.type === 'boolean' && value.value; checkbox.indeterminate = value.type === 'null';
+            // This synchronous, control-owned rollback changes presentation,
+            // not the submitted value. Later user changes still fence recovery.
+            refreshRetainedInput?.();
           }
         } finally {
           if (ownedFocus) { removeObservers(); removeFocusObserver = undefined; }

@@ -6,6 +6,7 @@ import {MemoryAdapter,Vault} from '../src/core/index.ts';
 import {NoteBuffer} from '../src/ui/note-buffer.ts';
 import {BaseDocument} from '../src/bases/document.ts';
 import {createBaseSession} from '../src/bases/session.ts';
+import {BaseController} from '../src/bases/controller.ts';
 import type {DocumentService,DocumentBaseResult,DocumentBaseValue} from '../src/core/document-semantics.ts';
 import type {DatabaseCollection,DatabaseEntry,DatabaseRequest,DatabaseService,DatabaseValue} from '../src/core/databases.ts';
 
@@ -22,14 +23,14 @@ class Adapter extends MemoryAdapter{
  override async write(path:string,text:string){await super.write(path,text);this.revisions.set(path,(this.revisions.get(path)??1)+1);}
 }
 function documentValue(value:DatabaseValue):DocumentBaseValue{if(value===null)return{type:'null'};if(Array.isArray(value))return{type:'list',value:value.map(item=>({type:'string',value:item}))};return{type:typeof value,value}as DocumentBaseValue;}
-async function fixture(){
+async function fixture(datatype:'number'|'checkbox'='number'){
  const existingGroup=false,retainedCommands=new Map<string,string>(),holds=new Map<string,number>(),claims=new Set<string>(),claimHistory:string[]=[],receipts=new Map<string,ReturnType<typeof structuredClone>>(),derivedAfterRetirement:string[]=[];let retired=false,loseReply=false;
  const inactive=()=>Object.assign(new Error('This vault session is no longer active. Reopen the vault before making another change.'),{code:'client_not_admitted',source:'host',commitUncertain:false});
  const checkDerived=(operation:string)=>{if(retired){derivedAfterRetirement.push(operation);throw inactive();}};
  const initialViews=[{id:'aaaaaaaaaaaa',type:'table',name:'Primary',...(existingGroup?{groupBy:{property:`note.${score}`,direction:'DESC'}}:{}),source:{kind:'collection',id:collectionId},order:['file.name',`note.${score}`,`note.${notes}`]},{id:'bbbbbbbbbbbb',type:'table',name:'Secondary',source:{kind:'collection',id:collectionId},order:['file.name',`note.${notes}`]}];
- const adapter=new Adapter({'Work.base':JSON.stringify({views:initialViews}),'One.md':'---\nScore: 1\nNotes: Original\n---\nExact body.\n'});
- let collection:DatabaseCollection={id:collectionId,name:'Tasks',revision:'schema-r1',deleted:false,properties:[{id:score,name:'Score',datatype:'number',options:[]},{id:notes,name:'Notes',datatype:'text',options:[]}]};
- let member:DatabaseEntry={entryId:'One.md',collectionId,revision:'member-r1',fileRevision:'r1',path:'One.md',values:{[score]:1,[notes]:'Original'},deleted:false,pendingProjection:false};
+ const adapter=new Adapter({'Work.base':JSON.stringify({views:initialViews}),'One.md':`---\nScore: ${datatype==='checkbox'?'false':'1'}\nNotes: Original\n---\nExact body.\n`});
+ let collection:DatabaseCollection={id:collectionId,name:'Tasks',revision:'schema-r1',deleted:false,properties:[{id:score,name:'Score',datatype,options:[]},{id:notes,name:'Notes',datatype:'text',options:[]}]};
+ let member:DatabaseEntry={entryId:'One.md',collectionId,revision:'member-r1',fileRevision:'r1',path:'One.md',values:{[score]:datatype==='checkbox'?false:1,[notes]:'Original'},deleted:false,pendingProjection:false};
  const requests:DatabaseRequest[]=[],errors:unknown[]=[],buffers=new Map<string,NoteBuffer>();let hold:ReturnType<typeof deferred>|undefined,fail=false;
  const response=()=>structuredClone({collections:[collection],entries:[member],projection:{pending:0,issues:[]}});
  adapter.databases={async request(command){requests.push(structuredClone(command));if(command.op==='get'||command.op==='list'){checkDerived(command.op);return response();}
@@ -99,4 +100,46 @@ test('a clean Base can retire its derived owners through an empty recovery capsu
 test('a new unsubmitted numeric draft cannot masquerade as a clean recovery capsule',async()=>{
  const f=await fixture();try{const input=f.edit(score,'9');f.retire();assert.equal(f.session.canRecoverAdmission!(),false);assert.throws(()=>f.session.prepareAdmissionRecovery!(),/Unsubmitted/);assert.equal(input.value,'9');assert.equal(f.session.hasPendingChanges(),true);assert.deepEqual(f.claimHistory,[]);
  }finally{f.restoreForCleanup();await f.close();}
+});
+
+for(const operation of ['close','flush'] as const)test(`${operation} cannot dispose or finish a Base before its prepared admission capsule settles`,async()=>{
+ const f=await fixture();let releasePending=()=>{};let finishing:Promise<void>|undefined,recovery:ReturnType<NonNullable<typeof f.session.prepareAdmissionRecovery>>|undefined;try{const release=(releasePending=f.hold()),input=f.edit(score,'9');f.key(input,'Enter');await until(()=>f.requests.some(request=>request.op==='set_entry'));f.retire();recovery=f.session.prepareAdmissionRecovery!();finishing=f.session[operation]();
+  const result=await Promise.race([finishing.then(()=>'finished',()=> 'rejected'),new Promise<string>(resolve=>setTimeout(()=>resolve('waiting'),20))]);assert.equal(result,'rejected','the owner barrier must reject without disposing or waiting on an unacknowledged write');assert.equal(f.host.isConnected,true);release();await recovery.settle();
+ }finally{releasePending();f.restoreForCleanup();await finishing?.catch(()=>{});if(recovery)await recovery.settle().catch(()=>{});await f.close();}
+});
+
+test('resubmitting an unchanged failed widget preserves its operation and selects the current editor attempt',async()=>{
+ const f=await fixture();try{f.fail();const input=f.edit(score,'9');f.key(input,'Enter');await until(()=>f.errors.length>0);const failureCount=f.errors.length,original=f.requests.find(request=>request.op==='set_entry')!;
+  f.key(input,'Enter');await until(()=>f.errors.length>failureCount);assert.deepEqual(f.requests.filter(request=>request.op==='set_entry'),[original,original]);f.retire();f.fail(false);assert.equal(f.session.canRecoverAdmission!(),true);await f.session.prepareAdmissionRecovery!().settle();assert.equal(f.session.hasPendingChanges(),false);assert.deepEqual(f.requests.filter(request=>request.op==='set_entry'),[original,original,original]);
+ }finally{f.restoreForCleanup();await f.close();}
+});
+
+test('canceling a rejected widget then submitting the same value owns a new command before deferred cleanup',async()=>{
+ const f=await fixture();try{f.fail();let input=f.edit(score,'9');f.key(input,'Enter');await until(()=>f.errors.length>0);const canceled=f.requests.find(request=>request.op==='set_entry')!;f.key(input,'Escape');f.fail(false);const release=f.hold();input=f.edit(score,'9');f.key(input,'Enter');await until(()=>f.requests.filter(request=>request.op==='set_entry').length===2);const next=f.requests.filter(request=>request.op==='set_entry')[1]!;
+  assert.notEqual((next as any).operationId,(canceled as any).operationId,'a canceled editor lifetime must not lend its old command to a new edit');f.retire();const recovery=f.session.prepareAdmissionRecovery!();release();await recovery.settle();assert.deepEqual(f.claimHistory,[(next as any).operationId]);assert.equal(f.session.hasPendingChanges(),false);
+ }finally{f.restoreForCleanup();await f.close();}
+});
+
+test('retirement interrupts an already waiting close before disposal while healthy pending closes still wait',async()=>{
+ const f=await fixture();let release=()=>{},finishing:Promise<void>|undefined,recovery:ReturnType<NonNullable<typeof f.session.prepareAdmissionRecovery>>|undefined;
+ try{release=f.hold();const input=f.edit(score,'9');f.key(input,'Enter');await until(()=>f.requests.some(request=>request.op==='set_entry'));finishing=f.session.close();const closeOutcome=finishing.then(()=>'closed',error=>String((error as any).code));await tick();f.retire();assert.equal(f.session.canRecoverAdmission!(),true,'the reversible pending-save phase must still admit exact recovery');recovery=f.session.prepareAdmissionRecovery!();
+  assert.equal(await Promise.race([closeOutcome,new Promise<string>(resolve=>setTimeout(()=>resolve('blocked'),30))]),'base_admission_recovery_pending');assert.equal(f.host.isConnected,true);assert.deepEqual(f.errors,[],'owned recovery interruption must not flash a failure notice');release();await recovery.settle();assert.equal(f.session.hasPendingChanges(),false);
+ }finally{release();f.restoreForCleanup();await finishing?.catch(()=>{});await recovery?.settle().catch(()=>{});await f.close();}
+});
+
+test('an ordinary healthy close continues waiting for its accepted numeric edit and then succeeds',async()=>{
+ const f=await fixture();let release=()=>{};try{release=f.hold();const input=f.edit(score,'9');f.key(input,'Enter');await until(()=>f.requests.some(request=>request.op==='set_entry'));const closing=f.session.close();assert.equal(await Promise.race([closing.then(()=>'closed'),new Promise<string>(resolve=>setTimeout(()=>resolve('waiting'),15))]),'waiting');release();await closing;assert.equal(f.session.hasPendingChanges(),false);assert.match(await f.adapter.read('One.md'),/Score: 9/);
+ }finally{release();f.restoreForCleanup();await f.close();}
+});
+
+test('a rejected checkbox preserves its submitted ownership through controlled display rollback',async()=>{
+ const f=await fixture('checkbox');try{f.fail();const checkbox=f.cell(score).querySelector<HTMLInputElement>('input[type="checkbox"]')!;assert.equal(checkbox.checked,false);checkbox.click();await until(()=>f.errors.length>0);await tick();const original=f.requests.find(request=>request.op==='set_entry')!;assert.equal(checkbox.checked,false,'ordinary failure presentation retains the saved baseline');f.retire();f.fail(false);assert.equal(f.session.canRecoverAdmission!(),true);await f.session.prepareAdmissionRecovery!().settle();assert.equal(f.session.hasPendingChanges(),false);assert.deepEqual(f.requests.filter(request=>request.op==='set_entry'),[original,original]);assert.equal(f.cell(score).querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked,true);assert.match(await f.adapter.read('One.md'),/Score: true/);
+ }finally{f.restoreForCleanup();await f.close();}
+});
+
+test('a preempted finish cannot continue old configuration acknowledgements after its pending edit resolves',async t=>{
+ const f=await fixture();let release=()=>{},closing:Promise<void>|undefined,expired=false,oldActions=0;const acknowledge=BaseController.prototype.acknowledgeConfigurationRetry;
+ t.mock.method(BaseController.prototype,'acknowledgeConfigurationRetry',function(this:BaseController){if(expired)oldActions++;return acknowledge.call(this);});
+ try{release=f.hold();const input=f.edit(score,'9');f.key(input,'Enter');await until(()=>f.requests.some(request=>request.op==='set_entry'));closing=f.session.close();const rejected=assert.rejects(closing,{code:'base_admission_recovery_pending'});await tick();expired=true;f.retire();const capsule=f.session.prepareAdmissionRecovery!();await rejected;release();await capsule.settle();await tick();assert.equal(oldActions,0);
+ }finally{release();f.restoreForCleanup();await closing?.catch(()=>{});expired=false;await f.close();}
 });

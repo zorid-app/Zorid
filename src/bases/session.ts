@@ -302,6 +302,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   type CollectionAttempt={signature:string;request:SetEntry;collectionId:string;widget?:BasePropertyEditRecovery;release?:()=>void;response?:DatabaseResponse};
   const collectionAttempts=new Map<string,CollectionAttempt>();
   let admissionRecovery:{capsule:BaseAdmissionRecovery;edits:CollectionAttempt[];settled:boolean;settling?:Promise<void>}|undefined;
+  let interruptFinish:(()=>void)|undefined;
   let retireDerived!:()=>void;
   const derivedRetirement=new Promise<void>(resolve=>{retireDerived=resolve;});
   const optionCreations = new Map<string,CollectionOptionCreation>();
@@ -575,15 +576,16 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       if(!batch){batch={entry,values:{}};batches.set(entry.entryId,batch);}batch.values[fieldId]=next;
     }
     for(const {entry,values}of batches.values()){
-      const signature=JSON.stringify([entry.entryId,version,values]);let request=collectionMutations.get(signature);
-      if(!request){request={op:'set_entry',operationId:crypto.randomUUID(),entryId:entry.entryId,expectedRevision:entry.revision,expectedCollectionRevision:captured.collection.revision,values};collectionMutations.set(signature,request);}
+      const signature=JSON.stringify([entry.entryId,version,values]);
+      const edit=edits.find(edit=>edit.path===entry.path&&Object.keys(values).length===1&&Object.hasOwn(values,basePropertyName(edit.property))),widget=edit&&currentCollectionWidget(edit);
       let attempt=collectionAttempts.get(signature);
+      if(attempt&&attempt.widget?.owner!==widget?.owner){attempt.release?.();collectionAttempts.delete(signature);collectionMutations.delete(signature);attempt=undefined;}
+      let request=collectionMutations.get(signature);
+      if(!request){request={op:'set_entry',operationId:crypto.randomUUID(),entryId:entry.entryId,expectedRevision:entry.revision,expectedCollectionRevision:captured.collection.revision,values};collectionMutations.set(signature,request);}
       if(!attempt){
-        const edit=edits.find(edit=>edit.path===entry.path&&Object.keys(values).length===1&&Object.hasOwn(values,basePropertyName(edit.property)));
-        const widget=edit&&[...content.querySelectorAll<HTMLElement>('[data-base-editing]')].map(basePropertyEditRecovery).find(widget=>widget&&widget.edit.version===edit.version&&widget.edit.path===edit.path&&widget.edit.property===edit.property&&baseValuesEqual(widget.edit.value,edit.value));
         const selected=request as SetEntry,release=options.holdRecoverDatabaseEntry?.(selected);
         attempt={signature,request:selected,collectionId:captured.collection.id,widget,release};collectionAttempts.set(signature,attempt);
-      }
+      }else attempt.widget=widget;
       const response=await databaseService.request(request),saved=response.entries.find(item=>item.entryId===entry.entryId);attempt.response=response;
       if(!saved||saved.pendingProjection)throw new Error('The property is committed locally but its note still needs publication. Retry this edit.');
       if(admissionRecovery)verifyRecoveredCollectionAttempt(attempt,response);
@@ -596,6 +598,13 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       await loadDefinitions();
     })().catch(error=>{if(!admissionRecovery)throw error;});
     await Promise.race([refresh,derivedRetirement]);
+  }
+  function currentCollectionWidget(edit:Pick<BasePropertyWidgetEdit,'version'|'path'|'property'|'value'>):BasePropertyEditRecovery|undefined {
+    return [...content.querySelectorAll<HTMLElement>('[data-base-editing]')].map(basePropertyEditRecovery).find(widget=>widget&&widget.edit.version===edit.version&&widget.edit.path===edit.path&&widget.edit.property===edit.property&&baseValuesEqual(widget.edit.value,edit.value));
+  }
+  function rebindRetainedCollectionWidget(edit:BasePropertyWidgetEdit):void {
+    const widget=currentCollectionWidget(edit);if(!widget)return;
+    for(const attempt of collectionAttempts.values())if(attempt.widget?.owner===widget.owner&&attempt.widget.edit.version===edit.version&&attempt.widget.edit.path===edit.path&&attempt.widget.edit.property===edit.property&&baseValuesEqual(attempt.widget.edit.value,edit.value))attempt.widget=widget;
   }
   function releaseUnownedCollectionAttempts():void {
     for(const [signature,attempt]of collectionAttempts){
@@ -611,7 +620,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   }
   function recoverableCollectionAttempts():CollectionAttempt[]|undefined {
     try{alive();}catch{return;}
-    if(disposed||closing||pendingCollectionRestore||pendingCollectionCreate||optionCreations.size||configurationLifecycle||controller.hasPendingViewReferences
+    if(disposed||closing&&!interruptFinish||pendingCollectionRestore||pendingCollectionCreate||optionCreations.size||configurationLifecycle||controller.hasPendingViewReferences
       ||mounted?.hasQueuedConfiguration?.()||toolbarUI.hasDraft()||settings.hasDraft()||summaryDraft||summaryHasRawDraft?.()
       ||chooser?.hasPendingChanges()||collectionEditor?.hasPendingChanges()||creation?.status==='uncertain'
       ||[...changedBuffers].some(buffer=>buffer.dirty||!!buffer.error))return;
@@ -653,7 +662,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       })();recovery.settling=settling;void settling.finally(()=>{if(recovery.settling===settling)recovery.settling=undefined;}).catch(()=>{});return settling;
     }}};
     admissionRecovery=recovery;collectionLoad++;if(collectionRefreshTimer!==undefined){clearTimeout(collectionRefreshTimer);collectionRefreshTimer=undefined;}
-    controller.dispose();retireDerived();return recovery.capsule;
+    controller.dispose();interruptFinish?.();retireDerived();return recovery.capsule;
   }
   const editCollectionProperty=(edit:Parameters<typeof actions.editProperty>[0])=>editCollectionProperties([edit]);
   async function createCollectionOption(property:string,label:string,presentation:BasePropertyPresentation):Promise<void>{
@@ -1102,7 +1111,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       onError: report, onEditStateChange: () => { renderStatus(controller.state); schedule(); },
       contextMenu: options.contextMenu, hoverFile: options.hoverFile, dragFile: options.dragFile,
       renderProperty: createBasePropertyRenderer({ canBegin: canBeginPropertyEdit, getEditableValue: presentation => baseEditablePropertyValue(presentation.row, presentation.property), getDefinition: property => definitions.properties[basePropertyName(property)],
-        commit: (edit: BasePropertyWidgetEdit) => track(async () => { assertPropertyWritable(edit.property, edit.value); await editProperty(edit); return acknowledgeWidget(edit, edit.value); }), readOnly: presentation => !writable || !!definitionsError || definitions.diagnostics.some(item => item.property === basePropertyName(presentation.property)),
+        commit: (edit: BasePropertyWidgetEdit) => {rebindRetainedCollectionWidget(edit);return track(async () => { assertPropertyWritable(edit.property, edit.value); await editProperty(edit); return acknowledgeWidget(edit, edit.value); });}, readOnly: presentation => !writable || !!definitionsError || definitions.diagnostics.some(item => item.property === basePropertyName(presentation.property)),
         isCurrent: presentation => !disposed && !!mountedResult && widgetResults.has(presentation.version),
         getRelationTargets,
         ...(writable?{createOption:(property:string,label:string,presentation:BasePropertyPresentation)=>track(async()=>{
@@ -1268,17 +1277,20 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     if (!controller.state.error) selectedIndex = controller.selectedViewIndex;
   }
 
-  async function settle(): Promise<void> {
+  async function settle(validateRecovery:()=>void=()=>{}): Promise<void> {
     await Promise.allSettled([...pending]);
+    validateRecovery();
     // Let property widgets finish handling their accepted/rejected operations.
     await Promise.resolve();
+    validateRecovery();
     const acknowledgesSavedDraft = controller.hasPendingViewReferences || [...changedBuffers].some(buffer => buffer.path === options.basePath && (buffer.dirty || buffer.error));
     const acknowledgement = toolbarUI.captureSaveAcknowledgement();
     // Reference operations own their exact failed note drafts and original
     // witnesses; flushing those buffers independently would invalidate retry.
-    if (controller.hasPendingViewReferences) await controller.retryViewRenameReferences();
-    for (const buffer of changedBuffers) await buffer.flush();
+    if (controller.hasPendingViewReferences) {await controller.retryViewRenameReferences();validateRecovery();}
+    for (const buffer of changedBuffers) {await buffer.flush();validateRecovery();}
     const configurationAcknowledged = await controller.acknowledgeConfigurationRetry();
+    validateRecovery();
     if (acknowledgesSavedDraft || configurationAcknowledged) acknowledgement();
     releaseCleanBuffers();
     if(pendingCollectionRestore)throw new Error('The collection Restore is unfinished. Retry Restore before leaving this Base.');
@@ -1288,11 +1300,18 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   }
   async function finish(close: boolean, dismissCleanPanels = false): Promise<void> {
     if (disposed) return;
+    let recoveryInterruption:Error|undefined;
+    const interrupted=()=>recoveryInterruption??=Object.assign(new Error('This Base is reconnecting; its submitted edits are retained.'),{code:'base_admission_recovery_pending'});
+    if(admissionRecovery&&!admissionRecovery.settled)throw interrupted();
     if (closing) throw new Error('This base view is already finishing edits');
     if (mounted?.hasQueuedConfiguration?.()) throw new Error('Wait for the queued column width changes before leaving this base');
     closing = true;
+    const previousRecovery=admissionRecovery;let interrupt!:()=>void;
+    const retirement=new Promise<void>(resolve=>{interrupt=resolve;});interruptFinish=interrupt;
     try {
-      await settle();
+      await Promise.race([settle(()=>{if(admissionRecovery!==previousRecovery)throw interrupted();}),retirement.then(()=>{throw interrupted();})]);
+      if(admissionRecovery!==previousRecovery)throw interrupted();
+      if(interruptFinish===interrupt)interruptFinish=undefined;
       if (mounted?.hasQueuedConfiguration?.()) throw new Error('Wait for the queued column width changes before leaving this base');
       if (dismissCleanPanels && summaryHasRawDraft?.()) throw new Error('Finish or cancel the summary edit before changing context');
       if (dismissCleanPanels) { mounted?.dismissCleanPanels?.(); toolbarUI.dismissCleanPanel(); settings.destroy(); destroySummaryEditor?.(); }
@@ -1304,8 +1323,9 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         if(refreshIndicatorTimer!==undefined)clearTimeout(refreshIndicatorTimer);
         root.removeEventListener('keydown', switchViewKey, true); controller.dispose(); disposed = true; root.remove();
       }
-    } catch (error) { report(error); throw error; }
+    } catch (error) { if(!recoveryInterruption||error!==recoveryInterruption||!admissionRecovery)report(error); throw error; }
     finally {
+      if(interruptFinish===interrupt)interruptFinish=undefined;
       closing = false; renderStatus(controller.state);
       const metadata=options.vault.metadataFrame;if(metadata)refreshFilterMetadata(metadata);
       if (editsWerePending) schedule();
@@ -1332,7 +1352,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     get selectedViewIdentity(){return controller.selectedViewIdentity;},
     rebindViewName: (from, to, viewId) => { alive(); return controller.rebindViewName(from, to,viewId); },
     hasPendingChanges: () => !disposed && (!!pending.size || !!mounted?.hasQueuedConfiguration?.() || controller.hasPendingViewReferences || creation?.status === 'uncertain' || !!pendingCollectionCreate || activeDraft() || [...changedBuffers].some(buffer => buffer.dirty || !!buffer.error)),
-    canRecoverAdmission:()=>admissionRecovery?!disposed&&!closing:!!recoverableCollectionAttempts(),
+    canRecoverAdmission:()=>admissionRecovery?!disposed:!!recoverableCollectionAttempts(),
     prepareAdmissionRecovery,
     owns: node => { try { alive(); return !closing && root.isConnected && toolbarUI.owns(node); } catch { return false; } },
     flush: options => finish(false, options?.dismissCleanPanels),
