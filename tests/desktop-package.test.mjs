@@ -247,6 +247,74 @@ test('builder dependency collector excludes project dependencies after staged ap
   assert.equal(runtimeFilter(runtimeFile, await fs.stat(runtimeFile)), true);
 });
 
+test('builder copy pipeline skips the empty-app fallback only after the supported dependency hook', async t => {
+  const f = await fixture(t);
+  const workspace = "packages:\n  - '.'\n";
+  const lock = "---\nlockfileVersion: '9.0'\nimporters:\n  .: {}\n---\nlockfileVersion: '9.0'\nimporters:\n  .: {}\n";
+  await f.write('pnpm-workspace.yaml', workspace); await f.write('pnpm-lock.yaml', lock);
+  const staged = await stageDesktop(f.root);
+  const require = createRequire(import.meta.url);
+  const builderRequire = createRequire(require.resolve('electron-builder/package.json'));
+  const { Packager } = builderRequire('app-builder-lib/out/packager.js');
+  const { PlatformPackager } = builderRequire('app-builder-lib/out/platformPackager.js');
+  const { Platform } = builderRequire('app-builder-lib/out/core.js');
+  const { PM } = builderRequire('app-builder-lib/out/node-module-collector');
+  const { AsyncTaskManager } = builderRequire('builder-util');
+  const previousUnsigned = process.env.ZORID_UNSIGNED_BUILD;
+  let config;
+  try {
+    process.env.ZORID_UNSIGNED_BUILD = '1';
+    config = require('../electron-builder.cjs');
+  } finally {
+    if (previousUnsigned === undefined) delete process.env.ZORID_UNSIGNED_BUILD;
+    else process.env.ZORID_UNSIGNED_BUILD = previousUnsigned;
+  }
+  let collections = 0;
+  async function copy(configuration, name) {
+    const info = Object.assign(Object.create(Packager.prototype), {
+      options: {}, _configuration: configuration, _appDir: staged.appDirectory,
+      projectDir: f.root, _appInfo: { type: 'commonjs' }, _metadata: f.metadata,
+      _originalMetadata: f.metadata, _framework: { isNpmRebuildRequired: true, version: '44.9.1' },
+      _nodeModulesHandledExternally: false, _isPrepackedAppAsar: false,
+      cancellationToken: { cancelled: false }, debugLogger: { isEnabled: false },
+      getWorkspaceRoot: async () => f.root, getPackageManager: async () => PM.PNPM,
+      tempDirManager: { async getTempFile() { return path.join(f.root, `collector-${collections++}.json`); } },
+    });
+    await info.installAppDependencies(Platform.MAC, 3);
+    const destination = path.join(f.root, name);
+    const platform = { info, config: configuration, platform: Platform.MAC, createTransformerForExtraFiles: () => null };
+    const tasks = new AsyncTaskManager(info.cancellationToken);
+    // This is the builder's real shared file-set/collector path, with bounded
+    // fixture copying instead of downloading Electron or producing an app.
+    PlatformPackager.prototype.copyAppFiles.call(platform, tasks, null, destination, destination,
+      { outDir: destination }, {}, [], value => value);
+    await tasks.awaitTasks();
+    return { destination, info };
+  }
+  const result = await copy(config, 'copied-runtime');
+  assert.equal(result.info.areNodeModulesHandledExternally, true);
+  assert.equal(collections, 0, 'the complete copy path must not invoke any dependency collector');
+  const inputs = JSON.parse(await fs.readFile(staged.inputManifest));
+  for (const file of Object.keys(inputs.files)) {
+    assert.deepEqual(await fs.readFile(path.join(result.destination, file)), await fs.readFile(path.join(staged.appDirectory, file)), file);
+  }
+  await assert.rejects(fs.access(path.join(result.destination, 'node_modules')));
+  // The original configuration must reproduce the real fallback failure even
+  // with the staged workspace boundary in place.
+  await assert.rejects(copy({ ...config, npmRebuild: false, beforeBuild: undefined }, 'failed-runtime'), /Node module collector process exited with code 1/);
+  assert.ok(collections >= 2, 'control visits staged app, then development workspace');
+  const collectorErrors = await Promise.all((await fs.readdir(f.root)).filter(file => /^collector-.*\.json$/.test(file))
+    .map(file => fs.readFile(path.join(f.root, file), 'utf8')));
+  assert.ok(collectorErrors.some(text => text.includes('ERR_PNPM_BROKEN_LOCKFILE')));
+  assert.equal(await fs.readFile(path.join(f.root, 'pnpm-workspace.yaml'), 'utf8'), workspace);
+  assert.equal(await fs.readFile(path.join(f.root, 'pnpm-lock.yaml'), 'utf8'), lock);
+  const stagedMetadata = JSON.parse(await fs.readFile(path.join(staged.appDirectory, 'package.json'), 'utf8'));
+  for (const field of ['dependencies', 'optionalDependencies', 'peerDependencies', 'devDependencies', 'bundledDependencies', 'bundleDependencies']) {
+    await fs.writeFile(path.join(staged.appDirectory, 'package.json'), JSON.stringify({ ...stagedMetadata, [field]: { unexpected: '1.0.0' } }));
+    await assert.rejects(copy(config, `rejected-${field}`), new RegExp(`unexpected ${field}`));
+  }
+});
+
 
 test('native host input fails closed on missing, wrong-architecture, script, symlink or non-executable files', async t => {
   const f = await fixture(t), filename = path.join(f.root, f.hostRelative);

@@ -1,5 +1,6 @@
 'use strict';
 const path = require('node:path');
+const fs = require('node:fs/promises');
 const pkg = require('./package.json');
 const unsigned = process.env.ZORID_UNSIGNED_BUILD === '1';
 const identity = process.env.CSC_NAME?.trim();
@@ -13,12 +14,25 @@ module.exports = {
   productName: 'Zorid',
   electronVersion: pkg.devDependencies.electron,
   directories: { app: '.release/app', output: 'release', buildResources: 'build' },
-  // The dependency collector can fall back from the staged app to the project.
-  // Renderer dependencies are already bundled; exclude that separate collector.
+  // Renderer dependencies are bundled. Keep development modules out even when
+  // changing builder defaults or inspecting the staged runtime separately.
   files: ['**/*', '!**/node_modules/**'],
   asar: true,
   extraResources: [{ from: '.release/native', to: 'native', filter: ['zorid-desktop-host'] }],
-  npmRebuild: false,
+  // Returning false is electron-builder's supported externally-handled-modules
+  // contract: skip both rebuilding and dependency collection. npmRebuild:false
+  // alone skips this hook and still searches the development workspace when
+  // the intentionally dependency-free staged app returns no modules.
+  beforeBuild: async ({ appDir }) => {
+    const metadata = JSON.parse(await fs.readFile(path.join(appDir, 'package.json'), 'utf8'));
+    for (const field of ['dependencies', 'optionalDependencies', 'peerDependencies', 'devDependencies', 'bundledDependencies', 'bundleDependencies']) {
+      const value = metadata[field];
+      if (value != null && (typeof value !== 'object' || Object.keys(value).length > 0)) {
+        throw new Error(`Staged desktop must be dependency-free; unexpected ${field}`);
+      }
+    }
+    return false;
+  },
   forceCodeSigning: !unsigned,
   artifactName: 'Zorid-${version}-${arch}.${ext}',
   publish: null,
