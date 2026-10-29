@@ -14,9 +14,9 @@ test('monotonic handshake is an interval independent of wall timeOrigin arithmet
   assert.throws(()=>clockInterval(1,[{remoteNow:0,before:0,after:1}]),/clock/);
 });
 test('trusted exact packaged input by800ms establishes the target',()=>{const value=assessNote(receipt());assert.equal(value.valid,true);assert.equal(value.outcome,'target-met');assert.deepEqual(value.inputMs,{lower:229,upper:231});});
-test('continuously observed not-ready deadline plus later trusted input proves a target miss',()=>{
+test('a not-ready deadline snapshot does not prove continuous coverage of silent eligibility changes',()=>{
   const r=receipt();r.observed.ready.at=1000;r.observed.probes=[{...r.observed.probes[0],appliedAt:1010}];r.dispatches[1]={name:'deadline',status:'observed-not-ready',observation:{at:800,ready:null,readinessCheck:{eligible:false,framesPending:false}}};
-  assert.equal(assessNote(r).outcome,'target-missed');
+  assert.equal(assessNote(r).outcome,'indeterminate');assert.equal(assessNote(r).valid,false);
 });
 test('late debugger attachment cannot manufacture a valid miss or a valid success',()=>{
   const r=receipt();r.observed.installedAt=900;r.observed.ready.at=1000;r.observed.probes=[{...r.observed.probes[0],appliedAt:1010}];r.dispatches[1].status='unobservable';
