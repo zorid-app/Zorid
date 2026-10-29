@@ -34,15 +34,23 @@ test('Tasks uses the existing editable named form and matches its own returned d
   assert.deepEqual(sources,[{kind:'collection',id:collection.id}]);chooser.destroy();f.dom.window.close();
 });
 
-test('configured form returns to the route that opened it and retains unsent raw changes',async()=>{
-  const f=fixture();let cancelled=0;
-  const chooser=mountSourceChooser(f.host,{service:{async request(){return reply();}},isCurrent:()=>true,choose:async()=>{},onCancel:()=>{cancelled++;}});
-  button(f.host,'New data source with options').click();input(f,'Raw draft');key(f,name(f),'Escape');button(f.host,'Back').click();button(f.host,'Cancel').click();
-  assert.equal(name(f).value,'Raw draft');assert.equal(cancelled,0);assert.equal(chooser.hasPendingChanges(),true);
-  input(f,'');button(f.host,'Back').click();assert.equal(f.doc.activeElement,button(f.host,'New data source with options'));
-  button(f.host,'Link to existing data source').click();await tick();button(f.host,'Create a collection').click();key(f,name(f),'Escape');await tick();
-  assert.equal(f.doc.activeElement,button(f.host,'Create a collection'));assert.equal(f.host.querySelector('.collection-source-choices')?.hasAttribute('hidden'),true);
+test('Escape retains unsubmitted input while explicit Back discards it and restores the originating action',async()=>{
+  const f=fixture(),requests:DatabaseRequest[]=[];let cancelled=0;
+  const chooser=mountSourceChooser(f.host,{service:{async request(command){requests.push(command);return reply();}},isCurrent:()=>true,choose:async()=>{},onCancel:()=>{cancelled++;}});
+  button(f.host,'New data source with options').click();input(f,'Raw draft');key(f,name(f),'Escape');
+  assert.equal(name(f).value,'Raw draft');assert.equal(cancelled,0);assert.equal(chooser.hasPendingChanges(),true);assert.equal(button(f.host,'Back').disabled,false);
+  button(f.host,'Back').click();assert.equal(f.doc.activeElement,button(f.host,'New data source with options'));assert.equal(chooser.hasPendingChanges(),false);
+  button(f.host,'New data source with options').click();assert.equal(name(f).value,'');button(f.host,'Back').click();
+  button(f.host,'Link to existing data source').click();await tick();button(f.host,'Create a collection').click();input(f,'Unsubmitted from existing');key(f,name(f),'Escape');assert.equal(name(f).value,'Unsubmitted from existing');button(f.host,'Back').click();await tick();
+  assert.equal(f.doc.activeElement,button(f.host,'Create a collection'));assert.equal(f.host.querySelector('.collection-source-choices')?.hasAttribute('hidden'),true);assert.equal(requests.some(command=>command.op==='create'),false);
   chooser.destroy();f.dom.window.close();
+});
+
+test('Back discards only raw Tasks name and preset configuration and reopening starts with Tasks defaults',()=>{
+  const f=fixture(),requests:DatabaseRequest[]=[];const chooser=mountSourceChooser(f.host,{service:{async request(command){requests.push(command);return reply();}},isCurrent:()=>true,choose:async()=>{}});
+  button(f.host,'Tasks').click();input(f,'Unsubmitted tasks');preset(f).value='blank';preset(f).dispatchEvent(new f.dom.window.Event('change',{bubbles:true}));key(f,name(f),'Escape');assert.equal(name(f).value,'Unsubmitted tasks');assert.equal(preset(f).value,'blank');
+  assert.equal(button(f.host,'Back').disabled,false);button(f.host,'Back').click();assert.equal(f.doc.activeElement,button(f.host,'Tasks'));assert.equal(chooser.hasPendingChanges(),false);
+  button(f.host,'Tasks').click();assert.equal(name(f).value,'Tasks');assert.equal(preset(f).value,'tasks');assert.deepEqual(requests,[]);chooser.destroy();f.dom.window.close();
 });
 
 test('uncertain configured creation locks its capsule and retries exactly despite changed DOM input',async()=>{
@@ -101,4 +109,11 @@ for(const route of ['tasks','empty'] as const)test(`an uncertain ${route} operat
   const retry=()=>button(f.host,route==='tasks'?'Create collection':'Retry data source').click();retry();await tick();
   assert.equal(chooser.hasPendingChanges(),true);if(route==='tasks')assert.equal(name(f).readOnly,true);else assert.equal(button(f.host,'Tasks').disabled,true);
   retry();await tick();const creates=requests.filter(command=>command.op==='create');assert.equal(creates.length,3);assert.deepEqual(creates[0],creates[1]);assert.deepEqual(creates[1],creates[2]);chooser.destroy();f.dom.window.close();
+});
+
+test('Back remains fenced during submitted creation and after positive pending publication',async()=>{
+  const f=fixture(),requests:DatabaseRequest[]=[];let resolve!:(value:DatabaseResponse)=>void,chosen=0;
+  const chooser=mountSourceChooser(f.host,{service:{request(command){requests.push(command);return new Promise(done=>{resolve=done;});}},isCurrent:()=>true,choose:async()=>{chosen++;}});
+  button(f.host,'Tasks').click();key(f,name(f),'Enter');assert.equal(button(f.host,'Back').disabled,true);button(f.host,'Back').click();assert.equal(name(f).isConnected,true);assert.equal(requests.length,1);
+  resolve({...reply([collection]),projection:{pending:1,issues:[]}});await tick();assert.equal(button(f.host,'Back').disabled,true);button(f.host,'Back').click();assert.equal(name(f).isConnected,true);assert.equal(chosen,0);assert.equal(chooser.hasPendingChanges(),true);chooser.destroy();f.dom.window.close();
 });

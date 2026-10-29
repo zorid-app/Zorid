@@ -195,7 +195,7 @@ export function mountSourceChooser(container: HTMLElement, options: SourceChoose
   });
   availability(); if (live()) (options.service ? empty : notes).focus();
   function showCollections() {
-    if (busy || !live() || retainedCreate || screen === 'create' && !canLeaveCreate?.()) return;
+    if (busy || !live() || retainedCreate) return;
     if (!options.service) { error.textContent = 'Collections are unavailable in this vault.'; error.hidden = false; return; }
     screen = 'existing'; composing = false; canLeaveCreate = undefined; returnFromCreate = undefined; createAvailability = undefined; choices.hidden = true; heading.textContent = 'Choose a collection'; form.replaceChildren();
     const list = element(doc, 'div'); list.className = 'collection-source-existing';
@@ -245,16 +245,16 @@ export function mountSourceChooser(container: HTMLElement, options: SourceChoose
     }); });
     canLeaveCreate = () => !request && !source && name.value === initialName && preset.value === initialPreset;
     returnFromCreate = () => {
-      if (busy || !canLeaveCreate?.()) return;
+      if (busy || request || source) return;
       if (origin === 'choices') showChoices(originButton); else showCollections();
     };
     const back = button(doc, 'Back', () => returnFromCreate?.());
     createAvailability = () => {
       retainedCreate = !!request || !!source;
       if (capturedDraft) { name.value = capturedDraft.name; preset.value = capturedDraft.preset; }
-      name.readOnly = retainedCreate; preset.disabled = busy || retainedCreate; back.disabled = busy || !canLeaveCreate?.();
+      name.readOnly = retainedCreate; preset.disabled = busy || retainedCreate; back.disabled = busy || !!request || !!source;
       hint.hidden = !!canLeaveCreate?.();
-      hint.textContent = retainedCreate ? 'Retry this creation to finish linking the original data source.' : 'Undo the name or preset changes to go back.';
+      hint.textContent = retainedCreate ? 'Retry this creation to finish linking the original data source.' : 'Use Back to cancel this setup.';
     };
     name.addEventListener('input', availability); preset.addEventListener('change', availability);
     name.addEventListener('keydown', event => { if (event.key === 'Enter' && !composing && !event.isComposing && event.keyCode !== 229 && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) { event.preventDefault(); event.stopPropagation(); submit.click(); } });
