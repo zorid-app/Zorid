@@ -3,6 +3,18 @@
 ## Execution checkpoint — shared-core coordinator
 
 
+**Base source progress; race fixes/review still pending — 2026-10-28.**
+Reported platformc526d9e0 reviewclosed51/51; Session59c1->56e0 cleanemptycapsule;
+Workspace/embed4mountedcasesGREEN (nativeACKheld,knownACK+oldlistheld). No native
+or GUI claim. Reviewcaught repeatedsamevalue retryownership andclose/capsule incl
+close-first races; authorfix/regressions pending, notfinalacceptance. Adjacent
+historical untypedfixture failures under exactbaseline classification; TSreported
+pass. No new tests/build/GUI/apply here; retain sole main/GUI lane and3owner split.
+FullBase scope/noFlashcorrectedoracle remains required. Protected71549/real backups
+untouched; realfreeze/apply/installheld until coherentreviewedpins +actualowned
+fault/replay/bytes/restart/normalclose acceptance. Scheduleralreadymain272274b0.
+
+
 **Explicit user Base inactive-session defect; effective3-owner split — 2026-10-28.**
 Verified screenshot-matching owned main14465 via Inspector/profile/executable/
 package/vault/slot, pending UI+exact b778 command privately captured0600/SHA b4c56be1.

@@ -3,6 +3,33 @@
 ## URGENT: real-session automatic save failure — 2026-10-28
 
 
+**Base recovery source progress; final ownership-race corrections pending — 2026-10-28.**
+Owner reports platform pending-database proxy c526d9e0 source/review CLOSED with
+51/51 focused checks. Exact commit touches platform/index.ts and its dedicated
+recovery test only. Base Session source59c1bafb ->56e0ca5b adds clean empty-capsule
+preparation; Workspace/embed composition has4mounted GREEN cases, including native
+ACK withheld and known ACK with old list held. These are source/controlled-fixture
+results, **not native GUI acceptance or a real-vault recovery claim**. Source files
+inspected here only for handoff scope; checks were not rerun by this main owner.
+
+Independent review identified repeated same-value widget retry ownership and
+close/capsule races, including close-first. Named Base author is correcting them
+with regressions before final handoff; do not treat59c1/56e0 as final approved
+composition. Parent is classifying adjacent historical untyped fixture failures
+against exact baseline, rather than silently declaring them regressions or passing.
+Reported TS passes. Existing named3-owner split stays in force; no overlapping
+Base author in this thread. Reviewed scheduler is already integrated main272274b0.
+
+User reiterates that inactive-session Base save failure must not occur. Retain full
+Base recovery and strict painted-error visibility gate; no Markdown-only narrowing.
+This update does not authorize a new build/GUI pass or real freeze/apply. Main
+owner keeps integration/GUI/install lane idle while coherent final corrected pins
+and independent review are prepared. Protected71549, Home/ProjectIdea exports and
+explicit real-apply/install hold remain untouched. Final acceptance must still
+exercise corrected-oracle actual owned Markdown+Base fault/reconnect, exact
+requests/bytes/state, restart and normal closure before live preservation/apply.
+
+
 **NEW direct user Base finding + effective implementation split — 2026-10-28.**
 User screenshot shows Recovery table/collection/record Rating9 and toast plus inline
 “This vault session is no longer active. Reopen the vault before making another
