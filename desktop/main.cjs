@@ -10,6 +10,34 @@ const { captureRichDiagnostic } = require('./document-semantics.cjs');
 const editorCore = require('./editor-core.cjs').createEditorCoreManager(process.env,{isPackaged:app.isPackaged,resourcesPath:process.resourcesPath,documentRuntime:true,
   onDocumentRuntimeNudge:(record,message)=>record.window.webContents.send('zorid:document-runtime',message)});
 let clientSlots;
+let independentJournalManager;
+const journalDocumentEpoch=new WeakMap();
+function revokeIndependentJournal(record){journalDocumentEpoch.set(record,(journalDocumentEpoch.get(record)??0)+1);independentJournalManager?.revoke(record);}
+function independentJournal(){
+  if(!independentJournalManager){
+    const {openDraftJournal}=require('./draft-journal.cjs');
+    const {createLazyDraftJournal}=require('./lazy-draft-journal.cjs');
+    const {createDraftJournalAdmissionManager}=require('./draft-journal-admission.cjs');
+    independentJournalManager=createDraftJournalAdmissionManager({broker,journal:createLazyDraftJournal(()=>openDraftJournal(path.join(app.getPath('userData'),'draft-journal-v2')))});
+  }
+  return independentJournalManager;
+}
+function captureJournalOwner(record,event,expectedRoot){
+  const entry=record.vault,generation=record.generation,webContents=record.window.webContents,frame=webContents.mainFrame,slot=record.clientSlot,epoch=journalDocumentEpoch.get(record)??0,persistedRoot=record.persistedVaultRoot;
+  const check=()=>{
+    try{
+    if(broker.authenticate(event)!==record||!entry||record.vault!==entry||record.generation!==generation||record.window.webContents!==webContents||webContents.mainFrame!==frame||record.clientSlot!==slot
+      ||record.vaultSelectionPending||typeof expectedRoot!=='string'||entry.service.root!==expectedRoot||persistedRoot!==expectedRoot||record.persistedVaultRoot!==persistedRoot||(journalDocumentEpoch.get(record)??0)!==epoch)
+      throw Error();
+    }catch{throw Object.assign(new Error('The independent draft owner changed.'),{code:'draft_admission_denied',commitUncertain:false});}
+  };check();return check;
+}
+async function contextWithIndependentJournal(record,event,expectedRoot,operation){
+  const check=captureJournalOwner(record,event,expectedRoot),context=await operation();check();
+  if(!context)return context;
+  const grant=independentJournal().attach(record,context);check();
+  return{...context,independentJournal:grant};
+}
 const { createContextMenuController } = require('./context-menu.cjs');
 const { validateMenuHotkeys, workspaceFileMenu } = require('./menu-hotkeys.cjs');
 const menuHotkeys = new WeakMap();
@@ -31,8 +59,9 @@ function handle(name, callback) {
     const record = broker.authenticate(event);
     // Renderer/module loading overlaps vault initialization. Its window identity
     // is already usable, but no vault capability may escape the opening barrier.
+    const epoch=journalDocumentEpoch.get(record)??0,frame=event.senderFrame,webContents=event.sender;
     if (record.opening && name !== 'getWindowInfo') return record.opening.then(() => {
-      if (broker.authenticate(event) !== record) throw new Error('Window changed while opening');
+      if (broker.authenticate(event) !== record||(journalDocumentEpoch.get(record)??0)!==epoch||record.window.webContents!==webContents||webContents.mainFrame!==frame) throw new Error('Window changed while opening');
       return callback(record, event, ...args);
     });
     return callback(record, event, ...args);
@@ -114,6 +143,7 @@ function registerIPC() {
       broker.authenticate(event);
       editorCore?.requireReleased(record);
       const previousService=record.vault?.service;
+      revokeIndependentJournal(record);
       const result = await broker.select(record, selection.filePaths[0]);
       if(previousService&&previousService!==record.vault?.service)await editorCore?.retire(broker,record,previousService);
       record.persistedVaultRoot=null;
@@ -130,11 +160,20 @@ function registerIPC() {
     try { return { ok: true, result: await callback() }; }
     catch (error) { return { ok: false, error: { code: typeof error?.code === 'string' && /^[a-z_]{1,64}$/.test(error.code) ? error.code : 'durable_request_failed', commitUncertain: error?.commitUncertain === true } }; }
   };
-  handle('getDurableContext', (record, _event, expectedRoot) => durableReply(() => editorCore ? editorCore.context(broker, record, expectedRoot) : null));
-  handle('recoverDurableContext', (record, event, expectedRoot, admissionId) => durableReply(() => {
+  handle('getDurableContext', (record, event, expectedRoot) => durableReply(() => contextWithIndependentJournal(record,event,expectedRoot,()=>editorCore ? editorCore.context(broker, record, expectedRoot) : null)));
+  handle('recoverDurableContext', (record, event, expectedRoot, admissionId) => durableReply(() => contextWithIndependentJournal(record,event,expectedRoot,()=>{
     if (!editorCore) throw new Error('No Rust editor context');
     return editorCore.recover(broker, record, event, expectedRoot, admissionId);
-  }));
+  })));
+  ipcMain.handle('zorid:independentJournal',async(event,input)=>{
+    try{
+      const record=broker.authenticate(event);
+      if(!input||typeof input!=='object'||Array.isArray(input)||Reflect.ownKeys(input).length!==4||!['vault','token','op','args'].every(key=>Object.hasOwn(input,key)&&Object.hasOwn(Object.getOwnPropertyDescriptor(input,key),'value')))throw{code:'invalid_draft_request'};
+      const check=captureJournalOwner(record,event,input.vault),value=await independentJournal().dispatch(record,event,input.vault,input.token,{op:input.op,args:input.args});
+      try{check();}catch(error){if(input.op==='compareAndSwap'||input.op==='retire')error.commitUncertain=true;throw error;}
+      return{independentJournal:true,schemaVersion:1,ok:true,value};
+    }catch(error){return{independentJournal:true,schemaVersion:1,ok:false,error:{code:typeof error?.code==='string'&&/^[a-z_]{1,64}$/.test(error.code)?error.code:'draft_admission_denied',commitUncertain:error?.commitUncertain===true,source:'main'}};}
+  });
   handle('durableInvoke', (record, event, expectedRoot, admissionId, method, args) => durableReply(async () => {
     if (!editorCore) throw new Error('No Rust editor context');
     if(method==='documentDrafts'){
@@ -156,9 +195,10 @@ function registerIPC() {
     }
     return editorCore.invoke(broker, record, event, expectedRoot, admissionId, method, args);
   }));
-  handle('releaseDurableContext', (record, event, expectedRoot, admissionId) => durableReply(() => {
+  handle('releaseDurableContext', (record, event, expectedRoot, admissionId) => durableReply(async() => {
     if (!editorCore) throw new Error('No Rust editor context');
-    return editorCore.release(broker, record, event, expectedRoot, admissionId);
+    const check=captureJournalOwner(record,event,expectedRoot);
+    await editorCore.release(broker, record, event, expectedRoot, admissionId);check();revokeIndependentJournal(record);
   }));
   for (const method of ['list', 'stat', 'read', 'readBinary', 'write', 'writeBinary', 'compareAndWrite', 'mkdir', 'rename', 'trash', 'remove', 'retryReconciliation', 'recoveryList', 'recoveryRead']) {
     handle(method, (record, event, expectedRoot, ...args) => broker.dispatch(record, expectedRoot, method, method==='recoveryList'||method==='recoveryRead'?structuredClone(args):args, () => broker.authenticate(event)));
@@ -197,6 +237,7 @@ async function createWindow({ source, primary = false, initialState = 'empty', r
   });
   window.on('focus', refreshApplicationMenu);
   window.on('closed', () => {
+    revokeIndependentJournal(record);
     const selectedService=record.vault?.service;
     contextMenus.close(window);broker.remove(record);
     void (async()=>{await editorCore?.retire(broker,record,selectedService);
@@ -208,6 +249,12 @@ async function createWindow({ source, primary = false, initialState = 'empty', r
     return { action: 'deny' };
   });
   window.webContents.on('will-navigate', (event, url) => { if (!allowedURL(url)) event.preventDefault(); });
+  window.webContents.on('did-start-navigation',(details,_url,isInPlace,isMainFrame)=>{
+    const main=typeof details?.isMainFrame==='boolean'?details.isMainFrame:isMainFrame;
+    const same=typeof details?.isSameDocument==='boolean'?details.isSameDocument:isInPlace;
+    if(main===true&&same!==true)revokeIndependentJournal(record);
+  });
+  window.webContents.on('render-process-gone',()=>revokeIndependentJournal(record));
   const opening = (async () => {
     if (source) broker.bind(record, source.vault);
     else {

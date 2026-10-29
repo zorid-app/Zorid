@@ -3,6 +3,9 @@ import type { VaultEntry } from '../core/types';
 import type { ContextMenuRequest } from './context-menu';
 
 export interface DesktopDurableContext { conditionalSavedSourceAvailable?:true; textCreateReceiptsAvailable?:true; workBlocks?:true; databases?:true; documentSemantics?:true; documentMaintenance?:true; metadataRowsAvailable?:boolean; propertyTargetsAvailable?:boolean; basePreviewAvailable?:boolean; draftsAvailable?:boolean; admissionId: string; scope: CheckpointScope; binaryLimits?:import('../core/binary-streams.ts').BinaryStreamLimits }
+export interface DesktopIndependentJournalGrant {readonly token:string;readonly scope:import('../core/independent-drafts.ts').IndependentDraftScope}
+export interface DesktopDurableContext {readonly independentJournal?:DesktopIndependentJournalGrant}
+export interface DesktopIndependentJournalRequest {readonly vault:string;readonly token:string;readonly op:'list'|'read'|'compareAndSwap'|'retire';readonly args:readonly unknown[]}
 export interface DesktopReconciliation {
   work?: {phase: 'discovery' | 'import' | 'publication' | 'complete' | 'blocked'; pending: boolean; workUnits: number};
   scanId: string; complete: boolean; scanComplete: boolean; finished: boolean;
@@ -28,6 +31,8 @@ export interface DesktopDurableFailure {
   error:{code:string;commitUncertain:boolean;source:'host'|'transport'|'protocol'};
 }
 export interface DesktopBridge {
+  /** Independent main-owned draft storage; never routed through Rust. */
+  independentJournal?(request:DesktopIndependentJournalRequest):Promise<unknown>;
   /** Successes/domain envelopes are unchanged; generic errors are plain data. */
   durableRequest?(request:DesktopDurableRequest):Promise<unknown>;
   getWindowInfo?(): Promise<DesktopWindowInfo>;

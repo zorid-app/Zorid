@@ -8,6 +8,18 @@ const plain = value => !!value && typeof value === 'object' && !Array.isArray(va
   && [null,Object.prototype].includes(Object.getPrototypeOf(value))
   && Reflect.ownKeys(value).every(key => typeof key === 'string' && Object.hasOwn(Object.getOwnPropertyDescriptor(value,key),'value'));
 const exact = (value, keys) => plain(value) && Reflect.ownKeys(value).length === keys.length && keys.every(key => Object.hasOwn(value,key));
+const journalFailure=(code,commitUncertain,source)=>({independentJournal:true,schemaVersion:1,ok:false,error:{code,commitUncertain,source}});
+const independentJournal=async request=>{
+  if(!exact(request,['vault','token','op','args'])||typeof request.vault!=='string'||!request.vault||request.vault.length>4096||request.vault.includes('\0')
+    ||typeof request.token!=='string'||!request.token||request.token.length>128||!['list','read','compareAndSwap','retire'].includes(request.op)||!Array.isArray(request.args)||request.args.length>1)
+    return journalFailure('invalid_draft_request',false,'protocol');
+  let reply;
+  try{reply=await invoke('independentJournal',request);}catch{return journalFailure('draft_transport_lost',true,'transport');}
+  if(exact(reply,['independentJournal','schemaVersion','ok','value'])&&reply.independentJournal===true&&reply.schemaVersion===1&&reply.ok===true)return reply;
+  if(exact(reply,['independentJournal','schemaVersion','ok','error'])&&reply.independentJournal===true&&reply.schemaVersion===1&&reply.ok===false&&exact(reply.error,['code','commitUncertain','source'])
+    &&typeof reply.error.code==='string'&&/^[a-z_]{1,64}$/.test(reply.error.code)&&typeof reply.error.commitUncertain==='boolean'&&reply.error.source==='main')return reply;
+  return journalFailure('invalid_draft_response',true,'protocol');
+};
 const durableMethods = new Set(['readText','readTextById','composeNote','planWrite','prepare','commit','query','listUnacknowledged','acknowledge',
   'checkpoints.load','checkpoints.compareAndSwap','checkpoints.list','checkpoints.changes','createText','createTextReceipt','fileCommand',
   'captureSavedSource','releaseSavedSource','databaseCommand','workblockCommand','documentCommand','documentDrafts','binaryCommand',
@@ -129,6 +141,7 @@ contextBridge.exposeInMainWorld('zorid', Object.freeze({
   },
   getDurableContext: vault => durable('getDurableContext', vault),
   durableRequest,
+  independentJournal,
   recoverDurableContext: (vault, admissionId) => durable('recoverDurableContext', vault, admissionId),
   durableInvoke: (vault, admissionId, method, args) => durable('durableInvoke', vault, admissionId, method, args),
   onDocumentRuntimeNudge: (vault, admissionId, callback, onRetire) => {

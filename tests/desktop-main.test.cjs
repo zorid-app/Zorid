@@ -39,6 +39,9 @@ test('main wiring creates empty authenticated windows and scopes vault picking t
   const nativeRequire = name => {
     if (name === './editor-core.cjs') return { createEditorCoreManager: (_environment,options) => {coreOptions=options;return ({open:openService,owns:()=>false,requireReleased(){},async recover(_broker,record,_event,root,admissionId){if(coreFailure)throw coreFailure;recoveries.push({recordId:record.id,root,admissionId});return {admissionId:'fresh-admission',scope:{vaultId:'store',clientId:'client'}};},async invoke(){if(coreFailure)throw coreFailure;return {queryId:'query'};},retire:async(_broker,_record,service)=>{retirements.push(service.root);},close:async()=>{}}); } };
     if (name === './client-slots.cjs') return {openClientSlots:async()=>({listRestorable:async()=>[],claim:async({primary}={})=>({slotId:primary?'primary':`window-${++slotNumber}`,clientId:'client',vaultPath:null}),setVault:async()=>{},release:async()=>{}})};
+    if (name === './draft-journal-admission.cjs') return {createDraftJournalAdmissionManager:()=>({attach:(_record,context)=>({token:'owned-journal-token',scope:{...context.scope,incarnationId:'owned-document'}}),revoke(){}})};
+    if (name === './lazy-draft-journal.cjs') return {createLazyDraftJournal:()=>({bind(){assert.fail('context must not open journal storage');}})};
+    if (name === './draft-journal.cjs') return {openDraftJournal:()=>{assert.fail('context must not open journal storage');}};
     if (name === './document-semantics.cjs') return require('../desktop/document-semantics.cjs');
     if (name === 'electron') return electron;
     if (name === 'node:fs/promises') return { readFile: async () => '{"path":"/first"}', mkdir: async () => {}, writeFile: async () => {} };
@@ -102,7 +105,7 @@ test('main wiring creates empty authenticated windows and scopes vault picking t
   }});
   assert.deepEqual(structuredClone(await exposed.durableInvoke('/first','admitted','documentCommand',[richRequest])),structuredClone(richReply.result));
   const priorFailure=coreFailure;coreFailure=undefined;
-  assert.deepEqual(structuredClone(await exposed.recoverDurableContext('/first','previous-admission')),{admissionId:'fresh-admission',scope:{vaultId:'store',clientId:'client'}});
+  assert.deepEqual(structuredClone(await exposed.recoverDurableContext('/first','previous-admission')),{admissionId:'fresh-admission',scope:{vaultId:'store',clientId:'client'},independentJournal:{token:'owned-journal-token',scope:{vaultId:'store',clientId:'client',incarnationId:'owned-document'}}});
   assert.deepEqual(recoveries,[{recordId:'main',root:'/first',admissionId:'previous-admission'}]);
   coreFailure=Object.assign(new Error('/private/recovery details'),{code:'durable_scope_changed',commitUncertain:false});
   assert.deepEqual(structuredClone(await invoke(windows[0],'recoverDurableContext','/first','foreign')),{ok:false,error:{code:'durable_scope_changed',commitUncertain:false}});

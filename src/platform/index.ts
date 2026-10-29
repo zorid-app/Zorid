@@ -1,4 +1,5 @@
 import {createDesktopDurableTransport} from './desktop-durable-transport.ts';
+import {createDesktopIndependentDraftProvider} from './desktop-independent-drafts.ts';
 import {createDatabaseService} from '../core/databases.ts';
 import type {DatabaseService,DatabaseRequest,DatabaseResponse,DesktopDatabaseRequest} from '../core/databases.ts';
 import {captureDatabaseRequest} from '../../desktop/databases.cjs';
@@ -74,6 +75,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
   }:undefined;
   const transport=createDesktopDurableTransport(bridge);
   const binding = recoveredBinding??await transport.getDurableContext?.(info.path);
+  const independentDrafts=binding&&Object.hasOwn(binding,'independentJournal')?createDesktopIndependentDraftProvider(bridge,info.path,binding.scope,binding.independentJournal):undefined;
   let durableWrites: DurableWrites | undefined;
   let release: (() => Promise<void>) | undefined;
   let recovery:PlatformVault['recovery'];
@@ -460,6 +462,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
     id: durableWrites ? `desktop-core:${durableWrites.checkpoints.scope.vaultId}:${durableWrites.checkpoints.scope.clientId}` : `desktop:${info.path}`,
     label: info.name,
     adapter: {
+      ...(independentDrafts?{independentDrafts}:{}),
       ...(durableWrites ? {durableWrites} : {}),
       ...(documents?{documentSemantics:documents.service}:{}),
       ...(databases?{databases}:{}),
