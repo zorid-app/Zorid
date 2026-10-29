@@ -44,7 +44,9 @@ The renderer observer is registered with
 then installed in the current document if needed. Main and renderer observations
 are buffered. Pre-attachment phases remain censored. Main request observation
 retains normal Promise/result identity and records actual receipt metadata, not
-bodies. Composite effect kind/priority stays unknown unless its exact committed
+bodies. `calledAt` is wrapper entry; `queuePredecessorSettledAt` is only the prior
+queue tail settling, **not** actual dispatch after readiness/authorization waits.
+Composite effect kind/priority stays unknown unless its exact committed
 descriptor was actually observed.
 
 All elapsed clocks use the runner's monotonic spawn/open origin. Remote
@@ -55,6 +57,8 @@ attachment overhead and late input dispatch remain in each receipt.
 There is one earliest-ready probe and one fixed 800 ms attempt, without retries.
 Normal trusted CDP keyboard input must produce a trusted `beforeinput` in the
 exact selected CodeMirror, with exact document growth, caret and post-paint state.
+Completion is observed through the actual CodeMirror transaction, including a
+bounded later DOM-observer/animation-frame turn; `beforeinput` alone is not ACK.
 Initial length/prefix, known first viewport text and two frames are checked. Full
 body hashing happens after the deadline. Ordinary Save and trusted Undo restore
 the original fixture, verified against physical files and read-only Core reads.

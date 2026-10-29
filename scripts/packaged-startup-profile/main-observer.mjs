@@ -40,14 +40,16 @@ export function installMainObserver(config){
     const original=RustVaultService.prototype.request;
     RustVaultService.prototype.request=function(command,...args){
       const operation=command?.request?.command?.op??command?.request?.op??null;
-      const row={method:command?.method,operation,queuedAt:now(),queueDepth:this.queuedCount,nativePid:this.child?.pid??null};
+      const row={method:command?.method,operation,calledAt:now(),queueDepthAtCall:this.queuedCount,nativePid:this.child?.pid??null};
       observeChild(this.child);
       const token=command?.method==='document_work'?command.request?.ticket:operation==='runtime_step'?command.request.command:null;
       if(token){row.ticket=token;row.effect=token.lane==='draft'?{kind:'draft',priority:'unobserved'}:issued.get(token.lifetime+':'+(token.effectId??token.id))??{kind:'unknown',priority:'unobserved'};}
       if(command?.method==='checkpoint_cas')row.checkpoint={scope:command.scope,key:command.key,nextRevision:command.next_revision,hasState:command.has_state};
       if(command?.method==='prepare_intent')row.prepared={operationId:command.operation_id,entryId:command.mutation?.id??null};
       if(command?.method==='commit_intent')row.reference=command.reference;
-      Promise.resolve(this.tail).then(()=>{row.dispatchAt=now();},()=>{row.dispatchAt=now();});
+      // The prior queue tail can settle before ready/reauthorization awaits.
+      // This is deliberately NOT labeled actual transport dispatch time.
+      Promise.resolve(this.tail).then(()=>{row.queuePredecessorSettledAt=now();},()=>{row.queuePredecessorSettledAt=now();});
       const result=original.call(this,command,...args);
       result.then(reply=>{
         row.finishedAt=now();row.ok=true;

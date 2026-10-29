@@ -11,6 +11,7 @@ import {CDP} from '../../tests/tasks-electron-integration/cdp.mjs';
 import {assessNote,clockInterval,DEADLINE_MS,fixtureText,planCampaign} from './oracle.mjs';
 import {observerSource} from './observer.mjs';
 import {installMainObserver} from './main-observer.mjs';
+import {stopOwned} from './cleanup.mjs';
 import {appPins,hash,hashFile,journalHeads,launchEnvironment,ownedOutput,ownedProcesses} from './support.mjs';
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -52,24 +53,8 @@ export async function main(args=process.argv.slice(2)){
   async function coreRead(renderer,vault,name){return renderer.evaluate(`(async()=>{const context=await window.zorid.getDurableContext(${JSON.stringify(vault)});const value=await window.zorid.durableInvoke(${JSON.stringify(vault)},context.admissionId,'readText',[${JSON.stringify(name)}]);return{entryId:value.entryId,revision:value.revision,content:value.content};})()`);}
   async function stop(launch){
     if(!active)return;
-    const owned=active;let forced=false;
-    launch.rendererEvents=owned.renderer?.events??[];launch.mainInspectorEvents=owned.main?.events??[];
-    launch.ownedProcessesBeforeQuit=ownedProcesses(clones);
-    try{if(owned.main&&owned.child.exitCode===null)await owned.main.evaluate('globalThis.__zoridPackagedQuit();true');}catch(error){launch.quitRequestError=String(error);}
-    owned.renderer?.close();owned.main?.close();
-    await Promise.race([owned.exit,sleep(shutdownMs)]);
-    if(owned.child.exitCode===null&&owned.child.signalCode===null){forced=true;owned.child.kill('SIGTERM');await Promise.race([owned.exit,sleep(2000)]);}
-    if(owned.child.exitCode===null&&owned.child.signalCode===null){forced=true;owned.child.kill('SIGKILL');await Promise.race([owned.exit,sleep(2000)]);}
-    const end=performance.now()+2000;let remaining=ownedProcesses(clones);
-    while(remaining.length&&performance.now()<end){await sleep(25);remaining=ownedProcesses(clones);}
-    for(const item of remaining){if(ownedProcesses(clones).some(value=>value.pid===item.pid)){forced=true;process.kill(item.pid,'SIGTERM');}}
-    if(remaining.length){await sleep(500);for(const item of ownedProcesses(clones)){forced=true;process.kill(item.pid,'SIGKILL');}await sleep(100);}
-    try{launch.mainFinal=JSON.parse(await fs.readFile(launch.mainFinalFile,'utf8'));}catch(error){launch.mainFinalError=String(error);}
-    const knownNative=launch.mainFinal?.nativePids??[],nativeExits=launch.mainFinal?.nativeExits??[];
-    const nativeNormal=knownNative.length?knownNative.every(pid=>nativeExits.some(row=>row.pid===pid&&row.code===0&&row.signal===null)):null;
-    launch.cleanup={normal:!forced&&launch.exitCode===0&&launch.signal===null&&launch.mainFinal?.normalQuitObserved===true&&nativeNormal!==false,gone:ownedProcesses(clones).length===0,forced,remaining:ownedProcesses(clones),nativeNormal,nativeExits};
-    await fs.writeFile(path.join(launch.directory,'stderr.log'),launch.stderr);await fs.writeFile(path.join(launch.directory,'stdout.log'),launch.stdout);
-    if(launch.cleanup.gone)active=null;
+    const owned=active;await stopOwned(owned,launch,{apps:clones,shutdownMs});
+    if(owned.child.exitCode!==null||owned.child.signalCode!==null)active=null;
   }
   async function configure(launch,record,newDocument=false){
     const config={identity:record.identity,path:record.path,characters:record.expectedCharacters,prefix:record.original.slice(0,160),visibleText:record.original.split('\n')[0].replace(/^#+\s*/,''),markers:{ready:'x',deadline:'y'}};
@@ -241,7 +226,7 @@ export async function main(args=process.argv.slice(2)){
       report.noteSummary.push({label,kind,attempts:cases.length,valid:cases.filter(c=>c.assessment?.valid).length,outcomes:cases.map(c=>c.assessment?.outcome??'missing'),observedInputUpperMs:observed,
         diagnosticMedianUpperMs:observed.length?observed[Math.floor(observed.length/2)]:null,limit:'Observed input timings include diagnostic/indeterminate cases;800ms acceptance is only assessment.usableByDeadline'});
     }
-    report.artifactsValid=report.launches.length===schedule.length&&report.launches.every(l=>!l.errors.length&&l.cleanup?.normal&&l.cleanup.gone&&l.fixturesRestored&&l.sourcePathsExact&&l.artifactsUnchanged);
+    report.artifactsValid=report.launches.length===schedule.length&&report.launches.every(l=>!l.errors.length&&!l.cleanupErrors?.length&&l.cleanup?.normal&&l.cleanup.gone&&l.fixturesRestored&&l.sourcePathsExact&&l.artifactsUnchanged);
     report.candidateTargetMet=report.artifactsValid&&report.launches.filter(l=>l.label==='candidate').every(l=>l.cases.filter(c=>c.kind!=='base').every(c=>c.assessment?.usableByDeadline));
     report.complete=report.launches.length===schedule.length;await save();
   }

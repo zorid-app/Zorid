@@ -4,7 +4,7 @@ export function installObserver(config){
   if(window.__zoridPackagedProbe?.identity===config.identity)return true;
   window.__zoridPackagedProbe?.dispose?.();
   const now=()=>performance.now(),state={identity:config.identity,path:config.path,installedAt:now(),readyStateAtAttach:document.readyState,events:[],ready:null,initial:null,probes:[],errors:[]};
-  let stopped=false,framing=false;
+  let stopped=false,framing=false;const pending=new Set();
   const current=()=>{
     const pane=document.querySelector('.pane.is-active'),node=pane?.querySelector('.cm-content'),view=node?.cmTile?.root?.view??node?.cmView?.view;
     if(!view||view.contentDOM!==node)return null;
@@ -27,7 +27,20 @@ export function installObserver(config){
       state.initial={length:view.state.doc.length,prefixMatches};state.ready={at:now(),visible:true,editable:true,visibleText:firstLines};
     }));
   }
-  const mutation=new MutationObserver(check);
+  function applied(item){
+    if(stopped||!pending.has(item))return;
+    const {probe,node,before,offset,index}=item,actual=current(),view=actual?.view;
+    const changed=actual?.node===node&&view?.state.doc.length===before+1&&view.state.doc.sliceString(offset,offset+1)===probe.marker&&view.state.selection.main.head===offset+1;
+    if(!changed&&now()-probe.beforeInputAt<1000){
+      if(!item.scheduled){item.scheduled=true;requestAnimationFrame(()=>{item.scheduled=false;applied(item);});}return;
+    }
+    pending.delete(item);
+    if(changed)probe.appliedAt=now();else probe.notAppliedAt=now();
+    probe.accepted=probe.trusted&&probe.guard&&before===config.characters+index&&changed;
+    probe.caret=view?.state.selection.main.head;
+    requestAnimationFrame(()=>requestAnimationFrame(()=>{if(stopped)return;probe.caretAfterPaint=view?.state.selection.main.head;probe.expectedCaretAfterPaint=state.probes.length;}));
+  }
+  const mutation=new MutationObserver(()=>{check();for(const item of pending)applied(item);});
   const beforeinput=event=>{
     const name=Object.keys(config.markers).find(key=>config.markers[key]===event.data);if(!name)return;
     const item=current();if(!item||!item.node.contains(event.target))return;
@@ -35,17 +48,12 @@ export function installObserver(config){
     const guard=!!state.ready&&!item.node.closest('[inert]')&&item.node.getAttribute('contenteditable')==='true'&&item.view.state.selection.main.head===offset;
     const probe={name,identity:config.identity,marker:event.data,trusted:event.isTrusted===true,inputType:event.inputType,beforeInputAt:now(),guard,beforeCharacters:before};
     state.probes.push(probe);
-    queueMicrotask(()=>{
-      const actual=current(),view=actual?.view;
-      probe.appliedAt=now();probe.accepted=probe.trusted&&guard&&actual?.node===item.node&&before===config.characters+index&&view?.state.doc.length===before+1&&view.state.doc.sliceString(offset,offset+1)===event.data&&view.state.selection.main.head===offset+1;
-      probe.caret=view?.state.selection.main.head;
-      requestAnimationFrame(()=>requestAnimationFrame(()=>{probe.caretAfterPaint=view?.state.selection.main.head;probe.expectedCaretAfterPaint=state.probes.length;}));
-    });
+    const waiting={probe,node:item.node,before,offset,index,scheduled:false};pending.add(waiting);queueMicrotask(()=>applied(waiting));
   };
   const domReady=()=>state.events.push({kind:'dom-content-loaded',at:now()}),loaded=()=>state.events.push({kind:'window-load',at:now()});
   document.addEventListener('beforeinput',beforeinput,true);document.addEventListener('DOMContentLoaded',domReady);window.addEventListener('load',loaded);
   mutation.observe(document.documentElement??document,{subtree:true,childList:true,characterData:true,attributes:true});
-  state.dispose=()=>{stopped=true;mutation.disconnect();document.removeEventListener('beforeinput',beforeinput,true);document.removeEventListener('DOMContentLoaded',domReady);window.removeEventListener('load',loaded);};
+  state.dispose=()=>{stopped=true;pending.clear();mutation.disconnect();document.removeEventListener('beforeinput',beforeinput,true);document.removeEventListener('DOMContentLoaded',domReady);window.removeEventListener('load',loaded);};
   window.__zoridPackagedProbe=state;check();return true;
 }
 export const observerSource=config=>`(${installObserver.toString()})(${JSON.stringify(config)})`;
