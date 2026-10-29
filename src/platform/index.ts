@@ -18,7 +18,7 @@ import type { DesktopBridge, DesktopVault, DesktopReconciliation, DesktopDurable
 export interface PlatformVault {
   /** Recovery preserves retained durable write identities; derived owners are rebuilt. */
   readonly recovery?:{
-    subscribe(listener:()=>void):()=>void;recover():Promise<PlatformVault>;
+    subscribe(listener:()=>void|Promise<void>):()=>void;recover():Promise<PlatformVault>;
     /** Proof of prior admission alone never selects an edit for replay. */
     containsCapturedSetEntry(command:DatabaseRequest):boolean;
     /** The current unchanged widget claims its exact edit before recovery starts. */
@@ -82,8 +82,17 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
     const admissionId = binding.admissionId, scope = Object.freeze({...binding.scope});
     let released = false,releasePending:Promise<void>|undefined,recovering:Promise<PlatformVault>|undefined,recovered:PlatformVault|undefined;
     let durableEpoch=0,retainedTarget:DurableWrites,recoveryNeeded=false,recoveryStop:(()=>void)|undefined;
-    const recoveryListeners=new Set<()=>void>();
-    const markRetired=()=>{if(released||recovered)return;recoveryNeeded=true;for(const listener of [...recoveryListeners])try{listener();}catch{/* One view cannot block recovery delivery. */}};
+    const recoveryListeners=new Set<()=>void|Promise<void>>();
+    let retirementDelivery:Promise<void>|undefined;
+    const deliverRetirement=(listener:()=>void|Promise<void>)=>{try{return Promise.resolve(listener());}catch(error){return Promise.reject(error);}};
+    const markRetired=()=>{
+      if(released||recovered)return Promise.resolve();recoveryNeeded=true;if(retirementDelivery)return retirementDelivery;
+      let complete!:()=>void;const delivery=new Promise<void>(resolve=>{complete=resolve;});retirementDelivery=delivery;
+      // Invoke immediately so owners can claim before any original rejection;
+      // await their explicit handoff when a reversible preflight must unwind.
+      void Promise.allSettled([...recoveryListeners].map(deliverRetirement)).then(()=>{if(retirementDelivery===delivery)retirementDelivery=undefined;complete();});
+      return delivery;
+    };
     const stopRecoveryReceiver=()=>{const stop=recoveryStop;recoveryStop=undefined;try{stop?.();}catch{/* A retired receiver cannot undo the backend acknowledgment. */}};
     const unavailable=(code:string,message:string)=>Object.assign(new Error(message),{code,source:'host',commitUncertain:true});
     const retainedCall=async<T>(method:keyof DurableWrites,args:unknown[]):Promise<T>=>{
@@ -192,6 +201,11 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
     };
     const failEntries=(error:unknown)=>{for(const capsule of entryCapsules.values()){capsule.attempt++;if(capsule.promise)settleEntry(capsule,error);}};
     const heldEntry=(capsule:EntryCapsule)=>{const hold=entryHolds.get(capsule.command.operationId);return hold?.fingerprint===capsule.fingerprint&&hold.count>0;};
+    const repairingEntry=(capsule:EntryCapsule)=>!!recovery&&!!recovering&&heldEntry(capsule)&&capsule.claims>0;
+    const afterRetirement=(capsule:EntryCapsule,attempt:number,reject:()=>void)=>{
+      if(!recovery||!heldEntry(capsule)||!retirementDelivery||!recoveryListeners.size)return false;
+      void retirementDelivery.then(()=>{if(capsule.attempt===attempt&&!repairingEntry(capsule))reject();});return true;
+    };
     const forgetReceipt=(capsule:EntryCapsule)=>{if(!capsule.claims&&!heldEntry(capsule)&&capsule.response&&entryCapsules.get(capsule.command.operationId)===capsule)entryCapsules.delete(capsule.command.operationId);};
     let replayEntries:((fresh:DatabaseService)=>void)|undefined;
     if(binding.databases===true){
@@ -206,18 +220,22 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
         void service.request(capsule.command).then(value=>{
           if(capsule.attempt!==attempt)return;
           if(!replay&&(epoch!==durableEpoch||recoveryNeeded)){
-            if(releasePending||released)settleEntry(capsule,unavailable('client_not_admitted','The desktop context was released before this edit was confirmed.'));
+            const reject=()=>settleEntry(capsule,unavailable('client_not_admitted','The desktop context was released before this edit was confirmed.'));
+            if(releasePending||released)reject();else if(!repairingEntry(capsule)&&!afterRetirement(capsule,attempt,reject))reject();
             return;
           }
           settleEntry(capsule,undefined,value);if(!replay&&!heldEntry(capsule)&&!capsule.claims)entryCapsules.delete(capsule.command.operationId);
         },error=>{
           if(capsule.attempt!==attempt)return;
-          if(!replay&&(epoch!==durableEpoch||recoveryNeeded)&&!releasePending&&!released)return;
-          const code=error&&typeof error==='object'&&'code'in error?String(error.code):'',retired=['client_not_admitted','client_ownership_lost'].includes(code);
+          const code=error&&typeof error==='object'&&'code'in error?String(error.code):'';
           const uncertain=error&&typeof error==='object'&&'commitUncertain'in error&&error.commitUncertain===true;
-          settleEntry(capsule,error);
-          if(!replay&&!retired&&!uncertain&&!recoveryNeeded)entryCapsules.delete(capsule.command.operationId);
+          const host=error&&typeof error==='object'&&'source'in error&&error.source==='host';
+          const retired=host&&(['client_not_admitted','client_ownership_lost'].includes(code)||code==='host_exited'&&uncertain);
+          const reject=()=>{settleEntry(capsule,error);if(!replay&&!retired&&!uncertain&&!recoveryNeeded)entryCapsules.delete(capsule.command.operationId);};
           if(!replay&&retired&&!releasePending&&!released)markRetired();
+          if(!replay&&(retired||epoch!==durableEpoch||recoveryNeeded)&&!releasePending&&!released
+            &&(repairingEntry(capsule)||afterRetirement(capsule,attempt,reject)))return;
+          reject();
         });
         return result;
       };
@@ -282,11 +300,11 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
           capsule.claims++;let active=true;
           return()=>{if(!active)return;active=false;capsule.claims--;forgetReceipt(capsule);};
         },
-        subscribe(listener:()=>void){
+        subscribe(listener:()=>void|Promise<void>){
           if(typeof listener!=='function')throw new Error('Recovery listener required');
           if(released)return()=>{};
           recoveryListeners.add(listener);
-          if(recoveryNeeded)queueMicrotask(()=>{if(!released&&recoveryListeners.has(listener))try{listener();}catch{/* Observation cannot undo recovery. */}});
+          if(recoveryNeeded)queueMicrotask(()=>{if(!released&&recoveryListeners.has(listener))void deliverRetirement(listener).catch(()=>{/* Observation cannot undo recovery. */});});
           return()=>{recoveryListeners.delete(listener);};
         },
         recover(){
