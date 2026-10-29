@@ -30,3 +30,8 @@ test('a missing file times out without a click or a direct-open fallback',async(
   const f=treeFixture({count:10}),receipt={};await assert.rejects(navigateFileTree(f.renderer,'Missing.md',{now:f.now,timeoutMs:100,pause:f.pause,receipt}));
   assert.equal(f.calls.filter(call=>call.type==='mousePressed').length,0);assert.ok(receipt.rowUnavailableWaitMs>0);
 });
+
+test('a foreground interference guard aborts navigation before a row click',async()=>{
+  const f=treeFixture(),error=Object.assign(Error('visibility lost'),{code:'PACKAGED_MEASUREMENT_INTERFERENCE'});
+  await assert.rejects(navigateFileTree(f.renderer,'Profile.base',{now:f.now,pause:f.pause,guard:async()=>{throw error;}}),value=>value===error);assert.equal(f.calls.length,0);assert.equal(f.selected,null);
+});

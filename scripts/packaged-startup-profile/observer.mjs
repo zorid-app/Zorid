@@ -71,7 +71,9 @@ export const sampleObserverSource=`(()=>{const value=window.__zoridPackagedProbe
 export function selectedEditorDiagnostics(){
   const pane=document.querySelector('.pane.is-active'),node=pane?.querySelector('.cm-content'),view=node?.cmTile?.root?.view??node?.cmView?.view;
   const rect=n=>{if(!n)return null;const value=n.getBoundingClientRect();return {top:value.top,bottom:value.bottom,left:value.left,width:value.width,height:value.height};};
+  const base=pane?.querySelector('.bases-session'),grid=base?.querySelector('.zorid-bases-table'),cells=[...grid?.querySelectorAll('[role="gridcell"][data-path]')??[]];
   return {sampledAt:performance.now(),visibilityState:document.visibilityState??null,hidden:document.hidden??null,documentHasFocus:document.hasFocus?.()??null,probe:window.__zoridPackagedProbe?.sample?.()??null,
+    base:base?{present:true,dataset:{...base.dataset},bounds:rect(base),busy:base.querySelector('.bases-session-content')?.getAttribute('aria-busy')??null,error:!!base.querySelector('.error-message'),gridPresent:!!grid,gridRowCount:grid?.getAttribute('aria-rowcount')??null,gridBusy:grid?.getAttribute('aria-busy')??null,knownFixtureRow:cells.some(cell=>cell.dataset.path==='Note 0000.md'),visibleCells:cells.slice(0,8).map(cell=>({path:cell.dataset.path,text:cell.textContent?.slice(0,160)})),controls:[...base.querySelectorAll('.bases-session-toolbar button')].slice(0,8).map(button=>({text:button.textContent,disabled:button.disabled})),text:base.textContent?.slice(0,1800)}:{present:false},
     title:pane?.querySelector('.note-title')?.value??null,contentFound:!!node,viewFound:!!view,contentDOMMatches:!!view&&view.contentDOM===node,
     characters:view?.state.doc.length??null,prefix:view?.state.doc.sliceString(0,160)??null,bounds:rect(node),editable:node?.getAttribute('contenteditable')??null,
     inert:!!node?.closest('[inert]'),focused:!!node&&document.activeElement===node,viewportHeight:innerHeight,

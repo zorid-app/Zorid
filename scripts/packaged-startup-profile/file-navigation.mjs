@@ -1,3 +1,4 @@
+import {visibleFramesSource} from './measurement.mjs';
 /** Real rendered Files tree only; no Workspace or bridge opening capability. */
 export function sampleFileTree({path,reveal=false}){
   const tree=document.querySelector('.sidebar-content .file-tree[role="tree"]'),scroll=tree?.closest('.sidebar-content');
@@ -11,16 +12,16 @@ export function sampleFileTree({path,reveal=false}){
     visible:!!rect&&rect.width>0&&rect.height>0&&rect.top>=viewport.top&&rect.bottom<=viewport.bottom,
     point:rect?{x:rect.left+rect.width/2,y:rect.top+rect.height/2}:null};
 }
-export async function navigateFileTree(renderer,path,{now=()=>performance.now(),timeoutMs=30000,pause=ms=>new Promise(resolve=>setTimeout(resolve,ms)),receipt={}}={}){
+export async function navigateFileTree(renderer,path,{now=()=>performance.now(),timeoutMs=30000,pause=ms=>new Promise(resolve=>setTimeout(resolve,ms)),receipt={},guard=async()=>{}}={}){
   Object.assign(receipt,{path,startedAtMs:now(),scrollSteps:0,rowReveals:0,rowUnavailableWaitMs:0});
   const sample=reveal=>renderer.evaluate(`(${sampleFileTree.toString()})(${JSON.stringify({path,reveal})})`);
-  const frames=()=>renderer.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+  const frames=()=>renderer.evaluate(visibleFramesSource);
   let beganScan=false,extent=null;
   while(now()-receipt.startedAtMs<timeoutMs){
-    const value=await sample(false);receipt.lastTree=value;
+    await guard();const value=await sample(false);receipt.lastTree=value;
     if(value.available&&value.found){
       if(!value.visible){await sample(true);receipt.rowReveals++;await frames();continue;}
-      receipt.locatedAtMs=now();
+      await guard();receipt.locatedAtMs=now();
       await renderer.call('Input.dispatchMouseEvent',{type:'mousePressed',...value.point,button:'left',clickCount:1});
       await renderer.call('Input.dispatchMouseEvent',{type:'mouseReleased',...value.point,button:'left',clickCount:1});
       receipt.clickedAtMs=now();receipt.totalMs=receipt.clickedAtMs-receipt.startedAtMs;return receipt;

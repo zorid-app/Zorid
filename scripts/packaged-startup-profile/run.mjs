@@ -11,6 +11,7 @@ import {CDP} from '../../tests/tasks-electron-integration/cdp.mjs';
 import {assessNote,baseFixtureSource,clockInterval,DEADLINE_MS,fixtureText,planCampaign,reopenPrepared} from './oracle.mjs';
 import {navigateFileTree} from './file-navigation.mjs';
 import {foregroundSource} from './foreground.mjs';
+import {boundedMeasurement,documentVisibilitySource,isMeasurementInterference,MeasurementInterference,requireForeground,visibleFramesSource} from './measurement.mjs';
 import {captureObserverFailure,observerSource,sampleObserverSource} from './observer.mjs';
 import {installMainObserver} from './main-observer.mjs';
 import {stopOwned} from './cleanup.mjs';
@@ -43,16 +44,33 @@ export async function main(args=process.argv.slice(2)){
   report.cdpHelperSha256=await hashFile(fileURLToPath(new URL('../../tests/tasks-electron-integration/cdp.mjs',import.meta.url)));
   const save=()=>fs.writeFile(path.join(out,'report.json'),JSON.stringify(report,null,2),{mode:0o600});
   const clones=[],pairs=new Map();let active;
-  async function bounded(action,record,ms=timeoutMs){const end=performance.now()+ms;let last;do{if(record?.exitCode!==undefined||record?.launchError)throw Error('Owned app exited before evidence: '+record.stderr);try{return await action();}catch(error){last=error;}await sleep(10);}while(performance.now()<end);throw last??Error('Packaged profiling deadline');}
+  async function bounded(action,record,ms=timeoutMs,{activation=false}={}){
+    return boundedMeasurement(action,{timeoutMs:ms,pause:sleep,guard:async()=>{
+      if(record?.exitCode!==undefined||record?.launchError)throw Error('Owned app exited before evidence: '+record.stderr);
+      if(!activation&&active?.foregroundEstablished)await checkForeground(record);
+    }});
+  }
   async function clock(cdp,record){const before=record.elapsed(),sample=await cdp.evaluate('({remoteNow:performance.now(),timeOrigin:performance.timeOrigin})'),after=record.elapsed();return {...sample,before,after};}
   const remaining=(launch,record)=>{const value=record.originMs+timeoutMs-launch.elapsed();assert.ok(value>0,'Original navigation/readiness deadline expired');return value;};
   function foregroundConfig(launch,activate){const pinned=report.apps[launch.label].pinned;return {pid:launch.pid,executable:pinned.executable,appPath:pinned.archive,profile:launch.profile,localDataDirectory:launch.localDataDirectory,url:pathToFileURL(path.join(pinned.archive,'dist/index.html')).href,activate};}
-  async function foreground(launch,record){
-    const receipt={calledAtMs:launch.elapsed()};(record.foregroundActivations??=[]).push(receipt);
-    try{receipt.window=await active.main.evaluate(foregroundSource(foregroundConfig(launch,true)));return receipt;}
-    catch(error){receipt.error=String(error);throw error;}finally{receipt.completedAtMs=launch.elapsed();}
+  async function checkForeground(launch){
+    const [window,document]=await Promise.all([active.main.evaluate(foregroundSource(foregroundConfig(launch,false))),active.renderer?.evaluate(documentVisibilitySource)]);
+    requireForeground(window,document);
   }
-  async function selectFile(launch,record,name){await foreground(launch,record);record.navigation={};return navigateFileTree(active.renderer,name,{now:launch.elapsed,timeoutMs:remaining(launch,record),receipt:record.navigation});}
+  async function foreground(launch,record){
+    const receipt={calledAtMs:launch.elapsed()};(record.foregroundActivations??=[]).push(receipt);active.foregroundEstablished=false;
+    try{
+      await bounded(async()=>{receipt.beforeWindow=await active.main.evaluate(foregroundSource(foregroundConfig(launch,false)));},launch,remaining(launch,record),{activation:true});
+      receipt.request=await active.main.evaluate(foregroundSource(foregroundConfig(launch,true)));receipt.requestCompletedAtMs=launch.elapsed();
+      await bounded(async()=>{
+        receipt.window=await active.main.evaluate(foregroundSource(foregroundConfig(launch,false)));
+        assert.ok(receipt.window.focused&&receipt.window.visible&&!receipt.window.minimized,'Owned native activation not confirmed');
+        if(active.renderer){receipt.document=await active.renderer.evaluate(documentVisibilitySource);assert.ok(!receipt.document.hidden&&receipt.document.visibilityState==='visible','Owned renderer not visible after activation');}
+      },launch,remaining(launch,record),{activation:true});
+      receipt.confirmedAtMs=launch.elapsed();active.foregroundEstablished=true;return receipt;
+    }catch(error){receipt.error=String(error);throw error;}finally{receipt.completedAtMs=launch.elapsed();}
+  }
+  async function selectFile(launch,record,name){await foreground(launch,record);record.navigation={};return navigateFileTree(active.renderer,name,{now:launch.elapsed,timeoutMs:remaining(launch,record),receipt:record.navigation,guard:()=>checkForeground(launch)});}
   async function press(renderer,key,code,commands){await renderer.call('Input.dispatchKeyEvent',{type:'keyDown',key,code,modifiers:4,...(commands?.length?{commands}:{})});await renderer.call('Input.dispatchKeyEvent',{type:'keyUp',key,code,modifiers:4});}
   async function coreRead(renderer,vault,name){return renderer.evaluate(`(async()=>{const context=await window.zorid.getDurableContext(${JSON.stringify(vault)});const value=await window.zorid.durableInvoke(${JSON.stringify(vault)},context.admissionId,'readText',[${JSON.stringify(name)}]);return{entryId:value.entryId,revision:value.revision,content:value.content};})()`);}
   async function stop(launch){
@@ -74,9 +92,9 @@ export async function main(args=process.argv.slice(2)){
     let done;record.deadlineDone=new Promise(resolve=>{done=resolve;});record.resolveDeadline=done;record.inputQueue=Promise.resolve();
     record.deadlineTimer=setTimeout(()=>{record.deadlineTask=(async()=>{
       const attempt={name:'deadline',scheduledForMs:record.originMs+DEADLINE_MS,attemptedAtMs:launch.elapsed(),status:'unobservable'};record.dispatches.push(attempt);
-      if(!record.cancelled&&launch.vaultVerified&&record.client&&active?.renderer===record.client&&record.configured){
+      if(!record.cancelled&&launch.vaultVerified&&record.client&&active?.renderer===record.client&&record.configured&&active.foregroundEstablished){
         try{const observed=await record.client.evaluate(serializableState);if(observed?.identity===record.identity){attempt.observation={at:observed.sampledAt,ready:observed.ready,readinessCheck:observed.readinessCheck};if(observed.ready)await sendProbe(launch,record,attempt);else if(observed.readinessCheck?.eligible===false&&observed.readinessCheck.framesPending===false)attempt.status='observed-not-ready';else attempt.status='readiness-unresolved';}}
-        catch(error){attempt.error=String(error);}
+        catch(error){attempt.error=String(error);if(isMeasurementInterference(error))record.measurementInterference=String(error);}
       }
     })().finally(done);},Math.max(0,record.originMs+DEADLINE_MS-launch.elapsed()));
   }
@@ -84,6 +102,7 @@ export async function main(args=process.argv.slice(2)){
     record.inputQueue=record.inputQueue.then(async()=>{
       const renderer=record.client;
       if(record.cancelled||!launch.vaultVerified||active?.renderer!==renderer)throw Error('Owned input scope retired before dispatch');
+      await checkForeground(launch);
       if(!record.focused){await renderer.evaluate("document.querySelector('.pane.is-active .cm-content').focus();true");await press(renderer,'Home','Home',['moveToBeginningOfDocument']);record.focused=true;}
       await renderer.evaluate(`(()=>{const s=window.__zoridPackagedProbe,p=document.querySelector('.pane.is-active'),n=p?.querySelector('.cm-content'),v=n?.cmTile?.root?.view??n?.cmView?.view;const title=${JSON.stringify(record.path.split('/').at(-1).replace(/\.md$/i,''))};if(s?.identity!==${JSON.stringify(record.identity)}||p?.querySelector('.note-title')?.value!==title||!v||n.closest('[inert]')||n.getAttribute('contenteditable')!=='true'||v.state.doc.length!==${record.expectedCharacters}+s.probes.length||v.state.doc.sliceString(s.probes.length,s.probes.length+${record.prefix.length})!==${JSON.stringify(record.prefix)})throw Error('Selected fixture changed before trusted input');return true;})()`);
       if(record.cancelled||active?.renderer!==renderer)throw Error('Owned input scope retired during preparation');
@@ -93,7 +112,7 @@ export async function main(args=process.argv.slice(2)){
   async function finishNote(launch,record){
     await bounded(async()=>{const value=await active.renderer.evaluate(serializableState);assert.equal(value?.identity,record.identity);assert.ok(value.ready,'Correct selected fixture is not ready');return value;},launch,remaining(launch,record));
     const ready={name:'ready',attemptedAtMs:launch.elapsed(),status:'unobservable'};record.dispatches.push(ready);await sendProbe(launch,record,ready);
-    await record.deadlineDone;await record.inputQueue;
+    await record.deadlineDone;await record.inputQueue;if(record.measurementInterference)throw new MeasurementInterference(record.measurementInterference);await checkForeground(launch);
     record.observed=await bounded(async()=>{const value=await active.renderer.evaluate(serializableState);assert.ok(value.probes.length&&value.probes.every(p=>p.caretAfterPaint!==undefined));return value;},launch);
     record.clockSamples.push(await clock(active.renderer,launch));
     const inserted=record.observed.probes.map(p=>p.marker).join(''),expected=inserted+record.original;
@@ -130,7 +149,7 @@ export async function main(args=process.argv.slice(2)){
       if(total!==${notes+1}||!cells.some(c=>c.dataset.path==='Note 0000.md'))return null;
       return{at:performance.now(),totalRows:total,knownFixtureRow:'Note 0000.md',visibleRows:cells.length,controlsReady:true};})()`;
     await bounded(async()=>assert.ok(await active.renderer.evaluate(snapshot),'Known Base fixture row/controls not ready'),launch,remaining(launch,record));
-    await active.renderer.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+    await active.renderer.evaluate(visibleFramesSource);await checkForeground(launch);
     const observed=await active.renderer.evaluate(snapshot);assert.ok(observed,'Base became unavailable after paint');
     record.observed=observed;const sample=await clock(active.renderer,launch),interval=clockInterval(observed.at,[sample]);record.readyMs={lower:interval.lower-record.originMs,upper:interval.upper-record.originMs};
     record.definitionUnchanged=await hashFile(path.join(pair.vault,'Profile.base'))===hash(pair.sources.get('Profile.base'));
@@ -173,7 +192,7 @@ export async function main(args=process.argv.slice(2)){
         const mainURL=await bounded(()=>{const url=/Debugger listening on (ws:\/\/127\.0\.0\.1:\d+\/[^\s]+)/.exec(launch.stderr)?.[1];assert.ok(url,'Packaged main inspector not observable');return url;},launch);
         active.main=new CDP(mainURL);await active.main.call('Runtime.enable');launch.mainAttachedMs=launch.elapsed();launch.mainClockSamples=[await clock(active.main,launch)];
         launch.mainScope=await active.main.evaluate(`(${installMainObserver.toString()})(${JSON.stringify({expectedAppPath:pinned.archive,profile:pair.profile,localDataDirectory:pair.data,outputFile:launch.mainFinalFile})})`);
-        await bounded(()=>foreground(launch,startup),launch,remaining(launch,startup));
+        await foreground(launch,startup);
         const endpoint=await bounded(()=>currentBrowserEndpoint(launch.stderr),launch);launch.browserEndpoint=endpoint;
         active.browser=new CDP(endpoint.url);await active.browser.opened;
         const expectedURL=pathToFileURL(path.join(pinned.archive,'dist/index.html')).href;
@@ -207,7 +226,7 @@ export async function main(args=process.argv.slice(2)){
         await bounded(async()=>assert.equal(await active.renderer.evaluate("(()=>{const n=document.querySelector('.pane.is-active .cm-content');return(n?.cmTile?.root?.view??n?.cmView?.view)?.state.doc.toString();})()"),pair.sources.get('Note 0000.md')),launch);
         launch.returnToStartupNoteVerified=true;
         launch.mainClockSamples.push(await clock(active.main,launch));
-      }catch(error){launch.errors.push(error.stack??String(error));report.errors.push({pairId:scheduled.pairId,mode:scheduled.mode,error:String(error)});await captureObserverFailure(active.renderer,launch);try{launch.failureWindow=active.main?await active.main.evaluate(foregroundSource(foregroundConfig(launch,false))):{unavailable:'Main inspector not attached'};}catch(windowError){launch.failureWindow={error:String(windowError)};}try{if(active.renderer){const image=await active.renderer.call('Page.captureScreenshot',{format:'png'});await fs.writeFile(path.join(directory,'failure.png'),Buffer.from(image.data,'base64'));}}catch{}}
+      }catch(error){launch.errors.push(error.stack??String(error));if(isMeasurementInterference(error))launch.measurementInterference={code:'PACKAGED_MEASUREMENT_INTERFERENCE',error:String(error),atMs:launch.elapsed()};report.errors.push({pairId:scheduled.pairId,mode:scheduled.mode,error:String(error)});await captureObserverFailure(active.renderer,launch);try{launch.failureWindow=active.main?await active.main.evaluate(foregroundSource(foregroundConfig(launch,false))):{unavailable:'Main inspector not attached'};}catch(windowError){launch.failureWindow={error:String(windowError)};}try{if(active.renderer){const image=await active.renderer.call('Page.captureScreenshot',{format:'png'});await fs.writeFile(path.join(directory,'failure.png'),Buffer.from(image.data,'base64'));}}catch{}}
       finally{
         for(const record of launch.cases){
           record.cancelled=true;

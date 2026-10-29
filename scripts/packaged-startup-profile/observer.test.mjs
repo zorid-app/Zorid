@@ -2,13 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {captureObserverFailure,observerSource,sampleObserverSource} from './observer.mjs';
-function fixture({deferredEligibility=false}={}){
+function fixture({deferredEligibility=false,withBase=false,noEditor=false}={}){
   let value='Fixture body',caret=0,now=1,top=0,editable='true',inert=false;const listeners=new Map(),microtasks=[],frames=[];
   const view={state:{doc:{get length(){return value.length;},sliceString:(a,b)=>value.slice(a,b)},selection:{main:{get head(){return caret;}}}}};
   const node={cmTile:{root:{view}},getAttribute:()=>editable,closest:()=>inert?{}:null,getBoundingClientRect:()=>({width:100,height:100,top,bottom:top+100}),contains:other=>other===node};view.contentDOM=node;
   const title={value:deferredEligibility?'':'Note'};
   const line={textContent:'Fixture body',outerHTML:'<div class="cm-line">Fixture body</div>',getBoundingClientRect:()=>node.getBoundingClientRect()};node.children=[line];
-  const pane={querySelector:selector=>selector==='.cm-content'?node:title,querySelectorAll:()=>[line]};
+  const cells=[{dataset:{path:'Note 0000.md'},textContent:'Note 0000'}],grid={getAttribute:name=>name==='aria-rowcount'?'103':null,querySelectorAll:()=>cells};
+  const base={dataset:{baseControllerUpdating:'true'},getBoundingClientRect:()=>node.getBoundingClientRect(),textContent:'Loading Profile table',querySelector:selector=>selector==='.zorid-bases-table'?grid:selector==='.bases-session-content'?{getAttribute:()=> 'true'}:null,querySelectorAll:()=>[{textContent:'Properties',disabled:false}]};
+  const pane={querySelector:selector=>selector==='.cm-content'?(noEditor?null:node):selector==='.note-title'?title:selector==='.bases-session'&&withBase?base:null,querySelectorAll:()=>[line]};
   const document={readyState:'loading',visibilityState:'hidden',hidden:true,hasFocus:()=>false,documentElement:{},querySelector:()=>pane,
     addEventListener:(key,handler)=>listeners.set(key,handler),removeEventListener:key=>listeners.delete(key)};
   const window={addEventListener(){},removeEventListener(){}};
@@ -57,4 +59,9 @@ test('failure capture cannot mask the original failure when the renderer is unav
   const unattached={};await captureObserverFailure(null,unattached);assert.match(unattached.failureObservation.unavailable,/not attached/);
   const launch={errors:['original readiness failure']};await captureObserverFailure({evaluate:async()=>{throw Error('renderer gone');}},launch);
   assert.match(launch.failureObservation.error,/renderer gone/);assert.deepEqual(launch.errors,['original readiness failure']);
+});
+
+test('failure diagnostics preserve Base grid/busy/error/control evidence without assuming an editor exists',async()=>{
+  const f=fixture({withBase:true,noEditor:true}),launch={};await captureObserverFailure({evaluate:async source=>f.evaluate(source)},launch);const base=launch.failureObservation.base;
+  assert.equal(launch.failureObservation.contentFound,false);assert.equal(base.present,true);assert.equal(base.busy,'true');assert.equal(base.gridRowCount,'103');assert.equal(base.knownFixtureRow,true);assert.equal(base.error,false);assert.equal(base.controls[0].text,'Properties');assert.equal(base.text,'Loading Profile table');
 });
