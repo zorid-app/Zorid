@@ -60,7 +60,7 @@ export function installObserver(config){
   // DOM properties and completed layout can become eligible without another
   // observed mutation. Each harness snapshot requests a fresh observational
   // check; readiness still requires its original two animation frames.
-  state.sample=()=>{check();return {...Object.fromEntries(Object.entries(state).filter(([,value])=>typeof value!=='function')),sampledAt:now()};};
+  state.sample=()=>{check();return {...Object.fromEntries(Object.entries(state).filter(([,value])=>typeof value!=='function')),sampledAt:now(),readinessCheck:{eligible:!!eligible(),framesPending:framing}};};
   window.__zoridPackagedProbe=state;check();return true;
 }
 export const observerSource=config=>`(${installObserver.toString()})(${JSON.stringify(config)})`;

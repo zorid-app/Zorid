@@ -68,7 +68,7 @@ export async function main(args=process.argv.slice(2)){
     record.deadlineTimer=setTimeout(()=>{record.deadlineTask=(async()=>{
       const attempt={name:'deadline',scheduledForMs:record.originMs+DEADLINE_MS,attemptedAtMs:launch.elapsed(),status:'unobservable'};record.dispatches.push(attempt);
       if(!record.cancelled&&launch.vaultVerified&&record.client&&active?.renderer===record.client&&record.configured){
-        try{const observed=await record.client.evaluate(serializableState);if(observed?.identity===record.identity){attempt.observation={at:observed.sampledAt,ready:observed.ready};if(observed.ready)await sendProbe(launch,record,attempt);else attempt.status='observed-not-ready';}}
+        try{const observed=await record.client.evaluate(serializableState);if(observed?.identity===record.identity){attempt.observation={at:observed.sampledAt,ready:observed.ready,readinessCheck:observed.readinessCheck};if(observed.ready)await sendProbe(launch,record,attempt);else if(observed.readinessCheck?.eligible===false&&observed.readinessCheck.framesPending===false)attempt.status='observed-not-ready';else attempt.status='readiness-unresolved';}}
         catch(error){attempt.error=String(error);}
       }
     })().finally(done);},Math.max(0,record.originMs+DEADLINE_MS-launch.elapsed()));

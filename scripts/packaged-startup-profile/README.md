@@ -115,3 +115,5 @@ node --test scripts/packaged-startup-profile/*.test.mjs
 ```
 
 Observer snapshots request a fresh readiness check so property or layout changes without a DOM mutation cannot leave the probe asleep. Exact source, selected editor, editability and viewport checks run before and after the two-frame observation. Failed launches retain observer state plus the actual selected CodeMirror identity, prefix, size, editability, bounds and visible line/widget diagnostics; these diagnostics do not establish input acceptance.
+
+A deadline snapshot with instantaneous eligibility or pending frame validation is indeterminate while readiness is unresolved; it cannot manufacture a target miss from an observer that had no intervening mutation. A valid miss requires a deadline snapshot that is actually ineligible with no frame validation pending.

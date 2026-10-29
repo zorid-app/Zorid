@@ -50,9 +50,10 @@ export function assessNote(value){
   const end=value.originMs+DEADLINE_MS;
   if(deadline[0].status==='unobservable'||!installed||installed.upper>end)return {valid:false,outcome:'indeterminate',usableByDeadline:false,inputMs:diagnosticInput,errors:['Deadline not continuously observable; attachment overhead cannot establish an app miss']};
   if(input.upper<=end&&viewport.upper<=end)return {valid:true,outcome:'target-met',usableByDeadline:true,inputMs:diagnosticInput,viewportMs:{lower:viewport.lower-value.originMs,upper:viewport.upper-value.originMs},errors:[]};
-  // An installed continuous observer retains the FIRST verified viewport. A
-  // not-ready observation after the deadline proves it was not ready by800ms.
-  if(deadline[0].status==='observed-not-ready'&&deadline[0].observation?.ready===null&&deadlineObserved?.lower>=end)return {valid:true,outcome:'target-missed',usableByDeadline:false,inputMs:diagnosticInput,errors:[]};
+  // A snapshot can discover silent property/layout eligibility and begin its
+  // two frames at the deadline. Pending/eligible checks cannot prove an app
+  // miss; require an actual ineligible snapshot with no pending validation.
+  if(deadline[0].status==='observed-not-ready'&&deadline[0].observation?.ready===null&&deadline[0].observation.readinessCheck?.eligible===false&&deadline[0].observation.readinessCheck.framesPending===false&&deadlineObserved?.lower>=end)return {valid:true,outcome:'target-missed',usableByDeadline:false,inputMs:diagnosticInput,errors:[]};
   return {valid:false,outcome:'indeterminate',usableByDeadline:false,inputMs:diagnosticInput,errors:['Clock uncertainty or automation dispatch delay overlaps the deadline; no app latency verdict']};
 }
 export function planCampaign(repetitions=1,seed=1){

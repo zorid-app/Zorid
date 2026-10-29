@@ -32,7 +32,7 @@ test('observer disposal removes event listeners instead of observing later cases
 test('sampling detects editor eligibility published through a property without a DOM mutation or focus',()=>{
   const f=fixture({deferredEligibility:true}),state=f.window.__zoridPackagedProbe;assert.equal(state.ready,null);
   f.publishWithoutMutation();assert.equal(state.ready,null);
-  state.extraDiagnosticMethod=()=>true;const sample=f.evaluate(sampleObserverSource);assert.equal(sample.extraDiagnosticMethod,undefined);assert.equal(sample.ready,null,'two real animation frames still required');f.flush();
+  state.extraDiagnosticMethod=()=>true;const sample=f.evaluate(sampleObserverSource);assert.equal(sample.extraDiagnosticMethod,undefined);assert.equal(sample.ready,null,'two real animation frames still required');assert.equal(sample.readinessCheck.eligible,true);assert.equal(sample.readinessCheck.framesPending,true);f.flush();
   assert.ok(state.ready);assert.equal(state.initial.prefixMatches,true);assert.equal(state.probes.length,0,'observation never injects an edit');
 });
 
