@@ -186,8 +186,10 @@ test('a nested parent close cannot discard its raw title draft after presenting 
   title.textContent='Retained / title';title.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));f.create();
   await until(()=>f.internal.baseNewItem?.path==='Untitled.md'&&f.internal.retiringBaseNewItems.has(f.parent));
   await assert.rejects(f.workspace.flush());assert.equal(f.parent.element.isConnected,true);assert.equal(title.textContent,'Retained / title');
+  const child=f.internal.baseNewItem;child.element.querySelector('[aria-label="Close preview"]')!.click();await until(()=>!child.element.isConnected);
+  assert.equal(f.parent.element.isConnected,true);assert.notEqual(f.parent.element.inert,true);assert.equal(f.internal.retiringBaseNewItems.has(f.parent),true,'closing the child exposes the still-owned parent draft');
   title.textContent='ZCreated';title.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));await f.workspace.flush();
-  assert.equal(f.parent.element.isConnected,false);assert.equal(f.internal.baseNewItem?.path,'Untitled.md');assert.equal(f.writes.filter(path=>path==='Untitled.md').length,1);
+  assert.equal(f.parent.element.isConnected,false);assert.equal(f.internal.baseNewItem,undefined);assert.equal(f.writes.filter(path=>path==='Untitled.md').length,1);
 });
 
 test('a nested late child-load failure retains its live parent and exact committed creation for retry',async t=>{
