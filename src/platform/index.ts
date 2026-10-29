@@ -1,5 +1,6 @@
 import {createDatabaseService} from '../core/databases.ts';
-import type {DatabaseService} from '../core/databases.ts';
+import type {DatabaseService,DatabaseRequest,DatabaseResponse,DesktopDatabaseRequest} from '../core/databases.ts';
+import {captureDatabaseRequest} from '../../desktop/databases.cjs';
 import {decodeDesktopNotePlan,snapshotDesktopNoteWriteInput} from './desktop-note-plan.ts';
 import {decodeWorkBlockEnvelope} from '../../desktop/workblocks.cjs';
 import {createDesktopWorkBlocks,createDesktopBinaryStreams,createDesktopConditionalSavedSources} from './desktop.ts';
@@ -16,7 +17,15 @@ import type { DesktopBridge, DesktopVault, DesktopReconciliation, DesktopDurable
 
 export interface PlatformVault {
   /** Recovery preserves retained durable write identities; derived owners are rebuilt. */
-  readonly recovery?:{subscribe(listener:()=>void):()=>void;recover():Promise<PlatformVault>};
+  readonly recovery?:{
+    subscribe(listener:()=>void):()=>void;recover():Promise<PlatformVault>;
+    /** Proof of prior admission alone never selects an edit for replay. */
+    containsCapturedSetEntry(command:DatabaseRequest):boolean;
+    /** The current unchanged widget claims its exact edit before recovery starts. */
+    claimCapturedSetEntry(command:DatabaseRequest):()=>void;
+    /** Hold a receipt through the owning widget's post-save refresh; no admission or replay. */
+    holdCapturedSetEntry(command:DatabaseRequest):()=>void;
+  };
   readonly recoveryHistory?:import('./bridge').RecoveryHistory;
   readonly workBlocks?:import('../core/workblocks.ts').WorkBlockService;
   readonly documentSemantics?:DocumentService;
@@ -74,6 +83,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
     let released = false,releasePending:Promise<void>|undefined,recovering:Promise<PlatformVault>|undefined,recovered:PlatformVault|undefined;
     let durableEpoch=0,retainedTarget:DurableWrites,recoveryNeeded=false,recoveryStop:(()=>void)|undefined;
     const recoveryListeners=new Set<()=>void>();
+    const markRetired=()=>{if(released||recovered)return;recoveryNeeded=true;for(const listener of [...recoveryListeners])try{listener();}catch{/* One view cannot block recovery delivery. */}};
     const stopRecoveryReceiver=()=>{const stop=recoveryStop;recoveryStop=undefined;try{stop?.();}catch{/* A retired receiver cannot undo the backend acknowledgment. */}};
     const unavailable=(code:string,message:string)=>Object.assign(new Error(message),{code,source:'host',commitUncertain:true});
     const retainedCall=async<T>(method:keyof DurableWrites,args:unknown[]):Promise<T>=>{
@@ -160,7 +170,84 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
       checkpoints:Object.freeze<DurableWrites['checkpoints']>({scope,load:key=>retainedCheckpoint('load',[key]),compareAndSwap:change=>retainedCheckpoint('compareAndSwap',[change]),list:options=>retainedCheckpoint('list',[options]),changes:options=>retainedCheckpoint('changes',[options])}),
     });
     let binaryDrained=false,documentsDrained=false,draftsDrained=false;
-    if(binding.databases===true)databases=createDatabaseService(request=>call('databaseCommand',request));
+    type EntryCommand=Extract<DatabaseRequest,{op:'set_entry'}>;
+    type EntryCapsule={command:EntryCommand;fingerprint:string;attempt:number;claims:number;promise?:Promise<DatabaseResponse>;resolve?:(value:DatabaseResponse)=>void;reject?:(error:unknown)=>void;response?:DatabaseResponse;error?:unknown};
+    const entryCapsules=new Map<string,EntryCapsule>();
+    const entryHolds=new Map<string,{fingerprint:string;count:number}>();
+    const captureEntry=(command:DatabaseRequest):DesktopDatabaseRequest=>captureDatabaseRequest({schemaVersion:1,command});
+    const capsuleFor=(command:DatabaseRequest)=>{
+      try{const captured=captureEntry(command);if(captured.command.op!=='set_entry')return;
+        const capsule=entryCapsules.get(captured.command.operationId);return capsule?.fingerprint===JSON.stringify(captured)?capsule:undefined;
+      }catch{return;}
+    };
+    const settleEntry=(capsule:EntryCapsule,error:unknown,response?:DatabaseResponse)=>{
+      const resolve=capsule.resolve,reject=capsule.reject;capsule.promise=undefined;capsule.resolve=undefined;capsule.reject=undefined;
+      if(response){
+        const saved=response.entries.find(entry=>entry.entryId===capsule.command.entryId);
+        // Native exact retries also retry publication. A pending projection is
+        // an honest result for this attempt, never a permanently cached receipt.
+        capsule.response=saved&&!saved.pendingProjection&&!Object.keys(saved.problems??{}).length?structuredClone(response):undefined;
+        capsule.error=undefined;resolve?.(response);
+      }else{capsule.error=error;reject?.(error);}
+    };
+    const failEntries=(error:unknown)=>{for(const capsule of entryCapsules.values()){capsule.attempt++;if(capsule.promise)settleEntry(capsule,error);}};
+    const heldEntry=(capsule:EntryCapsule)=>{const hold=entryHolds.get(capsule.command.operationId);return hold?.fingerprint===capsule.fingerprint&&hold.count>0;};
+    const forgetReceipt=(capsule:EntryCapsule)=>{if(!capsule.claims&&!heldEntry(capsule)&&capsule.response&&entryCapsules.get(capsule.command.operationId)===capsule)entryCapsules.delete(capsule.command.operationId);};
+    let replayEntries:((fresh:DatabaseService)=>void)|undefined;
+    if(binding.databases===true){
+      const original=createDatabaseService(request=>call('databaseCommand',request));
+      const runEntry=(capsule:EntryCapsule,service:DatabaseService,replay=false)=>{
+        if(!capsule.promise){capsule.promise=new Promise<DatabaseResponse>((resolve,reject)=>{capsule.resolve=resolve;capsule.reject=reject;});
+          // Recovery also resumes an already rejected command before its widget
+          // joins again. Preserve rejection for that owner without an unhandled task.
+          void capsule.promise.catch(()=>{});
+        }
+        const result=capsule.promise,attempt=++capsule.attempt,epoch=durableEpoch;
+        void service.request(capsule.command).then(value=>{
+          if(capsule.attempt!==attempt)return;
+          if(!replay&&(epoch!==durableEpoch||recoveryNeeded)){
+            if(releasePending||released)settleEntry(capsule,unavailable('client_not_admitted','The desktop context was released before this edit was confirmed.'));
+            return;
+          }
+          settleEntry(capsule,undefined,value);if(!replay&&!heldEntry(capsule)&&!capsule.claims)entryCapsules.delete(capsule.command.operationId);
+        },error=>{
+          if(capsule.attempt!==attempt)return;
+          if(!replay&&(epoch!==durableEpoch||recoveryNeeded)&&!releasePending&&!released)return;
+          const code=error&&typeof error==='object'&&'code'in error?String(error.code):'',retired=['client_not_admitted','client_ownership_lost'].includes(code);
+          const uncertain=error&&typeof error==='object'&&'commitUncertain'in error&&error.commitUncertain===true;
+          settleEntry(capsule,error);
+          if(!replay&&!retired&&!uncertain&&!recoveryNeeded)entryCapsules.delete(capsule.command.operationId);
+          if(!replay&&retired&&!releasePending&&!released)markRetired();
+        });
+        return result;
+      };
+      replayEntries=fresh=>{for(const capsule of entryCapsules.values()){
+        if(capsule.claims>0){if(!capsule.response)runEntry(capsule,fresh,true);}
+        else{capsule.attempt++;settleEntry(capsule,unavailable('client_not_admitted','This edit was not selected by its owner for recovery.'));entryCapsules.delete(capsule.command.operationId);}
+      }};
+      databases=Object.freeze({request(command:DatabaseRequest):Promise<DatabaseResponse>{
+        let captured:DesktopDatabaseRequest;try{captured=captureEntry(command);}catch(error){return Promise.reject(error);}
+        const blocked=released||recoveryNeeded||!!recovering||!!releasePending;
+        if(captured.command.op==='set_entry'){
+          const prior=entryCapsules.get(captured.command.operationId),fingerprint=JSON.stringify(captured);
+          if(prior&&prior.fingerprint===fingerprint){
+            if(prior.promise)return prior.promise;
+            if(prior.response)return Promise.resolve(structuredClone(prior.response));
+            if(recovered&&prior.claims>0)return runEntry(prior,recovered.databases!,true);
+            if(!blocked)return runEntry(prior,original);
+            return Promise.reject(prior.error??unavailable('client_not_admitted','This desktop context is no longer active.'));
+          }
+          if(blocked)return Promise.reject(unavailable('client_not_admitted','This desktop context is no longer active.'));
+          if(prior)return Promise.reject(unavailable('idempotency_conflict','This edit differs from its originally captured request.'));
+          const capsule:EntryCapsule={command:captured.command,fingerprint,attempt:0,claims:0};entryCapsules.set(capsule.command.operationId,capsule);
+          return runEntry(capsule,original);
+        }
+        if(blocked)return Promise.reject(unavailable('client_not_admitted','This desktop context is no longer active.'));
+        const epoch=durableEpoch;return original.request(captured.command).then(value=>{
+          if(epoch!==durableEpoch||released||recoveryNeeded)throw unavailable('client_not_admitted','The desktop context changed while this request was pending.');return value;
+        });
+      }});
+    }
     if(binding.workBlocks===true)workBlocks=createDesktopWorkBlocks(request=>call('workblockCommand',request).then(reply=>decodeWorkBlockEnvelope(request,reply)));
     if(binding.documentMaintenance===true){
       if(binding.documentSemantics!==true||!bridge.onDocumentRuntimeNudge)throw new Error('Incomplete document runtime capability');
@@ -180,9 +267,21 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
     if(binding.binaryLimits)binary=createDesktopBinaryStreams({scope,checkpoints:durableWrites.checkpoints,limits:binding.binaryLimits,assertActive:()=>{if(released||binaryDrained)throw new Error('Desktop binary context released');},invoke:bytes=>call<Uint8Array>('binaryCommand',bytes)});
     const recoveryBridge=bridge as DesktopBridge&{recoverDurableContext?:(root:string,priorAdmissionId:string)=>Promise<DesktopDurableContext>};
     if(recoveryBridge.recoverDurableContext){
-      const markRetired=()=>{if(released||recovered)return;recoveryNeeded=true;for(const listener of [...recoveryListeners])try{listener();}catch{/* One view cannot block recovery delivery. */}};
       recoveryStop=bridge.onDocumentRuntimeNudge?.(info.path,admissionId,()=>{},markRetired);
       recovery=Object.freeze({
+        containsCapturedSetEntry(command:DatabaseRequest){return !!capsuleFor(command);},
+        holdCapturedSetEntry(command:DatabaseRequest){
+          const captured=captureEntry(command);if(captured.command.op!=='set_entry'||released||recoveryNeeded||recovering||releasePending)throw unavailable('client_not_admitted','This edit cannot acquire a receipt hold in a retired context.');
+          const id=captured.command.operationId,fingerprint=JSON.stringify(captured),prior=entryHolds.get(id);
+          if(prior&&prior.fingerprint!==fingerprint)throw unavailable('idempotency_conflict','This edit differs from its original receipt hold.');
+          const hold=prior??{fingerprint,count:0};entryHolds.set(id,hold);hold.count++;let active=true;
+          return()=>{if(!active)return;active=false;if(--hold.count===0&&entryHolds.get(id)===hold)entryHolds.delete(id);const capsule=capsuleFor(captured.command);if(capsule)forgetReceipt(capsule);};
+        },
+        claimCapturedSetEntry(command:DatabaseRequest){
+          const capsule=capsuleFor(command);if(!capsule||released)throw unavailable('client_not_admitted','This edit has no admitted recovery capsule.');
+          capsule.claims++;let active=true;
+          return()=>{if(!active)return;active=false;capsule.claims--;forgetReceipt(capsule);};
+        },
         subscribe(listener:()=>void){
           if(typeof listener!=='function')throw new Error('Recovery listener required');
           if(released)return()=>{};
@@ -205,14 +304,15 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
               if(binding[capability]===true&&next[capability]!==true)throw unavailable('durable_recovery_scope_changed','The recovered desktop context is missing an admitted capability.');
             const fresh=await desktopVault(bridge,info,next),target=fresh.adapter.durableWrites;
             if(!target||target.checkpoints.scope.vaultId!==scope.vaultId||target.checkpoints.scope.clientId!==scope.clientId)throw unavailable('durable_recovery_scope_changed','The recovered desktop context has another durable scope.');
-            // Only the source-write proxy crosses this boundary. Native recovery
-            // positively retired old derived owners; their closures never adopt
-            // the replacement admission or its pin/runtime identifiers.
+            // Retained note writes and explicitly claimed collection commands
+            // cross this boundary. Native recovery positively retired old derived
+            // owners; their closures never adopt replacement pin/runtime IDs.
             retainedTarget=target;recovered=fresh;released=true;recoveryNeeded=false;
             stopRecoveryReceiver();recoveryListeners.clear();
             documentRuntime?.retire();drafts?.retire();
+            if(replayEntries&&fresh.databases)replayEntries(fresh.databases);
             return fresh;
-          })();
+          })().catch(error=>{failEntries(error);throw error;});
           recovering=repair;
           void repair.finally(()=>{if(recovering===repair)recovering=undefined;}).catch(()=>{});
           return repair;
@@ -226,8 +326,9 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
         if(binary&&!binaryDrained){await scheduleBinaryTransfer(binary.streams,()=>binary!.release());binaryDrained=true;}
         if(documents&&!documentsDrained){await documents.release();documentsDrained=true;}
         await releaseContext(info.path,admissionId);released=true;durableEpoch++;stopRecoveryReceiver();recoveryListeners.clear();documentRuntime?.retire();
+        failEntries(unavailable('client_not_admitted','The desktop context was released.'));entryCapsules.clear();entryHolds.clear();
       })();releasePending=retiring;
-      try{await retiring;}finally{if(releasePending===retiring)releasePending=undefined;}
+      try{await retiring;}catch(error){failEntries(error);throw error;}finally{if(releasePending===retiring)releasePending=undefined;}
     };
   }
   return {
