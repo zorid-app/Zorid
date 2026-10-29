@@ -17,7 +17,7 @@ export function validateViewName(views: readonly BaseViewConfig[], name: string,
   return normalized;
 }
 
-export function createLayoutSettings(doc: Document, parent: HTMLElement, view: BaseViewConfig, properties: readonly (readonly [string, string])[], changed: () => void): () => BaseViewPatch {
+export function createLayoutSettings(doc: Document, parent: HTMLElement, view: BaseViewConfig, properties: readonly (readonly [string, string])[], changed: () => void,onControl?:(key:string,control:HTMLInputElement|HTMLSelectElement)=>void): () => BaseViewPatch {
   const patch: BaseViewPatch = {};
   const row = (label: string, input: HTMLElement) => { const wrapper = doc.createElement('label'); wrapper.className = 'input-row'; wrapper.append(doc.createTextNode(label), input); parent.append(wrapper); input.setAttribute('aria-label', label); return wrapper; };
   const dropdown = (key: string, label: string, choices: readonly (readonly [string, string])[], fallback = '') => {
@@ -25,10 +25,10 @@ export function createLayoutSettings(doc: Document, parent: HTMLElement, view: B
     for (const [value, text] of choices) { const option = doc.createElement('option'); option.value = value; option.textContent = text; input.append(option); }
     const saved = typeof view[key] === 'string' ? view[key] : fallback;
     if (!choices.some(([value]) => value === saved)) { const option = doc.createElement('option'); option.value = saved; option.textContent = saved; input.prepend(option); }
-    input.value = saved; input.addEventListener('change', () => { patch[key] = input.value || undefined; changed(); }); row(label, input); return input;
+    input.value = saved;onControl?.(key,input); input.addEventListener('change', () => { patch[key] = input.value || undefined; changed(); }); row(label, input); return input;
   };
   const slider = (key: string, label: string, min: number, max: number, step: number, fallback: number) => {
-    const wrapper = doc.createElement('span'), input = doc.createElement('input'), output = doc.createElement('output'); input.type = 'range'; input.min = String(min); input.max = String(max); input.step = String(step); input.value = String(typeof view[key] === 'number' ? view[key] : fallback); input.setAttribute('aria-label', label); output.value = input.value; wrapper.append(input, output);
+    const wrapper = doc.createElement('span'), input = doc.createElement('input'), output = doc.createElement('output'); input.type = 'range'; input.min = String(min); input.max = String(max); input.step = String(step); input.value = String(typeof view[key] === 'number' ? view[key] : fallback); input.setAttribute('aria-label', label);onControl?.(key,input); output.value = input.value; wrapper.append(input, output);
     input.addEventListener('input', () => { output.value = input.value; patch[key] = Number(input.value); changed(); }); const labelRow = row(label, wrapper); wrapper.removeAttribute('aria-label'); labelRow.removeAttribute('for');
   };
   if (view.type === 'table') dropdown('rowHeight', 'Row height', [['', 'Short'], ['medium', 'Medium'], ['tall', 'Tall'], ['extra', 'Extra tall']]);
@@ -47,11 +47,11 @@ export function createLayoutSettings(doc: Document, parent: HTMLElement, view: B
     for (const [value, text] of [['page', 'Page rows (default)'], ['custom', 'Custom list rows']]) {
       const option = doc.createElement('option'); option.value = value; option.textContent = text; rows.append(option);
     }
-    rows.value = pageRows ? 'page' : 'custom'; row('Rows', rows);
+    rows.value = pageRows ? 'page' : 'custom'; row('Rows', rows);onControl?.('rows',rows);
     const custom: BaseViewPatch = { markers: typeof view.markers === 'string' ? view.markers : 'bullet', indentProperties: view.indentProperties, separator: view.separator };
     const markers = dropdown('markers', 'Markers', [['bullet', 'Bullet'], ['number', 'Number'], ['none', 'None']], 'bullet');
-    const indent = doc.createElement('input'); indent.type = 'checkbox'; indent.checked = view.indentProperties === true; const indentRow = row('Indent properties', indent);
-    const separator = doc.createElement('input'); separator.value = typeof view.separator === 'string' ? view.separator : ', '; const separatorRow = row('Property separator', separator);
+    const indent = doc.createElement('input'); indent.type = 'checkbox'; indent.checked = view.indentProperties === true; const indentRow = row('Indent properties', indent);onControl?.('indentProperties',indent);
+    const separator = doc.createElement('input'); separator.value = typeof view.separator === 'string' ? view.separator : ', '; const separatorRow = row('Property separator', separator);onControl?.('separator',separator);
     const sync = () => {
       const page = rows.value === 'page';
       markers.parentElement!.hidden = indentRow.hidden = page;

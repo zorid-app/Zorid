@@ -3,20 +3,24 @@ import type { BaseValue, BaseViewConfig, BaseViewPatch } from './document.ts';
 import type { BaseQueryResult } from './query.ts';
 import { normalizeBaseProperty } from './query.ts';
 import { icon } from '../ui/icons.ts';
+import {baseValueToString} from './expression.ts';
 import { filterConditionValues, validateToolbarPatch } from './toolbar-config.ts';
 import type { BaseFilterCondition, BaseFilterOperator } from './toolbar-config.ts';
 import { createBaseFilterDraft, newBaseFilterCondition, newBaseFilterGroup, readBaseFilterDraft, updateBaseFilterCondition, updateBaseFilterExpression, captureBaseFilterAcknowledgement, baseFilterCount } from './toolbar-filter.ts';
-import type { BaseFilterNode, BaseFilterDraftNode, BaseFilterDraftCondition, BaseFilterConjunction } from './toolbar-filter.ts';
+import type { BaseFilterNode, BaseFilterDraftNode, BaseFilterDraftCondition, BaseFilterDraftGroup, BaseFilterConjunction } from './toolbar-filter.ts';
 import type { BaseFilterOperandsSnapshot } from './toolbar-filter-operands.ts';
 import {baseFilterOperators,baseFilterProperty,baseFilterMethod} from './toolbar-filter-types.ts';
 import type {BaseFilterPropertyDescriptor,BaseFilterLiteral,BaseFilterOperatorDescriptor} from './toolbar-filter-types.ts';
 export type {BaseFilterPropertyDescriptor} from './toolbar-filter-types.ts';
 import {createBaseFilterValues} from './toolbar-filter-values.ts';
-import type {BaseFilterValues} from './toolbar-filter-values.ts';
+import type {BaseFilterValues,BaseFilterValuesAdmissionDraft} from './toolbar-filter-values.ts';
 export type { BaseFilterOperandsSnapshot } from './toolbar-filter-operands.ts';
 import { enhanceBaseFormulaEditor } from './toolbar-formula-editor.ts';
+import type {BaseFormulaEditor,BaseFormulaAdmissionDraft} from './toolbar-formula-editor.ts';
 import { createBaseCombobox } from './toolbar-combobox.ts';
+import type {BaseCombobox,BaseComboboxAdmissionDraft} from './toolbar-combobox.ts';
 import { createBaseManualGroups } from './toolbar-groups.ts';
+import type {BaseManualGroupsAdmissionDraft} from './toolbar-groups.ts';
 import { BASE_LAYOUTS, layoutIcon, uniqueViewName, validateViewName, createLayoutSettings, propertyDisplayPatch } from './toolbar-panels.ts';
 
 export interface BaseToolbarState {
@@ -71,11 +75,70 @@ export interface BaseToolbarOptions {
   onDraftChange(): void;
   onError(error: unknown): void;
 }
+export type BaseToolbarPanelName = 'View settings' | 'Views' | 'View options' | 'Add view' | 'Results' | 'Property' | 'Formula' | 'New item settings' | 'Filter' | 'Sort' | 'Properties' | 'Group';
+export type BaseToolbarRawPanelState={readonly kind:'new-item-settings';readonly folder:string;readonly template:string}|{readonly kind:'view-settings';readonly name:string}|{readonly kind:'results';readonly limit:string}|{readonly kind:'filter';readonly all:BaseToolbarFilterSectionDraft;readonly view:BaseToolbarFilterSectionDraft}
+ |{readonly kind:'views';readonly search:string}
+ |{readonly kind:'property';readonly display:string}
+ |{readonly kind:'formula';readonly name:string;readonly expression:BaseToolbarExpressionDraft}
+ |{readonly kind:'sort';readonly rules:readonly BaseValue[]}
+ |{readonly kind:'properties';readonly search:string;readonly order:readonly string[];readonly names:readonly (readonly [string,string])[]}
+ |{readonly kind:'group';readonly property:string;readonly direction:string;readonly manual?:BaseManualGroupsAdmissionDraft}
+ |{readonly kind:'view-options'|'add-view';readonly name:string;readonly layout:string;readonly patch:BaseViewPatch};
+export type BaseToolbarExpressionDraft={readonly kind:'native';readonly text:string}|{readonly kind:'formula';readonly draft:BaseFormulaAdmissionDraft};
+export interface BaseToolbarFilterSectionDraft {readonly tree:BaseFilterDraftGroup;readonly expanded:boolean;readonly initialized:boolean;readonly values:readonly {readonly path:string;readonly draft:BaseFilterValuesAdmissionDraft}[];readonly expressions:readonly {readonly path:string;readonly raw:BaseToolbarExpressionDraft}[]}
+export interface BaseToolbarAdmissionDraft {
+  readonly panel:BaseToolbarPanelName;
+  readonly target:{readonly selectedIndex:number;readonly viewId?:string;readonly formulaName?:string;readonly returnTo?:BaseToolbarPanelName};
+  readonly configuration:{readonly views:readonly BaseViewConfig[];readonly root:Readonly<Record<string,BaseValue|undefined>>};
+  readonly dirty:boolean;readonly innerDraft:boolean;
+  readonly access:{readonly readOnly:boolean;readonly browseOnly:boolean;readonly allowRename:boolean};
+  readonly comboboxes:readonly {readonly key:string;readonly draft:BaseComboboxAdmissionDraft}[];
+  readonly raw:BaseToolbarRawPanelState;
+  readonly controls:readonly {readonly key:string;readonly start:number|null;readonly end:number|null;readonly direction:'forward'|'backward'|'none'|null}[];
+  readonly focus?:{readonly key:string;readonly start:number|null;readonly end:number|null;readonly direction:'forward'|'backward'|'none'|null};
+  readonly validation:string;
+  readonly ready:Promise<void>;
+}
+/** Human input only; saved configuration and native witnesses are never copied as drafts. */
+export function baseToolbarAdmissionDraftText(draft:BaseToolbarAdmissionDraft):string {
+  const expression=(raw:BaseToolbarExpressionDraft)=>raw.kind==='native'?raw.text:raw.draft.state.text;
+  const literal=(value:BaseFilterLiteral)=>typeof value==='string'?value:JSON.stringify(value);
+  const filterValue=(draft:BaseFilterValuesAdmissionDraft):string=>{
+    const {model,control}=draft.state,parts:string[]=[];
+    if(draft.state.explicitNull)parts.push('null');
+    if(control)parts.push(control.type==='checkbox'?String(control.indeterminate?'unset':control.checked):control.value);
+    if(model.kind==='scalar'&&model.checkboxValue!==undefined)parts.push(String(model.checkboxValue));
+    if(model.kind==='members')parts.push(...model.items.map(literal));
+    if(model.kind==='delegate'){parts.push(...model.committed);if(model.delegate)parts.push(...model.delegate.state.values,model.delegate.state.input);}
+    if(draft.state.choices?.activeValue)parts.push(draft.state.choices.activeValue);
+    return parts.filter(Boolean).join('\n');
+  };
+  const filterNames=(root:BaseFilterDraftNode):string[]=>root.kind==='condition'?(root.fields?[root.fields.property,root.fields.operator]:[]):root.children.flatMap(filterNames);
+  let text:string;
+  switch(draft.raw.kind){
+    case'new-item-settings':text=`Folder: ${draft.raw.folder}\nTemplate: ${draft.raw.template}`;break;
+    case'view-settings':text=draft.raw.name;break;
+    case'results':text=draft.raw.limit;break;
+    case'filter':text=[draft.raw.all,draft.raw.view].flatMap(section=>[...filterNames(section.tree),...section.values.map(value=>filterValue(value.draft)),...section.expressions.map(value=>expression(value.raw))]).filter(Boolean).join('\n');break;
+    case'views':text=draft.raw.search;break;
+    case'property':text=draft.raw.display;break;
+    case'formula':text=`${draft.raw.name}\n${expression(draft.raw.expression)}`;break;
+    case'sort':text=draft.raw.rules.map(rule=>mapping(rule)?[rule.property??rule.column??'',rule.direction??''].join(' '):typeof rule==='string'?rule:JSON.stringify(rule)).join('\n');break;
+    case'properties':text=[draft.raw.search,...draft.raw.order,...draft.raw.names.map(([key,value])=>`${key}: ${value}`)].join('\n');break;
+    case'group':text=[draft.raw.property,draft.raw.direction,...(draft.raw.manual?.state.rows.map(row=>baseValueToString(row.key))??[]),draft.raw.manual?.state.newGroup?.value??''].filter(Boolean).join('\n');break;
+    case'view-options':case'add-view':text=[draft.raw.name,draft.raw.layout,...Object.entries(draft.raw.patch).map(([key,value])=>`${key}: ${typeof value==='string'?value:JSON.stringify(value)}`)].join('\n');break;
+  }
+  return[text,...draft.comboboxes.map(value=>value.draft.state.query).filter(Boolean)].filter(Boolean).join('\n');
+}
+const completedToolbarDrafts=new WeakSet<BaseToolbarAdmissionDraft>();
 export interface BaseToolbar {
   update(state: BaseToolbarState): void;
   /** Metadata-only advice; never replaces query/context witnesses or actions. */
   refreshFilterAdvice(state: BaseToolbarState): void;
   hasDraft(): boolean;
+  canCaptureAdmissionDraft():boolean;
+  captureFreeze():BaseToolbarAdmissionDraft|undefined;
+  restoreAdmissionDraft(draft:BaseToolbarAdmissionDraft):'restored'|'pending'|'conflict';
   /** Only this live toolbar's current connected portal, including its child controls. */
   owns(node: Node): boolean;
   /** After accepted saves settle, retire this toolbar's clean portal only. */
@@ -84,8 +147,8 @@ export interface BaseToolbar {
   destroy(): void;
 }
 type FilterNode = BaseFilterNode;
-type PanelName = 'View settings' | 'Views' | 'View options' | 'Add view' | 'Results' | 'Property' | 'Formula' | 'New item settings' | 'Filter' | 'Sort' | 'Properties' | 'Group';
-interface Panel { rebase?(state: BaseToolbarState, expectedName?: string): boolean; refreshFilterAdvice?(state:BaseToolbarState):void; flush?(): void; name: PanelName; node: HTMLElement; trigger: HTMLElement; dirty: boolean; innerDraft?: boolean; saving: boolean; failure?: object; acceptsSaveAcknowledgement?: () => boolean; close(restore?: boolean): void }
+type PanelName = BaseToolbarPanelName;
+interface Panel { hasUnfinishedInput?():boolean;canCaptureAdmissionDraft?():boolean;captureFreeze?():BaseToolbarAdmissionDraft|undefined;restoreRaw?(draft:BaseToolbarAdmissionDraft):boolean;rebase?(state: BaseToolbarState, expectedName?: string): boolean; refreshFilterAdvice?(state:BaseToolbarState):void; flush?(): void; name: PanelName; node: HTMLElement; trigger: HTMLElement; dirty: boolean; innerDraft?: boolean; saving: boolean; failure?: object; acceptsSaveAcknowledgement?: () => boolean; close(restore?: boolean): void }
 /** Only a retained, exact accepted configuration may offer a persistence retry. */
 export class BaseToolbarSaveError extends Error {
   readonly retry: () => Promise<void>;
@@ -144,7 +207,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
   let deferredState: BaseToolbarState | undefined;
   let activeViewDrag: { source: HTMLElement; from: number; version: BaseQueryResult['version']; token: string } | undefined;
   const report = (error: unknown) => { try { options.onError(error); } catch { /* Error rendering cannot mutate configuration. */ } };
-  const hasDraft = () => !!panel && (panel.dirty || panel.innerDraft || panel.saving || !!panel.failure);
+  const hasDraft = () => !!panel && (panel.dirty || panel.innerDraft || panel.saving || !!panel.failure || !!panel.hasUnfinishedInput?.());
   function refreshFilterSummary(next:BaseToolbarState):void {
     const trigger=actions.querySelector<HTMLButtonElement>('[aria-label="Filter"]');if(!trigger)return;
     // Match the filter sections' top-level rule/group count. A persisted empty
@@ -204,10 +267,10 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? children.length - 1 : (index + step + children.length) % children.length;
     children[next]?.focus();
   });
-  function open(name: PanelName, trigger: HTMLElement, targetIndex?: number, formulaName?: string, returnTo?: PanelName) {
+  function open(name: PanelName, trigger: HTMLElement, targetIndex?: number, formulaName?: string, returnTo?: PanelName, restoring?:BaseToolbarAdmissionDraft) {
     if (!state || destroyed || state.readOnly && !['Views', 'Results'].includes(name)) return;
     if (state.browseOnly && ['Properties','Property','Formula','Group'].includes(name)) return;
-    try { options.preflight(); if (hasDraft()) throw new Error('Apply or cancel the current toolbar changes first.'); } catch (error) { report(error); return; }
+    if(!restoring)try { options.preflight(); if (hasDraft()) throw new Error('Apply or cancel the current toolbar changes first.'); } catch (error) { report(error); return; }
     if (panel?.name === name) { panel.close(); return; }
     panel?.close(false);
     let opening = state, result = opening.result;
@@ -228,11 +291,29 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     const apply = doc.createElement('button'); apply.type = 'submit'; apply.textContent = 'Apply'; apply.className = 'mod-cta';
     const cancel = button(doc, 'Cancel', () => { if (!own.saving) own.close(); }); footer.append(cancel, apply); form.append(fields, error, footer); node.append(heading, form); doc.body.append(node);
     let autoTimer: ReturnType<typeof setTimeout> | undefined;
-    let generation = 0;
+    let generation = 0,rawFrozen=false,rawPassive=!!restoring,submitted=false;
+    const comboOwners=new Map<HTMLSelectElement,BaseCombobox>(),formulaOwners=new Map<HTMLTextAreaElement,BaseFormulaEditor>(),deferredNativeExpressions=new WeakSet<HTMLTextAreaElement>();
+    let rawModel:{hasRawInput?():boolean;dirtyOnRestore?:boolean;finishRestore?():boolean;canCapture?():boolean;ready?(raw:BaseToolbarRawPanelState):readonly Promise<void>[];capture():BaseToolbarRawPanelState;restore(raw:BaseToolbarRawPanelState):boolean;controls():readonly (readonly [string,HTMLInputElement|HTMLTextAreaElement|HTMLSelectElement])[]}|undefined;
+    type NativeText=HTMLInputElement|HTMLTextAreaElement;
+    type Composition={active:boolean;settling:boolean;start:string;update?:string;input?:{value:string;data:string|null;update?:string}};
+    const compositions=new Map<NativeText,Composition>(),activeCompositionTargets=new Set<EventTarget>();let completeRawCapture:(()=>void)|undefined;
+    const textTarget=(event:Event):NativeText|undefined=>event.target instanceof doc.defaultView!.HTMLInputElement||event.target instanceof doc.defaultView!.HTMLTextAreaElement?event.target:undefined;
+    const unfinishedInput=()=>[...activeCompositionTargets].some(target=>target instanceof doc.defaultView!.Node&&node.contains(target))||[...compositions.entries()].some(([input,cycle])=>node.contains(input)&&(cycle.active||cycle.settling));
+    const unsubmittedInput=()=>unfinishedInput()||!!rawModel?.hasRawInput?.()||[...comboOwners.values()].some(control=>control.hasRawInput());
+    const activateRaw=(event:Event)=>{if(rawFrozen){
+      if(event.type==='keydown'&&event.target&&activeCompositionTargets.has(event.target)){event.stopImmediatePropagation();return;}
+      if(event.type==='input'||event.type==='change')return;
+      if(event.cancelable)event.preventDefault();event.stopImmediatePropagation();return;
+    }rawPassive=false;};
+    for(const event of ['input','change','keydown','click','pointerdown','dragstart','dragover','drop','dragend'])node.addEventListener(event,activateRaw,true);
+    node.addEventListener('compositionstart',event=>{if(rawFrozen)return;activeCompositionTargets.add(event.target!);const input=textTarget(event);if(input)compositions.set(input,{active:true,settling:false,start:input.value});options.onDraftChange();},true);
+    node.addEventListener('compositionupdate',event=>{const input=textTarget(event),cycle=input&&compositions.get(input);if(cycle?.active)cycle.update=event.data;},true);
+    node.addEventListener('input',event=>{const input=textTarget(event),cycle=input&&compositions.get(input);if(cycle&&input){if(cycle.active)cycle.input={value:input.value,data:(event as InputEvent).data??null,update:cycle.update};else cycle.settling=false;}queueMicrotask(()=>completeRawCapture?.());},true);
+    node.addEventListener('compositionend',event=>{activeCompositionTargets.delete(event.target!);const input=textTarget(event),cycle=input&&compositions.get(input);if(cycle&&input){cycle.active=false;cycle.settling=!(event.data===''&&input.value===cycle.start||cycle.input?.value===input.value&&(cycle.input.data===event.data||cycle.input.update===event.data));}queueMicrotask(()=>completeRawCapture?.());options.onDraftChange();},true);
     let afterSave: (() => void) | undefined;
     let afterClean: (() => void) | undefined;
     let refreshPanel: ((result:BaseQueryResult,retainDraft:boolean)=>void) | undefined;
-    let enhanceControls: (()=>void) | undefined;
+    let enhanceControls: (()=>void) | undefined;let restoringRawModel=!!restoring;
     const focusVisible = (root:HTMLElement,label:string,fallback?:HTMLElement) => {
       // Rebuilt native selects are about to become hidden models. Enhance them
       // before restoring focus so the visible combobox owns subsequent keys.
@@ -243,9 +324,9 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     const disposers: (()=>void)[] = [];
     const auto = options.immediate === true && !['Views','Add view','New item settings'].includes(name) && (name !== 'Formula' || !!formulaName);
     if (auto) footer.hidden = true;
-    const own: Panel = { name, node, trigger, dirty: false, saving: false, failure: undefined,
+    const own: Panel = { name, node, trigger, dirty: false, saving: false, failure: undefined,hasUnfinishedInput:unfinishedInput,
       close(restore = true) {
-        if (own.saving) return;
+        if (own.saving||rawFrozen&&!destroyed) return;
         if (autoTimer) clearTimeout(autoTimer);
         activeViewDrag = undefined;
         for (const dispose of disposers.splice(0)) dispose();
@@ -275,7 +356,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     let retainedAttempt: AcceptedAttempt | undefined;
     const inputStates = () => new Map(Array.from(node.querySelectorAll<Control>('input,button,select,textarea'),input=>[input,input.disabled] as const));
     const place = () => { if (!node.isConnected) return; const anchor = trigger.getBoundingClientRect(), bounds = node.getBoundingClientRect(); node.style.left = `${Math.max(8, Math.min(anchor.left, (win?.innerWidth ?? 800) - bounds.width - 8))}px`; node.style.top = `${Math.max(8, Math.min(anchor.bottom + 6, (win?.innerHeight ?? 600) - bounds.height - 8))}px`; };
-    const outside = (event: Event) => { if (!node.contains(event.target as Node) && !trigger.contains(event.target as Node)) {
+    const outside = (event: Event) => { if(rawFrozen)return;if (!node.contains(event.target as Node) && !trigger.contains(event.target as Node)) {
       if (name === 'Add view' && !own.saving && !retryPersistence) { own.close(false); return; }
       if (auto && own.dirty && !retryPersistence) { submit(true); return; }
       if (!hasDraft()) own.close(false);
@@ -286,7 +367,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     doc.addEventListener('pointerdown', outside, true); doc.addEventListener('keydown', keydown, true); win?.addEventListener('resize', place); win?.addEventListener('scroll', place, true);
     const observer = win && 'ResizeObserver' in win ? new win.ResizeObserver(place) : undefined; observer?.observe(container); observer?.observe(node);
     const changed = () => {
-      if (destroyed || panel !== own) return;
+      if (destroyed || panel !== own || rawFrozen) return;
       generation++; own.dirty = true;
       // A failed accepted write must be retried before another semantic action.
       if (retryPersistence) return;
@@ -300,14 +381,14 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     let readOperation: (() => () => Promise<void>) | undefined;
     const menuAction = (text: string, action: () => Promise<void>, enabled = true) => {
       const item = button(doc, text, () => {
-        if (destroyed || panel !== own || !item.isConnected) return;
+        if (destroyed || panel !== own || !item.isConnected || rawFrozen || rawPassive) return;
         if (own.saving || own.dirty) { error.textContent = 'Finish the current changes first.'; return; }
         try { options.preflight(); } catch (failure) { report(failure); return; }
         const commandGeneration = generation, commandInputs = inputStates();
         own.saving = true; options.onDraftChange(); for (const input of commandInputs.keys()) input.disabled = true; item.disabled = true;
-        void invoke(action).then(() => {
+        submitted=true;void invoke(action).then(() => {
           if (destroyed || panel !== own) return;
-          own.saving = false;
+          own.saving = false;submitted=false;
           const refreshed = deferredState; deferredState = undefined;
           if (generation !== commandGeneration) {
             for (const [input,disabled] of commandInputs) input.disabled = disabled;
@@ -328,7 +409,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       }); item.className = 'bases-toolbar-menu-item'; item.disabled = !enabled; fields.append(item); return item;
     };
     function transition(action:()=>void) {
-      if(destroyed||panel!==own)return;
+      if(destroyed||panel!==own||rawFrozen||rawPassive)return;
       if(hasDraft()){
         if(auto&&!own.innerDraft&&!retryPersistence){afterClean=action;submit(false);}
         else error.textContent='Apply or cancel the current changes first.';
@@ -349,6 +430,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       nameRow.append(input);fields.append(nameRow);input.addEventListener('input',changed);
       input.addEventListener('blur',()=>{if(auto&&own.dirty)submit(false);});input.addEventListener('keydown',event=>{if(!event.isComposing&&event.key==='Enter'){event.preventDefault();input.blur();}});
       readPatch=()=>{const name=validateViewName(opening.views,input.value,selectedIndex);return name===configuredView.name?{}:{name};};
+      rawModel={capture:()=>({kind:'view-settings',name:input.value}),restore:raw=>{if(raw.kind!=='view-settings')return false;input.value=raw.name;return true;},controls:()=>[['name',input]]};
       if(options.commands?.updateView)readOperation=()=>{const patch=readPatch();expectedPatch={view:patch};return()=>options.commands!.updateView!(version,selectedIndex,patch);};
       const menu=doc.createElement('div');menu.dataset.settingsMenu='true';menu.setAttribute('role','menu');menu.setAttribute('aria-label','View settings commands');fields.append(menu);
       const row=(label:string,glyph:string,value:string,action:()=>void)=>{
@@ -402,6 +484,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         });
       };
       search.addEventListener('input', renderViews); renderViews();
+      rawModel={hasRawInput:()=>!!search.value,dirtyOnRestore:false,capture:()=>({kind:'views',search:search.value}),restore:raw=>{if(raw.kind!=='views')return false;search.value=raw.search;renderViews();return true;},controls:()=>[['search',search]]};
       menuAction('Results',async()=>{own.saving=false;own.close(false);open('Results',trigger);});
       if (!opening.readOnly && options.commands?.addView) menuAction('Add view', async () => { own.saving = false; own.close(false); open('Add view', trigger); });
     } else if (name === 'Add view') {
@@ -409,13 +492,13 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       const layout = select(doc, 'Layout', BASE_LAYOUTS.map(([key, label]) => [key, label] as const), 'table');
       const layoutLabel = doc.createElement('label'); layoutLabel.textContent = 'Layout'; layoutLabel.append(layout); fields.append(input, layoutLabel);
       const layoutFields = doc.createElement('div'); layoutFields.className = 'bases-layout-settings'; fields.append(layoutFields);
-      let initial: BaseViewPatch = {};
-      let layoutPatch = createLayoutSettings(doc,layoutFields,{type:'table',name:input.value},propertyOptions,changed);
+      let initial: BaseViewPatch = {};const layoutControls=new Map<string,HTMLInputElement|HTMLSelectElement>();const control=(key:string,input:HTMLInputElement|HTMLSelectElement)=>layoutControls.set(`layout/${key}`,input);
+      let layoutPatch = createLayoutSettings(doc,layoutFields,{type:'table',name:input.value},propertyOptions,changed,control);
       input.addEventListener('input', changed);
       layout.addEventListener('change', () => {
         initial = {...initial,...layoutPatch()};
-        layoutFields.replaceChildren();
-        layoutPatch = createLayoutSettings(doc,layoutFields,{...initial,type:layout.value,name:input.value},propertyOptions,changed);
+        layoutControls.clear();layoutFields.replaceChildren();
+        layoutPatch = createLayoutSettings(doc,layoutFields,{...initial,type:layout.value,name:input.value},propertyOptions,changed,control);
         changed();
       });
       apply.textContent = 'Create view'; own.dirty = true;
@@ -426,16 +509,19 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         return () => options.commands!.addView!(version,type,name,patch);
       };
       input.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.isComposing){event.preventDefault();submit(true);}});
+      rawModel={capture:()=>({kind:'add-view',name:input.value,layout:layout.value,patch:structuredClone({...initial,...layoutPatch()})}),restore:raw=>{if(raw.kind!=='add-view')return false;input.value=raw.name;layout.value=raw.layout;initial=structuredClone(raw.patch);layoutControls.clear();layoutFields.replaceChildren();layoutPatch=createLayoutSettings(doc,layoutFields,{...initial,type:raw.layout,name:raw.name},propertyOptions,changed,control);return true;},controls:()=>[['name',input],['layout',layout],...[...layoutControls]]};
     } else if (name === 'Results') {
-      const limit = doc.createElement('input'); limit.type = 'number'; limit.min = '0'; limit.step = '1'; limit.placeholder = 'e.g. 10'; limit.value = typeof result.view.limit === 'number' && result.view.limit > 0 ? String(result.view.limit) : ''; limit.setAttribute('aria-label', 'Limit'); const label = doc.createElement('label'); label.append(doc.createTextNode('Limit number of results'), limit); fields.append(label); limit.addEventListener('input', changed);
+      const limit = doc.createElement('input'); limit.type = 'text'; limit.inputMode = 'numeric'; limit.setAttribute('aria-description','Nonnegative whole number of results; leave blank for all results.'); limit.placeholder = 'e.g. 10'; limit.value = typeof result.view.limit === 'number' && result.view.limit > 0 ? String(result.view.limit) : ''; limit.setAttribute('aria-label', 'Limit'); const label = doc.createElement('label'); label.append(doc.createTextNode('Limit number of results'), limit); fields.append(label); limit.addEventListener('input', changed);
       if (!opening.readOnly) { const showAll = menuAction('Show all results', () => options.save(version, {limit: undefined}),typeof result.view.limit === 'number' && result.view.limit > 0); showAll.replaceChildren(icon('rotate-ccw',16,doc),doc.createTextNode('Show all')); }
       limit.disabled = opening.readOnly;
       if (options.onExport) { menuAction('Copy', () => options.onExport!('tsv', true)).replaceChildren(icon('copy',16,doc),doc.createTextNode('Copy to clipboard')); menuAction('Export CSV', () => options.onExport!('csv', false)).replaceChildren(icon('file-down',16,doc),doc.createTextNode('Export CSV…')); }
-      readPatch = () => { if (limit.value && (!Number.isSafeInteger(Number(limit.value)) || Number(limit.value) < 0)) throw new Error('Limit must be a nonnegative whole number.'); return {limit: limit.value && Number(limit.value) > 0 ? Number(limit.value) : undefined}; };
+      readPatch = () => { if (limit.value && (!limit.value.trim() || !Number.isSafeInteger(Number(limit.value)) || Number(limit.value) < 0)) throw new Error('Limit must be a nonnegative whole number.'); return {limit: limit.value && Number(limit.value) > 0 ? Number(limit.value) : undefined}; };
+      rawModel={capture:()=>({kind:'results',limit:limit.value}),restore:raw=>{if(raw.kind!=='results')return false;limit.value=raw.limit;return true;},controls:()=>[['limit',limit]]};
     } else if (name === 'Property') {
       const property = formulaName!;
       const display = doc.createElement('input'); display.value = opening.label(property); display.setAttribute('aria-label','Display name'); display.placeholder = property.slice(property.indexOf('.') + 1);
       const label = doc.createElement('label'); label.append(doc.createTextNode('Display name'),display); fields.append(label); display.addEventListener('input',changed);
+      rawModel={capture:()=>({kind:'property',display:display.value}),restore:raw=>{if(raw.kind!=='property')return false;display.value=raw.display;return true;},controls:()=>[['display',display]]};
       readOperation = () => { const root = propertyDisplayPatch(opening.settings??opening.root,new Map([[property,display.value]])); if (!options.commands?.updateRoot) throw new Error('Property labels are unavailable.'); expectedPatch = {root}; return () => options.commands!.updateRoot!(version,root); };
       if (property.startsWith('formula.')) menuAction('Edit formula',async () => { own.saving = false; own.close(false); open('Formula',trigger,undefined,property.slice(8)); });
       else if (property.startsWith('note.') && options.onPropertySettings) menuAction('Property type',async () => { own.saving = false; own.close(false); options.onPropertySettings!(property); });
@@ -469,11 +555,19 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         expectedPatch = {root:{formulas}}; return () => options.commands!.updateRoot!(version,{formulas});
       };
       if (formulaName && options.commands?.setFormula) menuAction('Remove formula', () => options.commands!.setFormula!(version, formulaName!, undefined));
+      let restoreExpression:BaseToolbarExpressionDraft|undefined;
+      rawModel={canCapture:()=>!formulaOwners.has(expression)||formulaOwners.get(expression)?.canCaptureAdmissionDraft()===true,
+        capture:()=>{const editor=formulaOwners.get(expression),draft=editor?.captureFreeze();if(editor&&!draft)throw new Error('The raw formula changed before it could be retained.');return{kind:'formula',name:input.value,expression:draft?{kind:'formula',draft}:{kind:'native',text:expression.value}};},
+        ready:raw=>raw.kind==='formula'&&raw.expression.kind==='formula'?[raw.expression.draft.ready]:[],
+        restore:raw=>{if(raw.kind!=='formula')return false;input.value=raw.name;restoreExpression=raw.expression;if(raw.expression.kind==='native'){expression.value=raw.expression.text;deferredNativeExpressions.add(expression);}return true;},
+        finishRestore:()=>{const captured=restoreExpression;restoreExpression=undefined;return!captured||captured.kind==='native'||formulaOwners.get(expression)?.restoreAdmissionDraft(captured.draft)===true;},
+        controls:()=>[['name',input],...(!formulaOwners.has(expression)?[['expression',expression] as const]:[])]};
     } else if (name === 'New item settings') {
       const folder = doc.createElement('input'), template = doc.createElement('input'); folder.setAttribute('aria-label', 'New item folder'); template.setAttribute('aria-label', 'New item template'); folder.value = typeof (opening.settings??opening.root)?.newItemFolder === 'string' ? (opening.settings??opening.root)!.newItemFolder as string : ''; template.value = typeof (opening.settings??opening.root)?.newItemTemplate === 'string' ? (opening.settings??opening.root)!.newItemTemplate as string : '';
       for (const [text, input] of [['Folder',folder], ['Template',template]] as const) { const label = doc.createElement('label'); label.append(doc.createTextNode(text), input); fields.append(label); input.addEventListener('input', changed); }
       const hint = doc.createElement('p'); hint.textContent = 'Zorid copies the complete template, including its body. Placeholders stay literal.'; fields.append(hint);
       readOperation = () => { if (!options.commands?.updateRoot) throw new Error('Creation settings are unavailable.'); return () => options.commands!.updateRoot!(version, {newItemFolder:folder.value.trim() || undefined,newItemTemplate:template.value.trim() || undefined}); };
+      rawModel={capture:()=>({kind:'new-item-settings',folder:folder.value,template:template.value}),restore:raw=>{if(raw.kind!=='new-item-settings')return false;folder.value=raw.folder;template.value=raw.template;return true;},controls:()=>[['folder',folder],['template',template]]};
     } else if (name === 'View options') {
       const layout = select(doc, 'Layout', BASE_LAYOUTS.map(([key, label]) => [key, label] as const), configuredView.type);
       const layoutLabel = doc.createElement('label'); layoutLabel.textContent = 'Layout'; layoutLabel.append(layout); fields.append(layoutLabel); layout.addEventListener('change', changed);
@@ -487,18 +581,20 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         for(const [type,label,glyph] of BASE_LAYOUTS){const tile=button(doc,'',()=>{layout.value=type;layout.dispatchEvent(new win!.Event('change',{bubbles:true}));for(const item of grid.querySelectorAll('[data-layout]'))item.setAttribute('aria-pressed',String((item as HTMLElement).dataset.layout===type));},label);tile.dataset.layout=type;tile.setAttribute('aria-pressed',String(configuredView.type===type));tile.append(icon(glyph,22,doc),doc.createTextNode(label));grid.append(tile);}fields.append(grid);
       }
       const layoutFields = doc.createElement('div'); layoutFields.className = 'bases-layout-settings'; fields.append(layoutFields);
-      let layoutPatch = createLayoutSettings(doc, layoutFields, configuredView, propertyOptions, changed);
+      const layoutControls=new Map<string,HTMLInputElement|HTMLSelectElement>(),control=(key:string,input:HTMLInputElement|HTMLSelectElement)=>layoutControls.set(`layout/${key}`,input);let retainedLayoutPatch:BaseViewPatch={};
+      let layoutPatch = createLayoutSettings(doc, layoutFields, configuredView, propertyOptions, changed,control);
       if(returnTo==='View settings'){const limit=button(doc,`Load limit · ${typeof configuredView.limit==='number'?configuredView.limit:'All results'}`,()=>navigatePanel('Results','View options'),'Load limit');limit.className='bases-settings-row';fields.append(limit);}
-      layout.addEventListener('change', () => { layoutFields.replaceChildren(); layoutPatch = createLayoutSettings(doc, layoutFields, {...configuredView, type:layout.value}, propertyOptions, changed); });
+      layout.addEventListener('change', () => { retainedLayoutPatch={};layoutControls.clear();layoutFields.replaceChildren(); layoutPatch = createLayoutSettings(doc, layoutFields, {...configuredView, type:layout.value}, propertyOptions, changed,control); });
       readPatch = () => {
         if (selectedIndex !== opening.selectedIndex && !options.commands?.updateView) throw new Error('Open this view before changing its settings.');
-        const patch: BaseViewPatch = { type: layout.value, ...layoutPatch() };
+        const patch: BaseViewPatch = { type: layout.value,...retainedLayoutPatch, ...layoutPatch() };
         if (opening.allowRename && nameInput.value.trim() !== configuredView.name) {
           patch.name = validateViewName(opening.views, nameInput.value, selectedIndex);
         }
         return patch;
       };
       if (options.commands?.updateView) readOperation = () => { const patch = validateToolbarPatch({...result,view:configuredView},readPatch()); expectedPatch = {view:patch}; return () => options.commands!.updateView!(version,selectedIndex,patch); };
+      rawModel={capture:()=>({kind:'view-options',name:nameInput.value,layout:layout.value,patch:structuredClone({...retainedLayoutPatch,...layoutPatch()})}),restore:raw=>{if(raw.kind!=='view-options')return false;nameInput.value=raw.name;layout.value=raw.layout;retainedLayoutPatch=structuredClone(raw.patch);layoutControls.clear();layoutFields.replaceChildren();layoutPatch=createLayoutSettings(doc,layoutFields,{...configuredView,...retainedLayoutPatch,type:raw.layout},propertyOptions,changed,control);for(const tile of fields.querySelectorAll<HTMLElement>('[data-layout]'))tile.setAttribute('aria-pressed',String(tile.dataset.layout===raw.layout));return true;},controls:()=>[['name',nameInput],['layout',layout],...[...layoutControls]]};
       if (selectedIndex !== opening.selectedIndex && !options.commands?.updateView) { nameInput.disabled = true; layout.disabled = true; for (const input of layoutFields.querySelectorAll<HTMLInputElement>('input,select')) input.disabled = true; menuAction('Open this view', () => options.selectView(selectedIndex)); }
       if (options.commands?.setDefaultView) menuAction('Set as default view', () => options.commands!.setDefaultView!(version, selectedIndex), selectedIndex !== 0);
       if (options.commands?.duplicateView) menuAction('Duplicate view', async () => {
@@ -574,6 +670,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       const updateAddProperty = () => { addProperty.hidden = !search.value.trim() || properties.some(property => property === normalizeBaseProperty(`note.${search.value.trim()}`)); addProperty.textContent = `Add property “${search.value.trim()}”`; };
       fields.append(addProperty,button(doc,'Hide all',() => { order = []; changed(); render(); }));
       search.addEventListener('input',() => { render(); updateAddProperty(); }); updateAddProperty(); render(); readPatch = () => ({ order });
+      rawModel={hasRawInput:()=>!!search.value,capture:()=>({kind:'properties',search:search.value,order:[...order],names:[...displayNames]}),restore:raw=>{if(raw.kind!=='properties')return false;search.value=raw.search;order=[...raw.order];displayNames.clear();for(const [key,value]of raw.names)displayNames.set(key,value);render();updateAddProperty();return true;},controls:()=>[['search',search]]};
       let presentedLabels=JSON.stringify(properties.map(property=>[property,opening.label(property),opening.propertyType?.(property)]));
       refreshPanel=(_next,retainDraft)=>{
         const nextLabels=JSON.stringify(properties.map(property=>[property,opening.label(property),opening.propertyType?.(property)]));
@@ -587,11 +684,11 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       readOperation = () => { const view = validateToolbarPatch(result, {order}); if (!displayNames.size) { expectedPatch = {view}; return () => options.save(version, view); } if (!options.saveConfiguration) throw new Error('Combined property configuration is unavailable.'); const root = propertyDisplayPatch(opening.settings??opening.root, displayNames); expectedPatch = {view,root}; return () => options.saveConfiguration!(version, {view,root}); };
     } else if (name === 'Sort') {
       let sortDrag: {item:BaseValue;source:HTMLElement;token:string;version:BaseQueryResult['version']} | undefined;
-      const sort = Array.isArray(result.view.sort) ? structuredClone(result.view.sort) as BaseValue[] : [];
+      const sort = Array.isArray(result.view.sort) ? structuredClone(result.view.sort) as BaseValue[] : [];const sortControls=new Map<string,HTMLSelectElement>();
       const list = doc.createElement('div'); fields.append(list);
       const render = () => {
         const focusedLabel = list.contains(doc.activeElement) ? doc.activeElement?.getAttribute('aria-label') : undefined;
-        sortDrag = undefined; list.replaceChildren(); sort.forEach((value, index) => {
+        sortDrag = undefined;sortControls.clear(); list.replaceChildren(); sort.forEach((value, index) => {
           const row = doc.createElement('div'); row.className = 'bases-toolbar-rule';
           const grip=doc.createElement('span');grip.className='bases-sort-grip';grip.draggable=true;grip.append(icon('grip-vertical',14,doc));row.append(grip);
           grip.addEventListener('dragstart',event=>{if(destroyed||panel!==own||!grip.isConnected||!event.dataTransfer){event.preventDefault();return;}const token=`${Date.now()}-${Math.random()}`;sortDrag={item:sort[index],source:grip,token,version};event.dataTransfer.setData('application/x-zorid-base-sort',token);event.dataTransfer.effectAllowed='move';});
@@ -602,7 +699,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
           if (!mapping(value)) { row.append(doc.createTextNode('Unsupported existing sort rule')); }
           else {
             const currentProperty = propertyId(value.column || value.property), choices = availableOptions.some(([key]) => key === currentProperty) ? availableOptions : [[currentProperty, opening.label(currentProperty)] as const, ...availableOptions];
-            const property = select(doc, 'Sort property', choices, currentProperty), direction = select(doc, 'Sort direction', [['ASC', 'A → Z'], ['DESC', 'Z → A']], String(value.direction));
+            const property = select(doc, 'Sort property', choices, currentProperty), direction = select(doc, 'Sort direction', [['ASC', 'A → Z'], ['DESC', 'Z → A']], String(value.direction));sortControls.set(`sort/${index}/property`,property);sortControls.set(`sort/${index}/direction`,direction);
             const edit = () => { const next: Record<string, BaseValue> = { ...value, property: property.value, direction: direction.value }; delete next.column; sort[index] = next; changed(); };
             property.addEventListener('change', edit); direction.addEventListener('change', edit); row.append(property, direction);
           }
@@ -614,6 +711,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       };
       fields.append(button(doc, 'Add sort', () => { const used = new Set(sort.filter(mapping).map(value => propertyId(value.column || value.property))); const property = result.availableProperties.find(property => !used.has(property)); if (!property) { error.textContent = 'All available properties are already sorted.'; return; } sort.push({ property, direction: 'ASC' }); changed(); render(); }));
       render(); readPatch = () => ({ sort });
+      rawModel={capture:()=>({kind:'sort',rules:structuredClone(sort)}),restore:raw=>{if(raw.kind!=='sort'||raw.rules.filter(mapping).some(rule=>!properties.includes(propertyId(rule.column||rule.property))))return false;sort.splice(0,sort.length,...structuredClone(raw.rules));render();return true;},controls:()=>[...sortControls]};
     } else if (name === 'Group') {
       const existing = mapping(result.view.groupBy) ? result.view.groupBy : undefined;
       const currentProperty = propertyId(existing?.property);
@@ -628,6 +726,9 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         direction.addEventListener('change',()=>manual.setManual(direction.value==='MANUAL'));
         property.addEventListener('change',()=>manual.update(result,false));
       }
+      let restoreManual:BaseManualGroupsAdmissionDraft|undefined;
+      rawModel={canCapture:()=>!manual||manual.canCaptureAdmissionDraft(),capture:()=>{const captured=manual?.captureFreeze();if(manual&&!captured)throw new Error('The raw grouping changed before it could be retained.');return{kind:'group',property:property.value,direction:direction.value,manual:captured};},ready:raw=>raw.kind==='group'&&raw.manual?[raw.manual.ready]:[],
+        restore:raw=>{if(raw.kind!=='group'||raw.property&&!properties.includes(raw.property))return false;property.value=raw.property;direction.value=raw.direction;restoreManual=raw.manual;return true;},finishRestore:()=>{const captured=restoreManual;restoreManual=undefined;return!captured||manual?.restoreAdmissionDraft(captured)===true;},controls:()=>[['property',property],['direction',direction]]};
       readPatch = () => {
         const groupBy: Record<string, BaseValue> | undefined = property.value ? { ...existing, property: property.value, direction: direction.value === 'MANUAL' ? existing?.direction ?? 'ASC' : direction.value } : undefined;
         if (groupBy && property.value !== propertyId(existing?.property)) delete groupBy.column;
@@ -674,10 +775,10 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       try{operandSnapshot=options.filterOperands?.();}catch(failure){report(failure);}
       const operandEditors=new Set<BaseFilterValues>();
       disposers.push(()=>{for(const editor of operandEditors)editor.destroy();operandEditors.clear();});
-      type Section={section:HTMLElement;refreshUntouchedAdvice():void;get():FilterNode|undefined;acknowledge():()=>void};
+      type Section={section:HTMLElement;canCapture():boolean;capture():BaseToolbarFilterSectionDraft;restore(raw:BaseToolbarFilterSectionDraft):boolean;finishRestore():boolean;nativeControls():readonly (readonly [string,HTMLTextAreaElement|HTMLSelectElement])[];refreshUntouchedAdvice():void;get():FilterNode|undefined;acknowledge():()=>void};
       let rootEditor:Section|undefined,viewEditor:Section|undefined;
       own.refreshFilterAdvice=next=>{
-        if(own.saving||own.failure||next.readOnly!==opening.readOnly||next.selectedIndex!==opening.selectedIndex
+        if(rawFrozen||own.saving||own.failure||next.readOnly!==opening.readOnly||next.selectedIndex!==opening.selectedIndex
           ||next.views[selectedIndex]?.name!==configuredView.name||next.views[selectedIndex]?.type!==configuredView.type
           ||JSON.stringify(configurationSnapshot(next))!==JSON.stringify(configuration))return;
         filterAdvice=next;
@@ -711,10 +812,12 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         const flair=doc.createElement('span');flair.className='bases-filter-count';
         const count=(source:FilterNode|undefined)=>{const n=baseFilterCount(source);flair.textContent=String(n);flair.hidden=n===0;};count(initial);disclosure.append(flair);section.append(disclosure,content);
         const alive=()=>!destroyed&&panel===own&&section.isConnected;
-        const localEditors=new Set<BaseFilterValues>(),validators=new Set<()=>void>(),rendered=new WeakMap<BaseFilterDraftNode,HTMLElement>();
+        const localEditors=new Set<BaseFilterValues>(),valueEditors=new Map<BaseFilterDraftCondition,BaseFilterValues>(),expressionSources=new Map<BaseFilterDraftCondition,HTMLTextAreaElement>(),filterSelects=new Map<string,HTMLSelectElement>(),validators=new Set<()=>void>(),rendered=new WeakMap<BaseFilterDraftNode,HTMLElement>();
+        let restoringValues=new Map<string,BaseFilterValuesAdmissionDraft>(),restoringExpressions=new Map<string,BaseToolbarExpressionDraft>(),restoreProblem=false;const finishChildRestores:(()=>void)[]=[],finishFormulaRestores:(()=>void)[]=[];
+        const pathOf=(wanted:BaseFilterDraftNode):string=>{let found:string|undefined;const visit=(value:BaseFilterDraftNode,path:string)=>{if(value===wanted)found=path;if(value.kind==='group')value.children.forEach((child,index)=>visit(child,`${path}/${index}`));};visit(draft,'root');return found??'';};
         const refreshUntouchedAdvice=new Set<()=>void>();
         let tree:HTMLElement,renderBudget=1000;
-        const release=()=>{for(const editor of localEditors){editor.destroy();operandEditors.delete(editor);}localEditors.clear();validators.clear();refreshUntouchedAdvice.clear();syncDraft();};
+        const release=()=>{for(const editor of localEditors){editor.destroy();operandEditors.delete(editor);}localEditors.clear();valueEditors.clear();expressionSources.clear();filterSelects.clear();validators.clear();refreshUntouchedAdvice.clear();syncDraft();};
         const focusNode=(value:BaseFilterDraftNode)=>{const row=rendered.get(value);if(row)focusVisible(row,'Filter property');};
         const renderNode=(value:BaseFilterDraftNode,remove:()=>void,depth=0):HTMLElement=>{
           const row=doc.createElement('div');row.className=value.kind==='condition'?'bases-filter-condition':'bases-filter-group';rendered.set(value,row);
@@ -724,7 +827,8 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
             const removeButton=button(doc,'Remove',()=>{if(!live()||!canRestructure(row))return;remove();render();semanticChanged();focusVisible(tree,'Match');},'Remove filter');
             if(options.immediate){removeButton.replaceChildren(icon('trash',16,doc));removeButton.className='bases-toolbar-menu-next';}
             if(value.advanced||!value.fields){
-              const expression=doc.createElement('textarea');expression.setAttribute('aria-label','Filter expression');expression.value=value.source??'';expression.rows=2;
+              const expression=doc.createElement('textarea');expression.setAttribute('aria-label','Filter expression');const retainedExpression=restoringExpressions.get(pathOf(value));expression.value=retainedExpression?(retainedExpression.kind==='native'?retainedExpression.text:retainedExpression.draft.initial):value.source??'';expression.rows=2;expressionSources.set(value,expression);
+              if(retainedExpression){if(retainedExpression.kind==='native'){deferredNativeExpressions.add(expression);updateBaseFilterExpression(value,retainedExpression.text);}else finishFormulaRestores.push(()=>{const editor=formulaOwners.get(expression);if(!editor?.restoreAdmissionDraft(retainedExpression.draft)){restoreProblem=true;return;}updateBaseFilterExpression(value,retainedExpression.draft.state.text);});}
               expression.addEventListener('input',()=>{if(!live())return;updateBaseFilterExpression(value,expression.value);semanticChanged();});row.append(expression,removeButton);
             }else{
               const fields=value.fields;
@@ -737,7 +841,8 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
               // A recognized AST can still require a different property family.
               // Keep such saved source editable verbatim, never coerce its data.
               if(!selected){
-                const expression=doc.createElement('textarea');expression.setAttribute('aria-label','Filter expression');expression.value=value.source??'';expression.rows=2;
+                const expression=doc.createElement('textarea');expression.setAttribute('aria-label','Filter expression');const retainedExpression=restoringExpressions.get(pathOf(value));expression.value=retainedExpression?(retainedExpression.kind==='native'?retainedExpression.text:retainedExpression.draft.initial):value.source??'';expression.rows=2;expressionSources.set(value,expression);
+              if(retainedExpression){if(retainedExpression.kind==='native'){deferredNativeExpressions.add(expression);updateBaseFilterExpression(value,retainedExpression.text);}else finishFormulaRestores.push(()=>{const editor=formulaOwners.get(expression);if(!editor?.restoreAdmissionDraft(retainedExpression.draft)){restoreProblem=true;return;}updateBaseFilterExpression(value,retainedExpression.draft.state.text);});}
                 expression.addEventListener('input',()=>{if(live()){updateBaseFilterExpression(value,expression.value);semanticChanged();}});row.append(expression,removeButton);
                 const saved=value.source;
                 // A retired metadata frame can temporarily hide a saved operator.
@@ -767,7 +872,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
                 catalog=catalog.map(item=>item.comparison&&item.arity==='one'?{...item,operand}:item);
                 selected=catalog.find(item=>item.id===fields.operator)!;
               }
-              const operator=select(doc,'Condition',catalog.map(item=>[item.id,item.label] as const),fields.operator);row.append(property,operator);
+              const operator=select(doc,'Condition',catalog.map(item=>[item.id,item.label] as const),fields.operator);row.append(property,operator);filterSelects.set(`${title}/${pathOf(value)}/property`,property);filterSelects.set(`${title}/${pathOf(value)}/operator`,operator);
               const host=doc.createElement('div');host.className='bases-filter-operand-host';row.append(host);
               let editor:BaseFilterValues;
               const primary=()=>host.querySelector<HTMLInputElement|HTMLTextAreaElement>('input,textarea');
@@ -784,11 +889,13 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
                 return clean;
               };
               const missing=(item:BaseFilterOperatorDescriptor,values:readonly BaseFilterLiteral[]|undefined)=>item.arity!=='none'&&(values===undefined||values.length===0||(!(item.operand==='tokens'||((descriptor.kind==='list'||descriptor.kind==='tagList')&&item.method==='contains'))&&values.some(part=>typeof part==='string'&&part==='')));
+              const retainedValue=restoringValues.get(pathOf(value));if(retainedValue)initialValues=retainedValue.initial;
               editor=createBaseFilterValues(doc,host,{operator:selected,property:descriptor,values:initialValues,snapshot:operandSnapshot,alive:live,
                 onChange(){const current=editor.read();publish(fromValues(value.fields!,current.values),{error:current.error,incomplete:missing(selected!,current.values)});},
                 onDraftChange(){syncDraft();validate();semanticChanged();},
               });
-              localEditors.add(editor);operandEditors.add(editor);validators.add(validate);
+              localEditors.add(editor);valueEditors.set(value,editor);operandEditors.add(editor);validators.add(validate);
+              if(retainedValue)finishChildRestores.push(()=>{if(!editor.restoreAdmissionDraft(retainedValue)){restoreProblem=true;return;}const current=editor.read();updateBaseFilterCondition(value,fromValues(value.fields!,current.values),{error:current.error,incomplete:missing(selected!,current.values)});validate();});
               const refreshBlank=()=>{
                 const field=primary(),focused=doc.activeElement;
                 if(!live()||descriptor.kind!=='unknown'||value.fields!==fields||value.source!==undefined||value.advanced
@@ -830,7 +937,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
               advanced.className='bases-toolbar-menu-next';advanced.append(icon('code',16,doc));row.append(advanced,removeButton);
             }
           }else{
-            const mode=select(doc,'Match',[['and','All the following are true'],['or','Any of the following are true'],['not','None of the following are true']],value.conjunction);
+            const mode=select(doc,'Match',[['and','All the following are true'],['or','Any of the following are true'],['not','None of the following are true']],value.conjunction);filterSelects.set(`${title}/${pathOf(value)}/match`,mode);
             mode.addEventListener('change',()=>{if(!live()||!canRestructure()){mode.value=value.conjunction;return;}value.conjunction=mode.value as BaseFilterConjunction;value.implicit=false;semanticChanged();render();});row.append(mode);
             for(let index=0;index<value.children.length;index++){
               const child=value.children[index];row.append(renderNode(child,()=>{value.children.splice(value.children.indexOf(child),1);if(!value.children.length)value.children.push(newBaseFilterCondition());},depth+1));if(renderBudget<0)break;
@@ -843,6 +950,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         const render=()=>{
           const focusedLabel=tree.contains(doc.activeElement)?doc.activeElement?.getAttribute('aria-label'):undefined;
           release();tree.replaceChildren();renderBudget=1000;tree.append(renderNode(draft,()=>{draft=newBaseFilterGroup();}));
+          for(const restore of finishChildRestores.splice(0))restore();
           if(focusedLabel)focusVisible(tree,focusedLabel);place();
         };
         const initialize=()=>{
@@ -855,11 +963,17 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
           content.append(actions);render();
         };
         if(expanded)initialize();
-        return {section,refreshUntouchedAdvice(){for(const refresh of [...refreshUntouchedAdvice])refresh();},get:()=>readBaseFilterDraft(draft),acknowledge(){const source=readBaseFilterDraft(draft),acknowledge=captureBaseFilterAcknowledgement(draft);return ()=>{acknowledge();count(source);for(const validate of validators)validate();};}};
+        return {section,canCapture:()=>[...expressionSources.values()].every(source=>!formulaOwners.has(source)||formulaOwners.get(source)?.canCaptureAdmissionDraft?.()===true)&&[...valueEditors.values()].every(editor=>editor.canCaptureAdmissionDraft()),
+          capture(){return{tree:structuredClone(draft),expanded:!content.hidden,initialized,values:[...valueEditors].map(([condition,editor])=>{const captured=editor.captureFreeze();if(!captured)throw new Error('The raw filter value changed before it could be retained.');return{path:pathOf(condition),draft:captured};}),expressions:[...expressionSources].map(([condition,source])=>{const editor=formulaOwners.get(source);if(!editor)return{path:pathOf(condition),raw:{kind:'native' as const,text:source.value}};const captured=editor.captureFreeze();if(!captured)throw new Error('The raw formula changed before it could be retained.');return{path:pathOf(condition),raw:{kind:'formula' as const,draft:captured}};})};},
+          restore(raw){draft=structuredClone(raw.tree);content.hidden=!raw.expanded;disclosure.setAttribute('aria-expanded',String(raw.expanded));restoringValues=new Map(raw.values.map(value=>[value.path,value.draft]));restoringExpressions=new Map(raw.expressions.map(value=>[value.path,value.raw]));restoreProblem=false;if(raw.initialized){if(!initialized)initialize();else render();}restoringValues.clear();restoringExpressions.clear();return!restoreProblem;},finishRestore(){for(const restore of finishFormulaRestores.splice(0))restore();return!restoreProblem;},nativeControls:()=>[...[...expressionSources].filter(([,source])=>!formulaOwners.has(source)).map(([condition,source])=>[`${title}/${pathOf(condition)}`,source] as const),...[...filterSelects]],
+          refreshUntouchedAdvice(){for(const refresh of [...refreshUntouchedAdvice])refresh();},get:()=>readBaseFilterDraft(draft),acknowledge(){const source=readBaseFilterDraft(draft),acknowledge=captureBaseFilterAcknowledgement(draft);return ()=>{acknowledge();count(source);for(const validate of validators)validate();};}};
       }
       rootEditor=filterSection('All views',initialRoot,false,!!options.commands?.updateRoot);
       if(configuredView.source!==undefined)rootEditor.section.hidden=true;
       viewEditor=filterSection('This view',initialView,true);fields.append(rootEditor.section,viewEditor.section);
+      rawModel={canCapture:()=>!!rootEditor?.canCapture()&&!!viewEditor?.canCapture(),capture:()=>({kind:'filter',all:rootEditor!.capture(),view:viewEditor!.capture()}),
+        ready:raw=>raw.kind==='filter'?[...[...raw.all.values,...raw.view.values].map(value=>value.draft.ready),...[...raw.all.expressions,...raw.view.expressions].flatMap(value=>value.raw.kind==='formula'?[value.raw.draft.ready]:[])]:[],
+        restore:raw=>raw.kind==='filter'&&rootEditor!.restore(raw.all)&&viewEditor!.restore(raw.view),finishRestore:()=>rootEditor!.finishRestore()&&viewEditor!.finishRestore(),controls:()=>[...rootEditor!.nativeControls(),...viewEditor!.nativeControls()]};
       readPatch=()=>({filters:viewEditor!.get() as BaseValue|undefined});
       readOperation=()=>{
         const viewFilter=viewEditor!.get(),rootFilter=rootEditor!.get();
@@ -880,7 +994,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       if(close)afterClean=undefined;
       closeWhenSettled ||= close;
       if (autoTimer) { clearTimeout(autoTimer); autoTimer = undefined; }
-      if (own.saving || destroyed || panel !== own) return;
+      if (own.saving || destroyed || panel !== own || rawFrozen || rawPassive) return;
       if (own.innerDraft) { error.textContent = 'Finish or cancel the unfinished value first.'; return; }
       if (!own.dirty && !own.failure) { if (close) own.close(); return; }
       if (!form.checkValidity()) { error.textContent = 'Check the invalid condition value before applying.'; return; }
@@ -905,9 +1019,9 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       const disabled = inputStates();
       if (!auto) for (const input of disabled.keys()) input.disabled = true;
       error.textContent = 'Saving…';
-      void invoke(operation).then(() => {
+      submitted=true;void invoke(operation).then(() => {
         if (destroyed || panel !== own) return;
-        own.saving = false; own.failure = undefined; retryPersistence = undefined; retainedAttempt = undefined;
+        own.saving = false; submitted=false; own.failure = undefined; retryPersistence = undefined; retainedAttempt = undefined;
         if(retrying)for(const [input,wasDisabled] of attempt.inputs) input.disabled=wasDisabled;
         own.dirty = generation !== submittedGeneration;
         if (!expectedConfiguration && own.dirty) {
@@ -952,13 +1066,14 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     form.addEventListener('submit', event => { event.preventDefault(); submit(!auto || !!retryPersistence); });
     own.flush = () => submit(true);
     if (options.immediate && win?.MutationObserver) {
-      const enhanced = new Map<HTMLSelectElement,ReturnType<typeof createBaseCombobox>>();
-      const editors = new Map<HTMLTextAreaElement,ReturnType<typeof enhanceBaseFormulaEditor>>();
+      const enhanced=comboOwners;
+      const editors=formulaOwners;
       const attemptedEditors = new WeakSet<HTMLTextAreaElement>();
       const enhance = () => {
+        if(rawFrozen||restoringRawModel)return;
         for (const [source,editor] of editors) if (!node.contains(source)) { editor.destroy(); editors.delete(source); }
         for (const source of node.querySelectorAll<HTMLTextAreaElement>('textarea')) {
-          if (attemptedEditors.has(source) || !['Formula expression','Filter expression'].includes(source.getAttribute('aria-label')??'')) continue;
+          if (deferredNativeExpressions.has(source) || attemptedEditors.has(source) || !['Formula expression','Filter expression'].includes(source.getAttribute('aria-label')??'')) continue;
           attemptedEditors.add(source); const focused = doc.activeElement === source;
           try { const editor = enhanceBaseFormulaEditor(source,{propertyIds:properties,functionNames:opening.functionNames??['if','date','duration','list','max','min','number','now','today','escapeHTML'],methodNames:opening.methodNames??['isTruthy','isEmpty','toString','isType','contains','containsAll','containsAny','endsWith','lower','replace','repeat','reverse','slice','split','startsWith','title','trim','abs','ceil','floor','round','toFixed','date','format','time','filter','flat','join','map','reduce','sort','unique','sum','mean','keys','values','matches','hasLink','asLink','hasProperty','hasTag','inFolder','relative'],onEscape:()=>submit(true)}); editors.set(source,editor); if (focused) editor.focus(); } catch (failure) { report(failure); }
         }
@@ -966,14 +1081,40 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         for (const source of node.querySelectorAll<HTMLSelectElement>('select')) {
           if (enhanced.has(source) || source.getAttribute('aria-label') === 'Value type') continue;
           const label = source.getAttribute('aria-label') ?? '';
-          enhanced.set(source,createBaseCombobox(source,{owner:node,searchable:/property|Layout/.test(label)}));
+          enhanced.set(source,createBaseCombobox(source,{owner:node,searchable:/property|Layout/.test(label),isCurrent:()=>!destroyed&&!rawFrozen&&panel===own}));
         }
       };
       enhanceControls=enhance;
       const observer = new win.MutationObserver(enhance); observer.observe(node,{childList:true,subtree:true}); enhance();
       disposers.push(()=>{observer.disconnect();for(const control of enhanced.values())control.destroy();enhanced.clear();for(const editor of editors.values())editor.destroy();editors.clear();});
     }
-    place(); const initialFocus = Array.from(fields.querySelectorAll<HTMLElement>('input,select,textarea,button')).find(control=>!control.hidden&&!control.closest('[hidden]')); initialFocus?.focus({ preventScroll: true }); if (name === 'Add view' && initialFocus?.tagName === 'INPUT') (initialFocus as HTMLInputElement).select();
+    let captured:BaseToolbarAdmissionDraft|undefined;
+    own.canCaptureAdmissionDraft=()=>!!captured||!!rawModel&&(rawModel.canCapture?.()??true)&&rawModel.controls().every(([,control])=>!(control instanceof doc.defaultView!.HTMLSelectElement)||!comboOwners.has(control)||comboOwners.get(control)?.canCaptureAdmissionDraft()===true)&&(own.dirty||!!own.innerDraft||unsubmittedInput())&&!own.saving&&!own.failure&&!submitted&&!retryPersistence&&!retainedAttempt;
+    own.captureFreeze=()=>{
+      if(captured)return captured;if(!own.canCaptureAdmissionDraft?.()||!rawModel)return;
+      const controls=()=>rawModel!.controls().map(([key,control])=>({key,start:'selectionStart'in control?control.selectionStart:null,end:'selectionEnd'in control?control.selectionEnd:null,direction:'selectionDirection'in control?control.selectionDirection:null}));
+      const focused=rawModel.controls().find(([,control])=>control===doc.activeElement),control=focused?.[1];
+      const focus=focused&&control?{key:focused[0],start:'selectionStart'in control?control.selectionStart:null,end:'selectionEnd'in control?control.selectionEnd:null,direction:'selectionDirection'in control?control.selectionDirection:null}:undefined;
+      rawFrozen=true;if(autoTimer){clearTimeout(autoTimer);autoTimer=undefined;}afterClean=undefined;
+      const freezeNative=()=>{
+        for(const [,control]of rawModel!.controls())if('readOnly'in control){const cycle=compositions.get(control);if(!cycle?.active&&!cycle?.settling)control.readOnly=true;}
+        for(const control of node.querySelectorAll<HTMLButtonElement|HTMLSelectElement|HTMLInputElement>('button,select,input[type=checkbox],input[type=radio]'))control.disabled=true;
+      };
+      const comboboxes=rawModel.controls().flatMap(([key,control])=>{if(!(control instanceof doc.defaultView!.HTMLSelectElement))return[];const owner=comboOwners.get(control);if(!owner)return[];const draft=owner.captureFreeze();if(!draft)throw new Error('The raw choice changed before it could be retained.');return[{key,draft}];});
+      let raw=rawModel.capture(),positions=controls(),resolve!:()=>void,finished=false,childrenReady=false;const ready=new Promise<void>(yes=>{resolve=yes;});
+      captured={panel:name,target:{selectedIndex,viewId:typeof configuredView.id==='string'?configuredView.id:undefined,formulaName,returnTo},configuration:structuredClone(configuration),dirty:own.dirty||unfinishedInput(),innerDraft:!!own.innerDraft,access:{readOnly:opening.readOnly,browseOnly:opening.browseOnly===true,allowRename:opening.allowRename},comboboxes,get raw(){return raw;},get controls(){return positions;},focus,validation:error.textContent??'',ready};
+      completeRawCapture=()=>{if(finished||!childrenReady||unfinishedInput())return;raw=rawModel!.capture();positions=controls();freezeNative();finished=true;completedToolbarDrafts.add(captured!);completeRawCapture=undefined;resolve();};
+      freezeNative();void Promise.all([...(rawModel.ready?.(raw)??[]),...comboboxes.map(value=>value.draft.ready)]).then(()=>{childrenReady=true;completeRawCapture?.();});completeRawCapture();
+      return captured;
+    };
+    own.restoreRaw=draft=>{
+      if(!rawModel?.restore(draft.raw))return false;
+      restoringRawModel=false;enhanceControls?.();if(rawModel.finishRestore?.()===false)return false;for(const captured of draft.comboboxes){const control=rawModel.controls().find(([key])=>key===captured.key)?.[1];if(!(control instanceof doc.defaultView!.HTMLSelectElement)||comboOwners.get(control)?.restoreAdmissionDraft(captured.draft)!==true)return false;}rawPassive=true;own.dirty=draft.dirty&&rawModel.dirtyOnRestore!==false;own.innerDraft||=draft.innerDraft;generation++;error.textContent=draft.validation;options.onDraftChange();
+      for(const captured of draft.controls){const control=rawModel.controls().find(([key])=>key===captured.key)?.[1];if(control&&'setSelectionRange'in control&&captured.start!==null&&captured.end!==null)try{control.setSelectionRange(captured.start,captured.end,captured.direction??undefined);}catch{/* Native date controls have no text selection. */}}
+      if(draft.focus)rawModel.controls().find(([key])=>key===draft.focus!.key)?.[1].focus({preventScroll:true});
+      return true;
+    };
+    place();if(!restoring){const initialFocus = Array.from(fields.querySelectorAll<HTMLElement>('input,select,textarea,button')).find(control=>!control.hidden&&!control.closest('[hidden]')); initialFocus?.focus({ preventScroll: true }); if (name === 'Add view' && initialFocus?.tagName === 'INPUT') (initialFocus as HTMLInputElement).select();}
   }
   function update(next: BaseToolbarState) {
     if (destroyed) return;
@@ -1007,7 +1148,14 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     }
     if (focusedLabel) Array.from(actions.querySelectorAll<HTMLButtonElement>('button')).find(node => node.getAttribute('aria-label') === focusedLabel)?.focus({ preventScroll: true });
   }
-  return { update, refreshFilterAdvice(next) {
+  return { update,canCaptureAdmissionDraft:()=>panel?.canCaptureAdmissionDraft?.()===true,captureFreeze:()=>panel?.captureFreeze?.(),restoreAdmissionDraft(draft){
+      if(destroyed||!state||panel||!completedToolbarDrafts.has(draft))return'pending';
+      const current=configurationSnapshot(state),target=state.views[draft.target.selectedIndex];
+      if(state.readOnly!==draft.access.readOnly||(state.browseOnly===true)!==draft.access.browseOnly||state.allowRename!==draft.access.allowRename||JSON.stringify(current)!==JSON.stringify(draft.configuration)||!target||draft.target.viewId!==undefined&&target.id!==draft.target.viewId)return'conflict';
+      const trigger=actions.querySelector<HTMLElement>('[data-toolbar-action="settings"]')??viewButton;
+      open(draft.panel,trigger,draft.target.selectedIndex,draft.target.formulaName,draft.target.returnTo,draft);
+      const restoredPanel=panel as Panel|undefined;if(!restoredPanel?.restoreRaw?.(draft)){restoredPanel?.close(false);return'conflict';}return'restored';
+    },refreshFilterAdvice(next) {
       if(destroyed)return;
       if(state&&next.result===state.result&&next.selectedIndex===state.selectedIndex&&next.readOnly===state.readOnly
         &&JSON.stringify(configurationSnapshot(next))===JSON.stringify(configurationSnapshot(state))) {
