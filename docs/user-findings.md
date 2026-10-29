@@ -3,6 +3,41 @@
 ## URGENT: real-session automatic save failure — 2026-10-28
 
 
+**Backend recovery API scope extension ACK — 2026-10-28.**
+Named `maintenance_triggers` scope now includes `desktop/main.cjs` and the existing
+bridge typing seam **`src/platform/bridge.d.ts`** (requested as bridge.ts; actual
+tracked declaration confirmed). Register/type explicit
+`recoverDurableContext(expectedRoot, priorAdmissionId)` that admits a **NEW binding**
+while retaining the same clientID/store/checkpoint scope. The terminal old lease
+stays dead. `checkpoint_review` retains `src/platform/index.ts` dynamic recovery
+binding +Workspace orchestration; coordinate the exact API shape before edits to
+either side. Existing backend files/preload error-only/test scopes remain as above;
+NoteBuffer worker stays separate. No main source mutation by these authors.
+
+Live owner's deterministic source finding: actual host death -> scheduler.close ->
+runtimeRetired -> all writes reject client_not_admitted. Reproduce this gap RED
+independently of the unknown cause of the original host exit. Normal Search
+unsubscribe was audited and is **not the cause**. Real-vault journal636rows are
+all bootstrap/local_command with **no external_observation**; do not attribute
+this incident to the known R5 bridge-origin bug merely because the installed old
+build lacks that variant. Installed old host SHA d4f8bb25 is valid; no host crash
+report and **no evidence of Jetsam**. Original exit cause remains unconfirmed.
+
+Expanded independent recovery backup verified locally by this main owner (metadata
+and hash only): `/private/tmp/Zorid-protected-drafts-2026-10-28-full.json`, mode0600,
+6272bytes,SHA256
+`1926b14437d6d2b0ef227da9e65352aaf048fc347a6c89df690ae557fc2365f5`.
+Live owner reports it includes TWO uncertain CAS records plus revisions. Earlier
+3851byte backup remains present and its prior SHA still verifies. Never copy
+private contents into source/docs. Preservation is not normal-save acceptance.
+
+Autosave grace applies only during valid recovery. Do not extend grace indefinitely,
+revive a terminal lease, suppress warnings or blindly replay a commit with an
+unknown outcome. Preserve both retained CAS records and resolve/query before any
+safe retry under the newly admitted scope. Protected PID71549 stays OPEN; no live
+flush/retry/reload/quit is authorized by isolated implementation scope. Install HELD.
+
+
 **Backend admission scope ACK; current-context failure — 2026-10-28.**
 Live root reports current `adapter.durableWrites.readTextById` for Project Idea's
 current entry rejects generic `Durable editor request failed`, rather than the

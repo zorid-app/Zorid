@@ -490,3 +490,18 @@ preload.cjs error-envelope-only coordination with platform owner; no Rust or oth
 transport scope. Automatic valid readmission must preserve drafts/retained unknown
 outcomes and CAS/lease/generation guards. Test-first fixture regression and review
 required. Main exclusively integrated here; live PID71549 protected, install HELD.
+
+
+### Explicit recovery API and expanded backup — 2026-10-28
+
+ACK maintenance_triggers desktop/main.cjs +actual src/platform/bridge.d.ts for
+recoverDurableContext(expectedRoot,priorAdmissionId), new binding/same client/store/
+checkpoint scope with terminal old lease dead. Platform-index dynamic binding and
+Workspace remain checkpoint_review-owned. Host-loss retirement->client_not_admitted
+is deterministic RED target independent of unknown original exit. Search unsubscribe
+and R5 external-origin attribution rejected for live incident; journal636 contains
+no external_observation, no crash report/Jetsam evidence. Full protected export
+6272bytes/0600/SHA1926b14437d6d2b0ef227da9e65352aaf048fc347a6c89df690ae557fc2365f5
+verified locally; earlier3851copy retained. TWO uncertainCAS+revisions preserved
+per owner. Grace only during valid recovery, never blind commit replay. Main source
+unchanged here, protected live app remains open, installation explicitly HELD.

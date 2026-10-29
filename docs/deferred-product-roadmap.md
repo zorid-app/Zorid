@@ -3,6 +3,24 @@
 ## Execution checkpoint — shared-core coordinator
 
 
+**Explicit durable recovery API extension ACK — 2026-10-28.**
+maintenance_triggers additionally owns desktop/main.cjs and actual tracked
+src/platform/bridge.d.ts (request called it bridge.ts), registering/typing
+recoverDurableContext(expectedRoot,priorAdmissionId): NEW binding, sameclientID/
+store/checkpointscope; terminal old lease stays dead. checkpoint_review retains
+platform/index dynamic binding +Workspace orchestration; coordinate API contract.
+Actual hostdeath->scheduler.close->runtimeRetired->allwrites client_not_admitted
+is deterministic gap to reproduce independently of unknown original exit cause.
+Normal Search unsubscribe excluded by audit. Real journal636rows bootstrap/local
+only, no external_observation: R5-origin attribution rejected for this incident.
+Old installed host SHA valid, no crash report/no evidence Jetsam. Root cause open.
+Full backup /private/tmp/Zorid-protected-drafts-2026-10-28-full.json verified0600/
+6272bytes/SHA1926b14437d6d2b0ef227da9e65352aaf048fc347a6c89df690ae557fc2365f5;
+owner reports TWO uncertainCAS+revisions. Prior3851byte copy retained/verified.
+Autosave grace only during valid recovery; no blind unknown-commit replay. Live
+PID71549 OPEN, install HELD, no live actions here, exclusive main lane retained.
+
+
 **Backend admission author ACK — 2026-10-28.**
 Current adapter readTextById rejects generic durable request failure, ProjectIdea
 client_not_admitted; Home uncertainCAS expected+nextRevision/conflict=false, both
