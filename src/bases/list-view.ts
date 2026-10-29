@@ -13,6 +13,10 @@ export function baseListSettings(result: BaseQueryResult): BaseListSettings {
   return { markers: view.markers === 'number' || view.markers === 'none' ? view.markers : 'bullet',
     indentProperties: !!view.indentProperties, separator: String(view.separator || ', ') };
 }
+const pageRowHeight = 30;
+function isPageRow(result: BaseQueryResult, settings: BaseListSettings): boolean {
+  return !settings.indentProperties && !['bullet','number','none'].includes(String(result.view.markers)) && result.view.separator === undefined;
+}
 
 /** List rows are variable-height measured units; only visible rows retain DOM/widgets. */
 export function createBaseListView(container: HTMLElement, options: BaseListViewOptions): BasePresentationHandle {
@@ -21,7 +25,7 @@ export function createBaseListView(container: HTMLElement, options: BaseListView
   let result = options.result; let epoch = 0; let destroyed = false;
   let pendingResult: BaseQueryResult | undefined;
   let activePath: string | undefined, activePosition = 0, restorePath: string | undefined, navigationFrame: number | undefined, creating = false;
-  let rowTargets: { path: string; offset: number }[] = [];
+  let rowTargets: { path: string; offset: number; height: number }[] = [];
   const collapsed = new Set<string>();
   const focusRow = (index: number) => {
     const target = rowTargets[index]; if (!target || destroyed) return;
@@ -29,10 +33,13 @@ export function createBaseListView(container: HTMLElement, options: BaseListView
     activePath = target.path; activePosition = index;
     const find = () => Array.from(surface.element.querySelectorAll<HTMLElement>('.bases-list-item')).find(node => node.dataset.listPosition === String(index));
     const focus = () => { if (destroyed) return; const node = find(); if (node) { for (const other of surface.element.querySelectorAll<HTMLElement>('.bases-list-item')) other.tabIndex = other === node ? 0 : -1; node.focus(); } };
-    if (find()) {
+    const mounted = find();
+    if (mounted) {
       const top = surface.element.scrollTop, height = surface.element.clientHeight || 600;
-      if (target.offset < top) surface.element.scrollTop = target.offset;
-      else if (target.offset + 32 > top + height) surface.element.scrollTop = target.offset + 32 - height;
+      const position = Number.parseFloat(mounted.style.top), offset = Number.isFinite(position) ? position : target.offset;
+      const rowHeight = mounted.getBoundingClientRect().height || target.height;
+      if (offset < top) surface.element.scrollTop = offset;
+      else if (offset + rowHeight > top + height) surface.element.scrollTop = offset + rowHeight - height;
       if (win && top !== surface.element.scrollTop) surface.element.dispatchEvent(new win.Event('scroll'));
       focus(); return;
     }
@@ -47,7 +54,7 @@ export function createBaseListView(container: HTMLElement, options: BaseListView
     const owner = epoch; let live = true;
     const element = document.createElement('div'); element.className = 'bases-list-item'; element.dataset.path = row.path; element.dataset.listPosition = String(position);
     const current = () => live && !destroyed && epoch === owner && element.isConnected && container.contains(element);
-    const pageRow = !settings.indentProperties && !['bullet','number','none'].includes(String(snapshot.view.markers)) && snapshot.view.separator === undefined;
+    const pageRow = isPageRow(snapshot, settings);
     element.classList.toggle('is-page-row', pageRow); element.setAttribute('role', 'listitem'); element.setAttribute('aria-label', row.path.replace(/\.md$/i, ''));
     element.tabIndex = activePath ? activePosition === position ? 0 : -1 : position === 0 ? 0 : -1;
     const first = document.createElement('div'); first.className = 'bases-list-item-properties'; element.append(first);
@@ -129,14 +136,15 @@ export function createBaseListView(container: HTMLElement, options: BaseListView
         if (settings.indentProperties && (!orderedProperties.length || emptyListValue(propertyValue(row, orderedProperties[0])))) return;
         const properties = orderedProperties.filter(property => !emptyListValue(propertyValue(row, property)));
         if (!properties.length) return;
-        const index = ++number, position = rowTargets.length; rowTargets.push({ path: row.path, offset });
-        append({ key: `list:${groupIndex}:${row.path}`, height: settings.indentProperties ? properties.length * 28 : 32,
+        const height = settings.indentProperties ? properties.length * 28 : isPageRow(snapshot, settings) ? pageRowHeight : 32;
+        const index = ++number, position = rowTargets.length; rowTargets.push({ path: row.path, offset, height });
+        append({ key: `list:${groupIndex}:${row.path}`, height,
           mount: () => mountRow(row, properties, index, position, settings, snapshot) });
       });
     });
     const activeIndex = rowTargets.findIndex(target => target.path === activePath);
     if (activeIndex < 0) { activePath = undefined; activePosition = 0; } else activePosition = activeIndex;
-    if (options.onNew) append({ key: 'list:new', height: 32, mount() {
+    if (options.onNew) append({ key: 'list:new', height: pageRowHeight, mount() {
       const owner = epoch, button = document.createElement('button'), item = document.createElement('div'); let live = true;
       item.setAttribute('role','listitem'); item.append(button);
       button.type = 'button'; button.className = 'bases-list-new'; button.append(icon('plus',16,document), document.createTextNode('New page')); button.disabled = creating;

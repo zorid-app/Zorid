@@ -6,8 +6,9 @@ import {baseExpressionValue as value} from '../src/bases/expression.ts';
 import type {BaseQueryResult} from '../src/bases/query.ts';
 import type {BaseListViewOptions} from '../src/bases/list-view.ts';
 const tick=()=>new Promise(resolve=>setTimeout(resolve,25));
-function fixture(count=3,overrides:Partial<BaseListViewOptions>={}){
+function fixture(count=3,overrides:Partial<BaseListViewOptions>={},prepare?:(dom:JSDOM)=>void){
   const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),doc=dom.window.document,host=doc.querySelector('main')!;
+  prepare?.(dom);
   const rows=Array.from({length:count},(_,i)=>({path:`Note ${i} #literal.md`,entryId:`entry-${i}`,revision:'r1',values:{'file.name':value(`Note ${i}`),'note.status':value('Started')}}));
   const result:BaseQueryResult={version:1,view:{type:'list',name:'List'},rows,groups:[{key:null,rows}],groupOptions:[],properties:['file.name','note.status'],availableProperties:['file.name','note.status'],counts:{scanned:count,matched:count,afterGroupOrder:count,afterSearch:count,returned:count},diagnostics:[]};
   const opened:{path:string;event:MouseEvent|KeyboardEvent;witness:unknown}[]=[],errors:unknown[]=[];
@@ -62,4 +63,40 @@ test('New page uses the supplied creation command, serializes activation and ret
     button.click();await Promise.resolve();assert.equal(calls,1);
     f.host.querySelector<HTMLButtonElement>('.bases-list-new')!.click();f.view.update({...f.result,version:3});await Promise.resolve();assert.equal(calls,1,'retired activation cannot create after a source/result switch');
   }finally{release();await tick();f.close();}
+});
+
+test('default page rows and New page share 30px virtual estimates without changing explicit legacy flows',()=>{
+  const f=fixture(3,{onNew(){}});try{
+    const content=f.host.querySelector<HTMLElement>('.bases-virtual-content')!;
+    assert.equal(content.style.height,'120px');
+    assert.deepEqual(f.rows().map(row=>row.style.top),['0px','30px','60px']);
+    assert.equal(f.host.querySelector<HTMLElement>('.bases-list-new')!.parentElement!.style.top,'90px');
+    const scroll=f.host.querySelector<HTMLElement>('.bases-virtual-scroll')!;
+    Object.defineProperty(scroll,'clientHeight',{value:60});
+    f.rows()[1].focus();f.key(f.rows()[1],'ArrowDown');
+    assert.equal(scroll.scrollTop,30,'keyboard navigation reveals the complete 30px destination row');
+    f.view.update({...f.result,view:{...f.result.view,markers:'number',separator:' / '}});
+    assert.equal(content.style.height,'126px');assert.equal(f.rows()[1].style.top,'32px');
+    f.view.update({...f.result,view:{...f.result.view,indentProperties:true}});
+    assert.equal(content.style.height,'198px');assert.equal(f.rows()[1].style.top,'56px');
+  }finally{f.close();}
+});
+
+test('keyboard reveal respects measured theme or wrapped row heights and updated virtual positions',async()=>{
+  let notify!:ResizeObserverCallback;
+  const f=fixture(3,{},dom=>{
+    class Observer{constructor(callback:ResizeObserverCallback){notify=callback;}observe(){}unobserve(){}disconnect(){}}
+    Object.defineProperty(dom.window,'ResizeObserver',{value:Observer});
+  });
+  try{
+    const scroll=f.host.querySelector<HTMLElement>('.bases-virtual-scroll')!;
+    Object.defineProperty(scroll,'clientHeight',{value:60});
+    const rows=f.rows();
+    rows[0].getBoundingClientRect=()=>({height:45} as DOMRect);
+    rows[1].getBoundingClientRect=()=>({height:50} as DOMRect);
+    notify(rows.slice(0,2).map(target=>({target} as ResizeObserverEntry)),{} as ResizeObserver);await tick();
+    assert.equal(rows[1].style.top,'45px');
+    rows[0].focus();f.key(rows[0],'ArrowDown');
+    assert.equal(scroll.scrollTop,35,'the complete 50px destination at measured offset45 fits in the 60px viewport');
+  }finally{f.close();}
 });

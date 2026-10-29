@@ -122,7 +122,7 @@ test('Large List mounts a bounded viewport and disposes property widgets as scro
   } });
   assert.ok(container.querySelectorAll('.bases-list-item').length < 40);
   const scroll = container.querySelector<HTMLElement>('.bases-virtual-scroll')!;
-  scroll.scrollTop = 160_000; scroll.dispatchEvent(new win.Event('scroll')); await tick();
+  scroll.scrollTop = 150_000; scroll.dispatchEvent(new win.Event('scroll')); await tick();
   assert.ok(disposed > 0); assert.ok(container.querySelectorAll('.bases-list-item').length < 45);
   assert.ok(container.textContent!.includes('Note 5000.md'));
   view.destroy(); assert.equal(mounted, disposed); d.window.close();
@@ -195,7 +195,7 @@ test('Single observer tracks only mounted units and restores scroll anchor after
   const above = container.querySelector<HTMLElement>('[data-virtual-index="5"]')!;
   above.getBoundingClientRect = () => ({ height: 64 } as DOMRect);
   callback([{ target: above } as ResizeObserverEntry], {} as ResizeObserver); await tick();
-  assert.equal(scroll.scrollTop, 352, 'expanded row above anchor retains visible note position');
+  assert.equal(scroll.scrollTop, 354, 'expanding a 30px default row to 64px retains the visible note position');
   view.destroy(); assert.equal(observed.size, 0); assert.equal(disconnected, true); d.window.close();
 });
 
