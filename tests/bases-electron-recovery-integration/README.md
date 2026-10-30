@@ -52,7 +52,7 @@ made valid by this recovery-only setup.
 
 | Scenario | Interruption and independent oracle |
 | --- | --- |
-| Terminal checkpoint ACK, Review/Copy, ordinary Save, explicit raw B | Hold only the real inert `prepare_intent` reply for exact A bytes. Type B in the same mounted editor and let its 250ms debounce elapse while A is pending. Set only the owned disposable `.zorid/vault.lock` to mode0000 and release the unchanged prepared reply. Require a genuine `filesystem_failed`/`commit_uncertain:true` checkpoint CAS response correlated to one original dispatched `checkpoint_cas` method/key/command/body digest and Native process, retained disabled B and read-only Review/Copy. Restore the exact inode's original mode in `finally`; whole physical/bridge source must still be S0. Review must expose exact S0/A/B, Copy must acknowledge its clipboard write, and neither action may dispatch a native mutation/checkpoint request or replacement intent, with a normal-bridge read barrier before the final event comparison. Use the ordinary Save current changes command-palette action to settle only A; the identical checkpoint CAS command/body must succeed before the original native A token commits. B must remain raw/unsubmitted for a bounded interval, then a normal explicit Tab commit saves B without retyping or replacing the editor. Check whole B, every unrelated fixture, visible value12, normal close/quit and fresh-launch readback. This access-denial case is terminal under the strict retry policy; it does not establish automatic host/admission recovery. |
+| Terminal checkpoint ACK, ordinary Save, explicit raw B | Hold only the real inert `prepare_intent` reply for exact A bytes. Type B in the same mounted editor and let its 250ms debounce elapse while A is pending. Set only the owned disposable `.zorid/vault.lock` to mode0000 and release the unchanged prepared reply. Require a genuine `filesystem_failed`/`commit_uncertain:true` checkpoint CAS response correlated to the original method/key/command/body digest and Native process. B remains exact and editable in the original panel/editor with the truthful save error; no custom Review/Copy/Retry UI remains. Restore the exact inode's mode in `finally`; whole physical/bridge source must still be S0. A350ms quiet interval plus normal-bridge read must leave S0 and the observed mutation/checkpoint frames unchanged. Use ordinary Save current changes to settle only A; identical checkpoint CAS command/body succeeds before original A token commits. B remains passive through another350ms interval, then an explicit normal formula Tab commit saves B without retyping/replacing editor. Check whole B, unrelated fixtures, value12, normal close/quit and restart readback. This terminal permission case does not establish automatic host/admission recovery. |
 | Accepted A, newer B, close | Arm exact saved Base entry/path and exact A bytes. Observe its real prepared token and committed native receipt, hold only that successful reply, type B through the mounted summary editor and request tab close. The panel retains B while disk contains A. Release the same encoded reply; exactly one A and one B write finish. Close safely, quit normally and verify exact B after restart. |
 | Lost New reply, automatic same-mounted recovery | Arm the exact destination and complete template digest, then click New **once**. Suppress its first genuine successful create reply and gracefully stop that real host before presenting actual EOF. Main must automatically replace the host while the original application, CDP target/document, pane, tab and saved Base source/view remain bound. Every host generation must be independently authenticated by the runner. The replayed file command must have the original operation, command/body digests and receipt sequence; its real frame lease must match a fresh positive same-client/store claim. Normal Native stat and bridge readback must retain the dropped entry ID/revision and independently authored complete template bytes; exactly one file exists. A passive observer installed before New records visible alert/failure/manual-recovery flashes through settlement. No second New, Save, reopen, reload or forced restart may complete recovery. Only after these checks and a350ms quiet duplicate-authoring barrier does the campaign quit normally and perform a separate ordinary-restart persistence readback. |
 
@@ -80,7 +80,7 @@ accessible. No production guard or semantic fault API is added for the test.
 The expected S0/A/B are authored whole strings preserving the comment, unknown
 root sentinel and unrelated summary/view. The DOM backend node ID checks that the
 same summary panel retains B. After restoring lock permissions, whole physical
-and normal-bridge source must still equal S0 before Review/Copy and ordinary Save. A failed checkpoint
+and normal-bridge source must still equal S0 before ordinary Save. A failed checkpoint
 frame and a successful retry must have identical command and opaque body hashes
 (same key, expected/next revision and saved state). That replay must precede A's
 successful commit with its original held token. A is prepared once, then exactly
@@ -89,13 +89,11 @@ must remain unsubmitted after the ordinary Save acknowledges A until the user
 explicitly commits its preserved raw input. Additional
 checkpoint transitions are expected; a new checkpoint request cannot substitute
 for replay of the failed request. This records exact native continuation rather
-than treating a Review, Copy or Save command as a physical-write counter. The
-Copy check records the clipboard API acknowledgement, not independent OS
-clipboard readback.
+than treating a Save command as a physical-write counter.
 A's intermediate whole physical and normal-bridge source is read back before B;
 it remains exact A throughout a further350ms raw-input hold before B's explicit
-commit. Review/Copy additionally requires unchanged native write-request and response
-frames after a normal-bridge read barrier. The relay records only write method,
+commit. Editable terminal input additionally requires unchanged native write-request and response
+frames across a350ms quiet interval and normal-bridge read barrier before ordinary Save. The relay records only write method,
 operation/checkpoint identities and command/body digests before forwarding; it
 never logs source bodies or changes a forwarded request.
 
@@ -128,6 +126,7 @@ Pure protocol checks require no application or native executable:
 node --test --test-concurrency=1 tests/bases-electron-recovery-integration/protocol.test.mjs \
   tests/bases-electron-recovery-integration/relay-process.test.mjs \
   tests/bases-electron-recovery-integration/configuration-review.test.mjs \
+  tests/bases-electron-recovery-integration/terminal-summary.test.mjs \
   tests/bases-electron-recovery-integration/collection-scene.test.mjs \
   tests/bases-electron-recovery-integration/terminal-checkpoint-failure.test.mjs \
   tests/bases-electron-recovery-integration/lost-create-auto.test.mjs \

@@ -37,6 +37,7 @@ async function event(c,kind,token,timeout=10000){return until(async()=>{const fo
 async function noFaults(c){const events=await c.relay.events();assert.deepEqual(events.filter(value=>['watchdog-released','relay-failed'].includes(value.kind)),[],'Relay failures cannot satisfy a product acceptance gate');return events;}
 async function stat(c,file){return c.cdp.evaluate(`(async()=>{const v=await window.zorid.getVault();return window.zorid.stat(v.path,${JSON.stringify(file)});})()`);}
 
+// Legacy helpers remain exported for the separately owned, frozen safety campaign.
 export function retainedConfigurationReviewFrame(document,scope){
   const roots=[...document.querySelectorAll(scope)];if(roots.length!==1)return false;
   const root=roots[0],review=root.querySelector('.bases-configuration-review');if(!review)return false;
@@ -64,8 +65,31 @@ export async function reviewRetainedConfiguration(c,scope,expected){
   assert.deepEqual(mutationFrames(await c.relay.events()),before,'Review/Copy dispatches no native mutation/checkpoint request or replacement intent after its normal bridge read');
   c.evidence.checks.push({name:'read-only-retained-configuration-review-copy',scope,frame,copyAction:'Clipboard writeText ACK; independent OS clipboard readback is not measured',sourceMutationDispatches:0,observedNativeWriteResponses:0});return frame;
 }
+export function retainedSummaryFrame(document,scope){
+  const roots=[...document.querySelectorAll(scope)];if(roots.length!==1)return false;
+  const root=roots[0],one=selector=>{const fields=root.querySelectorAll(selector);return fields.length===1?fields[0]:null;};
+  const name=one('input[aria-label="Summary name"]'),input=one('textarea[aria-label="Summary expression"]'),editor=one('.cm-content[role="textbox"][aria-label="Summary expression"]');if(!name||!input||!editor)return false;
+  const blocked=node=>!!node.closest('[hidden],[inert],[aria-disabled="true"],fieldset:disabled');
+  const shown=node=>!!node&&!!node.getClientRects().length&&!blocked(node)&&node.getAttribute('aria-hidden')!=='true'&&document.defaultView.getComputedStyle(node).visibility!=='hidden'&&document.defaultView.getComputedStyle(node).display!=='none';
+  const alert=root.querySelector('[role="alert"]');
+  const customLabels=new Set(['Review retained changes','Copy draft','Copy accepted configuration','Copy original configuration','Copy retained input','Retry save']);
+  return{busy:root.getAttribute('aria-busy'),name:name.value,draft:input.value,visibleDraft:editor.textContent,disabled:input.matches(':disabled'),readonly:editor.getAttribute('aria-readonly'),error:alert?.textContent??'',errorVisible:shown(alert),editable:!name.matches(':disabled')&&!name.readOnly&&!input.matches(':disabled')&&!input.readOnly&&!blocked(root)&&!blocked(name)&&!blocked(input)&&!blocked(editor)&&shown(editor)&&editor.getAttribute('contenteditable')==='true'&&editor.getAttribute('aria-readonly')==='false',customReview:!!root.querySelector('.bases-configuration-review'),customControls:[...root.querySelectorAll('button')].filter(node=>customLabels.has(node.textContent.trim())).map(node=>node.textContent.trim())};
+}
+export function assertEditableRetainedSummary(frame,{draft,name='Total'}){
+  assert.ok(frame,'One original retained summary editor exists');assert.equal(frame.busy,'false');assert.equal(frame.name,name);assert.equal(frame.draft,draft);assert.equal(frame.visibleDraft,draft);assert.equal(frame.editable,true,'Retained Summary fields remain editable after terminal failure');assert.ok(frame.error.trim(),'The terminal save error remains present');assert.equal(frame.errorVisible,true,'The terminal save error remains visible');assert.equal(frame.customReview,false);assert.deepEqual(frame.customControls,[],'No custom Review, Copy or Retry controls remain');
+}
+export async function retainEditableSummaryWithoutMutation(c,scope,expected){
+  const mutationFrames=events=>events.filter(event=>['native-write-request','native-prepared-write','native-mutation-response','native-checkpoint-response'].includes(event.kind));
+  const before=mutationFrames(await c.relay.events());assert.ok(before.some(event=>event.kind==='native-write-request'),'Original accepted request must already be observed');
+  const frame=await c.ui.wait(`return (${retainedSummaryFrame.toString()})(document,${JSON.stringify(scope)});`,'Terminal summary retains editable raw B');assertEditableRetainedSummary(frame,expected);
+  await delay(350);
+  await c.saved(expected.file,source=>assert.equal(source,expected.source),'terminal-editable-summary-original-source-barrier');
+  assert.deepEqual(mutationFrames(await c.relay.events()),before,'Editable retained B cannot automatically dispatch a mutation/checkpoint or replacement intent');
+  const after=await c.ui.wait(`return (${retainedSummaryFrame.toString()})(document,${JSON.stringify(scope)});`,'Terminal summary remains editable without automatic authoring');assertEditableRetainedSummary(after,expected);
+  c.evidence.checks.push({name:'terminal-summary-editable-without-custom-recovery-or-automatic-mutation',frame:after,sourceMutationDispatches:0,observedNativeWriteResponses:0});return after;
+}
 async function summaryFrame(c){
-  return c.ui.dom(`const p=document.querySelector(${JSON.stringify(panel)}),input=p?.querySelector('textarea[aria-label="Summary expression"]'),visible=p?.querySelector('.cm-content[aria-label="Summary expression"]'),review=p?[...p.querySelectorAll('button')].find(b=>b.textContent==='Review retained changes'):null;return p?{busy:p.getAttribute('aria-busy'),draft:input?.value,visibleDraft:visible?.textContent,disabled:input?.disabled,readonly:visible?.getAttribute('aria-readonly'),error:p.querySelector('[role="alert"]')?.textContent,review:!!(review&&!review.hidden&&!review.disabled&&review.getClientRects().length),manualRetry:[...p.querySelectorAll('button')].some(b=>b.textContent==='Retry save'&&!b.hidden)}:null;`);
+  return c.ui.dom(`return (${retainedSummaryFrame.toString()})(document,${JSON.stringify(panel)});`);
 }
 async function summaryPanelIdentity(c,selector=panel){
   // CDP DOM identity is passive: no property, focus, event or semantic API is injected.
@@ -85,7 +109,7 @@ async function requireCollectionScene(c,view){
   const observed=await c.ui.wait(`return (${collectionSceneFrame.toString()})(document,${JSON.stringify(active)},${JSON.stringify(scoreProperty)},${JSON.stringify(view)});`,'Actual collection-backed score rows and Total5 exist before any fault is armed',45000);
   c.evidence.checks.push({name:'supported-native-collection-scene-ready-before-fault',collectionId:c.fixtureScene.collectionId,scorePropertyId:c.fixtureScene.scorePropertyId,observed});
 }
-async function failedLiveWriteWithNewerDraft(c){
+export async function failedLiveWriteWithNewerDraft(c){
   const {failedBase,failedA,failedB,scoreProperty}=recoverySources(c.fixtureScene);
   await c.launch('native-failed-summary-newer-draft');await c.ui.openFile(failedPath);await c.ui.idle();
   const before=await stat(c,failedPath);assert.ok(before.entryId&&before.revision);
@@ -120,8 +144,8 @@ async function failedLiveWriteWithNewerDraft(c){
     c.evidence.actions.push({action:'owned-negative-checkpoint-lock-access',lock,dev:identity.dev,ino:identity.ino,originalMode:mode,mode:'0000',phase:'after-inert-prepare-before-ref-checkpoint',at:Date.now()});
     await c.relay.release(token);await event(c,'released',token,3000);
     negative=await until(async()=>{const row=terminalLockCheckpointFailure((await c.relay.events()).slice(offset),'note/v1/'+before.entryId,held);assert.ok(row);return row;},10000);
-    await c.ui.wait(`const p=document.querySelector(${JSON.stringify(panel)}),review=p?[...p.querySelectorAll('button')].find(b=>b.textContent==='Review retained changes'):null;return p?.getAttribute('aria-busy')==='false'&&!!p.querySelector('[role="alert"]')?.textContent?.trim()&&review&&!review.hidden&&!review.disabled;`,'A terminal checkpoint fault exposes read-only retained summary review',10000);
-    failed=await summaryFrame(c);assert.equal(failed.draft,'values.sum() + 7');assert.equal(failed.visibleDraft,failed.draft);assert.equal(failed.disabled,true);assert.equal(failed.readonly,'true');assert.equal(failed.review,true);assert.equal(failed.manualRetry,false);assert.equal(await summaryPanelIdentity(c),panelId);assert.equal(await summaryPanelIdentity(c,`${panel} ${summaryEditor}`),focused.editorBackendNodeId);
+    await c.ui.wait(`const p=document.querySelector(${JSON.stringify(panel)});return p?.getAttribute('aria-busy')==='false'&&!!p.querySelector('[role="alert"]')?.textContent?.trim();`,'A terminal checkpoint fault retains its save error',10000);
+    failed=await summaryFrame(c);assertEditableRetainedSummary(failed,{draft:'values.sum() + 7'});assert.equal(await summaryPanelIdentity(c),panelId);assert.equal(await summaryPanelIdentity(c,`${panel} ${summaryEditor}`),focused.editorBackendNodeId);
     const events=(await c.relay.events()).slice(offset);assert.equal(events.filter(e=>e.kind==='native-mutation-response'&&e.ok&&e.state==='committed'&&e.preparedBodySha256===digest(Buffer.from(failedA))).length,0,'Failed checkpoint acknowledgement must precede any successful A commit');
     await c.screenshot('r00-genuine-checkpoint-error-retains-newer-summary-draft');
   }finally{
@@ -129,11 +153,11 @@ async function failedLiveWriteWithNewerDraft(c){
     c.evidence.actions.push({action:'restore-owned-checkpoint-lock-access',lock,dev:identity.dev,ino:identity.ino,mode,at:Date.now()});
   }
   // Access-denied filesystem_failed is terminal under the strict retry policy.
-  // Review/Copy never retries it. After restoring access, ordinary Save settles
+  // Restoring access alone cannot retry it. Ordinary Save settles
   // accepted A; newer raw B requires its own explicit commit in the same editor.
   await c.saved(failedPath,source=>assert.equal(source,failedBase),'failed-summary-restored-original-physical-and-logical-source');
-  await reviewRetainedConfiguration(c,panel,{saved:failedBase,accepted:failedA,current:'Summary name: Total\nSummary expression: values.sum() + 7',file:failedPath,physical:failedBase});
-  assert.equal(await c.read(failedPath),failedBase,'Review/Copy does not publish A or newer B');
+  await retainEditableSummaryWithoutMutation(c,panel,{draft:'values.sum() + 7',file:failedPath,source:failedBase});
+  assert.equal(await c.read(failedPath),failedBase,'Editable retained B does not publish A or newer B before ordinary Save');
   await c.ui.command('Save current changes');
   await c.saved(failedPath,source=>assert.equal(source,failedA),'failed-summary-ordinary-save-settles-only-original-A');
   await c.ui.wait(`const p=document.querySelector(${JSON.stringify(panel)}),input=p?.querySelector('textarea[aria-label="Summary expression"]');return p?.getAttribute('aria-busy')==='false'&&input?.value==='values.sum() + 7'&&!input.disabled;`,'Original A ACK retains editable raw B without authoring it');
@@ -155,7 +179,7 @@ async function failedLiveWriteWithNewerDraft(c){
   for(const[file,source]of sources)await c.saved(file,current=>assert.equal(current,file===failedPath?failedB:source),'failed-summary-whole-source-and-unrelated-fixture-'+file);
   await c.ui.wait(`const e=document.querySelector('${active} .zorid-bases-table-footer [data-summary-property=${JSON.stringify(scoreProperty)}]');return e?.querySelector('.summary-function-name')?.textContent==='Total'&&e.querySelector('.summary-function-value')?.textContent==='12';`,'Saved B summary has independent two-note value12');
   await c.ui.click(close);await c.ui.wait(`return !document.querySelector(${JSON.stringify(active)});`,'Acknowledged failed-save continuation closes normally');
-  c.evidence.checks.push({name:'genuine-native-summary-terminal-checkpoint-review-save-and-explicit-raw-B',held:plain(held),failure:plain(negative),pending,failed,panelBackendNodeId:panelId,editorBackendNodeId:focused.editorBackendNodeId,prepared,checkpointReplay:plain(checkpointReplay),commits,manualRetryClicks:0,ordinarySaveCommands:1,explicitRawBCommits:1,scope:'Real failed checkpoint ACK from owned lock access denial; not postcommit publication, SQLite/device failure, power loss or synthetic reply'});
+  c.evidence.checks.push({name:'genuine-native-summary-terminal-checkpoint-ordinary-save-and-explicit-raw-B',held:plain(held),failure:plain(negative),pending,failed,panelBackendNodeId:panelId,editorBackendNodeId:focused.editorBackendNodeId,prepared,checkpointReplay:plain(checkpointReplay),commits,manualRetryClicks:0,ordinarySaveCommands:1,explicitRawBCommits:1,scope:'Real failed checkpoint ACK from owned lock access denial; not postcommit publication, SQLite/device failure, power loss or synthetic reply'});
   await c.quit('failed-summary-normal-quit-after-B');
   await c.launch('failed-summary-restart-readback');await c.ui.openFile(failedPath);await c.ui.idle();
   for(const[file,source]of sources)await c.saved(file,current=>assert.equal(current,file===failedPath?failedB:source),'failed-summary-restart-exact-fixture-'+file);
