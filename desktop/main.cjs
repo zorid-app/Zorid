@@ -1,14 +1,49 @@
 'use strict';
+// Opt-in attribution only: retain fixed phase names before Electron or local
+// modules load, so a late inspector can read the original Main chronology.
+const startupEntry = process.env.ZORID_PROFILE_STARTUP === '1' ? {
+  atMs: performance.now(), timeOrigin: performance.timeOrigin, uptimeMs: process.uptime() * 1000,
+} : null;
+const startupProfile = startupEntry ? {
+  version: 1, timeOrigin: startupEntry.timeOrigin, moduleEntryUptimeMs: startupEntry.uptimeMs,
+  phases: [{ phase: 'module.entry', atMs: startupEntry.atMs }], truncated: false,
+} : null;
+if (startupProfile) globalThis.__zoridStartupProfile = startupProfile;
+function startupMark(phase) {
+  if (!startupProfile) return;
+  if (startupProfile.phases.length >= 128) { startupProfile.truncated = true; return; }
+  startupProfile.phases.push({ phase, atMs: performance.now() });
+}
+function startupObserve(phase, result) {
+  if (!startupProfile) return result;
+  if (result && typeof result.then === 'function') {
+    result.then(() => startupMark(`${phase}.fulfilled`), () => startupMark(`${phase}.rejected`));
+  } else startupMark(`${phase}.fulfilled`);
+  return result;
+}
+function startupCall(phase, callback) {
+  startupMark(`${phase}.begin`);
+  try { return startupObserve(phase, callback()); }
+  catch (error) { startupMark(`${phase}.rejected`); throw error; }
+}
+startupMark('require.electron.begin');
 const { app, BrowserWindow, dialog, ipcMain, Menu, shell } = require('electron');
+startupMark('require.electron.complete');
+startupMark('require.node.begin');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { pathToFileURL } = require('node:url');
+startupMark('require.node.complete');
+startupMark('require.local.begin');
 const { VaultService } = require('./vault-service.cjs');
 const { WindowBroker } = require('./window-broker.cjs');
 const { captureRichDiagnostic } = require('./document-semantics.cjs');
+startupMark('require.local.complete');
+startupMark('editor_core.create.begin');
 const editorCore = require('./editor-core.cjs').createEditorCoreManager(process.env,{isPackaged:app.isPackaged,resourcesPath:process.resourcesPath,documentRuntime:true,
   onDocumentRuntimeNudge:(record,message)=>record.window.webContents.send('zorid:document-runtime',message)});
+startupMark('editor_core.create.complete');
 let clientSlots;
 let independentJournalManager;
 const journalDocumentEpoch=new WeakMap();
@@ -43,8 +78,10 @@ async function contextWithIndependentJournal(record,event,expectedRoot,operation
   const admissionId=editorCore.bindIndependentJournal(broker,record,expectedRoot,context.admissionId,grant,check);check();
   return{...context,admissionId,independentJournal:grant};
 }
+startupMark('require.menus.begin');
 const { createContextMenuController } = require('./context-menu.cjs');
 const { validateMenuHotkeys, workspaceFileMenu } = require('./menu-hotkeys.cjs');
+startupMark('require.menus.complete');
 const menuHotkeys = new WeakMap();
 const closeStates = new WeakMap();
 let quitRequested = false;
@@ -57,19 +94,25 @@ function allowedURL(url) {
   try { const current = new URL(url); current.hash = ''; const expected = new URL(devUrl || packagedUrl); expected.hash = ''; return current.href === expected.href; }
   catch { return false; }
 }
-const broker = new WindowBroker({ openVault: directory => editorCore ? editorCore.open(directory) : VaultService.open(directory), allowedURL });
+const broker = new WindowBroker({ openVault: directory => startupCall('vault_open', () => editorCore ? editorCore.open(directory) : VaultService.open(directory)), allowedURL });
 let lastVaultPath;
 function handle(name, callback) {
   ipcMain.handle(`zorid:${name}`, (event, ...args) => {
     const record = broker.authenticate(event);
+    const profiled = startupProfile && (name === 'getVault' || name === 'getDurableContext');
+    if (profiled) startupMark(`ipc.${name}.received`);
+    const dispatch = () => profiled ? startupCall(`ipc.${name}.dispatch`, () => callback(record, event, ...args)) : callback(record, event, ...args);
     // Renderer/module loading overlaps vault initialization. Its window identity
     // is already usable, but no vault capability may escape the opening barrier.
     const epoch=journalDocumentEpoch.get(record)??0,frame=event.senderFrame,webContents=event.sender;
-    if (record.opening && name !== 'getWindowInfo') return record.opening.then(() => {
-      if (broker.authenticate(event) !== record||(journalDocumentEpoch.get(record)??0)!==epoch||record.window.webContents!==webContents||webContents.mainFrame!==frame) throw new Error('Window changed while opening');
-      return callback(record, event, ...args);
-    });
-    return callback(record, event, ...args);
+    if (record.opening && name !== 'getWindowInfo') {
+      if (profiled) startupMark(`ipc.${name}.opening_wait`);
+      return record.opening.then(() => {
+        if (broker.authenticate(event) !== record||(journalDocumentEpoch.get(record)??0)!==epoch||record.window.webContents!==webContents||webContents.mainFrame!==frame) throw new Error('Window changed while opening');
+        return dispatch();
+      });
+    }
+    return dispatch();
   });
 }
 function registerIPC() {
@@ -119,6 +162,7 @@ function registerIPC() {
   handle('closeHandlerReady', (record, _event, ready) => {
     const state = closeStates.get(record);
     if (state) state.ready = ready === true;
+    if (state?.ready) startupMark('close_handler.ready');
   });
   handle('completeClose', (record, _event, token, ok) => {
     const state = closeStates.get(record);
@@ -210,6 +254,7 @@ function registerIPC() {
   }
 }
 async function createWindow({ source, primary = false, initialState = 'empty', restoreSlot, recoveryCheck, recoveryAssert } = {}) {
+  startupMark('window.create.begin');
   if (source) {
     broker.assertLive(source);
   }
@@ -217,7 +262,9 @@ async function createWindow({ source, primary = false, initialState = 'empty', r
   let window, record;
   try {
     if (recoveryCheck) { await recoveryCheck(); recoveryAssert(); }
+    startupMark('window.construct.begin');
     window = new BrowserWindow({ width: 1280, height: 860, minWidth: 640, minHeight: 480, title: 'Zorid', backgroundColor: '#1e1e1e', titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 15 }, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+    startupMark('window.construct.complete');
     record = broker.register(window, { primary, initialState, persistentId:clientSlot?.slotId });
   } catch (error) {
     if (window && !window.isDestroyed()) window.destroy();
@@ -260,6 +307,7 @@ async function createWindow({ source, primary = false, initialState = 'empty', r
     if(main===true&&same!==true)revokeIndependentJournal(record);
   });
   window.webContents.on('render-process-gone',()=>revokeIndependentJournal(record));
+  startupMark('window.opening.begin');
   const opening = (async () => {
     if (source) broker.bind(record, source.vault);
     else {
@@ -272,17 +320,19 @@ async function createWindow({ source, primary = false, initialState = 'empty', r
     if(record.vault&&clientSlot){await clientSlots.setVault(clientSlot.slotId,record.vault.service.root);record.persistedVaultRoot=record.vault.service.root;}
     if (recoveryCheck) { await recoveryCheck(record); recoveryAssert(record); }
   })();
+  startupObserve('window.opening', opening);
   record.opening = opening;
   try {
     // Start Chromium navigation before waiting for Rust/import/recovery. IPC
     // above still admits all vault operations only after opening succeeds.
     // Convert a synchronous navigation exception into a joined rejection too;
     // opening must remain observed if Chromium rejects navigation immediately.
-    const loading = (async () => devUrl ? window.loadURL(devUrl) : window.loadFile(path.join(__dirname, '../dist/index.html')))();
+    const loading = startupCall('navigation', () => (async () => devUrl ? window.loadURL(devUrl) : window.loadFile(path.join(__dirname, '../dist/index.html')))());
     await Promise.all([opening, loading]);
     if (recoveryCheck) { await recoveryCheck(record); recoveryAssert(record); }
+    startupMark('window.create.complete');
     return record;
-  } catch (error) { if (!window.isDestroyed()) window.destroy(); throw error; }
+  } catch (error) { startupMark('window.create.rejected'); if (!window.isDestroyed()) window.destroy(); throw error; }
   finally { if (record.opening === opening) delete record.opening; }
 }
 function openEmptyWindow() {
@@ -308,6 +358,7 @@ const ownsApplication=app.requestSingleInstanceLock();
 if(!ownsApplication)app.quit();
 app.on('second-instance',()=>{const first=BrowserWindow.getAllWindows()[0];if(first){if(first.isMinimized())first.restore();first.focus();}});
 app.whenReady().then(async () => {
+  startupMark('app.ready');
   if(!ownsApplication)return;
   if (familyFixture) {
     try {
@@ -320,15 +371,16 @@ app.whenReady().then(async () => {
     } catch { dialog.showErrorBox('Core fixture unavailable', 'Check the trusted fixture configuration and matching native host build.'); app.quit(); }
     return;
   }
-  clientSlots=await require('./client-slots.cjs').openClientSlots(path.join(app.getPath('userData'),'client-slots.json'));
-  const restoreSlots=await clientSlots.listRestorable();
-  try { lastVaultPath = JSON.parse(await fs.readFile(path.join(app.getPath('userData'), 'vault.json'), 'utf8')).path; }
+  clientSlots=await startupCall('client_slots.open', () => require('./client-slots.cjs').openClientSlots(path.join(app.getPath('userData'),'client-slots.json')));
+  const restoreSlots=await startupCall('restore_slots.list', () => clientSlots.listRestorable());
+  try { lastVaultPath = JSON.parse(await startupCall('last_vault.read', () => fs.readFile(path.join(app.getPath('userData'), 'vault.json'), 'utf8'))).path; }
   catch { /* A missing previous vault returns to the vault picker. */ }
   registerIPC();
   refreshApplicationMenu();
   await createWindow({ primary: true, initialState: 'restore' });
   for(const restoreSlot of restoreSlots)await createWindow({restoreSlot,initialState:'restore'});
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow({ primary: true, initialState: 'restore' }).catch(error => dialog.showErrorBox('Could not open window', error.message)); });
+  startupMark('app.initial_windows.complete');
 }).catch(error=>{dialog.showErrorBox('Could not start Zorid',error.message);app.quit();});
 app.on('before-quit', () => { quitRequested = true; });
 app.on('window-all-closed', () => { if (familyFixture || process.platform !== 'darwin') app.quit(); });
@@ -345,3 +397,4 @@ app.on('will-quit', event => {
     });
   } else broker.dispose();
 });
+startupMark('module.setup.complete');
