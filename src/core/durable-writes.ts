@@ -54,6 +54,15 @@ export interface ConditionalSavedSourceWitness {
   readonly revision: string;
   readonly path: string;
 }
+/** Caller-owned identity retained and independently protected before dispatch.
+ * This claim is not a physical-source proof. Only Native creates that proof. */
+export interface ConditionalSavedSourceRequest {
+  readonly captureId:string;
+  readonly logicalWitness:ConditionalSavedSourceWitness;
+}
+export interface PendingSavedSourceRequest extends ConditionalSavedSourceRequest {
+  readonly legacy:boolean;
+}
 /** Provider-owned physical-source proof. Only this opaque guard enters a plan. */
 export interface ConditionalSavedSourceGuard {
   readonly captureId: string;
@@ -106,8 +115,9 @@ export interface DurableWrites {
    * Null means this ordinary note has no managed collection projection. */
   composeNote?(input: DurableNoteCompositionInput): Promise<DurableNoteComposition|null>;
   /** Optional paired capability. Captures do not advance the logical baseline. */
-  captureSavedSource?(witness: ConditionalSavedSourceWitness): Promise<ConditionalSavedSourceCapture>;
+  captureSavedSource?(request: ConditionalSavedSourceRequest): Promise<ConditionalSavedSourceCapture>;
   releaseSavedSource?(captureId: string): Promise<void>;
+  listSavedSourceRequests?():Promise<readonly PendingSavedSourceRequest[]>;
   planWrite(input: DurableWriteInput): Promise<DurableWritePlan>;
   prepare(plan: DurableWritePlan): Promise<DurableWriteIntent>;
   commit(ref: DurableWriteRef): Promise<DurableWriteIntent>;
