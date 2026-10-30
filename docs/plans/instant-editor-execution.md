@@ -28,6 +28,15 @@ remain unchanged. Root owns all integration/build/install; goal is active after
 the user's explicit status change. Latest-native vs installed representative
 workload preparation is in progress, no new timings claimed yet.
 
+Next reference cut named owner capture_note_ui_finish: normal NoteBuffer
+failed-IO backoff plus its Workspace error suppression and history-restoration
+`saving` shortcut. Preserve ordinary debounce/newer-edit coalescing, exact pending
+intents and DurableState canonical reconciliation; do not replace the deleted
+policy with another retry framework. Worktree isolated, no Native/build by owner.
+Root95349e04 also removes manual-retry instructions from note-load failure copy;
+its nine existing Reading lifecycle checks pass after the browser fixture gains
+the animation-frame APIs now used by deferred recovery scheduling.
+
 
 ## Recovery scope correction — direct user instruction, 2026-10-30
 
