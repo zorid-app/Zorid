@@ -1,5 +1,33 @@
 # Instant editor and automatic recovery
 
+## Current continuation — recovery simplification and release gates
+
+Root now includes reviewed cuts bdf09d1b/075d89e2/908d5026/0022fe9f: unused New
+presentation helper removed, history dialog and initial-load local retry policy
+removed, dead history availability wiring removed. Integrated checks: history28,
+initial-load41, no skips. Core shutdown during initial fs.realpath is reproduced
+RED and fixed5c7a81cf (43manager checks); no late host starts after shutdown.
+Test-only first-terminal-save oracle aa6556fd removes dependency on bespoke
+Review/Copy controls;20composed oracle checks pass. Actual updated GUI pass awaits
+the reviewed configuration UI cut and matching build. Other New/busy/compound
+campaigns remain frozen. No future-feature recovery expansion is authorized.
+
+Package013 source908d5026/ASARd7f87161/native2f585 passes TS/Vite/361files. Real
+LaunchServices diagnostic002 is VALID with genuine focus/readiness, normal
+app/Native lifecycle and no owned processes left. Diagnostic BrowserWindow
+construction997ms/Native service open437ms are not800ms acceptance. The early
+quit211s artifact from diagnostic001 is not a Rust startup measurement.
+Full findings/limits: [reference ledger](obsidian-recovery-reference.md).
+
+Broader checks expose11existing failures also reproduced on pristineca35: two
+summary-close fixtures and nine inline Base stale/remount paths. Source/UI-cut
+worker has no new failing names; checkpoint_review owns bounded classification
+before release. No acceptance claim from the narrower passing gates. Latest
+resource21+GiB, so disk is no current blocker. Main7d8006b8 and installed app
+remain unchanged. Root owns all integration/build/install; goal is active after
+the user's explicit status change. Latest-native vs installed representative
+workload preparation is in progress, no new timings claimed yet.
+
 
 ## Recovery scope correction — direct user instruction, 2026-10-30
 

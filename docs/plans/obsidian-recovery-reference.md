@@ -21,6 +21,12 @@ verification, proof this cached version was selected at launch, or proof that
 all plugins/global handlers lack other behavior. Ranges below are zero-based,
 half-open UTF-8 byte offsets in that exact app.js.
 
+A bounded check of live-reference isolation found that a second user-data-dir
+does not isolate the shipped macOS CLI socket: main unlinks/listens on the
+home-directory socket even with CLI disabled, and may register the URL handler.
+No second Obsidian was launched, no user socket/profile/handler was changed, and
+no fault-runtime claim follows. Static call-chain evidence remains usable.
+
 ## Behavior established in the inspected paths
 
 | Path | Reference behavior | Original bytes |
