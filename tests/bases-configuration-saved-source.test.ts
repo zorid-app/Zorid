@@ -30,7 +30,7 @@ async function fixture(referenceNotes: Record<string, string> = {}, initialSourc
   const intents = new Map<string, DurableWriteIntent>(), inputs = new Map<string, {input: DurableWriteInput; source?: string}>();
   const planned: DurableWriteInput[] = [], committed: string[] = [], released: string[] = [], requestIds:string[]=[];
   const releasedRequests=new Set<string>(),attachedRequests=new Set<string>();
-  let onPlan: ((input: DurableWriteInput) => Promise<void>) | undefined, onCommit: (() => Promise<void>) | undefined, onCapture: (() => Promise<void>) | undefined;
+  let onPlan: ((input: DurableWriteInput) => Promise<void>) | undefined, onCommit: (() => Promise<void>) | undefined, onCapture: (() => Promise<void>) | undefined, onCommitReply:((outcome:DurableWriteIntent)=>Promise<void>)|undefined;
   const scope = {vaultId: 'config-store', clientId: 'config-client'};
   class Adapter extends MemoryAdapter {
     durableWrites!: DurableWrites; documentSemantics!: DocumentService; independentDrafts!:IndependentDraftProvider;
@@ -88,7 +88,7 @@ async function fixture(referenceNotes: Record<string, string> = {}, initialSourc
         await adapter.write(input.path, input.content); if (canProject) { if (input.path === path) physical = input.content; else physicalNotes.set(input.path, input.content); }
         outcome = {ref, state: 'committed', acknowledged: false, receipt: {operationId: ref.operationId, entryId: ref.entryId, revision: next.revision, sequence: String(generation)}};
       }
-      intents.set(ref.token, outcome); return structuredClone(outcome);
+      intents.set(ref.token, outcome);await onCommitReply?.(structuredClone(outcome));return structuredClone(outcome);
     },
     query: async ref => structuredClone(intents.get(ref.token) ?? null), listUnacknowledged: async () => [],
     acknowledge: async ref => { const row = intents.get(ref.token)!; if (row.state === 'committed' || row.state === 'rejected') intents.set(ref.token, {...row, acknowledged: true}); },
@@ -149,16 +149,17 @@ async function fixture(referenceNotes: Record<string, string> = {}, initialSourc
   const vault = new Vault(adapter); await vault.initialize();
   const buffers = new Map<string, NoteBuffer>(); const getBuffer = async (target: string) => { let value = buffers.get(target); if (!value) { value = new NoteBuffer(vault, target, {debounceMs: 60000}); buffers.set(target, value); } await value.load(); return value; };
   const buffer = await getBuffer(path); let alive = true;
-  const controller = new BaseController({vault, basePath: path, mutations: createBaseMutationHost({getBuffer, validate() { if (!alive) throw Error('Retired config host'); }}), onViewRenamed: event => renamed.push(event.to), delayMs: 1000});
+  const mutationHost=createBaseMutationHost({getBuffer,validate(){if(!alive)throw Error('Retired config host');}});
+  const controller = new BaseController({vault, basePath: path, mutations:mutationHost, onViewRenamed: event => renamed.push(event.to), delayMs: 1000});
   await controller.refresh(); if (!failCollectionQuery) assert.equal(controller.state.error, null);
-  return {vault, adapter, buffer, controller, planned, committed, released, captures, requestIds, renamed, get backlinkCalls() { return backlinkCalls; },
+  return {vault, adapter, buffer, controller, mutationHost, planned, committed, released, captures, requestIds, renamed, get backlinkCalls() { return backlinkCalls; },
     get physical() { return physical; }, get logical() { return current.content; }, get capturesTaken() { return captureCount; },
     async externalReference(target: string, content: string) { const old = notes.get(target); notes.set(target, {path: target, content, entryId: old?.entryId ?? 'ref-' + target, revision: old ? 'external-revision' : 'r1', stat: {ctime: 1, mtime: 2, size: content.length}}); physicalNotes.set(target, content); await adapter.write(target, content); },
     async configuration(source: string) { current = {...current,content:source,revision:'r'+ ++generation,stat:{...current.stat,mtime:generation,size:source.length}};physical=source;await adapter.write(path,source);await vault.reload();await controller.refresh(); },
     replaceLogical(source: string, entryId = current.entryId) { current = {...current,entryId,content:source,revision:'r'+ ++generation,stat:{...current.stat,mtime:generation,size:source.length}};physical=source; },
     external(source: string) { physical = source; }, retire() { alive = false; },
-    setPlan(fn: typeof onPlan) { onPlan = fn; }, setCommit(fn: typeof onCommit) { onCommit = fn; }, setCapture(fn: typeof onCapture) { onCapture = fn; },
-    async close() { controller.dispose(); onPlan = undefined; onCommit = undefined; for (const value of buffers.values()) { try { await value.dispose(); } catch {} } },
+    setPlan(fn: typeof onPlan) { onPlan = fn; }, setCommit(fn: typeof onCommit) { onCommit = fn; },setCommitReply(fn:typeof onCommitReply){onCommitReply=fn;}, setCapture(fn: typeof onCapture) { onCapture = fn; },
+    async close() { controller.dispose(); onPlan = undefined; onCommit = undefined;onCommitReply=undefined; for (const value of buffers.values()) { try { await value.dispose(); } catch {} } },
   };
 }
 
@@ -370,4 +371,76 @@ test('source repair preserves external physical changes and refuses selection/ep
     await assert.rejects(f.controller.repairViewSource(read,{kind:'untyped'}),/physical saved source changed/);assert.equal(f.logical,deletedSource);assert.equal(f.physical,deletedSource+'# external\n');assert.equal(f.buffer.text,deletedSource);
     f.external(deletedSource);f.setCapture(async()=>{await f.controller.refresh();});await assert.rejects(f.controller.repairViewSource(read,{kind:'untyped'}),/changed|retired|stale/);assert.equal(f.logical,deletedSource);assert.equal(f.planned.length,0);
   }finally{await f.close();}
+});
+
+
+function gate(){let resolve!:()=>void,settled=false;const promise=new Promise<void>(done=>{resolve=()=>{settled=true;done();};});return{promise,resolve,get settled(){return settled;}};}
+async function waitFor(check:()=>boolean){const deadline=Date.now()+2500;while(!check()&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,2));assert.ok(check(),'the original accepted source continuation settled');}
+function custodiedMutation(f:Awaited<ReturnType<typeof fixture>>){
+  const document=BaseDocument.parse(original);document.updateView(0,{limit:12});const desired=document.toString();
+  const state={rendererCurrent:true,writerCurrent:true,submitted:0,accepted:0,proof:undefined as (()=>boolean)|undefined};
+  const validateRenderer=()=>{if(!state.rendererCurrent)throw Error('Renderer attempt expired');};
+  const custody={submitted(proof:()=>boolean){state.submitted++;state.proof=proof;assert.equal(proof(),false,'a pending Native source write has no positive acknowledgement');},accepted(){assert.equal(state.proof?.(),true,'custody acknowledges only the exact settled source');state.accepted++;},validatePublication:validateRenderer};
+  const condition={attempt:{},validate(source:string,saved:string){validateRenderer();assert.equal(source,original);assert.equal(saved,original);},custody};
+  const pending=f.mutationHost.transform(path,source=>{assert.equal(source,original);return desired;},validateRenderer,()=>{if(!state.writerCurrent)throw Error('Stable writer expired');},f.buffer.savedDurableWitness,condition);
+  void pending.catch(()=>{});
+  return{state,pending,desired,custody};
+}
+
+test('source custody acknowledges a late Native success once after its renderer attempt expires',async()=>{
+  const f=await fixture(),entered=gate(),reply=gate();let mutation:ReturnType<typeof custodiedMutation>|undefined;
+  f.setCommitReply(async outcome=>{assert.equal(outcome.state,'committed');entered.resolve();await reply.promise;});
+  try{
+    mutation=custodiedMutation(f);await waitFor(()=>entered.settled);
+    assert.equal(mutation.state.submitted,1);assert.equal(mutation.state.proof?.(),false);assert.equal(mutation.state.accepted,0);
+    assert.equal(f.logical,mutation.desired);assert.equal(f.physical,mutation.desired,'Native has committed while its exact reply is held');
+    mutation.state.rendererCurrent=false;reply.resolve();await mutation.pending;
+    assert.equal(mutation.state.accepted,1);assert.equal(mutation.state.proof?.(),true);
+    assert.throws(()=>mutation!.custody.validatePublication(),/Renderer attempt expired/,'storage completion grants no old renderer publication');
+    assert.equal(f.planned.length,1);assert.equal(f.committed.length,1);assert.equal(f.capturesTaken,1);assert.deepEqual(f.released,[f.requestIds[0]]);
+    assert.equal(f.planned[0].conditionalSavedSource?.captureId,f.requestIds[0]);assert.equal(f.buffer.text,mutation.desired);assert.equal(f.buffer.savedText,mutation.desired);
+    mutation.state.writerCurrent=false;assert.equal(mutation.state.proof?.(),false,'a settled body grants no acknowledgement to an expired stable writer');mutation.state.writerCurrent=true;
+  }finally{reply.resolve();await mutation?.pending.catch(()=>{});await f.close();}
+});
+
+test('source custody survives typed busy autosave on the original ref after the renderer attempt expires',async()=>{
+  const f=await fixture(),entered=gate(),busyReply=gate(),retryEntered=gate(),retryReply=gate();let mutation:ReturnType<typeof custodiedMutation>|undefined;
+  f.setCommit(async()=>{if(f.committed.length===1){entered.resolve();await busyReply.promise;throw Object.assign(Error('Native temporarily busy'),{code:'storage_busy',source:'host'});}retryEntered.resolve();await retryReply.promise;});
+  try{
+    mutation=custodiedMutation(f);await waitFor(()=>entered.settled);assert.equal(mutation.state.submitted,1);mutation.state.rendererCurrent=false;
+    busyReply.resolve();await assert.rejects(mutation.pending,error=>{const failure=error as Error&{code?:string;source?:string;cause?:{code?:string;source?:string}};assert.equal(failure.code,'outcome_unknown');assert.equal(failure.source,'host');assert.equal(failure.cause?.code,'storage_busy');assert.equal(failure.cause?.source,'host');return true;});assert.equal(mutation.state.proof?.(),false);assert.equal(mutation.state.accepted,0);
+    await waitFor(()=>retryEntered.settled);assert.equal(mutation.state.proof?.(),false,'retry dispatch alone is not an acknowledgement');
+    retryReply.resolve();await waitFor(()=>!f.buffer.dirty&&f.buffer.error===null);
+    assert.equal(mutation.state.proof?.(),true);assert.equal(mutation.state.accepted,0,'a rejected outer host promise never fabricates another completion callback');
+    assert.equal(f.planned.length,1);assert.equal(f.capturesTaken,1);assert.equal(f.committed.length,2);assert.equal(f.committed[0],f.committed[1]);
+    assert.equal(f.logical,mutation.desired);assert.equal(f.physical,mutation.desired);assert.equal(f.planned[0].conditionalSavedSource?.captureId,f.requestIds[0]);assert.deepEqual(f.released,[f.requestIds[0]]);
+  }finally{busyReply.resolve();retryReply.resolve();await mutation?.pending.catch(()=>{});await f.close();}
+});
+
+test('source custody cannot acknowledge an uncertain committed reply or a rejected physical guard',async()=>{
+  for(const kind of ['uncertain','rejected'] as const){
+    const f=await fixture();let mutation:ReturnType<typeof custodiedMutation>|undefined;
+    if(kind==='uncertain')f.setCommitReply(async()=>{throw Error('Native committed reply lost');});
+    else f.setCommit(async()=>{f.external(original+'# External physical change\n');});
+    try{
+      mutation=custodiedMutation(f);await assert.rejects(mutation.pending);
+      assert.equal(mutation.state.submitted,1);assert.equal(mutation.state.accepted,0);assert.equal(mutation.state.proof?.(),false);
+      assert.equal(f.planned.length,1);assert.equal(f.capturesTaken,1);
+      if(kind==='uncertain'){assert.equal(f.logical,mutation.desired);assert.equal(f.physical,mutation.desired);assert.equal(f.buffer.dirty,true);}
+      else{assert.equal(f.logical,original);assert.equal(f.physical,original+'# External physical change\n');assert.equal(f.buffer.hasRecoveryConflict,true);}
+    }finally{await mutation?.pending.catch(()=>{});await f.close();}
+  }
+});
+
+test('source custody never counts a newer raw body as the exact original desired source',async()=>{
+  const f=await fixture(),entered=gate(),reply=gate();let mutation:ReturnType<typeof custodiedMutation>|undefined;
+  f.setCommitReply(async()=>{if(f.committed.length===1){entered.resolve();await reply.promise;}});
+  try{
+    mutation=custodiedMutation(f);await waitFor(()=>entered.settled);assert.equal(mutation.state.submitted,1);
+    const newer=mutation.desired+'# Newer raw body\n';f.buffer.update(newer);reply.resolve();
+    await assert.rejects(mutation.pending,/newer|unresolved/);
+    assert.equal(mutation.state.proof?.(),false);assert.equal(mutation.state.accepted,0);assert.equal(f.buffer.text,newer);assert.equal(f.buffer.dirty,false);assert.equal(f.buffer.error,null);
+    assert.equal(f.logical,newer);assert.equal(f.physical,newer);assert.equal(f.planned.length,2);assert.equal(f.planned[0].content,mutation.desired);assert.equal(f.planned[1].content,newer);
+    assert.ok(f.planned[0].conditionalSavedSource);assert.equal(f.planned[1].conditionalSavedSource,undefined);assert.equal(f.capturesTaken,1);
+  }finally{reply.resolve();await mutation?.pending.catch(()=>{});await f.close();}
 });
