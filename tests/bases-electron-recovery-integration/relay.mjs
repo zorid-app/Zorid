@@ -19,6 +19,14 @@ let dropped = false, nativeTerminatedDuringHold = false, failed = false, eventBy
 let requestChain = '', responseChain = '', eventTail = Promise.resolve();
 const preparedBodies=new Map();
 const textSha256=value=>typeof value==='string'?digest(Buffer.from(value)):undefined;
+function observedRequestOp(command,body){
+  if(command.method!=='database_request')return command.request?.op??command.request?.command?.op;
+  // Native's database operation is in the opaque JSON body, not the header.
+  // Observe only a bounded scalar tag; malformed/large bodies still pass through
+  // unchanged and remain unclassified for the campaign's closed-world oracle.
+  if(command.request?.schemaVersion!==1||command.request.bytes!==body.length||body.length>64*1024)return;
+  try{const value=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(body));if(value&&typeof value==='object'&&!Array.isArray(value)&&Object.hasOwn(value,'op')&&typeof value.op==='string'&&/^[a-z_]{1,64}$/.test(value.op))return value.op;}catch{}
+}
 const eventsFile = path.join(directory, 'events.jsonl');
 function event(value) {
   const line = JSON.stringify({at:Date.now(), generation, relayPid:process.pid, nativePid:child.pid, ...value}) + '\n';
@@ -38,7 +46,7 @@ const input = (async()=>{
     if(dropped)break;
     selection.request(frame, await readControl('arm.json'));
     const command=frame.header.command;
-    const operationId=command.operation_id??command.reference?.operation_id??command.family?.request?.operation_id,requestOp=command.request?.op??command.request?.command?.op,clientIdSha256=textSha256(command.client_id??command.reference?.client_id);
+    const operationId=command.operation_id??command.reference?.operation_id??command.family?.request?.operation_id,requestOp=observedRequestOp(command,frame.body),clientIdSha256=textSha256(command.client_id??command.reference?.client_id);
     await event({kind:'native-request',method:command.method,requestId:frame.header.request_id,
       ...(operationId?{operationId}:{}),entryId:command.entry_id??command.id??command.mutation?.id,key:command.key,
       clientIdSha256,leaseClientIdSha256:textSha256(frame.header.lease?.client_id),leaseLocalStoreIdSha256:textSha256(frame.header.lease?.local_store_id),leaseTokenSha256:textSha256(frame.header.lease?.token),
