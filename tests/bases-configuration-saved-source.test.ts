@@ -26,7 +26,7 @@ async function fixture(referenceNotes: Record<string, string> = {}, initialSourc
   const physicalSource = (target: string) => target === path ? physical : physicalNotes.get(target);
   let backlinkCalls = 0;
   const renamed: string[] = [];
-  const checkpoints = new Map<string, Checkpoint>(), captures = new Map<string, ConditionalSavedSourceCapture>();
+  const checkpoints = new Map<string, Checkpoint>(), checkpointRequests=new Map<string,string>(), captures = new Map<string, ConditionalSavedSourceCapture>();
   const intents = new Map<string, DurableWriteIntent>(), inputs = new Map<string, {input: DurableWriteInput; source?: string}>();
   const planned: DurableWriteInput[] = [], committed: string[] = [], released: string[] = [], requestIds:string[]=[];
   const releasedRequests=new Set<string>(),attachedRequests=new Set<string>();
@@ -41,11 +41,11 @@ async function fixture(referenceNotes: Record<string, string> = {}, initialSourc
   const unused = async (): Promise<never> => { throw Error('Unexpected fixture operation'); };
   adapter.durableWrites = {
     checkpoints: {scope, load: async key => structuredClone(checkpoints.get(key) ?? null), compareAndSwap: async change => {
-      const old = checkpoints.get(change.key);
-      if(old?.revision===change.nextRevision){assert.equal(old.encodedState,change.encodedState,'exact Core checkpoint replay cannot change its payload');return structuredClone(old);}
+      const old = checkpoints.get(change.key),attempt=JSON.stringify([change.key,change.nextRevision]),fingerprint=JSON.stringify(change);
+      if(old?.revision===change.nextRevision){assert.equal(checkpointRequests.get(attempt),fingerprint,'exact Core checkpoint replay retains its original expected revision and payload');return structuredClone(old);}
       assert.equal(change.expectedRevision, old?.revision ?? null);
       const next: Checkpoint = {version: 1, ...scope, key: change.key, revision: change.nextRevision, encodedState: change.encodedState, sequence: String(Number(old?.sequence ?? 0) + 1), deleted: change.encodedState === null, byteLength: Buffer.byteLength(change.encodedState ?? '')};
-      checkpoints.set(change.key, next); return structuredClone(next);
+      checkpoints.set(change.key, next);checkpointRequests.set(attempt,fingerprint);return structuredClone(next);
     }, list: unused, changes: unused},
     readText: async target => structuredClone(savedRecord(target)), readTextById: async id => structuredClone([current, ...notes.values()].find(row => row.entryId === id) ?? null),
     captureSavedSource: async request => {
