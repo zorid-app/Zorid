@@ -235,7 +235,7 @@ function createEditorCoreManager(environment=process.env, options={}){
         }
         const {generation}=attempt,check=attempt.check;
         attempt.initialCheck();
-        let delay=50,currentSaved;
+        let delay=50;
         for(;;){
           try{
             attempt.initialCheck();
@@ -247,7 +247,7 @@ function createEditorCoreManager(environment=process.env, options={}){
               attempt.authority=Object.freeze({...authority});attempt.scope??=Object.freeze({vaultId:authority.local_store_id,clientId:attempt.clientId});
             }
             const captureDispatchOwner=()=>{
-              const accepted=currentSaved,id=accepted?.id;
+              const accepted=attempt.saved,id=accepted?.id;
               return()=>{if(id===undefined)check();else if(checked(broker,record,expectedRoot,id)!==accepted)throw fail('durable_scope_changed');};
             };
             let saved;
@@ -255,7 +255,7 @@ function createEditorCoreManager(environment=process.env, options={}){
             const admission=await attempt.consumer.run();
             try {attempt.initialCheck();if(admission.scope.vaultId!==attempt.scope.vaultId||admission.scope.clientId!==attempt.scope.clientId)throw fail('durable_scope_changed');}
             catch(error){await attempt.consumer.reject(error,()=>admission.retire(),()=>admission.abandonTerminatedHost());throw error;}
-            saved={id:randomUUID(),admission,service,entry,generation,check:(allowRetired=false)=>{check();if((saved.runtimeRetired||saved.draftsRetired)&&!allowRetired)throw fail('client_not_admitted');}};currentSaved=saved;contexts.set(record,saved);
+            saved={id:randomUUID(),admission,service,entry,generation,check:(allowRetired=false)=>{check();if((saved.runtimeRetired||saved.draftsRetired)&&!allowRetired)throw fail('client_not_admitted');}};attempt.saved=saved;contexts.set(record,saved);
             try{
               if(admission.conditionalSavedSourceAvailable===true&&!['captureSavedSource','releaseSavedSource','listSavedSourceRequests'].every(name=>typeof admission.durableWrites?.[name]==='function'))throw fail('unsupported_host_capability');
               if(documentRuntime&&(!runtimeAvailable(admission)||typeof admission.documentCommand!=='function'))throw runtimeUnavailable();

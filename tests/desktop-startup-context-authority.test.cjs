@@ -20,11 +20,12 @@ function nativeFault(code,commitUncertain=false){
   const header=Buffer.from(JSON.stringify({version:1,request_id:'1',ok:false,error:{code,commit_uncertain:commitUncertain}})),prefix=Buffer.alloc(8);prefix.writeUInt32BE(header.length,0);
   host.receive(Buffer.concat([prefix,header]));assert.ok(error);return error;
 }
-async function fixture({claim,identity,release,checkpoint,replacement,closeHost}={}){
+async function fixture({claim,identity,release,checkpoint,replacement,closeHost,query}={}){
   const calls=[],references=[],services=[];let active=null,serial=0;
   const host=Object.create(RustVaultService.prototype);
   host.capabilities=['file_command'];
   host.request=async(command,bytes,reference,beforeDispatch)=>{
+    if(command.method==='query_intent'&&query)await query();
     beforeDispatch?.();calls.push(command.method);
     if(command.method==='claim_client'){
       const next=()=>{if(active)throw fault('client_in_use');active={local_store_id:'authority',client_id:command.client_id,token:`10000000-0000-4000-8000-${String(++serial).padStart(12,'0')}`};return{result:{lease:active}};};
@@ -38,6 +39,7 @@ async function fixture({claim,identity,release,checkpoint,replacement,closeHost}
     if(reference)assert.deepEqual(reference,active,'leased calls carry the Native admitted reference');
     if(command.method==='identity')return identity?identity({host,calls,reference}):{result:{identity:{local_store_id:'authority',realm_id:null,vault_id:null}}};
     if(command.method==='checkpoint_list')return checkpoint?checkpoint():{result:{items:[],cursor:null,highWater:'0'}};
+    if(command.method==='query_intent')return{result:{intent:null}};
     throw new Error(`unexpected ${command.method}`);
   };
   const filename=path.resolve(__dirname,'../desktop/editor-core.cjs'),sourceRequire=createRequire(filename),coreModule={exports:{}};
@@ -240,4 +242,25 @@ test('fatal and closed flags without actual exit cannot abandon terminal cleanup
     await assert.rejects(f.manager.retire(f.broker,f.record,f.record.vault.service),{code:'recovery_not_available'});
     assert.throws(()=>f.manager.requireReleased(f.record),{code:'durable_release_required'});assert.equal(f.calls.filter(x=>x==='claim_client').length,1);
   }finally{await f.close();}
+});
+
+
+test('cross-RPC reused capsule fences its accepted query against later journal binding rotation',async()=>{
+  let checkpointFailed=false,cleanupFailed=false;const entered=deferred(),gate=deferred();
+  const f=await fixture({
+    checkpoint(){if(!checkpointFailed){checkpointFailed=true;throw nativeFault('storage_busy');}return{result:{items:[],cursor:null,highWater:'0'}};},
+    release({next}){if(!cleanupFailed){cleanupFailed=true;throw nativeFault('permission_denied');}return next();},
+    async query(){entered.resolve();await gate.promise;}
+  });
+  let work;
+  try{
+    await assert.rejects(f.context(),{code:'storage_busy'});const before=await f.context();
+    const event={sender:f.record.window.webContents,senderFrame:f.record.window.webContents.mainFrame};
+    const ref={vaultId:'authority',clientId,operationId:'operation',entryId:'entry',token:'intent'};
+    work=f.manager.invoke(f.broker,f.record,event,root,before.admissionId,'query',[ref]);const result=work.then(value=>({value}),error=>({error}));
+    await entered.promise;f.main.revokeIndependentJournal(f.record);f.record.window.webContents.mainFrame={url:'https://zorid.test/'};
+    const after=await f.context();assert.notEqual(after.admissionId,before.admissionId);gate.resolve();
+    assert.equal((await result).error?.code,'durable_scope_changed');assert.equal(f.calls.filter(x=>x==='query_intent').length,0);
+    assert.equal(f.calls.filter(x=>x==='claim_client').length,2);
+  }finally{gate.resolve();await work?.catch(()=>{});await f.close();}
 });
