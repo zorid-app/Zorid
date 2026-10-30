@@ -20,31 +20,32 @@ function fixture(t:TestContext,overrides:Partial<RecoveryHistory>={}){
 const preview=()=>document.querySelector<HTMLTextAreaElement>('.version-history-preview')!;
 const row=(index=0)=>document.querySelectorAll<HTMLButtonElement>('.version-history-version')[index]!;
 
-test('a mounted history page retries its exact cursor after typed temporary storage failure without a retry notice',async t=>{
- t.mock.timers.enable({apis:['setTimeout']});const calls:unknown[]=[];const f=fixture(t,{list:async(id,options)=>{calls.push({id,options:structuredClone(options)});if(calls.length===1)throw fault('storage_busy');return{versions:[version()]};}});
- await settle();assert.equal(calls.length,1);assert.doesNotMatch(document.body.textContent!,/try again|couldn.t be opened/i);
- t.mock.timers.tick(500);await settle();assert.deepEqual(calls,[{id:'entry',options:{limit:20}},{id:'entry',options:{limit:20}}]);assert.ok(row());f.dialog.close();
+test('a failed page performs one request and never schedules or subscribes for automatic retries',async t=>{
+ t.mock.timers.enable({apis:['setTimeout']});let calls=0;const f=fixture(t,{list:async()=>{calls++;throw fault('storage_busy');}});
+ await settle();assert.equal(calls,1);assert.match(document.body.textContent!,/Version history is unavailable/);assert.equal(f.listeners.size,0);
+ t.mock.timers.tick(90000);for(const listener of f.listeners)listener();await settle();assert.equal(calls,1);assert.equal(document.querySelector('[role=dialog]')?.getAttribute('aria-busy'),'false');f.dialog.close();
 });
 
-test('a mounted selected preview automatically retries the original snapshot and remains usable',async t=>{
+test('a failed preview reads once per explicit selection, without elapsed-time or availability retries',async t=>{
  t.mock.timers.enable({apis:['setTimeout']});const calls:string[]=[];const f=fixture(t,{read:async(_id,id)=>{calls.push(id);if(calls.length===1)throw fault('filesystem_io_retryable');return{version:version(id),content:'old'};}});
- await settle();row().click();await settle();assert.equal(calls.length,1);assert.doesNotMatch(document.body.textContent!,/selecting it again|couldn.t be opened/i);
- t.mock.timers.tick(500);await settle();assert.deepEqual(calls,['2','2']);assert.equal(preview().value,'old');assert.equal(document.querySelector<HTMLButtonElement>('.mod-cta')!.disabled,false);f.dialog.close();
+ await settle();row().click();await settle();assert.deepEqual(calls,['2']);assert.match(document.body.textContent!,/This saved version is unavailable/);assert.equal(f.listeners.size,0);
+ t.mock.timers.tick(90000);for(const listener of f.listeners)listener();await settle();assert.deepEqual(calls,['2']);assert.equal(row().disabled,false);
+ row().click();await settle();assert.deepEqual(calls,['2','2']);assert.equal(preview().value,'old');assert.equal(document.querySelector<HTMLButtonElement>('.mod-cta')!.disabled,false);f.dialog.close();
 });
 
-test('changing version cancels the held older preview and never adopts its late result',async t=>{
- const old=deferred<{version:RecoveryVersion;content:string}>(),calls:string[]=[];const f=fixture(t,{read:async(_id,id)=>{calls.push(id);return id==='2'?old.promise:{version:version(id),content:'new'};}});
- await settle();row().click();await settle();row(1).click();await settle();assert.deepEqual(calls,['2','1']);assert.equal(preview().value,'new');old.resolve({version:version('2'),content:'old'});await settle();assert.equal(preview().value,'new');f.dialog.close();
+for(const outcome of ['fulfilled','rejected'] as const)test(`a superseded ${outcome} read cannot validate, paint errors, or finish the current selection`,async t=>{
+ const old=deferred<{version:RecoveryVersion;content:string}>(),next=deferred<{version:RecoveryVersion;content:string}>(),calls:string[]=[];let staleValidation=0;
+ const f=fixture(t,{read:async(_id,id)=>{calls.push(id);return id==='2'?old.promise:next.promise;}});
+ await settle();row().click();await settle();assert.equal(row(1).disabled,false,'selection remains switchable while the first request is held');row(1).click();await settle();
+ assert.deepEqual(calls,['2','1']);if(outcome==='fulfilled')old.resolve({get version(){staleValidation++;throw Error('obsolete metadata must not be read');},content:'old'});else old.reject(fault('storage_corrupt'));
+ await settle();assert.equal(staleValidation,0);assert.equal(preview().value,'');assert.equal(document.querySelector('[role=dialog]')?.getAttribute('aria-busy'),'true');assert.equal(document.querySelector<HTMLButtonElement>('.mod-cta')!.disabled,true);assert.equal(document.querySelector('.version-history-message')!.textContent,'');
+ next.resolve({version:version('1'),content:'new'});await settle();assert.equal(preview().value,'new');assert.equal(document.querySelector('[role=dialog]')?.getAttribute('aria-busy'),'false');f.dialog.close();
 });
 
-test('positive same-scope availability racing a retired read is not lost and close unsubscribes',async t=>{
- const held=deferred<{version:RecoveryVersion;content:string}>();let calls=0;const f=fixture(t,{read:async()=>++calls===1?held.promise:{version:version(),content:'old'}});
- await settle();row().click();await settle();assert.equal(f.listeners.size,1);for(const listener of f.listeners)listener();held.reject(fault('client_not_admitted'));await settle();assert.equal(calls,2);assert.equal(preview().value,'old');f.dialog.close();assert.equal(f.listeners.size,0);
-});
-
-test('admission errors never use elapsed time as authority and close cancels the wait',async t=>{
- t.mock.timers.enable({apis:['setTimeout']});let calls=0;const f=fixture(t,{read:async()=>{calls++;throw fault('client_not_admitted');}});
- await settle();row().click();await settle();t.mock.timers.tick(90000);await settle();assert.equal(calls,1);f.dialog.close();for(const listener of f.listeners)listener();await settle();assert.equal(document.querySelector('[role=dialog]'),null);assert.equal(f.listeners.size,0);assert.equal(calls,1);
+test('an admission failure is unavailable immediately and a different explicit selection remains usable',async t=>{
+ let calls=0;const f=fixture(t,{read:async(_id,id)=>{calls++;if(id==='2')throw fault('client_not_admitted');return{version:version(id),content:'new'};}});
+ await settle();row().click();await settle();assert.match(document.body.textContent!,/unavailable/);assert.equal(document.querySelector('[role=dialog]')?.getAttribute('aria-busy'),'false');assert.equal(f.listeners.size,0);
+ row(1).click();await settle();assert.equal(calls,2);assert.equal(preview().value,'new');f.dialog.close();
 });
 
 for(const [code,source]of [['permission_denied','host'],['storage_corrupt','host'],['invalid_durable_response','protocol'],['not_found','host'],['storage_busy','protocol']] as const)test(`terminal ${source} ${code} remains truthful and never retries`,async t=>{
@@ -54,5 +55,24 @@ for(const [code,source]of [['permission_denied','host'],['storage_corrupt','host
 
 
 test('closing a held page cancels its continuation and ignores late rows',async t=>{
- const held=deferred<{versions:RecoveryVersion[]}>(),f=fixture(t,{list:()=>held.promise});f.dialog.close();held.resolve({versions:[version()]});await settle();assert.equal(document.querySelector('[role=dialog]'),null);assert.equal(f.listeners.size,0);
+ const held=deferred<{versions:RecoveryVersion[]}>();let inspected=0;const f=fixture(t,{list:()=>held.promise});f.dialog.close();held.resolve({get versions(){inspected++;return[version()];}});await settle();assert.equal(inspected,0);assert.equal(document.querySelector('[role=dialog]'),null);assert.equal(f.listeners.size,0);
+});
+
+
+for(const outcome of ['fulfilled','rejected'] as const)test(`closing a held ${outcome} preview prevents late adoption`,async t=>{
+ const held=deferred<{version:RecoveryVersion;content:string}>();let inspected=0;const f=fixture(t,{read:()=>held.promise});
+ await settle();row().click();await settle();const detached=preview();f.dialog.close();
+ if(outcome==='fulfilled')held.resolve({get version(){inspected++;return version();},content:'old'});else held.reject(fault('permission_denied'));
+ await settle();assert.equal(inspected,0);assert.equal(detached.value,'');assert.equal(document.querySelector('[role=dialog]'),null);assert.equal(f.restores,0);
+});
+
+test('a stale vault owner ignores a held page before inspecting its results',async t=>{
+ const held=deferred<{versions:RecoveryVersion[]}>();let inspected=0;const f=fixture(t,{list:()=>held.promise});f.retire();held.resolve({get versions(){inspected++;return[version()];}});await settle();assert.equal(inspected,0);assert.equal(document.querySelector('[role=dialog]'),null);
+});
+
+test('restoration that is already saving closes the dialog without another restore request',async t=>{
+ const f=fixture(t);let saves=0;
+ // Use the public dialog API with the same history and explicit saving receipt.
+ f.dialog.close();const dialog=openVersionHistory({history:f.history,entryId:'entry',isCurrent:()=>true,restore:async content=>{assert.equal(content,'old');saves++;return'saving';}});
+ await settle();row().click();await settle();document.querySelector<HTMLButtonElement>('.mod-cta')!.click();await settle();assert.equal(saves,1);assert.equal(document.querySelector('[role=dialog]'),null);dialog.close();assert.equal(saves,1);
 });

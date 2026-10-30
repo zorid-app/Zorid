@@ -1,6 +1,5 @@
 import type {RecoveryHistory,RecoveryVersion,RecoveryCursor} from '../platform/bridge';
 import {el,textButton} from './dom.ts';
-import {NoteLoadSupervisor} from './note-load-supervisor.ts';
 
 export interface VersionHistoryOptions {
   history:RecoveryHistory;
@@ -20,13 +19,13 @@ export function openVersionHistory(options:VersionHistoryOptions):{close():void}
   const preview=el('textarea','version-history-preview');preview.readOnly=true;preview.setAttribute('aria-label','Version preview');
   const explanation=el('p','','Restoring replaces the current note with this version.');
   let closed=false,reading=false,listing=false,restoring=false,selected:RecoveryVersion|undefined,loaded:string|undefined,cursor:RecoveryCursor|undefined;
-  type ReadOwner={controller:AbortController;supervisor:NoteLoadSupervisor};
-  let readOwner:ReadOwner|undefined,listOwner:ReadOwner|undefined,stopAvailable=()=>{};
+  type RequestOwner=object;
+  let readOwner:RequestOwner|undefined,listOwner:RequestOwner|undefined;
   let pages=0;
   const current=()=>!closed&&options.isCurrent();
   const close=()=>{
     if(closed||restoring)return;
-    closed=true;readOwner?.controller.abort();readOwner?.supervisor.stop();listOwner?.controller.abort();listOwner?.supervisor.stop();stopAvailable();observer.disconnect();document.removeEventListener('keydown',keydown,true);overlay.remove();
+    closed=true;readOwner=undefined;listOwner=undefined;observer.disconnect();document.removeEventListener('keydown',keydown,true);overlay.remove();
     if(previous?.isConnected)previous.focus();
   };
   const cancel=textButton('Close',close);
@@ -44,26 +43,25 @@ export function openVersionHistory(options:VersionHistoryOptions):{close():void}
   const check=()=>{if(!current()){close();return false;}return true;};
   async function select(version:RecoveryVersion):Promise<void>{
     if(restoring||!check())return;
-    readOwner?.controller.abort();readOwner?.supervisor.stop();
-    const owner:ReadOwner={controller:new AbortController(),supervisor:new NoteLoadSupervisor()};readOwner=owner;
+    const owner:RequestOwner={};readOwner=owner;
     version=Object.freeze({...version});selected=version;loaded=undefined;preview.value='';reading=true;message.textContent='';
     controls();
     try{
-      const result=await owner.supervisor.run(()=>options.history.read(options.entryId,version.snapshotId),()=>{if(!current()||readOwner!==owner)throw new Error('History preview owner changed');},{signal:owner.controller.signal});
-      if(!check())return;
+      const result=await options.history.read(options.entryId,version.snapshotId);
+      if(readOwner!==owner||!check())return;
       if(result.version.entryId!==options.entryId||result.version.snapshotId!==version.snapshotId||result.version.byteLength!==version.byteLength||result.version.capturedAtMs!==version.capturedAtMs||result.version.path!==version.path||typeof result.content!=='string')throw new Error('History selection changed');
       loaded=result.content;preview.value=loaded;
-    }catch(error){if(readOwner===owner&&!owner.controller.signal.aborted&&check()){console.error('Version preview unavailable',error);message.textContent='This saved version is unavailable.';}}
-    finally{owner.supervisor.stop();if(readOwner===owner){readOwner=undefined;reading=false;if(current())controls();}}
+    }catch(error){if(readOwner===owner&&check()){console.error('Version preview unavailable',error);message.textContent='This saved version is unavailable.';}}
+    finally{if(readOwner===owner){readOwner=undefined;reading=false;if(current())controls();}}
   }
   async function loadPage():Promise<void>{
     if(listing||restoring||!check())return;
-    const owner:ReadOwner={controller:new AbortController(),supervisor:new NoteLoadSupervisor()};listOwner=owner;
+    const owner:RequestOwner={};listOwner=owner;
     const request=Object.freeze({limit:20,...(cursor?{before:Object.freeze({...cursor})}:{})});
     listing=true;controls();message.textContent='';
     try{
-      const result=await owner.supervisor.run(()=>options.history.list(options.entryId,request),()=>{if(!current()||listOwner!==owner)throw new Error('History page owner changed');},{signal:owner.controller.signal});
-      if(!check())return;
+      const result=await options.history.list(options.entryId,request);
+      if(listOwner!==owner||!check())return;
       cursor=result.nextCursor;pages++;
       for(const version of result.versions){
         const date=new Date(version.capturedAtMs);
@@ -76,8 +74,8 @@ export function openVersionHistory(options:VersionHistoryOptions):{close():void}
       more.hidden=!cursor||pages>=50;
       if(!buttons.length)message.textContent='No saved versions are available for this note yet.';
       else if(cursor&&pages>=50)message.textContent='Only the most recent versions are shown.';
-    }catch(error){if(listOwner===owner&&!owner.controller.signal.aborted&&check()){console.error('Version history unavailable',error);message.textContent='Version history is unavailable.';}}
-    finally{owner.supervisor.stop();if(listOwner===owner){listOwner=undefined;listing=false;if(current())controls();}}
+    }catch(error){if(listOwner===owner&&check()){console.error('Version history unavailable',error);message.textContent='Version history is unavailable.';}}
+    finally{if(listOwner===owner){listOwner=undefined;listing=false;if(current())controls();}}
   }
   async function restoreSelected():Promise<void>{
     if(restoring||reading||!selected||loaded===undefined||!check())return;
@@ -102,7 +100,6 @@ export function openVersionHistory(options:VersionHistoryOptions):{close():void}
   };
   const observer=new MutationObserver(()=>{if(!current()&&!restoring)close();});
   document.body.append(overlay);observer.observe(document.body,{childList:true,subtree:true});
-  stopAvailable=options.history.subscribeAvailable?.(()=>{if(!check())return;readOwner?.supervisor.admissionAvailable();listOwner?.supervisor.admissionAvailable();})??(()=>{});
   document.addEventListener('keydown',keydown,true);cancel.focus();void loadPage();
   return{close};
 }
