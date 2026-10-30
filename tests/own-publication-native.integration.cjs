@@ -23,9 +23,10 @@ test('actual host and automatic Core polling finish positive hints before a fres
   await fs.access(executable, fs.constants.X_OK);
   const parent = await fs.mkdtemp(path.join(tmpdir(), 'zorid-own-publication-'));
   const root = path.join(parent, 'vault');
-  let core, unsubscribe;
+  let core, unsubscribe, recorder;
   t.after(async () => {
     try {
+      core?.listeners.delete(recorder);
       unsubscribe?.();
       if (core) {
         await core.close();
@@ -61,6 +62,14 @@ test('actual host and automatic Core polling finish positive hints before a fres
     await fs.writeFile(path.join(root, `n-${String(index).padStart(3, '0')}.md`), `# External ${index}\n${'body\n'.repeat(1600)}`);
   }
   await fs.writeFile(path.join(root, tail), tailBody);
+  // Observe the real notify sink without starting automatic polling yet. This
+  // includes any attention emitted on the very first retired-header handoff.
+  const events = [], statuses = [];
+  recorder = event => {
+    events.push(event);
+    if (event.type === 'reconciliation') statuses.push(structuredClone(event.reconciliation));
+  };
+  core.listeners.add(recorder);
   core.needsScan = true;
   await core.pollNow();
   assert.equal(core.reconciliation.complete, false);
@@ -95,23 +104,21 @@ test('actual host and automatic Core polling finish positive hints before a fres
   assert.equal(selectedProof(core.root, oldScan), immutable);
   assert.equal(await core.readEntry(tail), null, 'fixture tail must still require continuation');
 
-  const events = [], statuses = [structuredClone(core.reconciliation)];
   let timer;
   try {
     await new Promise((resolve, reject) => {
       // A watchdog bounds the test; its duration is not a latency acceptance.
       timer = setTimeout(() => reject(new Error('automatic Core polling did not finish source reconciliation')), 20000);
       unsubscribe = core.subscribe(event => {
-        events.push(event);
         if (event.type === 'error') reject(new Error(`unexpected maintenance attention: ${event.code}`));
         if (event.type === 'reconciliation') {
-          statuses.push(structuredClone(event.reconciliation));
           if (event.reconciliation.complete) resolve();
         }
       });
     });
     if (core.polling) await core.polling;
-  } finally { clearTimeout(timer); unsubscribe?.(); unsubscribe = null; }
+  } finally { clearTimeout(timer); core.listeners.delete(recorder); unsubscribe?.(); unsubscribe = null; }
+  assert.ok(statuses.some(status => status.scanId === oldScan && status.finished && !status.complete && !status.scanComplete && status.work.pending), 'record the first retired-header transition itself');
   assert.ok(statuses.some(status => status.scanId !== oldScan && status.complete && status.scanComplete && status.finished), 'automatic consumer must reach a fresh complete namespace inventory');
   assert.ok(statuses.filter(status => status.scanId === oldScan).every(status => !status.complete && !status.scanComplete && status.work.pending && status.work.phase === 'discovery'));
   assert.equal(events.some(event => event.type === 'error'), false);
