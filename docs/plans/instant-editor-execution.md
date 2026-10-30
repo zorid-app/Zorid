@@ -83,6 +83,19 @@ harness correction: read-only unmeasured warm need not activate, lifecycle obser
 independent of focus, passive failure diagnostics; measured guards unchanged.
 Receipt /private/tmp/zorid-packaged-startup-candidate011-control100-20261030.
 
+Final path audit found two additional in-scope gaps; ordinary supervised note paths
+were checked rather than inferred from error strings. Real platform adapter RED
+at tmp/instant-editor-validation/recovery-path-audit001-20261030 shows trusted
+same-admission storage_busy rejects set_entry immediately. Other collection mutations
+bypass captured request continuation. Store transactional operation-ID receipts
+support exact replay before stale/precondition re-execution; new IDs/replanning are
+not allowed. capture_note_ui_finish owns design-first platform/database/UI continuation
+in an isolated current-source worktree. Version-history list/read use legacy IPC and
+bypass typed supervised reads; UI advises reselect/reopen/manual save on any error.
+checkpoint_review owns design-first typed history/read and restoration UI seam,
+coordinating its narrow index.ts changes with the mutation owner. No implementation
+accepted or runtime claim for either new correction yet.
+
 Remaining gates: actual recovery campaign success; valid startup/first-import/large
 restore/Base measurements and necessary fixes; scoped final review, main integration,
 final build/verify/staged install. No800ms startup claim. Ordinary185.99ms and432KB

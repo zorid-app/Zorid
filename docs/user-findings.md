@@ -3213,3 +3213,15 @@ Startup control100 failed during unmeasured warm foreground acquisition; no meas
 launch/reset or800ms result. Harness-only lifecycle/warm correction in progress.
 Main and installed app unchanged; final GUI acceptance/integration/install remain open.
 Exact receipts and pins: docs/plans/instant-editor-execution.md latest handoff.
+
+
+### 2026-10-30 — Final recovery-path audit followups
+
+Executable real-platform/mock-typed-host RED confirms same-admission storage_busy
+rejects collection set_entry immediately; non-set_entry mutations also lack captured
+automatic continuation. Exact operation-ID transactional replay contract exists.
+Version-history legacy reads bypass typed recovery and still suggest reselect/reopen.
+Named isolated owners are investigating safe continuation and history transport; both
+remain implementation/verification OPEN. Ordinary note source load/save supervisors
+exist; error strings alone were not counted as additional failures. Audit artifact:
+tmp/instant-editor-validation/recovery-path-audit001-20261030.
