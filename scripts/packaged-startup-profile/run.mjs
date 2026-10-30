@@ -11,6 +11,7 @@ import {CDP} from '../../tests/tasks-electron-integration/cdp.mjs';
 import {assessNote,clockInterval,DEADLINE_MS,planCampaign} from './oracle.mjs';
 import {navigateFileTree} from './file-navigation.mjs';
 import {foregroundSource} from './foreground.mjs';
+import {requestOwnedForeground} from './os-foreground.mjs';
 import {captureSetupFailure} from './setup-failure.mjs';
 import {fixtureOptions,fixtureSources,preparedRestore,returnTarget,startupTarget} from './fixtures.mjs';
 import {configurePassiveObserver,probeViewportSource} from './passive-observer.mjs';
@@ -47,6 +48,7 @@ export async function main(args=process.argv.slice(2)){
   report.fixturePolicy={...fixturePolicy,returnPath:returnTarget(fixturePolicy)};
   report.harnessFiles={};
   for(const name of await fs.readdir(fileURLToPath(new URL('.',import.meta.url))))if(/\.(mjs|md)$/.test(name))report.harnessFiles[name]=await hashFile(fileURLToPath(new URL(name,import.meta.url)));
+  report.nativeWindowAdapterSha256=await hashFile(fileURLToPath(new URL('../../tests/bases-electron-integration/window-visibility.mjs',import.meta.url)));
   report.cdpHelperSha256=await hashFile(fileURLToPath(new URL('../../tests/tasks-electron-integration/cdp.mjs',import.meta.url)));
   const save=()=>fs.writeFile(path.join(out,'report.json'),JSON.stringify(report,null,2),{mode:0o600});
   const clones=[],pairs=new Map();let active;
@@ -66,13 +68,19 @@ export async function main(args=process.argv.slice(2)){
   async function foreground(launch,record){
     const receipt={calledAtMs:launch.elapsed()};(record.foregroundActivations??=[]).push(receipt);active.foregroundEstablished=false;
     try{
-      await bounded(async()=>{receipt.beforeWindow=await active.main.evaluate(foregroundSource(foregroundConfig(launch,false)));},launch,remaining(launch,record),{activation:true});
-      receipt.request=await active.main.evaluate(foregroundSource(foregroundConfig(launch,true)));receipt.requestCompletedAtMs=launch.elapsed();
+      const config=foregroundConfig(launch,false);
+      await requestOwnedForeground({config,measured:launch.measured,receipt,now:launch.elapsed,timeoutMs:()=>remaining(launch,record),
+        assertAlive:()=>{assert.ok(active?.child.pid===launch.pid&&active.child.exitCode===null&&active.child.signalCode===null&&!launch.launchError,'Owned app lifetime changed before activation');},
+        readWindow:()=>bounded(()=>active.main.evaluate(foregroundSource(config)),launch,remaining(launch,record),{activation:true}),
+        readDocument:()=>active.renderer?bounded(()=>active.renderer.evaluate(documentVisibilitySource),launch,remaining(launch,record),{activation:true}):undefined,bringToFront:()=>active.renderer?.call('Page.bringToFront'),
+        focusWindow:()=>active.main.evaluate(foregroundSource({...foregroundConfig(launch,true),windowOnly:true})),
+      });
+      if(receipt.reusedConfirmedForeground)active.foregroundEstablished=true;
       await bounded(async()=>{
         receipt.window=await active.main.evaluate(foregroundSource(foregroundConfig(launch,false)));
         assert.ok(receipt.window.focused&&receipt.window.visible&&!receipt.window.minimized,'Owned native activation not confirmed');
-        if(active.renderer){receipt.document=await active.renderer.evaluate(documentVisibilitySource);assert.ok(!receipt.document.hidden&&receipt.document.visibilityState==='visible','Owned renderer not visible after activation');}
-      },launch,remaining(launch,record),{activation:true});
+        if(active.renderer){receipt.document=await active.renderer.evaluate(documentVisibilitySource);assert.ok(!receipt.document.hidden&&receipt.document.visibilityState==='visible'&&receipt.document.hasFocus===true&&receipt.document.url===config.url,'Owned renderer not focused/visible after activation');}
+      },launch,remaining(launch,record),{activation:!receipt.reusedConfirmedForeground});
       receipt.confirmedAtMs=launch.elapsed();active.foregroundEstablished=true;return receipt;
     }catch(error){receipt.error=String(error);throw error;}finally{receipt.completedAtMs=launch.elapsed();}
   }

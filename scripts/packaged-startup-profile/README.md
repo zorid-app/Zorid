@@ -205,3 +205,24 @@ a Native PID from `ps` does not invent an exit status. Native PIDs seen in the
 owned pre-quit process snapshot also require matching actual exit receipts. Warm
 setup failures preserve case/activation history plus independently attempted
 renderer and passive owned-window diagnostics, even when one observation fails.
+
+
+Measured foreground setup first reads the exact owned BrowserWindow and renderer
+focus. If both are already focused and visible at the packaged URL, that actual
+passive proof is reused without another activation. Otherwise it makes one
+`Page.bringToFront` request, one PID/executable-checked AppKit unhide/activation
+request using the existing Native journey's CoreGraphics window adapter, then one
+Electron window restore/show/focus request. There is no second Electron app-focus
+request or activation loop. The helper uses absolute `/usr/bin/osascript`, literal
+arguments, no shell and at most the remaining original budget (capped5s).
+
+AppKit accepted/active flags are diagnostics. A real owned native window must be
+on screen, and the final BrowserWindow plus document focus/visibility are still
+required before input; those gates are not replaced by API acceptance. Source and
+caret/viewport checks remain fresh. All setup/helper delays remain in the original
+clock, and the fixed800ms timer is never reset. Warm preparation never calls this
+activation boundary. The external Native window-adapter source is hashed in the
+report. Unit tests use injected executors/JXA stand-ins and execute no OS actions.
+The observed Electron-only failures do not establish a LaunchServices cause or
+user interference; both existing journeys launch their actual executable via
+`child_process.spawn`.

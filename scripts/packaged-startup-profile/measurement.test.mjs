@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {boundedMeasurement,isMeasurementInterference,requireForeground,visibleFramesSource} from './measurement.mjs';
-const window={visible:true,minimized:false,focused:true},document={visibilityState:'visible',hidden:false};
+const window={visible:true,minimized:false,focused:true},document={visibilityState:'visible',hidden:false,hasFocus:true};
 test('asynchronous native focus confirmation waits passively within the original budget',async()=>{
   let now=25,focused=false,requests=0;const origin=0;
   const result=await boundedMeasurement(()=>{requests++;assert.ok(focused);return 'focused';},{timeoutMs:100-now,now:()=>now,pause:async ms=>{now+=ms;if(now>=45)focused=true;}});

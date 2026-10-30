@@ -23,3 +23,5 @@ test('passive diagnostics never activate and minimized owned windows restore nor
   const f=fixture();assert.equal(f.run({activate:false}).activationRequested,false);assert.equal(f.calls.length,0);
   f.setMinimized(true);f.run();assert.ok(f.calls.includes('restore'));
 });
+
+test('the AppKit boundary uses Electron window-only focus without a second app activation',()=>{const f=fixture(),value=f.run({windowOnly:true});assert.deepEqual(f.calls,['show','window-focus']);assert.equal(value.applicationActivationRequested,false);assert.equal(value.activationRequested,true);});

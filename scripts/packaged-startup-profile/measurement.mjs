@@ -5,7 +5,7 @@ export class MeasurementInterference extends Error{
 export const isMeasurementInterference=error=>error?.code===INTERFERENCE_CODE||String(error?.message??error).includes(INTERFERENCE_CODE);
 export function requireForeground(window,document){
   if(!window?.visible||window.minimized||!window.focused)throw new MeasurementInterference('Owned window lost foreground visibility/focus');
-  if(document&&(document.hidden||document.visibilityState!=='visible'))throw new MeasurementInterference('Owned renderer became hidden');
+  if(document&&(document.hidden||document.visibilityState!=='visible'||document.hasFocus!==true))throw new MeasurementInterference('Owned renderer lost visibility/focus');
 }
 /** Expected loading assertions may retry. Measurement interference is terminal. */
 export async function boundedMeasurement(action,{timeoutMs,now=()=>performance.now(),pause=ms=>new Promise(resolve=>setTimeout(resolve,ms)),guard=async()=>{}}){
@@ -19,7 +19,7 @@ export async function boundedMeasurement(action,{timeoutMs,now=()=>performance.n
   }while(now()<end);
   throw last??Error('Packaged profiling deadline');
 }
-export const documentVisibilitySource='({visibilityState:document.visibilityState,hidden:document.hidden,hasFocus:document.hasFocus()})';
+export const documentVisibilitySource='({visibilityState:document.visibilityState,hidden:document.hidden,hasFocus:document.hasFocus(),url:location.href.split("#")[0]})';
 /** A hidden renderer may never deliver RAF. Reject on visibility loss rather
  * than waiting for the CDP transport deadline; no refocus or input is sent. */
 export function visibleFrames(){

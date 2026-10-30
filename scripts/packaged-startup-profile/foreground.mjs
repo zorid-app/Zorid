@@ -9,8 +9,8 @@ export function ownedPackagedWindow(config){
   const window=windows[0],url=window.webContents.getURL().split('#')[0];
   if(url!==config.url&&url!=='about:blank')throw Error('Foreground owned packaged window URL differs');
   const startedAt=performance.now();
-  if(config.activate){app.focus({steal:true});if(window.isMinimized())window.restore();window.show();window.focus();}
-  return {startedAt,completedAt:performance.now(),activationRequested:config.activate===true,pid:process.pid,windowId:window.id,url,
+  if(config.activate){if(!config.windowOnly)app.focus({steal:true});if(window.isMinimized())window.restore();window.show();window.focus();}
+  return {startedAt,completedAt:performance.now(),activationRequested:config.activate===true,applicationActivationRequested:config.activate===true&&!config.windowOnly,pid:process.pid,windowId:window.id,url,
     visible:window.isVisible(),minimized:window.isMinimized(),focused:window.isFocused(),webContentsFocused:window.webContents.isFocused(),
     backgroundThrottling:typeof window.webContents.getBackgroundThrottling==='function'?window.webContents.getBackgroundThrottling():null,
     occlusion:'not exposed by the inspected Electron BrowserWindow API'};
