@@ -188,3 +188,37 @@ Pure-core selected-file8549814a remains unwired; fresh selected-path priority an
 performance win until runtime/UI validation. Final delivery requires exact-source
 release/package, affected native validation, normal app lifecycle and installed
 smoke; no replacement of accepted installed app by old precombined package.
+
+## Delivered speed/focus batch — latest user steering
+
+User objects to expanding tests and asks to make the editor faster. Root stopped
+new test/harness/selected-provider expansion and delivered the already implemented
+speed and focus changes. Runtime3f43215a is integrated on main and installed at
+`/Users/ctk/Applications/Zorid.app`; Nativec455811939642faac79eb8087d0ceb1e5f6f5113ae45ce537754aaf7648851ba.
+Release Cargo/TS/Vite/package built;361files verified. Staged and installed
+packaged trusted autosave/restart checks passed with both actual app exits0 and
+all observed owned processes absent. Native kernel exit status in that smoke is
+explicitly unknown; separate paired Native runtime runs have real normal EOF/0.
+Receipt `/private/tmp/zorid-speed-install-20261030.json` confirms previous bundle
+deleted only after installed proof; obsolete agent stage deleted; real running
+user app, vaults and preferences untouched. Restart uses the installed update.
+
+The measured public runtime median improved1583→683ms (~57%), pumps32→8–9.
+Visible pre-focus-fix candidate accepted two edits635/948ms; third revealed real
+DOM focus loss, not app deactivation: widget removed input while query admission
+still blocked and dropped its one-shot completion. Reviewed18c6bfa8→3f43215a
+retains exact accepted keyboard intent until admission, preserves earlier captured
+user click and cancels on new focus/navigation/context. Existing composed checks
+passed; no post-fix complete five-edit GUI latency acceptance is claimed.
+
+Private smoke001 held its debugger open at quit;002 authenticated during partial
+Node crypto initialization. Both failed and remain failed. Existing003 corrected
+only those runner errors, then passed staged/installed save+restart normally.
+No additional product policy was added to satisfy a harness.
+
+Remaining selected-note-first and800ms launch targets stay OPEN. Pre-ready startup
+is held on c07ed20a without a proved speedup. Selected provider b9c1a08e/fa51678b
+stays unmerged: a real background-import-before-publication regression makes its
+new selected route fail where legacy read returns fresh canonical bytes. One
+uncommitted regression and logs are preserved on its worktree; all workers stopped
+new checks at user instruction. Do not silently ship that route or initial1.

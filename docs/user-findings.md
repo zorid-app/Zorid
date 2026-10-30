@@ -1,5 +1,19 @@
 # User findings queue
 
+## Speed update delivered; stop expanding tests — 2026-10-30
+
+User explicitly asks for editor speed instead of more tests. Root stopped test/
+harness expansion and installed reviewed runtime3f43215a (Nativec455) at
+`/Users/ctk/Applications/Zorid.app`. Public runtime refresh median1583→683ms;
+bounded reuse reduces pumps32→8–9. Included the confirmed post-save keyboard
+completion/focus fix. Staged and installed autosave/restart pass with normal app
+exits and no owned processes; old bundle deleted after proof, user data preserved.
+
+Selected-note-first/800ms launch remain open; unproved pre-ready code and selected
+provider route with a reproduced startup read regression remain isolated. No full
+five-edit post-focus GUI latency claim. See responsiveness delivery record.
+
+
 ## Measured Base interaction delay / responsiveness continuation — 2026-10-30
 
 Latest user transfers sole ownership after the recovery session completed; root

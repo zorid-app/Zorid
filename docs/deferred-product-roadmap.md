@@ -2,6 +2,15 @@
 
 ## Execution checkpoint — shared-core coordinator
 
+**SPEED/FOCUS BATCH INSTALLED — 2026-10-30, latest user steering.**
+User directs speed delivery and stops expanding tests. Root installed integrated
+runtime3f43215a/Nativec455 after staged+installed save/restart proof and361-file
+verification, then deleted previous bundle. Public runtime median1583→683ms;
+focus-completion bug fixed. All other experimental startup/selected work held,
+no more test/harness expansion. Remaining selected-first/800ms targets unverified.
+[Exact delivery and limits](plans/editor-responsiveness-20261030.md).
+
+
 **SOLE RESPONSIVENESS OWNER / MEASURED BASE DELAY — 2026-10-30.**
 User says the other session completed, no coordination needed, all ownership
 transferred here. Root owns isolated `codex/snappy-index-refresh` from59ce6b6a
