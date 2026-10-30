@@ -451,24 +451,7 @@ impl ProgressScan {
     /// allocating another durable revision. This is a fresh checked read, never
     /// a cached admission. The caller still holds the outer native vault lock.
     fn check_unchanged_inventory(&self, vault: &mut NativeVault) -> Result<()> {
-        vault.paths.verify()?;
-        self.inventory.validate()?;
-        let (revision, durable) = vault.store.external_scan_progress::<Inventory>()?;
-        if revision != self.checkpoint_revision {
-            return Err(zorid_store::StoreError::Sync(
-                zorid_client_sync::SyncError::VersionConflict,
-            )
-            .into());
-        }
-        let durable =
-            durable.ok_or_else(|| corrupt("active external inventory checkpoint missing"))?;
-        durable.validate()?;
-        // Compare the exact ordered typed state without allocating two copies
-        // of the complete inventory JSON for a read-only acknowledgement.
-        if self.inventory != durable {
-            return Err(corrupt("external inventory checkpoint state changed"));
-        }
-        vault.paths.verify()
+        vault.check_inventory_checkpoint(&self.checkpoint_revision, &self.inventory)
     }
 
     /// A fresh physical baseline invalidates old absence-binding fences. Retire
@@ -701,6 +684,30 @@ impl ProgressScan {
 }
 
 impl NativeVault {
+    fn check_inventory_checkpoint(
+        &mut self,
+        expected_revision: &Option<String>,
+        expected: &Inventory,
+    ) -> Result<()> {
+        self.paths.verify()?;
+        expected.validate()?;
+        let (revision, durable) = self.store.external_scan_progress::<Inventory>()?;
+        if &revision != expected_revision {
+            return Err(zorid_store::StoreError::Sync(
+                zorid_client_sync::SyncError::VersionConflict,
+            )
+            .into());
+        }
+        let durable =
+            durable.ok_or_else(|| corrupt("active external inventory checkpoint missing"))?;
+        durable.validate()?;
+        // Compare the exact ordered typed state without allocating two copies
+        // of the complete inventory JSON for a read-only acknowledgement.
+        if expected != &durable {
+            return Err(corrupt("external inventory checkpoint state changed"));
+        }
+        self.paths.verify()
+    }
     fn save_inventory(
         &mut self,
         revision: &mut Option<String>,
@@ -1060,6 +1067,7 @@ impl NativeVault {
         let mut work = 0u32;
         let mut total_bytes = 0u64;
         let mut stopped = false;
+        let mut first_directory = true;
         while inventory.next_directory < inventory.directories.len() {
             if work >= options.max_entries
                 || budget.as_ref().map_or_else(
@@ -1070,10 +1078,17 @@ impl NativeVault {
                 stopped = true;
                 break;
             }
-            // Persist every newly admitted directory marker before enumerating
-            // descendants. A crash cannot forget its original marker while
-            // retaining descendant observations/proofs.
-            self.save_inventory(&mut revision, Some(&inventory))?;
+            if first_directory {
+                // This exact inventory was just loaded or newly persisted.
+                // Continuing its current directory has no checkpoint delta;
+                // retain the original revision/state fence without rewriting it.
+                self.check_inventory_checkpoint(&revision, &inventory)?;
+                first_directory = false;
+            } else {
+                // A prior iteration advanced the parent cursor and may have
+                // admitted child markers. Persist those before descendants.
+                self.save_inventory(&mut revision, Some(&inventory))?;
+            }
             let index = inventory.next_directory;
             let saved = inventory.directories[index].clone();
             let directory = match open_directory(self, &directories, saved.path.as_ref()) {
@@ -1416,9 +1431,7 @@ impl NativeVault {
                 }
                 return self.progress_result(inventory, issues, revision, false);
             }
-            let mut bindings = self.store.physical_bindings()?;
-            bindings.sort_by(|a, b| a.state.id.cmp(&b.state.id));
-            let fences = binding_fences(&bindings, &proofs);
+            let fences = binding_fences(&self.store.physical_bindings()?, &proofs);
             if inventory
                 .absence_bindings
                 .as_ref()
@@ -1431,11 +1444,14 @@ impl NativeVault {
                 );
             }
             if inventory.absence_bindings.is_none() {
-                inventory.absence_bindings = Some(fences);
+                inventory.absence_bindings = Some(fences.clone());
                 self.save_inventory(&mut revision, Some(&inventory))?;
             }
             let after = inventory.absence_after.clone();
-            for binding in bindings
+            // Exact Present captures already exclude these bindings from all
+            // absence authority. Visit only the saved, freshly matched fences;
+            // old broad-traversal cursors remain valid in the same ID order.
+            for binding in fences
                 .into_iter()
                 .filter(|b| after.as_ref().is_none_or(|id| &b.state.id > id))
             {

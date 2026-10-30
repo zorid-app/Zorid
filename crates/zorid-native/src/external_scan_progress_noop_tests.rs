@@ -192,8 +192,7 @@ fn micro_options() -> ExternalReconcileOptions {
 fn micro_fixture(count: usize) -> (tempfile::TempDir, NativeVault) {
     let root = tempfile::tempdir().unwrap();
     for index in 0..count {
-        std::fs::write(root.path().join(format!("{index:02}.md")), b"stable note\n")
-            .unwrap();
+        std::fs::write(root.path().join(format!("{index:02}.md")), b"stable note\n").unwrap();
     }
     let mut vault = NativeVault::open(root.path()).unwrap();
     vault
@@ -245,8 +244,8 @@ fn micro_quantum_unchanged_current_directory_writes_only_advanced_cursor() {
     let (_root, mut vault) = micro_fixture(12);
     let _lock = vault.paths.lock(vault.options.lock_timeout).unwrap();
     let options = micro_options();
-    let mut budget = super::super::external_scan_quantum::ExternalWorkBudget::new(&options)
-        .unwrap();
+    let mut budget =
+        super::super::external_scan_quantum::ExternalWorkBudget::new(&options).unwrap();
     let mut first = vault
         .external_progress_scan_with_budget(options.scan.clone(), Some(&mut budget))
         .unwrap();
@@ -255,8 +254,8 @@ fn micro_quantum_unchanged_current_directory_writes_only_advanced_cursor() {
         .record_processed_retaining(&mut vault, &first.pending_paths(), true)
         .unwrap();
     let before = revisions(&mut vault);
-    let mut budget = super::super::external_scan_quantum::ExternalWorkBudget::new(&options)
-        .unwrap();
+    let mut budget =
+        super::super::external_scan_quantum::ExternalWorkBudget::new(&options).unwrap();
     let second = vault
         .external_progress_scan_with_budget(options.scan, Some(&mut budget))
         .unwrap();
@@ -266,4 +265,90 @@ fn micro_quantum_unchanged_current_directory_writes_only_advanced_cursor() {
     let added = revisions(&mut vault) - before;
     eprintln!("unchanged current-directory batch checkpoint revisions: {added}");
     assert_eq!(added, 1, "only the newly advanced cursor needs a revision");
+}
+
+#[test]
+fn micro_quantum_old_broad_absence_cursor_retains_and_finishes_missing_proofs() {
+    let (root, mut vault) = micro_fixture(5);
+    finish_micro(&mut vault);
+    let mut bindings = vault.store.physical_bindings().unwrap();
+    bindings.sort_by(|a, b| a.state.id.cmp(&b.state.id));
+    let before = bindings.first().unwrap().clone();
+    let after = bindings.last().unwrap().clone();
+    let middle = bindings[2].clone();
+    for missing in [&before, &after] {
+        std::fs::remove_file(root.path().join(missing.state.path.as_str())).unwrap();
+    }
+    let mut options = micro_options();
+    options.max_work_units = std::num::NonZeroU16::new(1).unwrap();
+    let scan_id;
+    {
+        let _lock = vault.paths.lock(vault.options.lock_timeout).unwrap();
+        let mut captured = None;
+        for _ in 0..32 {
+            let mut budget =
+                super::super::external_scan_quantum::ExternalWorkBudget::new(&options).unwrap();
+            let mut scan = vault
+                .external_progress_scan_with_budget(options.scan.clone(), Some(&mut budget))
+                .unwrap();
+            if scan.inventory.absence_after.as_ref() == Some(&before.state.id) {
+                captured = Some(scan);
+                break;
+            }
+            assert!(!scan.run.complete);
+            scan.record_processed_retaining(&mut vault, &scan.pending_paths(), true)
+                .unwrap();
+        }
+        let mut scan = captured.expect("first missing binding must be durably captured");
+        assert!(matches!(
+            scan.proofs.get(&before.state.path),
+            Some(ExternalScanProof::Absent { .. })
+        ));
+        assert!(matches!(
+            scan.proofs.get(&middle.state.path),
+            Some(ExternalScanProof::Present { .. })
+        ));
+        scan_id = scan.run.scan_id.clone();
+        // The old loop advanced across exact Present bindings as well. This
+        // represents its durable cursor after the first absence and a later
+        // harmless Present binding, but before the final missing binding.
+        scan.inventory.absence_after = Some(middle.state.id.clone());
+        vault
+            .store
+            .save_external_scan_progress(scan.checkpoint_revision.as_deref(), Some(&scan.inventory))
+            .unwrap();
+    }
+    drop(vault);
+    let mut vault = NativeVault::open_existing(root.path()).unwrap();
+    let _lock = vault.paths.lock(vault.options.lock_timeout).unwrap();
+    for _ in 0..16 {
+        let mut budget =
+            super::super::external_scan_quantum::ExternalWorkBudget::new(&options).unwrap();
+        let scan = vault
+            .external_progress_scan_with_budget(options.scan.clone(), Some(&mut budget))
+            .unwrap();
+        assert_eq!(scan.run.scan_id, scan_id);
+        if scan.run.complete {
+            for missing in [&before, &after] {
+                assert!(
+                    matches!(scan.proofs.get(&missing.state.path), Some(ExternalScanProof::Absent { before: original }) if original == missing)
+                );
+                assert_eq!(
+                    vault
+                        .store
+                        .physical_binding(&missing.state.id)
+                        .unwrap()
+                        .as_ref(),
+                    Some(missing),
+                    "inventory capture alone must not delete a binding"
+                );
+            }
+            assert!(matches!(
+                scan.proofs.get(&middle.state.path),
+                Some(ExternalScanProof::Present { .. })
+            ));
+            return;
+        }
+    }
+    panic!("old broad absence cursor did not finish its remaining actual candidate");
 }
