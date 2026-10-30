@@ -21,6 +21,76 @@ The user resumed the existing thread goal: it is active. The objective is not
 complete. Earlier create_goal replacement was rejected while the unfinished goal
 was blocked; that is historical, not a current execution blocker.
 
+## Latest execution handoff — 2026-10-30, ongoing
+
+Root remains sole integration/build owner in `.worktrees/instant-editor`, branch
+`codex/instant-editor-current`; main7d8006b8 and installed app are UNCHANGED. User
+continues this goal; do not stop from stale built-in blocked status. No other user
+session coordination. Current Root runtime through445d4f58; all source below is
+isolated pending final native/GUI/integration/install gates.
+
+Composed after package009: reviewed Base followups through10223f09; compatibility
+8aa1799f/a0d1ff49; Canvasc2ae75aa (Root15/15); managedPropertiese9537f00
+(Root36+12=48); lazy canonical startup56e126a1/352375d7 (Root80+58=138 checks,
+no800ms claim); capacity9e9d2d77/4aa7b44f/76de89da (Root121/121, preserves exact
+original operations/newer raw drafts); initial Main admission2f1b59b7/84c42f14/
+1877db4e (Root135/135 incl certificate, trusted Native-error brand, same retained
+context promise, scope/cleanup/dispatch fences; no renderer reload/retry loop).
+Pure identity host loss before any authority anchor and healthy unknown claim
+remain deliberately fenced rather than inventing scope or a lease.
+
+Native own-publication continuation: test0c378c9d actualRED2fail/1controlpass;
+producte684d425/337d266a, fixture10d68f2a independently reviewed. RootGREEN001
+compiled6/7; one fixture used /var alias with SQLiteNOFOLLOW; canonical path fix
+retained foreign checkpoint oracle. GREEN0027/7pass. Broader GREEN012 all181
+Native/Host checks pass, source unchanged. Production013 optimizedhost SHA
+3ef526aee653c9b198303c879da074c90113abf5930ea4e7e4729553dfc7b5ad;
+Rust digest9d86cf59a7cc2bf0df8e60c5f9c4e78a90c2bd1fc9e2411a9ace04a5d623d0dc.
+Actual framed tests43c7628c/049361f6/445d4f58: first run1/2 due projection DTO
+assertion expecting string instead of existing object; correction reviewed, second
+run2/2PASS with actual optimizedhost (1.31s), automatic Core polling/fresh namespace/
+normal EOF and old proofs preserved. No scheduler-isolation/performance claim.
+
+Root found added normal-import repeated seed construction/processed-set filtering.
+capture_native_finish owns bounded immutable per-directory hint reuse + moving
+already-validated bounded metadata maps after final normal use. Test-only RED pin
+e4126078 is READY but NOTCOMPOSED/RUN; no production edits yet at this handoff.
+Concept reviewed; skip budget/combined4096+1MiB caps/authority/CP fences remain.
+Do not lose progress through direct send_message to completed agents: use followup_task.
+
+Native controlled no-own-write pairs019/020 (old frozen6c vs3ef) completed normally:
+019 old9.655s/new10.231s import, audit4.623s/5.238s;
+020 new9.277s/old10.525s import, audit3.842s/3.813s.
+Mixed order/cache effects: NO consistent latency win/regression claim. All1001
+sources/IDs/revisions/cursor exact, audit0imports, normal EOF. Reports under
+Roottmp/instant-editor-validation/own-publication-fresh019,020. Performance resource
+hold on Base worker still needs RELEASE after this checkpoint (Native pair done).
+
+Package010 at sourcee953 passedTS/Vite/361fileverification with OLDhost6c;
+ASAR9fc1bb811866ffe133f49a07c797da72b6eab1a527ab786d2b472fd9a9d3a6ed.
+It predates lazy startup, capacity, new Main admission and Native continuation.
+Native recovery preflight001 rejected Root's mistyped fullHEAD before any launch.
+002 matched source/artifacts but FAILED BEFOREfault: legacy vault-view summary
+footer absent (collection-only controls). Cleanup used SIGTERM despite exit0;
+not normal acceptance, leaked[]. Exact receipt /private/tmp/zorid-bases-recovery-
+candidate010-20261030-002/result.json. Do not describe this as successful fault proof.
+
+Base parent reports FULL fixture ports217/217 incl mobile, reviewed pins READY
+372176d4→b6533386→95a15a2e (NOTCOMPOSED). All earlier37 full-gate failures
+proved on byte-identical fixtures at both10fd baseline ande953 before repairs.
+Actual collection scene provisioning7b51340b (NOTCOMPOSED) adds public Native
+prelaunch fixture setup and strict prepared-file skip/no rewrites; pure7contracts
+pass, source review accepted, REAL Native provision/GUI unexecuted. Root ACKed
+narrow common runner hook. Safety scene modernization remains deferred, not ready.
+Do not claim old vault-property Native campaign parity. All worker worktrees clean.
+
+Next: release quiet resource hold; actual seed-work RED then reviewed removal,
+Root7+appropriate broaderRust+optimizedrebuild; compose fixture/scene pins; full
+integrated TS/JS and REAL Native provisioning/fault checks; package newmatchedhost;
+actual800ms startup/reopen+Base validation; integrate main/build/verify/install
+staged replacement per standing authorization. Current free disk~4.6GiB; preserve
+vaults/preferences/installedapp, only own rebuildable caches if necessary.
+
 ## Current execution checkpoint — 2026-10-30
 
 Root remains sole integration/build owner in `codex/instant-editor-current`;

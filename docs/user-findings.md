@@ -3183,3 +3183,17 @@ reset causes under investigation, not296fullrescans. Unrelatedcheckpoint startup
 hydration, managed-note Properties admission, Canvas recovered-save latch remain
 owned implementation tasks. Installedapp/main unchanged. Exact evidence in
 instant-editor-execution.md package009 checkpoint.
+
+
+### 2026-10-30 — Selected startup and automatic recovery integration
+
+Root composed selected-checkpoint startup deferral, bounded capture-pressure exact
+operation recovery, managed Properties, Canvas recovered save-state and Main-owned
+first-admission continuation. Focused Root checks pass; Native own-save import
+restart fix passes7new+181adjacent and actual optimized-host polling2/2. Added
+seed setup repetition is under a scoped performance correction; controlled Native
+no-write timings mixed, no global latency claim. Package010 and Nativefault scene
+predate latest runtime; fault002 failed before injection from outdated readonly
+fixture and had forced cleanup. Actual collection fixture port reviewed but notrun.
+Main/install and actual800ms startup/Base remain OPEN. Latest exactpins/receipts
+are in instant-editor-execution.md latesthandoff.
