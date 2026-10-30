@@ -2,7 +2,7 @@
 //! physical branches until their exact historical observation is committed.
 use super::*;
 use std::collections::BTreeSet;
-use zorid_store::{ExternalNamespaceAction, ExternalNamespaceMember};
+use zorid_store::{ExternalNamespaceAction, ExternalNamespaceMember, PhysicalBinding};
 
 #[cfg(test)]
 #[path = "external_namespace_candidate_tests.rs"]
