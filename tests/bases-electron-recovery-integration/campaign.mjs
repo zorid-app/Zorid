@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {delay,until} from '../tasks-electron-integration/cdp.mjs';
 import {digest} from './protocol.mjs';
+import {captureFocusedSummaryInput,continueFocusedSummaryInput,disposeFocusedSummaryInput,summaryEditor} from './focused-summary-input.mjs';
 export {createNativeRelay} from './control.mjs';
 
 export const vaultName='bases-native-recovery';
@@ -63,10 +64,10 @@ export async function reviewRetainedConfiguration(c,scope,expected){
 async function summaryFrame(c){
   return c.ui.dom(`const p=document.querySelector(${JSON.stringify(panel)}),input=p?.querySelector('textarea[aria-label="Summary expression"]'),visible=p?.querySelector('.cm-content[aria-label="Summary expression"]'),review=p?[...p.querySelectorAll('button')].find(b=>b.textContent==='Review retained changes'):null;return p?{busy:p.getAttribute('aria-busy'),draft:input?.value,visibleDraft:visible?.textContent,disabled:input?.disabled,readonly:visible?.getAttribute('aria-readonly'),error:p.querySelector('[role="alert"]')?.textContent,review:!!(review&&!review.hidden&&!review.disabled&&review.getClientRects().length),manualRetry:[...p.querySelectorAll('button')].some(b=>b.textContent==='Retry save'&&!b.hidden)}:null;`);
 }
-async function summaryPanelIdentity(c){
+async function summaryPanelIdentity(c,selector=panel){
   // CDP DOM identity is passive: no property, focus, event or semantic API is injected.
   const {root}=await c.cdp.call('DOM.getDocument',{depth:0});
-  const {nodeId}=await c.cdp.call('DOM.querySelector',{nodeId:root.nodeId,selector:panel});assert.ok(nodeId);
+  const {nodeId}=await c.cdp.call('DOM.querySelector',{nodeId:root.nodeId,selector});assert.ok(nodeId);
   return (await c.cdp.call('DOM.describeNode',{nodeId})).node.backendNodeId;
 }
 export function collectionSceneFrame(document,scope,scoreProperty,view){
@@ -88,13 +89,18 @@ async function failedLiveWriteWithNewerDraft(c){
   const sources=fixtureFiles(c.fixtureScene);await c.saved(failedPath,source=>assert.equal(source,failedBase),'failed-summary-original-whole-source');
   await requireCollectionScene(c,'Failed summary');await c.ui.click(`${active} .zorid-bases-table-footer [data-summary-property=${JSON.stringify(scoreProperty)}]`);await c.ui.button('Edit Total','.zorid-bases-summary-picker');
   const panelId=await summaryPanelIdentity(c),offset=(await c.relay.events()).length;
-  const token=await c.relay.arm({mode:'hold',phase:'prepared',path:failedPath,entryId:before.entryId,bodySha256:digest(Buffer.from(failedA))});
-  await c.ui.type(expression,'values.length');const held=await event(c,'held',token);
-  assert.equal(held.phase,'prepared');assert.equal(held.nativeState,'prepared');assert.ok(held.nativeIntentToken&&held.operationId);assert.equal(held.sequence,undefined,'An inert prepared reply is not a durable save receipt');
-  assert.equal(await c.read(failedPath),failedBase);
-  await c.ui.wait(`return document.querySelector(${JSON.stringify(panel)})?.getAttribute('aria-busy')==='true';`,'Actual A save is pending its genuine prepared reply');
-  await c.ui.type(expression,'values.sum() + 7');const typedAt=Date.now();await delay(300);
-  const pending=await summaryFrame(c);assert.equal(pending.busy,'true');assert.equal(pending.draft,'values.sum() + 7');assert.equal(pending.visibleDraft,pending.draft);assert.ok(Date.now()-typedAt>=300);
+  const focused=await captureFocusedSummaryInput(c,'Failures / Live');let token,held,pending;
+  try{
+    assert.equal(focused.panelBackendNodeId,panelId);
+    token=await c.relay.arm({mode:'hold',phase:'prepared',path:failedPath,entryId:before.entryId,bodySha256:digest(Buffer.from(failedA))});
+    await c.ui.type(expression,'values.length');held=await event(c,'held',token);
+    assert.equal(held.phase,'prepared');assert.equal(held.nativeState,'prepared');assert.ok(held.nativeIntentToken&&held.operationId);assert.equal(held.sequence,undefined,'An inert prepared reply is not a durable save receipt');
+    assert.equal(await c.read(failedPath),failedBase);
+    await c.ui.wait(`return document.querySelector(${JSON.stringify(panel)})?.getAttribute('aria-busy')==='true';`,'Actual A save is pending its genuine prepared reply');
+    await continueFocusedSummaryInput(c,focused,'values.sum() + 7','values.length');const typedAt=Date.now();await delay(300);
+    pending=await summaryFrame(c);assert.equal(pending.busy,'true');assert.equal(pending.draft,'values.sum() + 7');assert.equal(pending.visibleDraft,pending.draft);assert.ok(Date.now()-typedAt>=300);
+    assert.equal(await summaryPanelIdentity(c,`${panel} ${summaryEditor}`),focused.editorBackendNodeId,'Newer B remains in the original accepted editor');
+  }finally{await disposeFocusedSummaryInput(c,focused);}
   assert.equal(await c.read(failedPath),failedBase,'Neither pending A nor newer debounce draft B has committed');
 
   const vault=await fs.realpath(c.vault),out=await fs.realpath(c.outputDirectory),privateDirectory=path.join(vault,'.zorid'),lock=path.join(privateDirectory,'vault.lock');
@@ -112,7 +118,7 @@ async function failedLiveWriteWithNewerDraft(c){
     await c.relay.release(token);await event(c,'released',token,3000);
     negative=await until(async()=>{const row=(await c.relay.events()).slice(offset).find(e=>e.kind==='native-checkpoint-response'&&e.key==='note/v1/'+before.entryId&&!e.ok);assert.ok(row);assert.equal(row.errorCode,'checkpoint_storage');assert.equal(row.commitUncertain,true);return row;},10000);
     await c.ui.wait(`const p=document.querySelector(${JSON.stringify(panel)}),review=p?[...p.querySelectorAll('button')].find(b=>b.textContent==='Review retained changes'):null;return p?.getAttribute('aria-busy')==='false'&&!!p.querySelector('[role="alert"]')?.textContent?.trim()&&review&&!review.hidden&&!review.disabled;`,'A terminal checkpoint fault exposes read-only retained summary review',10000);
-    failed=await summaryFrame(c);assert.equal(failed.draft,'values.sum() + 7');assert.equal(failed.visibleDraft,failed.draft);assert.equal(failed.disabled,true);assert.equal(failed.readonly,'true');assert.equal(failed.review,true);assert.equal(failed.manualRetry,false);assert.equal(await summaryPanelIdentity(c),panelId);
+    failed=await summaryFrame(c);assert.equal(failed.draft,'values.sum() + 7');assert.equal(failed.visibleDraft,failed.draft);assert.equal(failed.disabled,true);assert.equal(failed.readonly,'true');assert.equal(failed.review,true);assert.equal(failed.manualRetry,false);assert.equal(await summaryPanelIdentity(c),panelId);assert.equal(await summaryPanelIdentity(c,`${panel} ${summaryEditor}`),focused.editorBackendNodeId);
     const events=(await c.relay.events()).slice(offset);assert.equal(events.filter(e=>e.kind==='native-mutation-response'&&e.ok&&e.state==='committed'&&e.preparedBodySha256===digest(Buffer.from(failedA))).length,0,'Failed checkpoint acknowledgement must precede any successful A commit');
     await c.screenshot('r00-genuine-checkpoint-error-retains-newer-summary-draft');
   }finally{
@@ -128,7 +134,7 @@ async function failedLiveWriteWithNewerDraft(c){
   await c.ui.command('Save current changes');
   await c.saved(failedPath,source=>assert.equal(source,failedA),'failed-summary-ordinary-save-settles-only-original-A');
   await c.ui.wait(`const p=document.querySelector(${JSON.stringify(panel)}),input=p?.querySelector('textarea[aria-label="Summary expression"]');return p?.getAttribute('aria-busy')==='false'&&input?.value==='values.sum() + 7'&&!input.disabled;`,'Original A ACK retains editable raw B without authoring it');
-  await delay(350);assert.equal(await c.read(failedPath),failedA,'A shared Save acknowledgement cannot automatically submit newer raw B');assert.equal(await summaryPanelIdentity(c),panelId,'The original panel retains B through ordinary A resolution');
+  await delay(350);assert.equal(await c.read(failedPath),failedA,'A shared Save acknowledgement cannot automatically submit newer raw B');assert.equal(await summaryPanelIdentity(c),panelId,'The original panel retains B through ordinary A resolution');assert.equal(await summaryPanelIdentity(c,`${panel} ${summaryEditor}`),focused.editorBackendNodeId,'Original editor retains raw B after A ACK');
   await c.ui.click(`${panel} .cm-content[aria-label="Summary expression"]`);await c.ui.key('Tab');
   await c.saved(failedPath,source=>assert.equal(source,failedB),'failed-summary-explicit-raw-B-commit-after-original-A-resolution');
   // Opening the normal palette requested an outside close. Once explicit B
@@ -146,7 +152,7 @@ async function failedLiveWriteWithNewerDraft(c){
   for(const[file,source]of sources)await c.saved(file,current=>assert.equal(current,file===failedPath?failedB:source),'failed-summary-whole-source-and-unrelated-fixture-'+file);
   await c.ui.wait(`const e=document.querySelector('${active} .zorid-bases-table-footer [data-summary-property=${JSON.stringify(scoreProperty)}]');return e?.querySelector('.summary-function-name')?.textContent==='Total'&&e.querySelector('.summary-function-value')?.textContent==='12';`,'Saved B summary has independent two-note value12');
   await c.ui.click(close);await c.ui.wait(`return !document.querySelector(${JSON.stringify(active)});`,'Acknowledged failed-save continuation closes normally');
-  c.evidence.checks.push({name:'genuine-native-summary-terminal-checkpoint-review-save-and-explicit-raw-B',held:plain(held),failure:plain(negative),pending,failed,panelBackendNodeId:panelId,prepared,checkpointReplay:plain(checkpointReplay),commits,manualRetryClicks:0,ordinarySaveCommands:1,explicitRawBCommits:1,scope:'Real failed checkpoint ACK from owned lock access denial; not postcommit publication, SQLite/device failure, power loss or synthetic reply'});
+  c.evidence.checks.push({name:'genuine-native-summary-terminal-checkpoint-review-save-and-explicit-raw-B',held:plain(held),failure:plain(negative),pending,failed,panelBackendNodeId:panelId,editorBackendNodeId:focused.editorBackendNodeId,prepared,checkpointReplay:plain(checkpointReplay),commits,manualRetryClicks:0,ordinarySaveCommands:1,explicitRawBCommits:1,scope:'Real failed checkpoint ACK from owned lock access denial; not postcommit publication, SQLite/device failure, power loss or synthetic reply'});
   await c.quit('failed-summary-normal-quit-after-B');
   await c.launch('failed-summary-restart-readback');await c.ui.openFile(failedPath);await c.ui.idle();
   for(const[file,source]of sources)await c.saved(file,current=>assert.equal(current,file===failedPath?failedB:source),'failed-summary-restart-exact-fixture-'+file);
@@ -161,11 +167,15 @@ async function heldWriteAndClose(c){
   await c.saved('Recovery.base',source=>assert.equal(source,summaryBase),'held-write-original-exact-source');
   await requireCollectionScene(c,'Recovery');await c.ui.click(`${active} .zorid-bases-table-footer [data-summary-property=${JSON.stringify(scoreProperty)}]`);
   await c.ui.button('Edit Total','.zorid-bases-summary-picker');
-  const token=await c.relay.arm({mode:'hold',path:'Recovery.base',entryId:before.entryId,bodySha256:digest(Buffer.from(sourceA))});
-  await c.ui.type(expression,'values.length');const held=await event(c,'held',token);
-  assert.equal(await c.read('Recovery.base'),sourceA,'Native has really committed A before holding its acknowledgement');
-  await c.ui.wait(`return document.querySelector(${JSON.stringify(panel)})?.getAttribute('aria-busy')==='true';`,'Mounted summary is waiting for the real acknowledgement',3000);
-  await c.ui.type(expression,'values.sum() + 7');await delay(300);
+  const focused=await captureFocusedSummaryInput(c,'Recovery');let token,held;
+  try{
+    token=await c.relay.arm({mode:'hold',path:'Recovery.base',entryId:before.entryId,bodySha256:digest(Buffer.from(sourceA))});
+    await c.ui.type(expression,'values.length');held=await event(c,'held',token);
+    assert.equal(await c.read('Recovery.base'),sourceA,'Native has really committed A before holding its acknowledgement');
+    await c.ui.wait(`return document.querySelector(${JSON.stringify(panel)})?.getAttribute('aria-busy')==='true';`,'Mounted summary is waiting for the real acknowledgement',3000);
+    await continueFocusedSummaryInput(c,focused,'values.sum() + 7','values.length');await delay(300);
+    assert.equal(await summaryPanelIdentity(c),focused.panelBackendNodeId);assert.equal(await summaryPanelIdentity(c,`${panel} ${summaryEditor}`),focused.editorBackendNodeId);
+  }finally{await disposeFocusedSummaryInput(c,focused);}
   await c.ui.click(close);await delay(100);
   assert.equal(await c.ui.dom(`return document.querySelector(${JSON.stringify(expression)})?.value;`),'values.sum() + 7','Close cannot discard newer B while accepted A is awaiting acknowledgement');
   assert.equal(await c.read('Recovery.base'),sourceA,'B has not been manufactured before real A reply');
@@ -197,7 +207,7 @@ async function heldWriteAndClose(c){
   assert.equal(continuations.filter(value=>value.bodySha256===digest(Buffer.from(sourceA))).length,1);
   assert.equal(continuations.filter(value=>value.bodySha256===digest(Buffer.from(sourceB))).length,1);
   assert.equal(writes.length,2,'Each exact prepared A/B write has one genuine successful commit response');
-  c.evidence.checks.push({name:'accepted-native-A-newer-B-close-retention',held:plain(held),continuation:disposition,closeRetryNeeded:retained,prepared:continuations,commits:writes});
+  c.evidence.checks.push({name:'accepted-native-A-newer-B-close-retention',held:plain(held),panelBackendNodeId:focused.panelBackendNodeId,editorBackendNodeId:focused.editorBackendNodeId,continuation:disposition,closeRetryNeeded:retained,prepared:continuations,commits:writes});
   await c.quit('held-write-normal-quit-after-B');
   await c.launch('held-write-restart-readback');await c.ui.openFile('Recovery.base');await c.ui.idle();
   await c.saved('Recovery.base',source=>assert.equal(source,sourceB),'newer-B-survives-normal-native-app-restart');
