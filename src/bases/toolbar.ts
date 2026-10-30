@@ -1104,7 +1104,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       const newer=generation!==attempt.generation;
       if(newer&&!attempt.configuration)return;
       if(attempt.configuration)configuration=attempt.configuration;
-      if(deferredState&&!own.rebase?.(deferredState,attempt.viewName))return;
+      if(newer&&deferredState&&!own.rebase?.(deferredState,attempt.viewName))return;
       if(deferredState){state=deferredState;deferredState=undefined;}
       own.failure=undefined;retryPersistence=undefined;reviewFailure=undefined;retainedAttempt=undefined;submitted=false;
       for(const [input,disabled]of attempt.inputs)input.disabled=disabled;
