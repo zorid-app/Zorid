@@ -15,6 +15,10 @@ test('terminal summary oracle passively preserves editable exact raw B and hones
   const f=fixture();try{const before=f.doc.body.innerHTML;assertEditableRetainedSummary(f.frame(),expected);assert.equal(f.doc.body.innerHTML,before);}finally{f.dom.window.close();}
 });
 
+test('terminal summary oracle accepts the enhanced editor with its hidden backing textarea',()=>{
+  const f=fixture();try{f.doc.querySelector('textarea').hidden=true;const before=f.doc.body.innerHTML;assertEditableRetainedSummary(f.frame(),expected);assert.equal(f.doc.body.innerHTML,before);}finally{f.dom.window.close();}
+});
+
 test('terminal summary oracle rejects replaced targets, frozen fields, altered B and hidden errors',()=>{
   for(const alter of [
     doc=>doc.body.append(doc.querySelector(scope).cloneNode(true)),
@@ -23,6 +27,9 @@ test('terminal summary oracle rejects replaced targets, frozen fields, altered B
     doc=>{doc.querySelector('textarea').readOnly=true;},
     doc=>doc.querySelector('.cm-content').setAttribute('aria-readonly','true'),
     doc=>doc.querySelector('.cm-content').setAttribute('contenteditable','false'),
+    doc=>{doc.querySelector('.cm-content').hidden=true;},
+    doc=>{doc.querySelector('.cm-content').style.display='none';},
+    doc=>{doc.querySelector('.cm-content').style.visibility='hidden';},
     doc=>doc.querySelector(scope).setAttribute('inert',''),
     doc=>{doc.querySelector('textarea').value+='wrong';},
     doc=>{doc.querySelector('.cm-content').textContent+='wrong';},
