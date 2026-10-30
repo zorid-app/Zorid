@@ -4,7 +4,10 @@ const { desktopTextCreates } = require('./text-create.cjs');
 const { createDesktopDocumentSemantics } = require('./document-semantics.cjs');
 const {captureDatabaseRequest,isDatabaseMutation}=require('./databases.cjs');
 const {captureWorkBlockRequest}=require('./workblocks.cjs');
-const { MAX_BINARY_FRAME } = require('./rust-vault-service.cjs');
+const { MAX_BINARY_FRAME, isNativeFailure } = require('./rust-vault-service.cjs');
+const temporaryCodes=new Set(['storage_busy','storage_io_retryable','storage_capacity','filesystem_io_retryable','lock_timeout']);
+const retryableAdmissionFailure=error=>isNativeFailure(error)&&error.commitUncertain===false&&temporaryCodes.has(error.code);
+const retryableCleanupFailure=error=>retryableAdmissionFailure(error)||error?.commitUncertain===true;
 const {captureDraftRequest,captureDraftBody,MAX_DRAFT_CHUNK}=require('./document-drafts.cjs');
 const {AsyncLocalStorage}=require('node:async_hooks');
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
@@ -15,7 +18,7 @@ function fail(code, uncertain = false) { return Object.assign(new Error('Desktop
  * assertOwner must verify the selected WindowBroker record/grant generation.
  * Returns an injected editor context: {scope,durableWrites,assertActive,release}.
  */
-async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwner, expectedScope, captureDispatchOwner } = {}) {
+async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwner, expectedScope, captureDispatchOwner } = {}, initialAttempt) {
   if (fixture !== true || !uuid(clientId) || typeof assertOwner !== 'function'||captureDispatchOwner!==undefined&&typeof captureDispatchOwner!=='function') throw fail('invalid_admission');
   const host = service.host;
   let phase = 'admitting', closing = null, flushed = false, releasePrepared = false, activeFlush = null, runtime = null, drafts = null,draftRetired=false;
@@ -26,7 +29,7 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
     assertOwner();
   }
   live();
-  const reference = await host.claimClient(clientId);
+  const reference = await (initialAttempt?initialAttempt.claim():host.claimClient(clientId));
   const releaseLease=()=>drafts?service.releaseDocumentDraftClient(reference):host.releaseClient(reference);
   try {
     live();
@@ -40,7 +43,11 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
       live();
       dispatchOwners.getStore()?.();
     });
-    Object.defineProperty(shadow, 'host', { value: guarded });
+    // The initial Main-owned identity was validated by the transport before claim.
+    // Reuse it only with the exact matching claimed scope, avoiding another RPC.
+    const authority=initialAttempt?.authority;
+    if(authority&&(authority.local_store_id!==reference.local_store_id||reference.client_id!==clientId))throw fail('client_scope_mismatch');
+    Object.defineProperty(shadow, 'host', { value: authority?Object.freeze({...guarded,identity:async()=>{live();return authority;}}):guarded });
     const capability = await desktopDurableWrites(shadow, { clientId });
     if (capability.checkpoints.scope.vaultId !== reference.local_store_id || capability.checkpoints.scope.clientId !== reference.client_id) throw fail('client_scope_mismatch');
     let creates;
@@ -244,6 +251,18 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
     });
     return context;
   } catch (reason) {
+    if(initialAttempt){
+      let runtimeRevoked=false,released=false;
+      return initialAttempt.reject(reason,async()=>{
+        if(released)return;
+        draftRetired=true;drafts?.revoke();
+        if(!runtimeRevoked){await runtime?.revoke();runtimeRevoked=true;}
+        phase='releasing';await releaseLease();released=true;
+      },async()=>{
+        draftRetired=true;drafts?.revoke();await runtime?.revoke();
+        drafts?.release();phase='released';released=true;
+      });
+    }
     draftRetired=true;drafts?.revoke();
     await runtime?.revoke();
     phase = 'releasing';
@@ -251,4 +270,43 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
     throw reason;
   }
 }
-module.exports = { admitDesktopFixtureClient };
+
+// Main retains this capsule until construction and its exact cleanup are known.
+// A rejected claim promise is never silently replaced with a second claim.
+function createDesktopAdmissionAttempt(service,options,authority){
+  let claimed=null,cleanup=null,cleaning=null,primary=null,cleanupFailure=null,claimNotDispatched=false,abandon=null;
+  const capsule={
+    authority,
+    claim(){
+      if(!claimed)claimed=service.host.claimClient(options.clientId,()=>{try{options.assertOwner();}catch(error){claimNotDispatched=true;throw error;}}).catch(error=>{primary=error;throw error;});
+      return claimed;
+    },
+    cleanup(){
+      if(cleaning)return cleaning;
+      if(!cleanup)return Promise.resolve();
+      cleaning=(async()=>{
+        try{await cleanup();cleanup=null;cleanupFailure=null;claimed=null;}
+        catch(error){cleanupFailure=error;throw primary??error;}
+      })().finally(()=>{cleaning=null;});return cleaning;
+    },
+    async reject(error,release,retireDead){
+      primary??=error;cleanup=release;abandon=retireDead;
+      try{await capsule.cleanup();}catch{/* Keep both the primary reason and exact cleanup. */}
+      throw primary;
+    },
+    async abandonTerminatedHost(){
+      if(service.host.exited!==true)throw fail('recovery_not_available');
+      await abandon?.();cleanup=null;cleanupFailure=null;claimed=null;
+    },
+    get failure(){return primary;},
+    get retryable(){return retryableAdmissionFailure(primary)&&(!cleanupFailure||retryableCleanupFailure(cleanupFailure));},
+    get fenced(){return cleanup!==null||claimed!==null&&!claimNotDispatched&&!(primary&&isNativeFailure(primary)&&primary.commitUncertain===false);},
+    async run(){
+      await capsule.cleanup();
+      if(primary){if(!retryableAdmissionFailure(primary))throw primary;primary=null;claimed=null;claimNotDispatched=false;}
+      return admitDesktopFixtureClient(service,options,capsule);
+    },
+  };
+  return Object.freeze(capsule);
+}
+module.exports = { admitDesktopFixtureClient, createDesktopAdmissionAttempt, retryableAdmissionFailure };

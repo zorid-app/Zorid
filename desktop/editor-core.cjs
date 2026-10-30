@@ -6,11 +6,12 @@ const path=require('node:path');
 const {randomUUID}=require('node:crypto');
 const {MAX_BINARY_FRAME}=require('./rust-vault-service.cjs');
 const {VaultService}=require('./vault-service.cjs');
-const {admitDesktopFixtureClient}=require('./client-admission.cjs');
+const {createDesktopAdmissionAttempt,retryableAdmissionFailure}=require('./client-admission.cjs');
 const {captureDocumentRuntimeRequest,captureDocumentRuntimeReply}=require('./document-semantics.cjs');
 const {captureSavedSourceRequest,captureSavedSourceId,captureSavedSourceValue,captureSavedSourceRequests}=require('./conditional-saved-source.cjs');
 const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 const fail=code=>Object.assign(new Error('Rust vault operation failed.'),{code});
+const admissionResumesAfterExit=error=>retryableAdmissionFailure(error)||['host_exited','host_timeout','transport_io','host_unavailable','client_ownership_lost'].includes(error?.code);
 const runtimeUnavailable=()=>Object.assign(new Error('The desktop core does not support document indexing. Update Zorid and restart the app.'),{code:'document_runtime_unavailable'});
 const methods=new Set(['readText','readTextById','composeNote','planWrite','prepare','commit','query','listUnacknowledged','acknowledge']);
 const checkpointMethods=new Set(['load','compareAndSwap','list','changes']);
@@ -27,6 +28,7 @@ function createEditorCoreManager(environment=process.env, options={}){
   // the foreground compatibility path.
   const documentRuntime=options.documentRuntime===true;
   if(documentRuntime&&typeof options.onDocumentRuntimeNudge!=='function')throw runtimeUnavailable();
+  const initialAttempts=new Map(),backoffWaits=new Set();
   const contexts=new Map(), admissions=new Map(), released=new WeakMap(), services=new Set(), openings=new Map(), retirements=new Map(), recovering=new Map(), replacements=new Map(), recoveryStates=new WeakMap();
   const describe=saved=>({admissionId:saved.id,scope:saved.admission.scope,...(saved.admission.createTextReceipt?{textCreateReceiptsAvailable:true}:{}),...(saved.admission.conditionalSavedSourceAvailable===true?{conditionalSavedSourceAvailable:true}:{}),...(saved.admission.documentCommand?{documentSemantics:true}:{}),...(saved.admission.metadataRowsAvailable===true?{metadataRowsAvailable:true}:{}),...(saved.admission.propertyTargetsAvailable===true?{propertyTargetsAvailable:true}:{}),...(saved.admission.basePreviewAvailable===true?{basePreviewAvailable:true}:{}),...(saved.admission.draftsAvailable===true?{draftsAvailable:true}:{}),...(documentRuntime&&runtimeAvailable(saved.admission)?{documentMaintenance:true}:{}),...(saved.admission.workblockCommand?{workBlocks:true}:{}),...(saved.admission.databaseCommand?{databases:true}:{}),...(saved.admission.binaryLimits?{binaryLimits:saved.admission.binaryLimits}:{})});
   const executable=()=>require('./host-location.cjs').resolveDesktopHost({...options,override:config.executable});
@@ -67,6 +69,19 @@ function createEditorCoreManager(environment=process.env, options={}){
     const clear=()=>{if(replacements.get(service)===pending)replacements.delete(service);if(entry.retiring===pending)delete entry.retiring;};
     void pending.then(clear,clear);return pending;
   }
+  // Only failed construction waits use timers. Owner changes and shutdown are
+  // rechecked while backing off; healthy contexts incur no periodic polling.
+  function admissionBackoff(milliseconds,check){
+    return new Promise((resolve,reject)=>{
+      let remaining=milliseconds,timer;
+      const cancel=()=>{clearTimeout(timer);backoffWaits.delete(cancel);try{check();}catch(error){reject(error);return;}reject(fail('editor_core_closed'));};
+      const step=()=>{try{check();}catch(error){backoffWaits.delete(cancel);reject(error);return;}
+        if(remaining<=0){backoffWaits.delete(cancel);resolve();return;}
+        const interval=Math.min(remaining,100);remaining-=interval;timer=setTimeout(step,interval);
+      };
+      backoffWaits.add(cancel);step();
+    });
+  }
   function checked(broker,record,expectedRoot,admissionId,allowRetired=false){
     broker.assertLive(record);
     const saved=contexts.get(record);
@@ -74,10 +89,17 @@ function createEditorCoreManager(environment=process.env, options={}){
     saved.check(allowRetired);return saved;
   }
   async function isCoreRoot(input){await fs.realpath(input);return true;}
+  async function settleInitialCleanup(attempt){
+    const {service,consumer}=attempt;
+    if(terminated(service)){
+      await service.close();
+      await consumer?.abandonTerminatedHost();
+    }else await consumer?.cleanup();
+  }
   function retire(broker,record,selectedService){
     const initial=contexts.get(record)??released.get(record)??(selectedService?{service:selectedService}:null);
     if(!initial)return Promise.resolve();
-    const service=initial.service,root=service.root,entry=broker.vaults.get(root);
+    const service=initial.service,root=service.root,entry=broker.vaults.get(root),ownedInitialAttempt=initialAttempts.get(record);
     const previous=retirements.get(root);
     // Install before any await: open/selection must not borrow a service whose
     // last owner is draining. Other live members keep their existing service.
@@ -85,6 +107,8 @@ function createEditorCoreManager(environment=process.env, options={}){
       if(previous)await previous;
       const admission=admissions.get(record);
       if(admission)await admission.catch(()=>{});
+      const initialAttempt=ownedInitialAttempt?.service===service?ownedInitialAttempt:null;
+      if(initialAttempt&&initialAttempts.get(record)===initialAttempt){await settleInitialCleanup(initialAttempt);if(initialAttempt.consumer?.fenced)throw fail('admission_cleanup_unknown');if(initialAttempts.get(record)===initialAttempt&&initialAttempt.service===service)initialAttempts.delete(record);}
       const saved=contexts.get(record)??released.get(record)??initial;
       released.delete(record);contexts.delete(record);
       saved.stopRuntime?.();saved.stopDrafts?.();
@@ -116,7 +140,7 @@ function createEditorCoreManager(environment=process.env, options={}){
       while(retirements.has(canonical)){await retirements.get(canonical);if(closed)throw fail('editor_core_closed');}
       return openService(canonical);
     },
-    async recover(broker,record,event,expectedRoot,admissionId){
+    async recover(broker,record,event,expectedRoot,admissionId,assertInitialOwner){
       broker.authenticate(event);
       const previous=recovering.get(record);
       if(previous){if(previous.root!==expectedRoot||previous.id!==admissionId)throw fail('durable_scope_changed');previous.check();return previous.promise;}
@@ -130,7 +154,7 @@ function createEditorCoreManager(environment=process.env, options={}){
         recoveryStates.set(record,state);
       }
       const {saved,scope}=state;
-      const check=()=>{broker.authenticate(event);if(closed||state.root!==expectedRoot||record.vault!==saved.entry||record.generation!==saved.generation||record.vaultSelectionPending||record.persistedVaultRoot!==expectedRoot||record.clientSlot?.clientId!==scope.clientId)throw fail('durable_scope_changed');};
+      const check=()=>{assertInitialOwner?.();broker.authenticate(event);if(closed||state.root!==expectedRoot||record.vault!==saved.entry||record.generation!==saved.generation||record.vaultSelectionPending||record.persistedVaultRoot!==expectedRoot||record.clientSlot?.clientId!==scope.clientId)throw fail('durable_scope_changed');};
       check();
       if(current&&current!==saved){
         if(state.replacementId&&current.id!==state.replacementId)throw fail('durable_scope_changed');
@@ -154,7 +178,7 @@ function createEditorCoreManager(environment=process.env, options={}){
         // Never replay source operations. The renderer retains its exact pending
         // checkpoint revision and write reference across this lease replacement.
         admissions.delete(record);
-        const next=await this.context(broker,record,expectedRoot,scope);check();
+        const next=await this.context(broker,record,expectedRoot,scope,assertInitialOwner);check();
         if(contexts.get(record)?.service!==service)throw fail('durable_scope_changed');
         state.replacementId=next.admissionId;return next;
       })();
@@ -162,8 +186,8 @@ function createEditorCoreManager(environment=process.env, options={}){
       void pending.finally(()=>{if(recovering.get(record)?.promise===pending)recovering.delete(record);if(admissions.get(record)===pending)admissions.delete(record);}).catch(()=>{});
       return pending;
     },
-    requireReleased(record){if(contexts.has(record)||admissions.has(record))throw fail('durable_release_required');},
-    async context(broker,record,expectedRoot,recoveryScope){
+    requireReleased(record){if(contexts.has(record)||admissions.has(record)||initialAttempts.get(record)?.consumer?.fenced)throw fail('durable_release_required');},
+    async context(broker,record,expectedRoot,recoveryScope,assertInitialOwner){
       broker.assertLive(record);
       const entry=record.vault;
       if(record.vaultSelectionPending||!entry||entry.service.root!==expectedRoot)throw fail('durable_scope_changed');
@@ -173,60 +197,126 @@ function createEditorCoreManager(environment=process.env, options={}){
       const inFlight=admissions.get(record);if(inFlight)return inFlight;
       const recoveringState=recoveryStates.get(record);
       if(recoveringState&&!recoveringState.replacementId&&recoveringState.root===expectedRoot&&recoveringState.saved.entry===entry&&recoveringState.saved.generation===record.generation)recoveryScope??=recoveringState.scope;
-      const generation=record.generation,service=entry.service;
-      const check=()=>{
-        broker.assertLive(record);
-        if(closed||record.vaultSelectionPending||record.generation!==generation||record.vault!==entry||service.closed
-          ||!broker.allowedURL(record.window.webContents.mainFrame.url))throw fail('durable_scope_changed');
-      };
-      check();
       const pending=(async()=>{
-        let saved;
-        const captureDispatchOwner=()=>{
-          const id=saved?.id;
-          return()=>{if(id===undefined)check();else if(checked(broker,record,expectedRoot,id)!==saved)throw fail('durable_scope_changed');};
-        };
-        const admission=await admitDesktopFixtureClient(service,{fixture:true,clientId:fixture&&record.id==='main'?config.clientId:record.clientSlot?.clientId,assertOwner:check,captureDispatchOwner,...(recoveryScope?{expectedScope:recoveryScope}:{})});
-        try {check();if(recoveryScope&&(admission.scope.vaultId!==recoveryScope.vaultId||admission.scope.clientId!==recoveryScope.clientId))throw fail('durable_scope_changed');}
-        catch(error){await admission.retire();throw error;}
-        saved={id:randomUUID(),admission,service,entry,generation,check:(allowRetired=false)=>{check();if((saved.runtimeRetired||saved.draftsRetired)&&!allowRetired)throw fail('client_not_admitted');}};contexts.set(record,saved);
-        try{
-          if(admission.conditionalSavedSourceAvailable===true&&!['captureSavedSource','releaseSavedSource','listSavedSourceRequests'].every(name=>typeof admission.durableWrites?.[name]==='function'))throw fail('unsupported_host_capability');
-          if(documentRuntime&&(!runtimeAvailable(admission)||typeof admission.documentCommand!=='function'))throw runtimeUnavailable();
-          if(admission.metadataRowsAvailable===true&&typeof admission.documentCommand!=='function')throw fail('unsupported_host_capability');
-          if(admission.basePreviewAvailable===true&&(!documentRuntime||!runtimeAvailable(admission)||typeof options.onDocumentRuntimeNudge!=='function'||typeof admission.documentCommand!=='function'))throw fail('unsupported_host_capability');
-          if(admission.draftsAvailable===true){
-            if(!documentRuntime||!runtimeAvailable(admission)||typeof options.onDocumentRuntimeNudge!=='function'||!admission.documentCommand||!admission.documentDrafts||!['invoke','subscribe'].every(name=>typeof admission.documentDrafts[name]==='function'))throw fail('unsupported_host_capability');
-            const publish=retired=>{
-              try{
-                if(contexts.get(record)!==saved||saved.draftsRetired)return;
-                if(retired){broker.assertLive(record);if(record.vaultSelectionPending||record.vault!==entry||record.generation!==generation||!broker.allowedURL(record.window.webContents.mainFrame.url))return;saved.draftsRetired=true;}
-                else check();
-                options.onDocumentRuntimeNudge(record,{vault:expectedRoot,admissionId:saved.id,...(retired?{retired:true}:{})});
-              }catch{/* Only this admitted receiver may observe hints. */}
-            };
-            const stopDrafts=admission.documentDrafts.subscribe(()=>publish(false),()=>publish(true));
-            if(typeof stopDrafts!=='function')throw fail('invalid_document_response');saved.stopDrafts=stopDrafts;saved.check();
+        let attempt=initialAttempts.get(record);
+        if(attempt){
+          try{attempt.initialCheck();}catch(error){
+            await settleInitialCleanup(attempt);
+            if(attempt.consumer?.fenced)throw error;
+            if(initialAttempts.get(record)===attempt)initialAttempts.delete(record);attempt=null;
           }
-          if(documentRuntime){
-            const publish=retired=>{
-              try{
-                if(contexts.get(record)!==saved||saved.runtimeRetired)return;
-                if(retired){
-                  broker.assertLive(record);
-                  if(record.vaultSelectionPending||record.vault!==entry||record.generation!==generation||!broker.allowedURL(record.window.webContents.mainFrame.url))return;
-                  saved.runtimeRetired=true;
-                }else check();
-                options.onDocumentRuntimeNudge(record,{vault:expectedRoot,admissionId:saved.id,...(retired?{retired:true}:{})});
-              }catch{/* A revoked window cannot receive a late derived-state hint. */}
+        }
+        if(attempt&&attempt.service!==entry.service){
+          // Another coordinated recovery may already have replaced this dead
+          // service. Adopt it only after old ownership is positively gone and
+          // retain the original actual store scope for the next identity check.
+          if(!terminated(attempt.service))throw fail('durable_scope_changed');
+          await settleInitialCleanup(attempt);attempt.initialCheck();
+          if(attempt.consumer?.failure&&!admissionResumesAfterExit(attempt.consumer.failure))throw attempt.consumer.failure;
+          attempt.service=entry.service;attempt.authority=null;attempt.consumer=null;
+        }
+        if(!attempt){
+          const generation=record.generation,webContents=record.window.webContents,frame=webContents.mainFrame,slot=record.clientSlot,slotClientId=slot?.clientId,clientId=fixture&&record.id==='main'?config.clientId:slot?.clientId,persistedRoot=record.persistedVaultRoot;
+          attempt={service:entry.service,scope:recoveryScope??null,authority:null,consumer:null,complete:false};
+          const ownerCheck=()=>{
+            broker.assertLive(record);
+            if(closed||record.vaultSelectionPending||record.generation!==generation||record.vault!==entry
+              ||!broker.allowedURL(record.window.webContents.mainFrame.url))throw fail('durable_scope_changed');
+          };
+          attempt.check=()=>{ownerCheck();if(attempt.service.closed)throw fail('durable_scope_changed');};
+          attempt.initialCheck=()=>{
+            ownerCheck();
+            if(attempt.service.closed&&!terminated(attempt.service))throw fail('durable_scope_changed');
+            if(record.window.webContents!==webContents||webContents.mainFrame!==frame||record.clientSlot!==slot||slot?.clientId!==slotClientId||record.persistedVaultRoot!==persistedRoot)throw fail('durable_scope_changed');
+            assertInitialOwner?.();
+          };
+          attempt.generation=generation;attempt.clientId=clientId;
+          initialAttempts.set(record,attempt);
+        }
+        const {generation}=attempt,check=attempt.check;
+        attempt.initialCheck();
+        let delay=50,currentSaved;
+        for(;;){
+          try{
+            attempt.initialCheck();
+            const service=attempt.service;
+            if(!attempt.authority){
+              const authority=await service.host.identity(attempt.initialCheck);attempt.initialCheck();
+              if(typeof authority?.local_store_id!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(authority.local_store_id))throw fail('invalid_authority');
+              if(attempt.scope&&(authority.local_store_id!==attempt.scope.vaultId||attempt.clientId!==attempt.scope.clientId))throw fail('durable_scope_changed');
+              attempt.authority=Object.freeze({...authority});attempt.scope??=Object.freeze({vaultId:authority.local_store_id,clientId:attempt.clientId});
+            }
+            const captureDispatchOwner=()=>{
+              const accepted=currentSaved,id=accepted?.id;
+              return()=>{if(id===undefined)check();else if(checked(broker,record,expectedRoot,id)!==accepted)throw fail('durable_scope_changed');};
             };
-            const stopRuntime=admission.documentRuntime.subscribe(()=>publish(false),()=>publish(true));
-            if(typeof stopRuntime!=='function')throw fail('invalid_document_response');
-            saved.stopRuntime=stopRuntime;
-            saved.check();
+            let saved;
+            if(!attempt.consumer)attempt.consumer=createDesktopAdmissionAttempt(service,{fixture:true,clientId:attempt.clientId,assertOwner:()=>attempt.complete?check():attempt.initialCheck(),captureDispatchOwner,expectedScope:attempt.scope},attempt.authority);
+            const admission=await attempt.consumer.run();
+            try {attempt.initialCheck();if(admission.scope.vaultId!==attempt.scope.vaultId||admission.scope.clientId!==attempt.scope.clientId)throw fail('durable_scope_changed');}
+            catch(error){await attempt.consumer.reject(error,()=>admission.retire(),()=>admission.abandonTerminatedHost());throw error;}
+            saved={id:randomUUID(),admission,service,entry,generation,check:(allowRetired=false)=>{check();if((saved.runtimeRetired||saved.draftsRetired)&&!allowRetired)throw fail('client_not_admitted');}};currentSaved=saved;contexts.set(record,saved);
+            try{
+              if(admission.conditionalSavedSourceAvailable===true&&!['captureSavedSource','releaseSavedSource','listSavedSourceRequests'].every(name=>typeof admission.durableWrites?.[name]==='function'))throw fail('unsupported_host_capability');
+              if(documentRuntime&&(!runtimeAvailable(admission)||typeof admission.documentCommand!=='function'))throw runtimeUnavailable();
+              if(admission.metadataRowsAvailable===true&&typeof admission.documentCommand!=='function')throw fail('unsupported_host_capability');
+              if(admission.basePreviewAvailable===true&&(!documentRuntime||!runtimeAvailable(admission)||typeof options.onDocumentRuntimeNudge!=='function'||typeof admission.documentCommand!=='function'))throw fail('unsupported_host_capability');
+              if(admission.draftsAvailable===true){
+                if(!documentRuntime||!runtimeAvailable(admission)||typeof options.onDocumentRuntimeNudge!=='function'||!admission.documentCommand||!admission.documentDrafts||!['invoke','subscribe'].every(name=>typeof admission.documentDrafts[name]==='function'))throw fail('unsupported_host_capability');
+                const publish=retired=>{
+                  try{
+                    if(contexts.get(record)!==saved||saved.draftsRetired)return;
+                    if(retired){broker.assertLive(record);if(record.vaultSelectionPending||record.vault!==entry||record.generation!==generation||!broker.allowedURL(record.window.webContents.mainFrame.url))return;saved.draftsRetired=true;}
+                    else check();
+                    options.onDocumentRuntimeNudge(record,{vault:expectedRoot,admissionId:saved.id,...(retired?{retired:true}:{})});
+                  }catch{/* Only this admitted receiver may observe hints. */}
+                };
+                const stopDrafts=admission.documentDrafts.subscribe(()=>publish(false),()=>publish(true));
+                if(typeof stopDrafts!=='function')throw fail('invalid_document_response');saved.stopDrafts=stopDrafts;saved.check();
+              }
+              if(documentRuntime){
+                const publish=retired=>{
+                  try{
+                    if(contexts.get(record)!==saved||saved.runtimeRetired)return;
+                    if(retired){
+                      broker.assertLive(record);
+                      if(record.vaultSelectionPending||record.vault!==entry||record.generation!==generation||!broker.allowedURL(record.window.webContents.mainFrame.url))return;
+                      saved.runtimeRetired=true;
+                    }else check();
+                    options.onDocumentRuntimeNudge(record,{vault:expectedRoot,admissionId:saved.id,...(retired?{retired:true}:{})});
+                  }catch{/* A revoked window cannot receive a late derived-state hint. */}
+                };
+                const stopRuntime=admission.documentRuntime.subscribe(()=>publish(false),()=>publish(true));
+                if(typeof stopRuntime!=='function')throw fail('invalid_document_response');
+                saved.stopRuntime=stopRuntime;
+                saved.check();
+              }
+              attempt.initialCheck();if(entry.service!==service)throw fail('durable_scope_changed');
+            }catch(error){if(contexts.get(record)===saved)contexts.delete(record);try{saved.stopRuntime?.();saved.stopDrafts?.();}finally{await attempt.consumer.reject(error,()=>admission.retire(),()=>admission.abandonTerminatedHost());}throw error;}
+            attempt.complete=true;
+            if(initialAttempts.get(record)===attempt)initialAttempts.delete(record);
+            return describe(saved);
+          }catch(error){
+            // Transport already owns terminating a failed shared host. Never kill
+            // one here or claim again until its actual close/exit has drained.
+            if(terminated(attempt.service)&&attempt.scope&&admissionResumesAfterExit(attempt.consumer?.failure??error)){
+              attempt.initialCheck();
+              const old=attempt.service;
+              let next;
+              try{next=await replaceTerminatedService(broker,entry,old);}
+              catch(replacementError){
+                if(!retryableAdmissionFailure(replacementError))throw replacementError;
+                await admissionBackoff(delay,attempt.initialCheck);delay=Math.min(delay*2,1000);continue;
+              }
+              attempt.service=next;attempt.authority=null;attempt.consumer=null;
+              attempt.initialCheck();continue;
+            }
+            if(terminated(attempt.service)&&attempt.consumer){await settleInitialCleanup(attempt);throw attempt.consumer.failure??error;}
+            const retry=attempt.consumer?attempt.consumer.retryable:retryableAdmissionFailure(error);
+            if(!retry)throw error;
+            await admissionBackoff(delay,attempt.initialCheck);delay=Math.min(delay*2,1000);
           }
-        }catch(error){if(contexts.get(record)===saved)contexts.delete(record);try{saved.stopRuntime?.();saved.stopDrafts?.();}finally{await admission.retire();}throw error;}
-        return describe(saved);
+        }
       })();
       admissions.set(record,pending);
       try{return await pending;}finally{if(admissions.get(record)===pending)admissions.delete(record);}
@@ -342,9 +432,10 @@ function createEditorCoreManager(environment=process.env, options={}){
     close(){
       if(closePromise)return closePromise;
       closed=true;
+      for(const cancel of [...backoffWaits])cancel();
       closePromise=(async()=>{
         await Promise.allSettled([...openings.values(),...admissions.values(),...retirements.values()].filter(Boolean));
-        for(const saved of contexts.values()){saved.stopRuntime?.();saved.stopDrafts?.();}contexts.clear();await Promise.all([...services].map(service=>service.close()));services.clear();
+        for(const saved of contexts.values()){saved.stopRuntime?.();saved.stopDrafts?.();}contexts.clear();initialAttempts.clear();await Promise.all([...services].map(service=>service.close()));services.clear();
       })();return closePromise;
     },
   };

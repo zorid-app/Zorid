@@ -16,18 +16,21 @@ function fixture({admission,admissionFactory,options={}}={}){
   vm.runInNewContext(fs.readFileSync(filename,'utf8'),{module,exports:module.exports,process,structuredClone,require(name){
     if(name==='node:fs/promises')return {realpath:async value=>value};
     if(name==='./vault-service.cjs')return {VaultService:{async open(root,configuration){
-      const service={root,configuration,host:{fatal:null,exited:false},closed:false,subscribe(){return ()=>{};},async close(){this.closed=true;if(opened[0]===this)await closed.promise;}};
+      const service={root,configuration,host:{fatal:null,exited:false,async identity(){return{local_store_id:admission?.scope.vaultId??'store',realm_id:null,vault_id:null};}},closed:false,subscribe(){return ()=>{};},async close(){this.closed=true;if(opened[0]===this)await closed.promise;this.host.exited=true;}};
       opened.push(service);return service;
     }}};
     if(name==='./host-location.cjs')return {resolveDesktopHost:async()=>'/trusted/host'};
-    if(name==='./client-admission.cjs')return {admitDesktopFixtureClient:admissionFactory??(admission?async()=>admission:assert.fail)};
+    if(name==='./client-admission.cjs')return {
+      createDesktopAdmissionAttempt(service,options){let failure;return{async run(){return admissionFactory?admissionFactory(service,options):admission?Promise.resolve(admission):assert.fail();},async reject(error,cleanup){failure=error;await cleanup();throw error;},async cleanup(){},async abandonTerminatedHost(){},get failure(){return failure;},fenced:false,retryable:false};},
+      retryableAdmissionFailure:()=>false,
+    };
     // Unmocked dependencies resolve beside the evaluated production module.
     return sourceRequire(name);
   }});
   const manager=module.exports.createEditorCoreManager({},options);
   const broker=new WindowBroker({openVault:directory=>manager.open(directory),allowedURL:()=>true});
   let id=0;
-  const window=()=>broker.register({webContents:{id:++id,mainFrame:{url:'https://zorid.test/'},isDestroyed:()=>false},isDestroyed:()=>false});
+  const window=()=>{const record=broker.register({webContents:{id:++id,mainFrame:{url:'https://zorid.test/'},isDestroyed:()=>false},isDestroyed:()=>false});record.clientSlot={clientId:admission?.scope.clientId??'client'};return record;};
   return {manager,broker,window,opened,closed};
 }
 function bindJournal(f,record,context,assertCurrent=()=>{}){

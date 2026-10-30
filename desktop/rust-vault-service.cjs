@@ -1,4 +1,7 @@
 'use strict';
+// Only fully validated negative Native replies carry this process-local proof.
+const nativeFailures=new WeakSet();
+const isNativeFailure=error=>!!error&&typeof error==='object'&&nativeFailures.has(error);
 const { spawn } = require('node:child_process');
 const fs = require('node:fs/promises');
 const path = require('node:path');
@@ -379,6 +382,7 @@ class RustVaultService {
           if (header.ok) pending.resolve({ result: header.result, bytes });
           else {
             const error=failure(header.error.code, header.error.commit_uncertain === true);
+            nativeFailures.add(error);
             if(details!==undefined)error.details=details;
             pending.reject(error);
           }
@@ -473,7 +477,7 @@ class RustVaultService {
   recoveryList(entryId,options) { const command=captureRecoveryList(entryId,options);return this.request(command).then(reply=>reply.result); }
   recoveryRead(entryId,snapshotId) { const command=captureRecoveryRead(entryId,snapshotId);return this.request(command).then(({result,bytes})=>({version:result.version,content:new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(bytes)})); }
   localFamilyStatus() { return this.request({method:'local_family_status'}).then(reply=>reply.result.family); }
-  claimClient(clientId) { return this.request({ method: 'claim_client', client_id: clientId }).then(reply => Object.freeze({ ...reply.result.lease })); }
+  claimClient(clientId,beforeDispatch) { return this.request({ method: 'claim_client', client_id: clientId },undefined,undefined,beforeDispatch).then(reply => Object.freeze({ ...reply.result.lease })); }
   releaseClient(reference) { return this.request({ method: 'release_client', reference }).then(reply => reply.result); }
   withClientLease(reference, beforeRequest = () => {}) {
     const captured = Object.freeze({ local_store_id: reference.local_store_id, client_id: reference.client_id, token: reference.token });
@@ -525,7 +529,7 @@ class RustVaultService {
   }
   checkpointList(scope, options) { return this.request({ method: 'checkpoint_list', scope, limit: options.limit, cursor: options.cursor ?? null }).then(reply => reply.result); }
   checkpointChanges(scope, options) { return this.request({ method: 'checkpoint_changes', scope, after: options.after, limit: options.limit, cursor: options.cursor ?? null }).then(reply => reply.result); }
-  identity() { return this.request({ method: 'identity' }).then(reply => reply.result.identity); }
+  identity(beforeDispatch) { return this.request({ method: 'identity' },undefined,undefined,beforeDispatch).then(reply => reply.result.identity); }
   listEntries() { return this.request({ method: 'list' }).then(reply => reply.result.entries); }
   readEntryById(id) {
     return this.request({ method: 'read', id }).then(({ result, bytes }) => ({ ...result, bytes }));
@@ -593,4 +597,4 @@ class RustVaultService {
     return this.closePromise;
   }
 }
-module.exports = { RustVaultService, reconciliationStatus, MAX_BINARY_FRAME };
+module.exports = { RustVaultService, reconciliationStatus, MAX_BINARY_FRAME, isNativeFailure };

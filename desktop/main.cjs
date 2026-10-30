@@ -37,7 +37,7 @@ function captureJournalOwner(record,event,expectedRoot){
   };check();return check;
 }
 async function contextWithIndependentJournal(record,event,expectedRoot,operation){
-  const check=captureJournalOwner(record,event,expectedRoot),context=await operation();check();
+  const check=captureJournalOwner(record,event,expectedRoot),context=await operation(check);check();
   if(!context)return context;
   const grant=independentJournal().attach(record,context);check();
   const admissionId=editorCore.bindIndependentJournal(broker,record,expectedRoot,context.admissionId,grant,check);check();
@@ -165,10 +165,10 @@ function registerIPC() {
     try { return { ok: true, result: await callback() }; }
     catch (error) { return { ok: false, error: { code: typeof error?.code === 'string' && /^[a-z_]{1,64}$/.test(error.code) ? error.code : 'durable_request_failed', commitUncertain: error?.commitUncertain === true } }; }
   };
-  handle('getDurableContext', (record, event, expectedRoot) => durableReply(() => contextWithIndependentJournal(record,event,expectedRoot,()=>editorCore ? editorCore.context(broker, record, expectedRoot) : null)));
-  handle('recoverDurableContext', (record, event, expectedRoot, admissionId) => durableReply(() => contextWithIndependentJournal(record,event,expectedRoot,()=>{
+  handle('getDurableContext', (record, event, expectedRoot) => durableReply(() => contextWithIndependentJournal(record,event,expectedRoot,check=>editorCore ? editorCore.context(broker, record, expectedRoot,undefined,check) : null)));
+  handle('recoverDurableContext', (record, event, expectedRoot, admissionId) => durableReply(() => contextWithIndependentJournal(record,event,expectedRoot,check=>{
     if (!editorCore) throw new Error('No Rust editor context');
-    return editorCore.recover(broker, record, event, expectedRoot, admissionId);
+    return editorCore.recover(broker, record, event, expectedRoot, admissionId,check);
   })));
   ipcMain.handle('zorid:independentJournal',async(event,input)=>{
     try{
