@@ -202,7 +202,26 @@ async function launch(name){await diskGuard();assert.ok(!child);await fs.rm(path
   evidence.checks.push({name:'owned-native-window-and-renderer-actually-visible',...record.visibility});
 }else{record.hidden=appKit('hide');assert.equal(record.hidden.hidden,true,'Owned test app verified hidden');}
 return ui;}
-async function quit(name){assert.ok(child&&!exited());await nativeChildren();const request=appKit('terminate');await until(async()=>assert.ok(exited(),'Normal application quit'),20000);assert.equal(child.exitCode,0);assert.equal(child.signalCode,null,'A cleanup signal cannot satisfy normal quit');if(relay){await until(async()=>{const {events,rows}=await inspectNativeGenerations();return nativeRegistry.assertShutdown({events,rows,appPid:child.pid});},5000);if(nativeObservationFailure)throw nativeObservationFailure;}evidence.checks.push({name,request,exitCode:child.exitCode,signal:child.signalCode});await stop();}
+async function quit(name){
+  assert.ok(child&&!exited());
+  // Finish active ownership observation before deliberately tearing its process
+  // tree down. macOS ps can expose an old state with an exiting command name.
+  clearInterval(nativePoll);nativePoll=undefined;await nativeObservationTail;
+  if(nativeObservationFailure)throw nativeObservationFailure;
+  await nativeChildren();
+  const quittingPids=new Set([child.pid,...natives.keys()]);
+  const request=appKit('terminate');
+  await until(async()=>assert.ok(exited(),'Normal application quit'),20000);
+  assert.equal(child.exitCode,0);assert.equal(child.signalCode,null,'A cleanup signal cannot satisfy normal quit');
+  if(relay){
+    // A process still present with any non-zombie state is pending, regardless
+    // of its command text. Do not signal it or grant it replacement authority.
+    await until(async()=>{const rows=processes();assert.ok(!rows.some(row=>quittingPids.has(row.pid)&&!row.state.startsWith('Z')),'Authenticated quitting process tree has exited');return true;},5000);
+    await until(async()=>{const {events,rows}=await inspectNativeGenerations();return nativeRegistry.assertShutdown({events,rows,appPid:child.pid});},5000);
+    if(nativeObservationFailure)throw nativeObservationFailure;
+  }
+  evidence.checks.push({name,request,exitCode:child.exitCode,signal:child.signalCode});await stop();
+}
 async function read(file){return readFixture(vault,file);}
 async function saved(file,check,name){const source=await until(async()=>{const source=await read(file);await check(source);return source;},45000);const normal=await cdp.evaluate(`(async()=>{const v=await window.zorid.getVault();return window.zorid.read(v.path,${JSON.stringify(file)});})()`);assert.equal(normal,source,'Normal bridge read equals actual saved bytes');evidence.checks.push({name,file,sha256:createHash('sha256').update(source).digest('hex'),source});return source;}
 function frontmatter(source){const match=source.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);assert.ok(match,'Frontmatter present');return yaml.parse(match[1]);}
