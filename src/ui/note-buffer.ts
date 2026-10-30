@@ -1,6 +1,5 @@
 import { assertNoteTextChange } from '../core/note-text-limit.ts';
 import { DurableNoteState } from './note-durable-state.ts';
-import {NoteLoadSupervisor} from './note-load-supervisor.ts';
 import type { Vault } from '../core/vault.ts';
 import { isMarkdown, normalizePath } from '../core/types.ts';
 import type { NoteMetadata } from '../core/types.ts';
@@ -57,7 +56,7 @@ export class NoteBuffer {
   private options: NoteBufferOptions;
   private durable?: DurableNoteState;
   private loaded = false;
-  private initialLoad?:{controller:AbortController;supervisor:NoteLoadSupervisor};
+  private initialLoad?:{controller:AbortController};
   private disposed = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private autosaveEpoch=0;
@@ -130,7 +129,7 @@ export class NoteBuffer {
     if(this.loaded)throw new Error('An admitted note must use its durable close barrier');
     this.disposed=true;this.cancelInitialLoad();this.durable?.stopDraftProtection();await this.closeMetadataProjection();
   }
-  coreAdmissionAvailable(scope:{vaultId:string;clientId:string}):void{if(this.durable?.coreAdmissionAvailable(scope))this.initialLoad?.supervisor.admissionAvailable();}
+  coreAdmissionAvailable(scope:{vaultId:string;clientId:string}):void{this.durable?.coreAdmissionAvailable(scope);}
 
   private validateWrite(): void { for (const validate of this.writeValidators) validate(); }
 
@@ -316,11 +315,24 @@ export class NoteBuffer {
 
   private expectedEntryId?:string;
   private async readInitial<T>(operation:(check:()=>void)=>Promise<T>,validate:()=>void,signal?:AbortSignal):Promise<T>{
-    const owner={controller:new AbortController(),supervisor:new NoteLoadSupervisor()};this.initialLoad=owner;
+    const owner={controller:new AbortController()};this.initialLoad=owner;
+    const cancelled=()=>Object.assign(new Error('The note load was cancelled'),{code:'note_load_cancelled'});
+    let rejectCancellation!:(error:Error)=>void;
+    const cancellation=new Promise<never>((_resolve,reject)=>{rejectCancellation=reject;});
+    void cancellation.catch(()=>{});
+    const cancel=()=>rejectCancellation(cancelled());
+    owner.controller.signal.addEventListener('abort',cancel,{once:true});
     const abort=()=>owner.controller.abort();signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)abort();
-    const check=()=>{if(owner.controller.signal.aborted||this.disposed)throw Object.assign(new Error('The note load was cancelled'),{code:'note_load_cancelled'});validate();};
-    try{return await owner.supervisor.run(()=>operation(check),check,{signal:owner.controller.signal,onError:error=>{this.rememberError(error);this.notify();}});}
-    finally{signal?.removeEventListener('abort',abort);owner.supervisor.stop();if(this.initialLoad===owner)this.initialLoad=undefined;}
+    const check=()=>{if(owner.controller.signal.aborted||this.disposed||this.initialLoad!==owner)throw cancelled();validate();};
+    try{
+      check();
+      // One provider call. Racing observes even a late rejection after cancellation.
+      const value=await Promise.race([operation(check),cancellation]);
+      check();return value;
+    }finally{
+      signal?.removeEventListener('abort',abort);owner.controller.signal.removeEventListener('abort',cancel);
+      if(this.initialLoad===owner)this.initialLoad=undefined;
+    }
   }
   load(expectedEntryId?:string,validate:()=>void=()=>{},options:{signal?:AbortSignal}={}): Promise<void> {
     return this.enqueue(async () => {

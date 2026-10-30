@@ -87,17 +87,20 @@ test('canonical source retirement waits without polling and only a same-scope po
   f.failCAS(undefined);f.note.coreAdmissionAvailable(f.writes.checkpoints.scope);await drain();assert.deepEqual(f.calls[1],exact);assert.equal(f.note.error,null);
 });
 
-test('a typed initial read retries automatically without authorizing a blank editor or duplicate healthy reads',async t=>{
-  t.mock.timers.enable({apis:['setTimeout']});const f=await fixture(t,{operation:false});f.failRead(fault());
-  const loading=f.note.load('entry');await drain();assert.equal(f.note.hasAdmittedContent,false);assert.equal(f.sourceReads,1);assert.equal(f.checkpointReads,0);
-  f.failRead(undefined);t.mock.timers.tick(500);await loading;assert.equal(f.note.hasAdmittedContent,true);assert.equal(f.note.text,'Original');assert.equal(f.sourceReads,2);assert.equal(f.checkpointReads,1);assert.equal(f.calls.length,0);
-  await Promise.all([f.note.load('entry'),f.note.load('entry')]);t.mock.timers.tick(90000);await drain();assert.equal(f.sourceReads,2);assert.equal(f.calls.length,0);
+test('a typed initial read fails once without a blank editor, timer or admission replay',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});const f=await fixture(t,{operation:false}),error=fault();f.failRead(error);
+  let rejected:unknown;const loading=f.note.load('entry').catch(value=>{rejected=value;});await drain();
+  assert.equal(rejected,error);await loading;assert.equal(f.note.error,error);assert.equal(f.note.hasAdmittedContent,false);assert.equal(f.sourceReads,1);assert.equal(f.checkpointReads,0);
+  f.failRead(undefined);t.mock.timers.tick(90000);f.note.coreAdmissionAvailable(f.writes.checkpoints.scope);await drain();assert.equal(f.sourceReads,1);assert.equal(f.note.hasAdmittedContent,false);
+  await f.note.load('entry');assert.equal(f.note.hasAdmittedContent,true);assert.equal(f.note.text,'Original');assert.equal(f.sourceReads,2);assert.equal(f.checkpointReads,1);assert.equal(f.calls.length,0);
+  await Promise.all([f.note.load('entry'),f.note.load('entry')]);assert.equal(f.sourceReads,2);
 });
 
-test('an initial checkpoint failure cannot follow a same-path replacement on automatic retry',async t=>{
-  t.mock.timers.enable({apis:['setTimeout']});const f=await fixture(t,{operation:false});f.failCheckpointRead(fault());
-  const loading=f.note.load('entry'),failed=assert.rejects(loading,/selected note changed/);await drain();f.replace();f.failCheckpointRead(undefined);
-  t.mock.timers.tick(500);await failed;assert.equal(f.note.hasAdmittedContent,false);assert.equal(f.checkpointReads,1);assert.equal(f.calls.length,0);assert.equal(f.plans.length,0);await f.note.disposeUnadmitted();
+test('an initial checkpoint failure requires explicit reload and cannot follow a same-path replacement',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});const f=await fixture(t,{operation:false}),error=fault();f.failCheckpointRead(error);
+  let rejected:unknown;const loading=f.note.load('entry').catch(value=>{rejected=value;});await drain();assert.equal(rejected,error);await loading;
+  f.replace();f.failCheckpointRead(undefined);t.mock.timers.tick(90000);await drain();assert.equal(f.sourceReads,1);
+  await assert.rejects(f.note.load('entry'),/selected note changed/);assert.equal(f.note.hasAdmittedContent,false);assert.equal(f.checkpointReads,1);assert.equal(f.calls.length,0);assert.equal(f.plans.length,0);await f.note.disposeUnadmitted();
 });
 
 test('cancelling and disposing a pure held load is prompt and an old late reply cannot admit or mutate it',async t=>{
@@ -145,11 +148,11 @@ test('a loaded body cannot be readmitted after its capability or local scope is 
   (f.writes.checkpoints.scope as {vaultId:string}).vaultId='load-authority';
 });
 
-test('a positive same-scope admission also wakes an unadmitted source read without a polling timer',async t=>{
-  t.mock.timers.enable({apis:['setTimeout']});const f=await fixture(t,{operation:false});f.failRead(fault('client_not_admitted'));
-  const loading=f.note.load('entry');let admitted=false;void loading.then(()=>{admitted=true;},()=>{});await drain();t.mock.timers.tick(90000);await drain();assert.equal(f.sourceReads,1);assert.equal(f.note.hasAdmittedContent,false);
-  f.failRead(undefined);f.note.coreAdmissionAvailable({vaultId:'foreign',clientId:'load-client'});await drain();assert.equal(f.sourceReads,1);
-  f.note.coreAdmissionAvailable(f.writes.checkpoints.scope);await drain();assert.equal(admitted,true);await loading;assert.equal(f.sourceReads,2);assert.equal(f.note.text,'Original');assert.equal(f.note.hasAdmittedContent,true);
+test('positive same-scope admission does not replay a failed unadmitted source read',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});const f=await fixture(t,{operation:false}),error=fault('client_not_admitted');f.failRead(error);
+  let rejected:unknown;const loading=f.note.load('entry').catch(value=>{rejected=value;});await drain();assert.equal(rejected,error);await loading;
+  f.failRead(undefined);f.note.coreAdmissionAvailable({vaultId:'foreign',clientId:'load-client'});f.note.coreAdmissionAvailable(f.writes.checkpoints.scope);t.mock.timers.tick(90000);await drain();
+  assert.equal(f.sourceReads,1);assert.equal(f.note.hasAdmittedContent,false);await f.note.load('entry');assert.equal(f.sourceReads,2);assert.equal(f.note.text,'Original');assert.equal(f.note.hasAdmittedContent,true);
 });
 
 test('a reentrant admitted onState edit and flush cannot queue a checkpoint before the original ref continuation',async t=>{
@@ -173,4 +176,26 @@ test('inventory arriving after unadmitted disposal cannot start either core or i
   await f.note.disposeUnadmitted();await cancelled;held.resolve();f.holdInventory(undefined);await drain();
   assert.equal(f.calls.length,0);assert.equal(f.journal.length,0);
   const restored=new NoteBuffer(f.vault,'One.md',{debounceMs:60000});await restored.load('entry');assert.equal(restored.text,'Journal D2');await restored.dispose();
+});
+
+for(const reason of ['aborted','owner-changed'] as const)test(`a ${reason} initial legacy read is rejected before dispatch`,async()=>{
+  const vault=new Vault(new MemoryAdapter({'One.md':'Original'}));await vault.initialize();let reads=0;
+  vault.read=async()=>{reads++;return'Late body';};const note=new NoteBuffer(vault,'One.md'),signal=new AbortController(),error=Error('Original owner changed');
+  if(reason==='aborted')signal.abort();
+  await assert.rejects(note.load(undefined,()=>{if(reason==='owner-changed')throw error;},{signal:signal.signal}),reason==='aborted'?{code:'note_load_cancelled'}:error);
+  assert.equal(reads,0);assert.equal(note.hasAdmittedContent,false);await note.disposeUnadmitted();
+});
+
+test('a held legacy read rechecks its owner before admitting the returned body',async()=>{
+  const vault=new Vault(new MemoryAdapter({'One.md':'Original'}));await vault.initialize();const held=gate(),error=Error('Original owner changed');let current=true,reads=0;
+  vault.read=async()=>{reads++;await held.promise;return'Obsolete body';};const note=new NoteBuffer(vault,'One.md');
+  const loading=note.load(undefined,()=>{if(!current)throw error;}),rejected=assert.rejects(loading,error);await drain();current=false;held.resolve();await rejected;
+  assert.equal(reads,1);assert.equal(note.hasAdmittedContent,false);assert.equal(note.text,'');assert.equal(note.savedText,'');await note.disposeUnadmitted();
+});
+
+test('cancellation promptly rejects a held legacy read and observes its later provider rejection',async()=>{
+  const vault=new Vault(new MemoryAdapter({'One.md':'Original'}));await vault.initialize();const held=gate();let reads=0;
+  vault.read=async()=>{reads++;await held.promise;throw fault();};const note=new NoteBuffer(vault,'One.md'),signal=new AbortController();
+  const loading=note.load(undefined,()=>{},{signal:signal.signal}),rejected=assert.rejects(loading,{code:'note_load_cancelled'});await drain();signal.abort();await rejected;
+  assert.equal(reads,1);assert.equal(note.hasAdmittedContent,false);await note.disposeUnadmitted();held.resolve();await drain();assert.equal(note.text,'');assert.equal(note.savedText,'');
 });
