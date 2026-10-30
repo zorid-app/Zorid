@@ -75,7 +75,8 @@ export function captureCollectionSourceCompletion(options:CaptureCollectionSourc
   if(typeof source!=='string'||typeof entryId!=='string'||!entryId||typeof revision!=='string'||!revision
     ||!Number.isSafeInteger(viewIndex)||viewIndex<0)return fail();
   const kind=freeze(structuredClone(options.kind)),document=BaseDocument.parse(source),originalView=document.views[viewIndex];
-  if(!originalView||viewId!==undefined&&originalView.id!==viewId)return fail();
+  const firstView=kind.type==='add-view'&&document.views.length===0&&viewIndex===0&&viewId===undefined;
+  if(!originalView&&!firstView||viewId!==undefined&&originalView?.id!==viewId)return fail();
   let completionIndex=viewIndex,sourcePatch:BaseViewPatch|undefined;
   if(kind.type==='change-source')sourcePatch=freeze(resetViewSourcePatch(originalView,{kind:'untyped'}));
   else if(kind.type==='add-view')completionIndex=document.addView(kind.viewType,kind.viewName);

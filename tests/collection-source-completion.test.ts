@@ -152,3 +152,20 @@ test('pending entry receipt permits publication fields to settle while retaining
   const clean={...receipt(),entries:[{...entry,fileRevision:uuid(33),pendingProjection:false}]};
   assert.equal(plan.complete(clean,command).desiredSource,source);
 });
+
+test('an empty Base can capture its first add-view without inventing an original selected view',()=>{
+  const empty='# Empty Base retained\nfixture: {sentinel: original}\nviews: []\n';
+  const capture={source:empty,entryId:uuid(10),revision:uuid(11),viewIndex:0};
+  const plan=captureCollectionSourceCompletion({...capture,kind:{type:'add-view',viewType:'table',viewName:'First'}});
+  const first=plan.complete(receipt(),create),repeated=plan.complete(receipt(),create);
+  assert.equal(first,repeated);assert.equal(first.expectedSource,empty);assert.equal(first.entryId,capture.entryId);assert.equal(first.revision,capture.revision);
+  assert.equal(first.viewIndex,0);assert.match(first.viewId!,/^[0-9a-z]{12}$/);
+  const document=BaseDocument.parse(first.desiredSource);assert.equal(document.views.length,1);assert.equal(document.views[0].name,'First');
+  assert.equal(document.views[0].id,first.viewId);assert.deepEqual(document.views[0].source,{kind:'collection',id:created.id});
+  assert.deepEqual(document.getRoot('fixture'),{sentinel:'original'});assert.match(first.desiredSource,/# Empty Base retained/);
+  for(const kind of [{type:'none'},{type:'change-source'},{type:'append-properties',collection,originalOrder:[]}] as const){
+    assert.throws(()=>captureCollectionSourceCompletion({...capture,kind}));
+  }
+  assert.throws(()=>captureCollectionSourceCompletion({...capture,viewIndex:1,kind:{type:'add-view',viewType:'table',viewName:'First'}}));
+  assert.throws(()=>captureCollectionSourceCompletion({...capture,viewId:'foreign00001',kind:{type:'add-view',viewType:'table',viewName:'First'}}));
+});
