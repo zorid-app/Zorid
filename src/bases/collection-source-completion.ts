@@ -111,7 +111,7 @@ export function captureCollectionSourceCompletion(options:CaptureCollectionSourc
       else next.updateView(completionIndex,{source:{kind:'collection',id:collection.id}});
     }else if(kind.type==='append-properties'){
       const before=kind.collection;
-      if(command.op!=='update'||command.collectionId!==before.id||command.expectedRevision!==before.revision
+      if(command.op!=='update'||command.collectionId!==before.id||command.expectedRevision!==before.revision||command.name!==before.name
         ||command.properties.length<before.properties.length
         ||!before.properties.every((property,index)=>matchesProperty(property,collection.properties[index]))
         ||!before.properties.every((property,index)=>command.properties[index].id===property.id&&matchesProperty(command.properties[index],property)))return fail();

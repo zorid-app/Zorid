@@ -80,6 +80,7 @@ test('append rejects foreign collection, changed original schema, incorrect gene
   for(const response of [receipt({...created,id:'foreign00001',properties:[field,appended]}),receipt({...created,properties:[{...field,name:'Changed'},appended]}),receipt({...created,properties:[field,{...appended,name:'Wrong'}]})])assert.throws(()=>make().complete(response,update));
   assert.throws(()=>make().complete(updated(),{...update,expectedRevision:uuid(99)}));
   assert.throws(()=>make().complete(updated(),{...update,collectionId:'foreign00001'}));
+  assert.throws(()=>make().complete(receipt({...created,name:'Renamed',properties:[field,appended]}),{...update,name:'Renamed'}));
 });
 
 test('capture rejects a mismatched selected view and completion rejects read/maintenance commands',()=>{
