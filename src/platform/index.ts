@@ -29,7 +29,7 @@ const adapterReadRunners=new WeakMap<VaultAdapter,(method:keyof AdapterReads,pat
 const noteReadRunners=new WeakMap<DurableWrites,(method:'readText'|'readTextById',key:string,budget:ReadBudget)=>Promise<DurableWriteRead|null>>();
 type SavedSourceMethod='captureSavedSource'|'releaseSavedSource'|'listSavedSourceRequests';
 const savedSourceRunners=new WeakMap<DurableWrites,(method:SavedSourceMethod,input:unknown,budget:ReadBudget)=>Promise<unknown>>();
-type EntryCommand=Extract<DatabaseRequest,{op:'set_entry'}>;
+type EntryCommand=Extract<DatabaseRequest,{operationId:string}>;
 type EntryHold={fingerprint:string;count:number};
 type EntryCapsule={command:EntryCommand;fingerprint:string;attempt:number;io?:DatabaseMutationSupervisor;claims:number;holds:Set<EntryHold>;registrations:Set<Map<string,EntryCapsule>>;promise?:Promise<DatabaseResponse>;resolve?:(value:DatabaseResponse)=>void;reject?:(error:unknown)=>void;response?:DatabaseResponse;error?:unknown};
 // A checked replacement adopts the SAME owner capsule. No nested promise,
@@ -46,6 +46,10 @@ export interface PlatformVault {
     claimCapturedSetEntry(command:DatabaseRequest):()=>void;
     /** Hold a receipt through the owning widget's post-save refresh; no admission or replay. */
     holdCapturedSetEntry(command:DatabaseRequest):()=>void;
+    /** A live collection control owns only its originally captured mutation. */
+    containsCapturedDatabaseMutation?(command:DatabaseRequest):boolean;
+    holdCapturedDatabaseMutation?(command:DatabaseRequest):()=>void;
+    claimCapturedDatabaseMutation?(command:DatabaseRequest):()=>void;
   };
   readonly recoveryHistory?:import('./bridge').RecoveryHistory;
   readonly workBlocks?:import('../core/workblocks.ts').WorkBlockService;
@@ -314,17 +318,19 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
     const entryHolds=new Map<string,EntryHold>();
     const captureEntry=(command:DatabaseRequest):DesktopDatabaseRequest=>captureDatabaseRequest({schemaVersion:1,command});
     const capsuleFor=(command:DatabaseRequest)=>{
-      try{const captured=captureEntry(command);if(captured.command.op!=='set_entry')return;
+      try{const captured=captureEntry(command);if(!('operationId'in captured.command))return;
         const capsule=entryCapsules.get(captured.command.operationId);return capsule?.fingerprint===JSON.stringify(captured)?capsule:undefined;
       }catch{return;}
     };
     const settleEntry=(capsule:EntryCapsule,error:unknown,response?:DatabaseResponse)=>{
       const resolve=capsule.resolve,reject=capsule.reject;capsule.promise=undefined;capsule.resolve=undefined;capsule.reject=undefined;
       if(response){
-        const saved=response.entries.find(entry=>entry.entryId===capsule.command.entryId);
+        const command=capsule.command;
+        const saved='entryId'in command?response.entries.find(entry=>entry.entryId===command.entryId):undefined;
         // Native exact retries also retry publication. A pending projection is
         // an honest result for this attempt, never a permanently cached receipt.
-        capsule.response=saved&&!saved.pendingProjection&&!Object.keys(saved.problems??{}).length?structuredClone(response):undefined;
+        const complete=capsule.command.op==='set_entry'?saved&&!saved.pendingProjection&&!Object.keys(saved.problems??{}).length:!response.projection.pending&&!response.projection.issues.length;
+        capsule.response=complete?structuredClone(response):undefined;
         capsule.error=undefined;resolve?.(response);
       }else{capsule.error=error;reject?.(error);}
     };
@@ -380,7 +386,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
       databases=Object.freeze({request(command:DatabaseRequest):Promise<DatabaseResponse>{
         let captured:DesktopDatabaseRequest;try{captured=captureEntry(command);}catch(error){return Promise.reject(error);}
         const blocked=released||recoveryNeeded||!!recovering||!!releasePending;
-        if(captured.command.op==='set_entry'){
+        if('operationId'in captured.command){
           const prior=entryCapsules.get(captured.command.operationId),fingerprint=JSON.stringify(captured);
           if(prior&&prior.fingerprint===fingerprint){
             if(prior.promise)return prior.promise;
@@ -425,23 +431,28 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
     }
     if(binding.documentSemantics)documents=createDesktopDocumentService(request=>call('documentCommand',request),documentRuntime?.transport,{metadataRowsAvailable:binding.metadataRowsAvailable===true,propertyTargetsAvailable:binding.propertyTargetsAvailable===true,basePreviewAvailable:binding.basePreviewAvailable===true,draftsAvailable:binding.draftsAvailable===true,drafts:drafts?.transport});
     if(binding.binaryLimits)binary=createDesktopBinaryStreams({scope,checkpoints:durableWrites.checkpoints,limits:binding.binaryLimits,assertActive:()=>{if(released||binaryDrained)throw new Error('Desktop binary context released');},invoke:bytes=>call<Uint8Array>('binaryCommand',bytes)});
+    const holdDatabaseMutation=(command:DatabaseRequest)=>{
+      const captured=captureEntry(command);if(!('operationId'in captured.command)||released||recoveryNeeded||recovering||releasePending)throw unavailable('client_not_admitted','This edit cannot acquire a receipt hold in a retired context.');
+      const id=captured.command.operationId,fingerprint=JSON.stringify(captured),prior=entryHolds.get(id);
+      if(prior&&prior.fingerprint!==fingerprint)throw unavailable('idempotency_conflict','This edit differs from its original receipt hold.');
+      const hold=prior??{fingerprint,count:0};entryHolds.set(id,hold);hold.count++;capsuleFor(captured.command)?.holds.add(hold);let active=true;
+      return()=>{if(!active)return;active=false;if(--hold.count===0&&entryHolds.get(id)===hold)entryHolds.delete(id);const capsule=capsuleFor(captured.command);if(capsule){if(!hold.count)capsule.holds.delete(hold);if(!heldEntry(capsule)&&!capsule.claims&&capsule.promise)capsule.io?.stop();forgetReceipt(capsule);}};
+    };
+    const claimDatabaseMutation=(command:DatabaseRequest)=>{
+      const capsule=capsuleFor(command);if(!capsule||released)throw unavailable('client_not_admitted','This edit has no admitted recovery capsule.');
+      capsule.claims++;entryClaims.set(capsule,(entryClaims.get(capsule)??0)+1);let active=true;
+      return()=>{if(!active)return;active=false;capsule.claims--;const count=(entryClaims.get(capsule)??1)-1;if(count)entryClaims.set(capsule,count);else entryClaims.delete(capsule);if(!capsule.claims&&capsule.promise)capsule.io?.stop();forgetReceipt(capsule);};
+    };
     const recoveryBridge=transport;
     if(recoveryBridge.recoverDurableContext){
       recoveryStop=bridge.onDocumentRuntimeNudge?.(info.path,admissionId,()=>{},markRetired);
       recovery=Object.freeze({
-        containsCapturedSetEntry(command:DatabaseRequest){return !!capsuleFor(command);},
-        holdCapturedSetEntry(command:DatabaseRequest){
-          const captured=captureEntry(command);if(captured.command.op!=='set_entry'||released||recoveryNeeded||recovering||releasePending)throw unavailable('client_not_admitted','This edit cannot acquire a receipt hold in a retired context.');
-          const id=captured.command.operationId,fingerprint=JSON.stringify(captured),prior=entryHolds.get(id);
-          if(prior&&prior.fingerprint!==fingerprint)throw unavailable('idempotency_conflict','This edit differs from its original receipt hold.');
-          const hold=prior??{fingerprint,count:0};entryHolds.set(id,hold);hold.count++;capsuleFor(captured.command)?.holds.add(hold);let active=true;
-          return()=>{if(!active)return;active=false;if(--hold.count===0&&entryHolds.get(id)===hold)entryHolds.delete(id);const capsule=capsuleFor(captured.command);if(capsule){if(!hold.count)capsule.holds.delete(hold);forgetReceipt(capsule);}};
-        },
-        claimCapturedSetEntry(command:DatabaseRequest){
-          const capsule=capsuleFor(command);if(!capsule||released)throw unavailable('client_not_admitted','This edit has no admitted recovery capsule.');
-          capsule.claims++;entryClaims.set(capsule,(entryClaims.get(capsule)??0)+1);let active=true;
-          return()=>{if(!active)return;active=false;capsule.claims--;const count=(entryClaims.get(capsule)??1)-1;if(count)entryClaims.set(capsule,count);else entryClaims.delete(capsule);if(!capsule.claims&&capsule.promise)capsule.io?.stop();forgetReceipt(capsule);};
-        },
+        containsCapturedDatabaseMutation:(command:DatabaseRequest)=>!!capsuleFor(command),
+        holdCapturedDatabaseMutation:holdDatabaseMutation,
+        claimCapturedDatabaseMutation:claimDatabaseMutation,
+        containsCapturedSetEntry(command:DatabaseRequest){return command.op==='set_entry'&&!!capsuleFor(command);},
+        holdCapturedSetEntry(command:DatabaseRequest){if(command.op!=='set_entry')throw unavailable('invalid_database_request','This is not a collection cell edit.');return holdDatabaseMutation(command);},
+        claimCapturedSetEntry(command:DatabaseRequest){if(command.op!=='set_entry')throw unavailable('invalid_database_request','This is not a collection cell edit.');return claimDatabaseMutation(command);},
         subscribe(listener:()=>void|Promise<void>){
           if(typeof listener!=='function')throw new Error('Recovery listener required');
           if(released)return()=>{};

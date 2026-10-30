@@ -1,4 +1,4 @@
-import type { DatabaseService, DatabaseCollection, DatabaseProperty, DatabasePropertyInput, DatabaseEntry, DatabaseRequest } from '../core/databases.ts';
+import type { DatabaseService, DatabaseCollection, DatabaseProperty, DatabasePropertyInput, DatabaseEntry, DatabaseRequest, DatabaseResponse } from '../core/databases.ts';
 import type { BaseViewSource } from '../bases/document.ts';
 import {validDateText} from '../bases/property-definitions.ts';
 import {icon} from '../ui/icons.ts';
@@ -50,10 +50,19 @@ export function collectionInitialValues(collection:DatabaseCollection,hints:Read
   return values;
 }
 
+/** The concrete control retains its original receipt and continuation through
+ * a checked admission handoff. No hook means the ordinary one-shot service. */
+export type CollectionSubmit=(command:DatabaseRequest,complete:(reply:DatabaseResponse,recovering:boolean)=>Promise<void>)=>Promise<void>;
+function submitCollection(options:{service?:DatabaseService;submit?:CollectionSubmit},command:DatabaseRequest,complete:(reply:DatabaseResponse,recovering:boolean)=>Promise<void>):Promise<void>{
+  return options.submit?options.submit(command,complete):options.service!.request(command).then(reply=>complete(reply,false));
+}
+
 export interface SourceChooserOptions {
   readonly service?: DatabaseService;
+  readonly submit?:CollectionSubmit;
+  readonly onDestroy?:()=>void;
   readonly isCurrent: () => boolean;
-  readonly choose: (source: BaseViewSource) => Promise<void>;
+  readonly choose: (source: BaseViewSource,recovering?:boolean) => Promise<void>;
   readonly onCancel?: () => void;
   readonly onError?: (problem: unknown) => void;
 }
@@ -140,15 +149,15 @@ export function mountSourceChooser(container: HTMLElement, options: SourceChoose
             while (names.has(name.toLowerCase())) name = `New database ${++suffix}`;
             emptyRequest = { op: 'create', operationId: operationId(), name, preset: 'blank' };
           }
-          const response = await options.service!.request(emptyRequest); if (!live()) return;
-          emptyAccepted = true;
-          if (response.projection.pending || response.projection.issues.length) throw new Error(response.projection.issues.map(issue => issue.message).join('\n') || 'The data source is committed locally but its files still need publication. Retry this creation.');
-          const created = response.collections.find(collection => !collection.deleted && emptyRequest?.op === 'create' && collection.name === emptyRequest.name);
-          if (!created) throw new Error('The data source was not returned. Retry this creation.');
-          emptySource = { kind: 'collection', id: created.id };
-        }
-        if (!live()) return;
-        await options.choose(emptySource);
+          await submitCollection(options,emptyRequest,async(response,recovering)=>{
+            if(!live())throw new Error('This collection control was closed.');
+            emptyAccepted = true;
+            if (response.projection.pending || response.projection.issues.length) throw new Error(response.projection.issues.map(issue => issue.message).join('\n') || 'The data source is committed locally but its files still need publication. Retry this creation.');
+            const created = response.collections.filter(collection => !collection.deleted && emptyRequest?.op === 'create' && collection.name === emptyRequest.name);
+            if (created.length!==1) throw new Error('The data source was not returned unambiguously. Retry this creation.');
+            emptySource = { kind: 'collection', id: created[0].id };await options.choose(emptySource,recovering);
+          });
+        }else{if(!live())return;await options.choose(emptySource);}
         if (live()) { emptyRequest = undefined; emptySource = undefined; emptyAccepted = false; emptyUncertain = false; draft = false; }
       } catch (problem) {
         const rejected = problem as { source?: unknown; commitUncertain?: unknown };
@@ -227,14 +236,14 @@ export function mountSourceChooser(container: HTMLElement, options: SourceChoose
             request = { op: 'create', operationId: operationId(), name: name.value.trim(), preset: preset.value as 'blank' | 'tasks' };
             retainedCreate = true;
           }
-          const response = await options.service!.request(request); if (!live()) return;
-          accepted = true;
-          if (response.projection.pending || response.projection.issues.length) throw new Error(response.projection.issues.map(issue => issue.message).join('\n') || 'The collection is committed locally but its files still need publication. Retry creation.');
-          const created = response.collections.find(item => !item.deleted && item.name === request!.name);
-          if (!created) throw new Error('The collection was not returned. Retry this creation.');
-          source = { kind: 'collection', id: created.id };
-        }
-        await options.choose(source);
+          await submitCollection(options,request,async(response,recovering)=>{
+            if(!live())throw new Error('This collection control was closed.');accepted = true;
+            if (response.projection.pending || response.projection.issues.length) throw new Error(response.projection.issues.map(issue => issue.message).join('\n') || 'The collection is committed locally but its files still need publication. Retry creation.');
+            const created = response.collections.filter(item => !item.deleted && item.name === request!.name);
+            if (created.length!==1) throw new Error('The collection was not returned unambiguously. Retry this creation.');
+            source = { kind: 'collection', id: created[0].id };await options.choose(source,recovering);
+          });
+        }else await options.choose(source);
         if (live()) { request = undefined; source = undefined; capturedDraft = undefined; retainedCreate = false; accepted = false; uncertain = false; draft = false; }
       } catch (problem) {
         const rejected = problem as {source?: unknown; commitUncertain?: unknown};
@@ -260,15 +269,17 @@ export function mountSourceChooser(container: HTMLElement, options: SourceChoose
     name.addEventListener('keydown', event => { if (event.key === 'Enter' && !composing && !event.isComposing && event.keyCode !== 229 && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) { event.preventDefault(); event.stopPropagation(); submit.click(); } });
     form.append(name, preset, submit, back, hint); availability(); name.focus();
   }
-  return { element: root, hasPendingChanges: () => busy || draft, destroy() { destroyed = true; doc.removeEventListener('focusin', outsideFocus, true); doc.removeEventListener('pointerdown', outsideFocus, true); doc.defaultView?.removeEventListener('blur', windowBlur); root.remove(); } };
+  return { element: root, hasPendingChanges: () => busy || draft, destroy() { if(destroyed)return;destroyed = true;options.onDestroy?.(); doc.removeEventListener('focusin', outsideFocus, true); doc.removeEventListener('pointerdown', outsideFocus, true); doc.defaultView?.removeEventListener('blur', windowBlur); root.remove(); } };
 }
 
 export interface CollectionEditorOptions {
   readonly service: DatabaseService;
+  readonly submit?:CollectionSubmit;
+  readonly onDestroy?:()=>void;
   readonly collection: DatabaseCollection;
   readonly entries: readonly DatabaseEntry[];
   readonly isCurrent: () => boolean;
-  readonly onSaved: (collection: DatabaseCollection) => Promise<void>;
+  readonly onSaved: (collection: DatabaseCollection,recovering?:boolean) => Promise<void>;
   readonly onClose: () => void;
   readonly propertyId?: string;
   /** Existing single-property editors may float at their invoking header. Full managers ignore this. */
@@ -333,12 +344,14 @@ export function mountCollectionPropertyPicker(container: HTMLElement, options: C
     busy = true; root.setAttribute('aria-busy', 'true'); error.hidden = true; controls();
     try {
       if (!accepted) {
-        const response = await options.service.request(request); if (!live()) return;
-        if (response.projection.pending || response.projection.issues.length) throw new Error(response.projection.issues.map(issue => issue.message).join('\n') || 'The property is committed locally but its files still need publication. Retry creation.');
-        accepted = response.collections.find(collection => collection.id === options.collection.id);
-        if (!accepted) throw new Error('The updated collection was not returned. Retry creation.');
-      }
-      await options.onSaved(accepted);
+        await submitCollection(options,request,async(response,recovering)=>{
+          if(!live())throw new Error('This collection control was closed.');
+          if (response.projection.pending || response.projection.issues.length) throw new Error(response.projection.issues.map(issue => issue.message).join('\n') || 'The property is committed locally but its files still need publication. Retry creation.');
+          accepted = response.collections.find(collection => collection.id === options.collection.id);
+          if (!accepted) throw new Error('The updated collection was not returned. Retry creation.');
+          await options.onSaved(accepted,recovering);
+        });
+      }else await options.onSaved(accepted);
       if (live()) { request = undefined; dirty = false; options.onClose(); }
     } catch (problem) {
       if (live()) {
@@ -391,7 +404,7 @@ export function mountCollectionPropertyPicker(container: HTMLElement, options: C
   setSelected(0); position(); name.focus();
   doc.addEventListener('pointerdown', outside, true); doc.addEventListener('scroll', position, true); doc.defaultView?.addEventListener('resize', position);
   return { element: root, hasPendingChanges: () => busy || dirty || !!request, destroy() {
-    destroyed = true; doc.removeEventListener('pointerdown', outside, true); doc.removeEventListener('scroll', position, true); doc.defaultView?.removeEventListener('resize', position); root.remove();
+    if(destroyed)return;destroyed = true;options.onDestroy?.(); doc.removeEventListener('pointerdown', outside, true); doc.removeEventListener('scroll', position, true); doc.defaultView?.removeEventListener('resize', position); root.remove();
   } };
 }
 
@@ -536,7 +549,7 @@ export function mountCollectionEditor(container: HTMLElement, options: Collectio
     for (const control of root.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>('input,button,select')) control.disabled = true;
     error.hidden = true;
     if (!request) request = { op: 'update', operationId: operationId(), collectionId: options.collection.id, expectedRevision: options.collection.revision, name: name.value.trim(), properties: structuredClone(properties), confirmDestructive: destructiveConfirmed };
-    void options.service.request(request).then(async response => { if (!live()) return; if(response.projection.pending||response.projection.issues.length)throw new Error(response.projection.issues.map(issue=>issue.message).join('\n')||'The properties are committed locally but their files still need publication. Retry Apply.'); const collection = response.collections.find(item => item.id === options.collection.id); if (!collection) throw new Error('The updated collection was not returned.'); await options.onSaved(collection); if (live()) { dirty = false; options.onClose(); } }).catch(problem => { if (live()) { error.textContent = problemText(problem); error.hidden = false; } }).finally(() => { busy = false; root.removeAttribute('aria-busy'); for (const control of root.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>('input,button,select')) control.disabled = false; });
+    void submitCollection(options,request,async(response,recovering)=>{ if (!live()) throw new Error('This collection control was closed.'); if(response.projection.pending||response.projection.issues.length)throw new Error(response.projection.issues.map(issue=>issue.message).join('\n')||'The properties are committed locally but their files still need publication. Retry Apply.'); const collection = response.collections.find(item => item.id === options.collection.id); if (!collection) throw new Error('The updated collection was not returned.'); await options.onSaved(collection,recovering); }).then(()=>{if(live()){dirty=false;options.onClose();}}).catch(problem => { if (live()) { error.textContent = problemText(problem); error.hidden = false; } }).finally(() => { busy = false; root.removeAttribute('aria-busy'); for (const control of root.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>('input,button,select')) control.disabled = false; });
   });
   if (focusedProperty) root.addEventListener('keydown', event => {
     if (event.isComposing || busy) return;
@@ -549,11 +562,13 @@ export function mountCollectionEditor(container: HTMLElement, options: Collectio
   if (anchor) { doc.addEventListener('scroll', place, true); view?.addEventListener('resize', place); resize?.observe(root); }
   const first = options.propertyId ? list.querySelector<HTMLElement>(`[data-property-id="${options.propertyId}"] input`) : name;
   first?.focus();
-  return { element: root, hasPendingChanges: () => dirty || busy, destroy() { destroyed = true; doc.removeEventListener('scroll', place, true); view?.removeEventListener('resize', place); resize?.disconnect(); root.remove(); } };
+  return { element: root, hasPendingChanges: () => dirty || busy, destroy() { if(destroyed)return;destroyed = true;options.onDestroy?.(); doc.removeEventListener('scroll', place, true); view?.removeEventListener('resize', place); resize?.disconnect(); root.remove(); } };
 }
 
 export interface CollectionBrowserOptions {
   readonly service: DatabaseService;
+  readonly submit?:CollectionSubmit;
+  readonly onDestroy?:()=>void;
   readonly isCurrent: () => boolean;
   readonly open: (collection: DatabaseCollection) => Promise<void>;
   readonly openEntry: (entry: DatabaseEntry) => Promise<void>;
@@ -569,7 +584,7 @@ export function mountCollectionBrowser(container: HTMLElement, options: Collecti
   const live=()=>!destroyed&&options.isCurrent();
   async function run(action:()=>Promise<void>){if(busy||!live())return;busy=true;error.hidden=true;root.setAttribute('aria-busy','true');for(const control of root.querySelectorAll<HTMLButtonElement>('button'))control.disabled=true;try{await action();}catch(problem){if(live()){error.textContent=problemText(problem);error.hidden=false;}}finally{busy=false;root.removeAttribute('aria-busy');for(const control of root.querySelectorAll<HTMLButtonElement>('button'))control.disabled=false;retry.hidden=!request;}}
   async function refresh(){const response=await options.service.request({op:'list'});if(!live())return;list.replaceChildren();for(const collection of response.collections){const row=element(doc,'div');row.className='collection-browser-item';row.append(button(doc,collection.name+(collection.deleted?' (deleted)':''),()=>{void run(()=>select(collection.id));}));list.append(row);}if(!list.childNodes.length)list.append(element(doc,'p','Create a collection from a Base’s Add view menu.'));}
-  async function mutate(command:DatabaseRequest){if(request&&JSON.stringify({...request,operationId:undefined})!==JSON.stringify({...command,operationId:undefined}))throw new Error('Retry the unfinished collection operation before starting another one.');request??=command;const reply=await options.service.request(request);if(reply.projection.pending||reply.projection.issues.length)throw new Error(reply.projection.issues.map(issue=>issue.message).join('\n')||'Some collection files still need publication. Retry this operation.');request=undefined;await options.onMutation();await refresh();if(current)await select(current.id);}
+  async function mutate(command:DatabaseRequest){if(request&&JSON.stringify({...request,operationId:undefined})!==JSON.stringify({...command,operationId:undefined}))throw new Error('Retry the unfinished collection operation before starting another one.');request??=command;await submitCollection(options,request,async(reply,recovering)=>{if(!live())throw new Error('This collection control was closed.');if(reply.projection.pending||reply.projection.issues.length)throw new Error(reply.projection.issues.map(issue=>issue.message).join('\n')||'Some collection files still need publication. Retry this operation.');request=undefined;if(!recovering){await options.onMutation();await refresh();if(current)await select(current.id);}});}
   async function select(id:string){const reply=await options.service.request({op:'get',collectionId:id});if(!live())return;const collection=reply.collections.find(item=>item.id===id);if(!collection)throw new Error('This collection is unavailable.');current=collection;detail.replaceChildren();detail.append(element(doc,'h3',collection.name));
     if(collection.deleted){detail.append(element(doc,'p','This collection and its entries are in Trash.'),button(doc,'Restore collection',()=>{void run(()=>mutate({op:'restore',operationId:operationId(),collectionId:collection.id,expectedRevision:collection.revision}));}));return;}
     detail.append(button(doc,'Open collection',()=>{void run(()=>options.open(collection));}));
@@ -584,5 +599,5 @@ export function mountCollectionBrowser(container: HTMLElement, options: Collecti
     if(!entries.childNodes.length)entries.append(element(doc,'p','No entries yet. Use New in a collection view.'));detail.append(entries);
   }
   void run(refresh);
-  return{destroy(){destroyed=true;root.remove();}};
+  return{destroy(){if(destroyed)return;destroyed=true;options.onDestroy?.();root.remove();}};
 }
