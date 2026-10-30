@@ -28,6 +28,10 @@ export type IndependentDraftRead=IndependentDraftCandidate|(IndependentDraftRece
  * original request. Reading a head never authorizes rebasing that request. */
 export interface IndependentDraftProvider {
   readonly scope:IndependentDraftScope;
+  /** Trusted same-vault/client certificate after prior Core RPC ownership has
+   * drained. A different incarnation ID alone is never proof of retirement.
+   * Legacy absence cannot authorize cleanup; unknown failures must reject. */
+  isRetiredIncarnation?(incarnationId:string):Promise<boolean>;
   compareAndSwap(request:IndependentDraftChange):Promise<IndependentDraftReceipt>;
   retire(request:IndependentDraftRetirement):Promise<IndependentDraftReceipt>;
   read(address:IndependentDraftAddress):Promise<IndependentDraftRead>;

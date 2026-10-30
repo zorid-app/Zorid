@@ -36,6 +36,12 @@ export function createDesktopIndependentDraftProvider(bridge:Pick<DesktopBridge,
     throw fail();
   }
   return Object.freeze<IndependentDraftProvider>({scope,
+    async isRetiredIncarnation(input){
+      let incarnationId:string;try{incarnationId=id(input);}catch{throw fail('invalid_draft_request',false);}
+      const value=await request('isRetiredIncarnation',[incarnationId]);
+      if(typeof value!=='boolean')throw fail();
+      return value;
+    },
     async compareAndSwap(input){
       if(!record(input,['entryId','writer','generation','expectedRevision','nextRevision','baseline','draft','checkpointRevision','pendingOperation']))throw fail('invalid_draft_request',false);
       const entryId=id(input.entryId),writer=id(input.writer),expected=input.expectedRevision===null?null:counter(input.expectedRevision),next=counter(input.nextRevision),savedGeneration=generation(input.generation);

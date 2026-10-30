@@ -8,7 +8,7 @@ import type { ContextMenuRequest } from './context-menu';
 export interface DesktopDurableContext { conditionalSavedSourceAvailable?:true; textCreateReceiptsAvailable?:true; workBlocks?:true; databases?:true; documentSemantics?:true; documentMaintenance?:true; metadataRowsAvailable?:boolean; propertyTargetsAvailable?:boolean; basePreviewAvailable?:boolean; draftsAvailable?:boolean; admissionId: string; scope: CheckpointScope; binaryLimits?:import('../core/binary-streams.ts').BinaryStreamLimits }
 export interface DesktopIndependentJournalGrant {readonly token:string;readonly scope:import('../core/independent-drafts.ts').IndependentDraftScope}
 export interface DesktopDurableContext {readonly independentJournal?:DesktopIndependentJournalGrant}
-export interface DesktopIndependentJournalRequest {readonly vault:string;readonly token:string;readonly op:'list'|'read'|'compareAndSwap'|'retire';readonly args:readonly unknown[]}
+export interface DesktopIndependentJournalRequest {readonly vault:string;readonly token:string;readonly op:'list'|'read'|'compareAndSwap'|'retire'|'isRetiredIncarnation';readonly args:readonly unknown[]}
 export interface DesktopReconciliation {
   work?: {phase: 'discovery' | 'import' | 'publication' | 'complete' | 'blocked'; pending: boolean; workUnits: number};
   scanId: string; complete: boolean; scanComplete: boolean; finished: boolean;

@@ -11,7 +11,7 @@ const exact = (value, keys) => plain(value) && Reflect.ownKeys(value).length ===
 const journalFailure=(code,commitUncertain,source)=>({independentJournal:true,schemaVersion:1,ok:false,error:{code,commitUncertain,source}});
 const independentJournal=async request=>{
   if(!exact(request,['vault','token','op','args'])||typeof request.vault!=='string'||!request.vault||request.vault.length>4096||request.vault.includes('\0')
-    ||typeof request.token!=='string'||!request.token||request.token.length>128||!['list','read','compareAndSwap','retire'].includes(request.op)||!Array.isArray(request.args)||request.args.length>1)
+    ||typeof request.token!=='string'||!request.token||request.token.length>128||!['list','read','compareAndSwap','retire','isRetiredIncarnation'].includes(request.op)||!Array.isArray(request.args)||request.args.length>1)
     return journalFailure('invalid_draft_request',false,'protocol');
   let reply;
   try{reply=await invoke('independentJournal',request);}catch{return journalFailure('draft_transport_lost',true,'transport');}
