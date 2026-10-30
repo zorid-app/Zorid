@@ -18,6 +18,7 @@ import {CAMPAIGN_DIRECTORIES,validateFixtureName,readFixture,writeFixture,campai
 import {relayProcessOwnership,livingOwnedProcesses,discoverUnannouncedRelayProcesses} from './native-ownership.mjs';
 import {windowMode,assertNativeWindowVisible,assertRendererVisible,nativeWindowAdapterSource} from './window-visibility.mjs';
 import {assertRelayCampaign,assertRelayProvenance} from './relay-admission.mjs';
+import {verifyPreparedSceneFiles} from '../bases-electron-recovery-integration/collection-scene.mjs';
 import {admitExternalCli,assertExternalCli,createExternalCliConflicts} from '../bases-electron-safety-integration/external-cli-conflict.mjs';
 
 const arg = name => { const i=process.argv.indexOf(name); return i<0?undefined:process.argv[i+1]; };
@@ -56,7 +57,7 @@ async function hash(file){const h=createHash('sha256');for await(const bytes of 
 async function tree(directory){const result=[];async function visit(relative=''){for(const entry of(await fs.readdir(path.join(directory,relative),{withFileTypes:true})).sort((a,b)=>a.name.localeCompare(b.name))){const name=path.join(relative,entry.name);assert.ok(!entry.isSymbolicLink(),'No artifact symlink: '+name);if(entry.isDirectory())await visit(name);else if(entry.isFile())result.push([name,await hash(path.join(directory,name))]);}}await visit();return result;}
 async function provenance(){if(externalCliArtifact)await assertExternalCli(externalCliArtifact);assert.equal(git('rev-parse','HEAD').trim(),head,'Frozen integration HEAD changed');assert.equal(git('diff','--name-only','HEAD').trim(),'','Frozen tracked source changed');const names=git('ls-files','-z','desktop','src','crates','scripts','Cargo.toml','Cargo.lock','package.json','pnpm-lock.yaml','vite.config.mjs','index.html').split('\0').filter(Boolean).sort();return{head,tracked:await Promise.all(names.map(async name=>[name,await hash(path.join(root,name))])),dist:await tree(path.join(root,'dist')),native:{file:native,sha256:await hash(native)},...(externalCliArtifact?{externalCli:externalCliArtifact}:{}),...(relay?{relay:{executable:relayExecutable,identity:relayIdentity,files:await Promise.all(relayFiles.map(async file=>[file,await hash(file)])),node:{file:relayIdentity.executable,sha256:await hash(await fs.realpath(relayIdentity.executable))}}}:{}),electron:{file:electron,sha256:await hash(electron)},harness:await tree(harness),campaigns:await campaignClosure(path.dirname(harness),tree),cdpHelper:await hash(path.join(harness,'../tasks-electron-integration/cdp.mjs'))};}
 const processes=()=>execFileSync('ps',['-ww','-axo','pid=,ppid=,command='],{encoding:'utf8'}).split('\n').map(line=>{const m=line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);return m?{pid:Number(m[1]),parent:Number(m[2]),command:m[3]}:null;}).filter(Boolean);
-let child,cdp,browserCDP,ui,record,before,failure,relay,relayExecutable,relayIdentity,relayFiles=[],externalCliConflicts;
+let child,cdp,browserCDP,ui,record,before,failure,relay,relayExecutable,relayIdentity,relayFiles=[],externalCliConflicts,fixtureScene;
 const natives=new Map();let cuaCheckpointCount=0;
 let nativeMenuCheckpointCount=0;
 async function nativeContextMenu(caseId){
@@ -187,16 +188,23 @@ try{
   }
   before=await provenance();await fs.writeFile(path.join(out,'provenance-before.json'),JSON.stringify(before,null,2));
   await fs.mkdir(vault,{recursive:true});await fs.mkdir(profile);await fs.mkdir(path.join(sandbox,'app-data'));if(!campaign&&!windowBootstrapProbe)await fs.mkdir(path.join(vault,'Created'));
-  const fixtures=windowBootstrapProbe?new Map([['Window probe.md','Owned window bootstrap fixture.\n']]):(campaign?.fixtureFiles??fixtureFiles)();
+  if(campaign?.prepareScene){
+    assert.equal(campaignPath,path.join(path.dirname(harness),'bases-electron-recovery-integration','campaign.mjs'),'Only the owned recovery scene may provision native collection fixtures');
+    evidence.fixtureSetupStage='prelaunch-native-collection-scene';
+    try{fixtureScene=await campaign.prepareScene({native,root,vault,localData:path.join(sandbox,'app-data'),outputDirectory:out,evidence,nativeSha256:before.native.sha256});evidence.fixtureSetupStage='native-collection-scene-published';}catch(error){evidence.fixtureSetupStage='failed-before-app-launch';throw error;}
+  }
+  const fixtures=windowBootstrapProbe?new Map([['Window probe.md','Owned window bootstrap fixture.\n']]):(campaign?.fixtureFiles??fixtureFiles)(fixtureScene);
   assert.ok(fixtures instanceof Map,'Owned fixture map');
   for(const[file,source]of fixtures){validateFixtureName(file);assert.ok(typeof source==='string'||Buffer.isBuffer(source),'Fixture file is text or bytes');}
   if(!campaign&&!windowBootstrapProbe)fixtures.set('Properties.yaml',yaml.stringify({properties:{rating:{type:'number'},done:{type:'checkbox'},finished:{type:'date'},appointment:{type:'datetime'},priority:{type:'select',options:[{value:'Low'},{value:'Medium'},{value:'High'}]},keywords:{type:'list'},topics:{type:'multiselect',options:[{value:'Rust',color:'orange'},{value:'Design',color:'blue'},{value:'Writing',color:'green'}]},status:{type:'status',options:[{value:'To read',category:'todo'},{value:'Reading',category:'in-progress'},{value:'Finished',category:'done'}]},author:{type:'relation',relation:{multiple:false,targetFilter:'type == "author"'}},books:{type:'reverseRelation',reverseRelation:{property:'author'}},bookCount:{type:'rollup',rollup:{relation:'books',aggregation:'count'}},averageRating:{type:'rollup',rollup:{relation:'books',property:'rating',aggregation:'average'}}}}));
-  for(const[file,source]of fixtures)await writeFixture(vault,file,source,{createParents:true});
+  const preparedFiles=fixtureScene===undefined?new Map():await verifyPreparedSceneFiles(vault,fixtures,fixtureScene.preparedFiles);
+  for(const[file,source]of fixtures)if(!preparedFiles.has(file))await writeFixture(vault,file,source,{createParents:true});
+  if(preparedFiles.size)evidence.checks.push({name:'prepared-native-member-sources-verified-without-rewrite',files:[...preparedFiles].map(([file,source])=>({file,bytes:Buffer.byteLength(source),sha256:createHash('sha256').update(source).digest('hex')})),rewrites:0});
   await fs.writeFile(path.join(profile,'vault.json'),JSON.stringify({path:vault}));
   evidence.fixtureManifest=await tree(vault);
   if(externalCliArtifact){const env={...process.env,ZORID_LOCAL_DATA_DIR:path.join(sandbox,'app-data')};for(const key of ['DISPLAY','ZORID_IPC_ENDPOINT','ZORID_DESKTOP_ENDPOINT','ZORID_FIXTURE_VAULT','ZORID_FIXTURE_CLIENT_ID'])delete env[key];externalCliConflicts=await createExternalCliConflicts({artifact:externalCliArtifact,vault,outputDirectory:out,evidence,env});}
   if(windowBootstrapProbe){await launch('owned-visible-window-bootstrap');await screenshot('owned-visible-window-bootstrap');await quit('owned-window-bootstrap-normal-quit');}
-  else await (campaign?.journey??journey)({get ui(){return ui;},get cdp(){return cdp;},vault,yaml,template:campaign?(campaign.template??''):template,evidence,outputDirectory:out,...(cuaNativeContextMenus?{nativeContextMenu}:{}),...(externalCliConflicts?{externalCliConflicts}:{}),...(relay?{relay:Object.freeze({arm:input=>relay.arm(input),release:token=>relay.release(token),events:()=>relay.events()}),forceShutdown}:{}),launch,quit,read,saved,frontmatter,screenshot,external,diskGuard,prepareDownloads});
+  else await (campaign?.journey??journey)({get ui(){return ui;},get cdp(){return cdp;},vault,yaml,fixtureScene,template:campaign?(campaign.template??''):template,evidence,outputDirectory:out,...(cuaNativeContextMenus?{nativeContextMenu}:{}),...(externalCliConflicts?{externalCliConflicts}:{}),...(relay?{relay:Object.freeze({arm:input=>relay.arm(input),release:token=>relay.release(token),events:()=>relay.events()}),forceShutdown}:{}),launch,quit,read,saved,frontmatter,screenshot,external,diskGuard,prepareDownloads});
   if(cuaNativeContextMenus)assert.equal(nativeMenuCheckpointCount,NATIVE_MENU_CASES.length,'All five original native menus must reach their CUA checkpoint');
   const after=await provenance();await fs.writeFile(path.join(out,'provenance-after.json'),JSON.stringify(after,null,2));assert.deepEqual(after,before,'Exact source/artifact freeze survived journey');evidence.provenanceVerified=true;evidence.status='passed';
 }catch(error){failure=error;evidence.status='failed';evidence.failure={message:error.message,stack:error.stack};if(cdp)try{evidence.failureDOM=await ui.dom(`

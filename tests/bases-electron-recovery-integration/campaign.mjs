@@ -7,19 +7,21 @@ export {createNativeRelay} from './control.mjs';
 
 export const vaultName='bases-native-recovery';
 export const template='\uFEFF---\r\nstatus: Template\r\nliteral: "{{date}}"\r\n---\r\n# {{title}}\r\nExact copy 😀\r\n';
-const summaryBase='filters: \'note.kind == "recovery"\'\nsummaries:\n  Total: values.sum()\nviews:\n  - type: table\n    name: Recovery\n    order: [ file.name, note.score ]\n    summaries:\n      note.score: Total\n';
-const sourceA=summaryBase.replace('Total: values.sum()','Total: values.length');
-const sourceB=summaryBase.replace('Total: values.sum()','Total: values.sum() + 7');
+export {prepareScene} from './collection-scene.mjs';
+import {sceneName,memberInputs,expectedMemberSource} from './collection-scene.mjs';
 const failedPath='Failures/Live.base';
-const failedBase='# Failed live-save fixture comment\nfixtureSentinel: preserve-failed-summary\n'+summaryBase.replace('Total: values.sum()\n','Total: values.sum()\n  Unrelated: values.length\n').replace('name: Recovery','name: Failed summary')+'  - type: list\n    name: Unrelated view\n    order: [ file.name ]\n    summaries: { note.score: Unrelated }\n';
-const failedA=failedBase.replace('Total: values.sum()\n','Total: values.length\n');
-const failedB=failedBase.replace('Total: values.sum()\n','Total: values.sum() + 7\n');
-export function fixtureFiles(){return new Map([
-  ['Recovery.base',summaryBase],
-  [failedPath,failedBase],
-  ['A.md','---\nkind: recovery\nscore: 2\n---\nA body sentinel\n'],
-  ['B.md','---\nkind: recovery\nscore: 3\n---\nB body sentinel\n'],
-  ['Create.base','filters: \'note.kind == "recovery"\'\nnewItemFolder: Created\nnewItemTemplate: Templates/Literal.md\nviews: [{type: table, name: Create, order: [file.name]}]\n'],
+export function recoverySources(scene){
+  assert.match(scene?.collectionId,/^[0-9a-z]{12}$/);assert.match(scene?.scorePropertyId,/^[0-9a-z]{12}$/);assert.equal(scene.collectionName,sceneName);
+  const scoreProperty=`note.${scene.scorePropertyId}`;
+  const summaryBase=`views:\n  - id: aaaaaaaaaaaa\n    type: table\n    name: Recovery\n    source: { kind: collection, id: ${scene.collectionId} }\n    order:\n      - file.name\n      - ${scoreProperty}\n    summaryDefinitions:\n      Total: values.sum()\n    summaries:\n      ${scoreProperty}: Total\n`;
+  const failedBase='# Failed live-save fixture comment\nfixtureSentinel: preserve-failed-summary\n'+summaryBase.replace('name: Recovery','name: Failed summary').replace('      Total: values.sum()\n','      Total: values.sum()\n      Unrelated: values.length\n')+`  - id: bbbbbbbbbbbb\n    type: list\n    name: Unrelated view\n    source: { kind: collection, id: ${scene.collectionId} }\n    order: [ file.name ]\n    summaryDefinitions: { Unrelated: values.length }\n    summaries: { ${scoreProperty}: Unrelated }\n`;
+  return Object.freeze({scoreProperty,summaryBase,sourceA:summaryBase.replace('Total: values.sum()','Total: values.length'),sourceB:summaryBase.replace('Total: values.sum()','Total: values.sum() + 7'),failedBase,failedA:failedBase.replace('Total: values.sum()','Total: values.length'),failedB:failedBase.replace('Total: values.sum()','Total: values.sum() + 7')});
+}
+export function fixtureFiles(scene){const sources=recoverySources(scene);return new Map([
+  ['Recovery.base',sources.summaryBase],
+  [failedPath,sources.failedBase],
+  ...memberInputs.map(member=>[member.path,expectedMemberSource(member)]),
+  ['Create.base','filters: \'file.ext == "md"\'\nnewItemFolder: Created\nnewItemTemplate: Templates/Literal.md\nviews: [{type: table, name: Create, order: [file.name]}]\n'],
   ['Created/.keep','Disposable output directory.\n'],
   ['Templates/Literal.md',template],
 ]);}
@@ -67,11 +69,24 @@ async function summaryPanelIdentity(c){
   const {nodeId}=await c.cdp.call('DOM.querySelector',{nodeId:root.nodeId,selector:panel});assert.ok(nodeId);
   return (await c.cdp.call('DOM.describeNode',{nodeId})).node.backendNodeId;
 }
+export function collectionSceneFrame(document,scope,scoreProperty,view){
+  const roots=[...document.querySelectorAll(scope)];if(roots.length!==1)return false;
+  const root=roots[0],grid=root.querySelector('[role="grid"]'),footerRow=grid?.querySelector('.zorid-bases-table-footer'),footer=footerRow?.querySelector(`[data-summary-property=${JSON.stringify(scoreProperty)}]`);
+  const values=[...root.querySelectorAll(`[role="gridcell"][data-property=${JSON.stringify(scoreProperty)}]`)].map(cell=>({path:cell.dataset.path,value:cell.textContent.trim()})).sort((a,b)=>a.path.localeCompare(b.path));
+  if(root.dataset.baseControllerError!=='false'||root.dataset.baseControllerUpdating!=='false'||root.querySelector('.bases-session-content')?.getAttribute('aria-busy')!=='false'||grid?.getAttribute('aria-label')!==view||grid.getAttribute('aria-rowcount')!=='5'||!grid.querySelector('.zorid-bases-table-new-row:not([hidden])')||!footerRow||footerRow.hidden||JSON.stringify(values)!==JSON.stringify([{path:'A.md',value:'2'},{path:'B.md',value:'3'}])||footer?.querySelector('.summary-function-name')?.textContent!=='Total'||footer.querySelector('.summary-function-value')?.textContent!=='5')return false;
+  return{view:grid.getAttribute('aria-label'),values,summary:'5',property:scoreProperty,source:root.querySelector('.collection-source-bar')?.textContent};
+}
+async function requireCollectionScene(c,view){
+  const {scoreProperty}=recoverySources(c.fixtureScene);
+  const observed=await c.ui.wait(`return (${collectionSceneFrame.toString()})(document,${JSON.stringify(active)},${JSON.stringify(scoreProperty)},${JSON.stringify(view)});`,'Actual collection-backed score rows and Total5 exist before any fault is armed',45000);
+  c.evidence.checks.push({name:'supported-native-collection-scene-ready-before-fault',collectionId:c.fixtureScene.collectionId,scorePropertyId:c.fixtureScene.scorePropertyId,observed});
+}
 async function failedLiveWriteWithNewerDraft(c){
+  const {failedBase,failedA,failedB,scoreProperty}=recoverySources(c.fixtureScene);
   await c.launch('native-failed-summary-newer-draft');await c.ui.openFile(failedPath);await c.ui.idle();
   const before=await stat(c,failedPath);assert.ok(before.entryId&&before.revision);
-  const sources=fixtureFiles();await c.saved(failedPath,source=>assert.equal(source,failedBase),'failed-summary-original-whole-source');
-  await c.ui.click(`${active} .zorid-bases-table-footer [data-summary-property="note.score"]`);await c.ui.button('Edit Total','.zorid-bases-summary-picker');
+  const sources=fixtureFiles(c.fixtureScene);await c.saved(failedPath,source=>assert.equal(source,failedBase),'failed-summary-original-whole-source');
+  await requireCollectionScene(c,'Failed summary');await c.ui.click(`${active} .zorid-bases-table-footer [data-summary-property=${JSON.stringify(scoreProperty)}]`);await c.ui.button('Edit Total','.zorid-bases-summary-picker');
   const panelId=await summaryPanelIdentity(c),offset=(await c.relay.events()).length;
   const token=await c.relay.arm({mode:'hold',phase:'prepared',path:failedPath,entryId:before.entryId,bodySha256:digest(Buffer.from(failedA))});
   await c.ui.type(expression,'values.length');const held=await event(c,'held',token);
@@ -129,21 +144,22 @@ async function failedLiveWriteWithNewerDraft(c){
   assert.equal(prepared.filter(e=>e.bodySha256===digest(Buffer.from(failedA))).length,1,'A is prepared only once; the original reference is retried');
   assert.equal(prepared.filter(e=>e.bodySha256===digest(Buffer.from(failedB))).length,1);
   for(const[file,source]of sources)await c.saved(file,current=>assert.equal(current,file===failedPath?failedB:source),'failed-summary-whole-source-and-unrelated-fixture-'+file);
-  await c.ui.wait(`const e=document.querySelector('${active} .zorid-bases-table-footer [data-summary-property="note.score"]');return e?.querySelector('.summary-function-name')?.textContent==='Total'&&e.querySelector('.summary-function-value')?.textContent==='12';`,'Saved B summary has independent two-note value12');
+  await c.ui.wait(`const e=document.querySelector('${active} .zorid-bases-table-footer [data-summary-property=${JSON.stringify(scoreProperty)}]');return e?.querySelector('.summary-function-name')?.textContent==='Total'&&e.querySelector('.summary-function-value')?.textContent==='12';`,'Saved B summary has independent two-note value12');
   await c.ui.click(close);await c.ui.wait(`return !document.querySelector(${JSON.stringify(active)});`,'Acknowledged failed-save continuation closes normally');
   c.evidence.checks.push({name:'genuine-native-summary-terminal-checkpoint-review-save-and-explicit-raw-B',held:plain(held),failure:plain(negative),pending,failed,panelBackendNodeId:panelId,prepared,checkpointReplay:plain(checkpointReplay),commits,manualRetryClicks:0,ordinarySaveCommands:1,explicitRawBCommits:1,scope:'Real failed checkpoint ACK from owned lock access denial; not postcommit publication, SQLite/device failure, power loss or synthetic reply'});
   await c.quit('failed-summary-normal-quit-after-B');
   await c.launch('failed-summary-restart-readback');await c.ui.openFile(failedPath);await c.ui.idle();
   for(const[file,source]of sources)await c.saved(file,current=>assert.equal(current,file===failedPath?failedB:source),'failed-summary-restart-exact-fixture-'+file);
-  await c.ui.wait(`return document.querySelector('${active} .zorid-bases-table-footer [data-summary-property="note.score"] .summary-function-value')?.textContent==='12';`,'Failed-save newer B survives normal restart');
+  await c.ui.wait(`return document.querySelector('${active} .zorid-bases-table-footer [data-summary-property=${JSON.stringify(scoreProperty)}] .summary-function-value')?.textContent==='12';`,'Failed-save newer B survives normal restart');
   await c.quit('failed-summary-readback-normal-quit');
 }
 
 async function heldWriteAndClose(c){
+  const {summaryBase,sourceA,sourceB,scoreProperty}=recoverySources(c.fixtureScene);
   await c.launch('native-held-write');await c.ui.openFile('Recovery.base');await c.ui.idle();
   const before=await stat(c,'Recovery.base');assert.ok(before.entryId&&before.revision);
   await c.saved('Recovery.base',source=>assert.equal(source,summaryBase),'held-write-original-exact-source');
-  await c.ui.click(`${active} .zorid-bases-table-footer [data-summary-property="note.score"]`);
+  await requireCollectionScene(c,'Recovery');await c.ui.click(`${active} .zorid-bases-table-footer [data-summary-property=${JSON.stringify(scoreProperty)}]`);
   await c.ui.button('Edit Total','.zorid-bases-summary-picker');
   const token=await c.relay.arm({mode:'hold',path:'Recovery.base',entryId:before.entryId,bodySha256:digest(Buffer.from(sourceA))});
   await c.ui.type(expression,'values.length');const held=await event(c,'held',token);
