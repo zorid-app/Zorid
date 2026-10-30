@@ -94,7 +94,15 @@ function allowedURL(url) {
   try { const current = new URL(url); current.hash = ''; const expected = new URL(devUrl || packagedUrl); expected.hash = ''; return current.href === expected.href; }
   catch { return false; }
 }
-const broker = new WindowBroker({ openVault: directory => startupCall('vault_open', () => editorCore ? editorCore.open(directory) : VaultService.open(directory)), allowedURL });
+let startupVaultOpening;
+const broker = new WindowBroker({ openVault: directory => startupCall('vault_open', () => {
+  if (startupVaultOpening?.directory === directory) {
+    const opening = startupVaultOpening.promise;
+    startupVaultOpening = undefined;
+    return opening;
+  }
+  return editorCore ? editorCore.open(directory) : VaultService.open(directory);
+}), allowedURL });
 let lastVaultPath;
 function handle(name, callback) {
   ipcMain.handle(`zorid:${name}`, (event, ...args) => {
@@ -262,6 +270,7 @@ async function createWindow({ source, primary = false, initialState = 'empty', r
   let window, record;
   try {
     if (recoveryCheck) { await recoveryCheck(); recoveryAssert(); }
+    if (coreClosing || coreClosed) throw Object.assign(new Error('Zorid is closing.'), {code:'editor_core_closed'});
     startupMark('window.construct.begin');
     window = new BrowserWindow({ width: 1280, height: 860, minWidth: 640, minHeight: 480, title: 'Zorid', backgroundColor: '#1e1e1e', titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 15 }, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
     startupMark('window.construct.complete');
@@ -371,10 +380,28 @@ app.whenReady().then(async () => {
     } catch { dialog.showErrorBox('Core fixture unavailable', 'Check the trusted fixture configuration and matching native host build.'); app.quit(); }
     return;
   }
-  clientSlots=await startupCall('client_slots.open', () => require('./client-slots.cjs').openClientSlots(path.join(app.getPath('userData'),'client-slots.json')));
-  const restoreSlots=await startupCall('restore_slots.list', () => clientSlots.listRestorable());
-  try { lastVaultPath = JSON.parse(await startupCall('last_vault.read', () => fs.readFile(path.join(app.getPath('userData'), 'vault.json'), 'utf8'))).path; }
-  catch { /* A missing previous vault returns to the vault picker. */ }
+  const slotsReady = startupCall('client_slots.open', () => require('./client-slots.cjs').openClientSlots(path.join(app.getPath('userData'),'client-slots.json'))).then(slots => {
+    clientSlots = slots;
+    return startupCall('restore_slots.list', () => slots.listRestorable());
+  });
+  const lastVaultReady = (async () => {
+    try { lastVaultPath = JSON.parse(await startupCall('last_vault.read', () => fs.readFile(path.join(app.getPath('userData'), 'vault.json'), 'utf8'))).path; }
+    catch { /* A missing previous vault returns to the vault picker. */ }
+  })();
+  const [restoreSlots] = await Promise.all([slotsReady, lastVaultReady]);
+  const primarySlot = (await clientSlots.listExisting()).find(slot => slot.slotId === 'primary');
+  if (coreClosing || coreClosed) return;
+  const selected = primarySlot?.vaultPath || lastVaultPath;
+  if (selected && editorCore) {
+    // Open only the saved primary vault, without admitting a renderer/client.
+    // Durable slot claim yields to filesystem work before BrowserWindow's
+    // synchronous construction, allowing Native startup to overlap both costs.
+    const promise = startupCall('vault_preopen', () => editorCore.open(selected));
+    startupVaultOpening = {directory:selected, promise};
+    // Opening may fail before there is a window. Keep that rejection observed;
+    // normal broker selection below consumes the same outcome and picker path.
+    void promise.catch(() => {});
+  }
   registerIPC();
   refreshApplicationMenu();
   await createWindow({ primary: true, initialState: 'restore' });
