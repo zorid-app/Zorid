@@ -177,7 +177,7 @@ fn view(tx: &Connection, reference: &HostIntentRef) -> Result<Option<HostIntentV
     })
     .transpose()
 }
-fn request(tx: &Connection, reference: &HostIntentRef) -> Result<MutationRequest> {
+pub(super) fn request(tx: &Connection, reference: &HostIntentRef) -> Result<MutationRequest> {
     let metadata = view(tx, reference)?.ok_or_else(|| invalid("host intent not found"))?;
     let json: String = tx.query_row(
         "SELECT request FROM host_intents WHERE client_id=?1 AND token=?2",
@@ -396,12 +396,16 @@ impl Store {
                     operation_id: command.operation_id.clone(),
                 }.into());
             }
+            if let Some(source)=&source {
+                if capture.is_none() {host_source_requests::admit_legacy_attachment(&tx,source.capture_id())?;}
+            }
             let reference = HostIntentRef {
                 client_id: client.clone(),
                 token: OperationId::new(uuid::Uuid::new_v4().to_string())?,
             };
             let rejected = match &source { Some(HostSourceBinding::Rejected { code, .. }) => Some(HostRejection { code: *code }), _ => None };
             tx.execute("INSERT INTO host_intents(client_id,token,operation_id,entry_id,request,state,acknowledged,rejection) VALUES(?1,?2,?3,?4,?5,?6,0,?7)",params![client.as_str(),reference.token.as_str(),command.operation_id.as_str(),command.mutation.id().as_str(),serde_json::to_string(command)?,if rejected.is_some() { "rejected" } else { "prepared" },rejected.map(|rejection| serde_json::to_string(&rejection)).transpose()?])?;
+            if let Some(capture)=&capture { host_source_requests::attach(&tx,capture,&command.operation_id)?; }
             if let Some(source) = &source {
                 host_source_guards::insert(&tx, command, source)?;
             }

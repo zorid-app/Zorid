@@ -238,12 +238,13 @@ fn malformed_source_schema_is_rejected_before_database_or_journal_changes() {
         (16, "CREATE TABLE unexpected(value)"),
         (17, "DROP TABLE host_intent_sources"),
         (17, "DROP TABLE host_intent_sources; CREATE TABLE host_intent_sources(operation_id TEXT PRIMARY KEY, capture_id TEXT, record TEXT)"),
-        (20, "SELECT 1"),
+        (21, "SELECT 1"),
     ] {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("db");
         drop(Store::open(&path).unwrap());
         let db = rusqlite::Connection::open(&path).unwrap();
+        db.execute_batch("DROP TABLE host_source_requests").unwrap();
         if version < 19 { db.execute_batch("DROP TABLE host_source_captures").unwrap(); }
         if version < 18 { drop_database_schema(&db); }
         if version == 16 { db.execute_batch("DROP TABLE host_intent_sources").unwrap(); }
@@ -276,7 +277,7 @@ fn schema_sixteen_migration_preserves_ordinary_intent_and_receipt_without_source
     drop(store);
     let db = rusqlite::Connection::open(&path).unwrap();
     drop_database_schema(&db);
-    db.execute_batch("DROP TABLE host_source_captures; DROP TABLE host_intent_sources; PRAGMA user_version=16; PRAGMA journal_mode=DELETE;").unwrap();
+    db.execute_batch("DROP TABLE host_source_requests; DROP TABLE host_source_captures; DROP TABLE host_intent_sources; PRAGMA user_version=16; PRAGMA journal_mode=DELETE;").unwrap();
     let old_intents: String = db.query_row("SELECT request FROM host_intents", [], |row| row.get(0)).unwrap();
     let old_receipts: String = db.query_row("SELECT result FROM operations", [], |row| row.get(0)).unwrap();
     drop(db);
@@ -285,7 +286,7 @@ fn schema_sixteen_migration_preserves_ordinary_intent_and_receipt_without_source
     assert_eq!(migrated.query_host_intent(&reference).unwrap(), Some(prepared));
     assert_eq!(migrated.host_intent_source_guard(&reference).unwrap(), None);
     let db = rusqlite::Connection::open(&path).unwrap();
-    assert_eq!(db.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0)).unwrap(), 19);
+    assert_eq!(db.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0)).unwrap(), 20);
     assert_eq!(db.query_row("SELECT request FROM host_intents", [], |row| row.get::<_, String>(0)).unwrap(), old_intents);
     assert_eq!(db.query_row("SELECT result FROM operations", [], |row| row.get::<_, String>(0)).unwrap(), old_receipts);
     migrated.request_host_commit(&reference).unwrap();

@@ -66,7 +66,7 @@ fn pending_capture_count_is_global_idempotent_and_durable_across_restart() {
         client_id: uuid(1), lease_token: uuid(10), guard: template.clone(),
     }));
     assert!(!reopened.register_host_source_capture(&uuid(3), &uuid(30), &ninth).unwrap());
-    assert!(!reopened.release_host_source_capture(&uuid(2), &template.capture_id).unwrap());
+    assert!(reopened.release_host_source_capture(&uuid(2), &template.capture_id).unwrap());
     assert_eq!(reopened.host_source_capture_usage().unwrap(), (8, 64));
     assert!(reopened.release_host_source_capture(&uuid(1), &template.capture_id).unwrap());
     assert!(reopened.register_host_source_capture(&uuid(3), &uuid(30), &ninth).unwrap());
@@ -116,7 +116,7 @@ fn exact_pending_ownership_reuse_release_and_lease_retirement_are_separate() {
     assert!(store.host_source_capture(&uuid(102)).unwrap().is_some());
     // Individual release is authorized by the current same client, not its old lease.
     assert!(store.release_host_source_capture(&client, &uuid(101)).unwrap());
-    assert!(!store.release_host_source_capture(&client, &uuid(102)).unwrap());
+    assert!(store.release_host_source_capture(&client, &uuid(102)).unwrap());
     assert!(store.release_host_source_capture(&client, &uuid(999)).unwrap());
     assert_eq!(store.host_source_capture_usage().unwrap(), (1, 8));
 }
@@ -280,7 +280,7 @@ fn persisted_count_or_byte_overcommit_is_corruption_not_a_fresh_admission_budget
 }
 
 fn schema_without_captures(db: &Connection) -> Vec<(String, String, String)> {
-    db.prepare("SELECT type,name,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' AND name!='host_source_captures' ORDER BY type,name").unwrap()
+    db.prepare("SELECT type,name,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' AND name NOT IN ('host_source_captures','host_source_requests','host_source_requests_pending') ORDER BY type,name").unwrap()
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap()
 }
 fn retained_records(db: &Connection) -> Vec<(String, String)> {
@@ -299,7 +299,7 @@ fn exact_schema_eighteen_migrates_only_capture_schema_and_preserves_old_intents_
     let prepared = store.prepare_guarded_host_intent(&uuid(1), &command, &guard).unwrap();
     let before = store.list_snapshot().unwrap(); drop(store);
     let db = Connection::open(&path).unwrap();
-    db.execute_batch("DROP TABLE host_source_captures; PRAGMA user_version=18; PRAGMA journal_mode=DELETE;").unwrap();
+    db.execute_batch("DROP TABLE host_source_requests; DROP TABLE host_source_captures; PRAGMA user_version=18; PRAGMA journal_mode=DELETE;").unwrap();
     let old_schema = schema_without_captures(&db); let old_records = retained_records(&db); drop(db);
     let migrated = Store::open(&path).unwrap();
     assert_eq!(migrated.list_snapshot().unwrap(), before);
@@ -307,7 +307,7 @@ fn exact_schema_eighteen_migrates_only_capture_schema_and_preserves_old_intents_
     assert_eq!(migrated.host_operation_source_guard(&command.operation_id).unwrap(), Some(guard));
     assert_eq!(migrated.host_source_capture_usage().unwrap(), (0, 0)); drop(migrated);
     let db = Connection::open(&path).unwrap();
-    assert_eq!(db.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0)).unwrap(), 19);
+    assert_eq!(db.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0)).unwrap(), 20);
     assert_eq!(schema_without_captures(&db), old_schema);
     assert_eq!(retained_records(&db), old_records);
     assert_eq!(db.query_row("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='host_source_captures'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
@@ -320,10 +320,11 @@ fn missing_malformed_or_foreign_capture_schema_fails_before_version_or_wal_chang
         (19, "DROP TABLE host_source_captures; CREATE TABLE host_source_captures(capture_id TEXT PRIMARY KEY,record TEXT)"),
         (18, "CREATE TABLE host_source_captures(foreign_record)"),
         (18, "CREATE TRIGGER foreign_capture_trigger AFTER INSERT ON entries BEGIN SELECT 1; END"),
-        (20, "SELECT 1"),
+        (21, "SELECT 1"),
     ] {
         let directory = tempfile::tempdir().unwrap(); let path = directory.path().join("db");
         drop(Store::open(&path).unwrap()); let db = Connection::open(&path).unwrap();
+        db.execute_batch("DROP TABLE host_source_requests").unwrap();
         if version == 18 { db.execute_batch("DROP TABLE host_source_captures").unwrap(); }
         db.pragma_update(None, "user_version", version).unwrap(); db.execute_batch(change).unwrap();
         db.pragma_update(None, "journal_mode", "DELETE").unwrap(); drop(db);
@@ -361,4 +362,163 @@ fn capture_request_release_does_not_disclose_or_mutate_foreign_ownership() {
     assert!(store.release_host_source_capture(&uuid(2),&guard.capture_id).unwrap());
     assert!(store.release_host_source_capture(&uuid(2),&uuid(999)).unwrap());
     assert_eq!(store.host_source_capture_usage().unwrap(),(1,8));
+}
+
+fn request(guard:&HostSourceGuard)->zorid_store::HostSourceCaptureRequest {
+    zorid_store::HostSourceCaptureRequest{capture_id:guard.capture_id.clone(),logical_witness:zorid_store::HostSourceWitness{
+        entry_id:guard.logical_state.id.clone(),revision:guard.logical_state.revision.clone(),path:guard.logical_state.path.clone()}}
+}
+#[test]
+fn capture_request_original_pending_precedes_capacity_and_has_owned_bounded_metadata() {
+    use zorid_store::HostSourceRequestLookup::*;
+    let directory=tempfile::tempdir().unwrap();let path=directory.path().join("db");
+    let (mut store,_,guard)=fixture(&path);let (client,lease)=(uuid(1),uuid(10));
+    for i in 0..8 {store.register_host_source_capture(&client,&lease,&sized(&guard,100+i,8)).unwrap();}
+    let original=store.host_source_request(&client,&request(&guard)).unwrap();
+    assert!(matches!(&original,Pending(c) if c.guard==guard&&c.lease_token==lease));
+    let list=store.host_source_pending_requests(&client).unwrap();assert_eq!(list.len(),8);
+    assert!(list.iter().all(|row|!row.legacy&&row.lease_token==lease));
+    assert!(store.host_source_pending_requests(&uuid(2)).unwrap().is_empty());
+    let mut mismatch=request(&guard);mismatch.logical_witness.path=VaultPath::new("Other.md").unwrap();
+    assert!(store.host_source_request(&client,&mismatch).is_err());
+    assert!(store.host_source_request(&uuid(2),&request(&guard)).is_err());
+    drop(store);let store=Store::open(&path).unwrap();assert_eq!(store.host_source_request(&client,&request(&guard)).unwrap(),original);
+}
+#[test]
+fn capture_request_initial_and_pending_changed_are_durable_without_reobserving_guard() {
+    use zorid_store::HostSourceRequestLookup::*;
+    for pending in [false,true] {
+        let directory=tempfile::tempdir().unwrap();let path=directory.path().join("db");
+        let (mut store,_,guard)=fixture(&path);let client=uuid(1);
+        if pending {store.register_host_source_capture(&client,&uuid(10),&guard).unwrap();}
+        assert_eq!(store.record_host_source_request_changed(&client,&request(&guard)).unwrap(),Changed);
+        assert_eq!(store.host_source_capture_usage().unwrap(),(0,0));
+        drop(store);let mut store=Store::open(&path).unwrap();
+        assert_eq!(store.host_source_request(&client,&request(&guard)).unwrap(),Changed);
+        assert!(store.register_host_source_capture(&client,&uuid(11),&guard).is_err());
+        store.release_host_source_capture(&client,&guard.capture_id).unwrap();
+        assert_eq!(store.host_source_request(&client,&request(&guard)).unwrap(),Changed);
+    }
+}
+#[test]
+fn capture_request_attached_including_rejected_keeps_exact_intent_through_release() {
+    use zorid_store::HostSourceRequestLookup::*;
+    for rejected in [false,true] {
+        let directory=tempfile::tempdir().unwrap();let path=directory.path().join("db");
+        let (mut store,command,guard)=fixture(&path);let (client,lease)=(uuid(1),uuid(10));
+        store.register_host_source_capture(&client,&lease,&guard).unwrap();
+        let prepared=if rejected {store.prepare_rejected_captured_host_intent(&client,&lease,&command,&guard,HostRejectionCode::ConditionalSourceChanged).unwrap()}
+            else {store.prepare_captured_host_intent(&client,&lease,&command,&guard).unwrap()};
+        let expected=Attached{operation_id:command.operation_id.clone()};
+        assert_eq!(store.host_source_request(&client,&request(&guard)).unwrap(),expected);
+        store.release_host_source_capture(&client,&guard.capture_id).unwrap();store.retire_host_source_captures(&client,&lease).unwrap();
+        assert_eq!(store.record_host_source_request_changed(&client,&request(&guard)).unwrap(),expected);
+        assert_eq!(store.replay_guarded_host_intent(&client,&command,&guard.capture_id).unwrap(),Some(prepared));
+        assert!(store.register_host_source_capture(&client,&lease,&guard).is_err());
+    }
+}
+#[test]
+fn capture_request_guard_and_receipt_transitions_roll_back_together() {
+    use zorid_store::HostSourceRequestLookup::*;
+    for action in ["changed","release","attach"] {
+        let directory=tempfile::tempdir().unwrap();let path=directory.path().join("db");
+        let (mut store,command,guard)=fixture(&path);let (client,lease)=(uuid(1),uuid(10));
+        store.register_host_source_capture(&client,&lease,&guard).unwrap();
+        let db=Connection::open(&path).unwrap();db.execute_batch("CREATE TRIGGER fail_request_update BEFORE UPDATE ON host_source_requests BEGIN SELECT RAISE(ABORT,'fixture'); END").unwrap();
+        let failed=match action {"changed"=>store.record_host_source_request_changed(&client,&request(&guard)).is_err(),"release"=>store.release_host_source_capture(&client,&guard.capture_id).is_err(),_=>store.prepare_captured_host_intent(&client,&lease,&command,&guard).is_err()};
+        assert!(failed);assert_eq!(store.host_source_capture_usage().unwrap(),(1,8));
+        assert!(matches!(store.host_source_request(&client,&request(&guard)).unwrap(),Pending(_)));
+        assert_eq!(store.host_intent_for_operation(&command.operation_id).unwrap(),None);
+    }
+}
+#[test]
+fn capture_request_schema_nineteen_backfills_only_pending_and_uses_indexed_legacy_union() {
+    use zorid_store::HostSourceRequestLookup::*;
+    let directory=tempfile::tempdir().unwrap();let path=directory.path().join("db");
+    let (mut store,command,guard)=fixture(&path);let (client,lease)=(uuid(1),uuid(10));
+    for i in 0..16 {let mut cmd=command.clone();cmd.operation_id=uuid(300+i);store.prepare_guarded_host_intent(&client,&cmd,&sized(&guard,200+i,8)).unwrap();}
+    let legacy=sized(&guard,200,8);let mut legacy_command=command.clone();legacy_command.operation_id=uuid(300);
+    store.register_host_source_capture(&client,&lease,&guard).unwrap();drop(store);
+    let db=Connection::open(&path).unwrap();let before=retained_records(&db);
+    db.execute_batch("DROP TABLE host_source_requests; PRAGMA user_version=19; PRAGMA journal_mode=DELETE;").unwrap();drop(db);
+    let mut store=Store::open(&path).unwrap();let list=store.host_source_pending_requests(&client).unwrap();
+    assert_eq!(list.len(),1);assert_eq!(list[0].capture_id,guard.capture_id);assert!(list[0].legacy);assert_eq!(list[0].lease_token,lease);
+    assert_eq!(store.host_source_request(&client,&request(&legacy)).unwrap(),Attached{operation_id:legacy_command.operation_id});
+    store.release_host_source_capture(&client,&legacy.capture_id).unwrap();assert!(store.register_host_source_capture(&client,&lease,&legacy).is_err());
+    let db=Connection::open(&path).unwrap();assert_eq!(retained_records(&db),before);
+    assert_eq!(db.query_row("SELECT count(*) FROM host_source_requests",[],|row|row.get::<_,i64>(0)).unwrap(),1);
+    let plan:String=db.query_row("EXPLAIN QUERY PLAN SELECT operation_id FROM host_intent_sources WHERE capture_id=?1",[legacy.capture_id.as_str()],|row|row.get(3)).unwrap();assert!(plan.contains("SEARCH")&&plan.contains("capture_id"),"{plan}");
+}
+#[test]
+fn capture_request_migration_does_not_decode_unselected_legacy_history() {
+    let directory=tempfile::tempdir().unwrap();let path=directory.path().join("db");
+    let (mut store,command,guard)=fixture(&path);let client=uuid(1);
+    store.prepare_guarded_host_intent(&client,&command,&guard).unwrap();drop(store);
+    let db=Connection::open(&path).unwrap();db.execute_batch("UPDATE host_intent_sources SET record='malformed old history'; DROP TABLE host_source_requests; PRAGMA user_version=19; PRAGMA journal_mode=DELETE;").unwrap();drop(db);
+    let store=Store::open(&path).unwrap();assert_eq!(store.host_source_capture_usage().unwrap(),(0,0));
+    assert!(store.host_source_request(&client,&request(&guard)).is_err());
+}
+#[test]
+fn capture_request_corrupt_receipt_and_missing_guard_fail_closed() {
+    for change in ["UPDATE host_source_requests SET record='malformed'","DELETE FROM host_source_captures","DELETE FROM host_source_requests",
+        "UPDATE host_source_requests SET state='released'","UPDATE host_source_requests SET record=json_set(record,'$.local_store_id','foreign')"] {
+        let directory=tempfile::tempdir().unwrap();let path=directory.path().join("db");
+        let (mut store,_,guard)=fixture(&path);let client=uuid(1);store.register_host_source_capture(&client,&uuid(10),&guard).unwrap();
+        Connection::open(&path).unwrap().execute_batch(change).unwrap();
+        assert!(store.host_source_request(&client,&request(&guard)).is_err(),"{change}");
+        assert!(store.host_source_pending_requests(&client).is_err(),"{change}");
+        assert!(store.release_host_source_capture(&client,&guard.capture_id).is_err(),"{change}");
+    }
+}
+
+#[test]
+fn capture_request_legacy_rejected_attachment_stays_terminal_without_invented_path() {
+    use zorid_store::HostSourceRequestLookup::*;
+    let directory=tempfile::tempdir().unwrap();let path=directory.path().join("db");
+    let (mut store,command,guard)=fixture(&path);let client=uuid(1);
+    let rejected=store.prepare_rejected_guarded_host_intent(&client,&command,&guard.capture_id,HostRejectionCode::SourceCaptureExpired).unwrap();
+    assert_eq!(store.host_source_request(&client,&request(&guard)).unwrap(),Attached{operation_id:command.operation_id.clone()});
+    let mut wrong=request(&guard);wrong.logical_witness.entry_id=EntryId::new("another").unwrap();
+    assert!(store.host_source_request(&client,&wrong).is_err());
+    store.release_host_source_capture(&client,&guard.capture_id).unwrap();
+    assert_eq!(store.replay_guarded_host_intent(&client,&command,&guard.capture_id).unwrap(),Some(rejected));
+    assert!(store.register_host_source_capture(&client,&uuid(10),&guard).is_err());
+    assert_eq!(Connection::open(&path).unwrap().query_row("SELECT count(*) FROM host_source_requests",[],|row|row.get::<_,i64>(0)).unwrap(),0);
+}
+#[test]
+fn capture_request_corrupt_legacy_attachment_is_not_unknown_even_without_a_receipt() {
+    for change in ["UPDATE host_intent_sources SET record='malformed'","UPDATE host_intents SET acknowledged=1",
+        "UPDATE host_intents SET request=json_set(request,'$.operation_id','different')"] {
+        let directory=tempfile::tempdir().unwrap();let path=directory.path().join("db");
+        let (mut store,command,guard)=fixture(&path);let client=uuid(1);
+        store.prepare_guarded_host_intent(&client,&command,&guard).unwrap();Connection::open(&path).unwrap().execute_batch(change).unwrap();
+        assert!(store.host_source_request(&client,&request(&guard)).is_err(),"{change}");
+        assert!(store.release_host_source_capture(&client,&guard.capture_id).is_err(),"{change}");
+        assert!(store.register_host_source_capture(&client,&uuid(10),&guard).is_err(),"{change}");
+        assert_eq!(Connection::open(&path).unwrap().query_row("SELECT count(*) FROM host_source_requests",[],|row|row.get::<_,i64>(0)).unwrap(),0);
+    }
+}
+#[test]
+fn capture_request_failed_pending_migration_rolls_back_schema_and_version() {
+    let directory=tempfile::tempdir().unwrap();let path=directory.path().join("db");
+    let (mut store,_,guard)=fixture(&path);store.register_host_source_capture(&uuid(1),&uuid(10),&guard).unwrap();drop(store);
+    let db=Connection::open(&path).unwrap();db.execute_batch("DROP TABLE host_source_requests; UPDATE host_source_captures SET record='malformed'; PRAGMA user_version=19; PRAGMA journal_mode=DELETE;").unwrap();drop(db);
+    assert!(Store::open(&path).is_err());let db=Connection::open(&path).unwrap();
+    assert_eq!(db.pragma_query_value(None,"user_version",|row|row.get::<_,i64>(0)).unwrap(),19);
+    assert_eq!(db.query_row("SELECT count(*) FROM sqlite_master WHERE name='host_source_requests'",[],|row|row.get::<_,i64>(0)).unwrap(),0);
+    assert_eq!(db.query_row("SELECT record FROM host_source_captures",[],|row|row.get::<_,String>(0)).unwrap(),"malformed");
+}
+
+#[test]
+fn capture_request_legacy_prepare_cannot_bypass_pending_or_terminal_receipts() {
+    for pending in [false,true] {
+        let directory=tempfile::tempdir().unwrap();let path=directory.path().join("db");
+        let (mut store,command,guard)=fixture(&path);let (client,lease)=(uuid(1),uuid(10));
+        if pending {store.register_host_source_capture(&client,&lease,&guard).unwrap();}
+        else {store.release_host_source_capture(&client,&guard.capture_id).unwrap();}
+        assert!(store.prepare_guarded_host_intent(&client,&command,&guard).is_err());
+        assert!(store.prepare_rejected_guarded_host_intent(&client,&command,&guard.capture_id,HostRejectionCode::SourceCaptureExpired).is_err());
+        assert_eq!(store.host_intent_for_operation(&command.operation_id).unwrap(),None);
+        assert_eq!(store.host_source_capture_usage().unwrap(),if pending {(1,8)}else{(0,0)});
+    }
 }

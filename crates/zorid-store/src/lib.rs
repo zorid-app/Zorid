@@ -112,6 +112,8 @@ pub use namespace::{
 mod host_intents;
 mod host_source_guards;
 pub use host_source_guards::{HostSourceCapture, HostSourceGuard, MAX_HOST_SOURCE_BYTES, MAX_HOST_SOURCE_PATH_BYTES, MAX_HOST_SOURCE_CAPTURES, MAX_HOST_SOURCE_TOTAL_BYTES};
+mod host_source_requests;
+pub use host_source_requests::{HostSourceWitness, HostSourceCaptureRequest, HostSourceRequestLookup, HostSourcePendingRequest};
 pub use host_intents::{
     HostIntentAcknowledgment, HostIntentPage, HostIntentRef, HostIntentState, HostIntentView,
     HostMutationKind, HostProjectionState, HostRejection, HostRejectionCode,
@@ -143,7 +145,8 @@ use zorid_core::{
     Mutation, MutationRequest, RecordedOperation, Revision,
 };
 
-const SCHEMA_VERSION: i64 = 19;
+const SCHEMA_VERSION: i64 = 20;
+const SOURCE_CAPTURE_SCHEMA_VERSION: i64 = 19;
 const DATABASE_SCHEMA_VERSION: i64 = 18;
 const SOURCE_GUARD_SCHEMA_VERSION: i64 = 17;
 const GRAPH_SCHEMA_VERSION: i64 = 16;
@@ -176,6 +179,7 @@ fn schema_objects() -> Vec<(&'static str, &'static str)> {
         .chain(host_intents::SCHEMA)
         .chain(host_source_guards::SCHEMA)
         .chain(host_source_guards::CAPTURE_SCHEMA)
+        .chain(host_source_requests::SCHEMA)
         .chain(projection_jobs::SCHEMA)
         .chain(namespace::SCHEMA)
         .chain(text_sync::SCHEMA)
@@ -206,7 +210,7 @@ fn check_schema(connection: &Connection) -> Result<i64> {
     // Unreleased formats: reject before changing WAL or database bytes.
     if !matches!(
         version,
-        0 | PREDECESSOR_SCHEMA_VERSION | NAMESPACE_SCHEMA_VERSION | OBSERVATION_SCHEMA_VERSION | TEXT_SCHEMA_VERSION | GRAPH_SCHEMA_VERSION | SOURCE_GUARD_SCHEMA_VERSION | DATABASE_SCHEMA_VERSION | SCHEMA_VERSION
+        0 | PREDECESSOR_SCHEMA_VERSION | NAMESPACE_SCHEMA_VERSION | OBSERVATION_SCHEMA_VERSION | TEXT_SCHEMA_VERSION | GRAPH_SCHEMA_VERSION | SOURCE_GUARD_SCHEMA_VERSION | DATABASE_SCHEMA_VERSION | SOURCE_CAPTURE_SCHEMA_VERSION | SCHEMA_VERSION
     ) {
         return Err(StoreError::UnsupportedSchema(version));
     }
@@ -235,8 +239,10 @@ fn check_schema(connection: &Connection) -> Result<i64> {
                             && !storage_accounting::schema().any(|(accounting_name, _)| accounting_name == name)))
                     && (version >= SOURCE_GUARD_SCHEMA_VERSION
                         || !host_source_guards::SCHEMA.iter().any(|(guard_name, _)| guard_name == name))
-                    && (version >= SCHEMA_VERSION
+                    && (version >= SOURCE_CAPTURE_SCHEMA_VERSION
                         || !host_source_guards::CAPTURE_SCHEMA.iter().any(|(capture_name, _)| capture_name == name))
+                    && (version >= SCHEMA_VERSION
+                        || !host_source_requests::SCHEMA.iter().any(|(request_name, _)| request_name == name))
                     && (version >= DATABASE_SCHEMA_VERSION
                         || !databases::SCHEMA.iter().any(|(database_name, _)| database_name == name))
             })
@@ -501,6 +507,7 @@ impl Store {
                 .chain(host_intents::SCHEMA)
                 .chain(host_source_guards::SCHEMA)
                 .chain(host_source_guards::CAPTURE_SCHEMA)
+                .chain(host_source_requests::SCHEMA)
                 .chain(projection_jobs::SCHEMA)
                 .chain(namespace::SCHEMA)
                 .chain(physical_bindings::SCHEMA)
@@ -579,8 +586,13 @@ impl Store {
             tx.execute("INSERT INTO local_database_state(singleton,revision) VALUES(1,0)", [])?;
             tx.pragma_update(None, "user_version", DATABASE_SCHEMA_VERSION)?;
         }
-        if version != 0 && version < SCHEMA_VERSION {
+        if version != 0 && version < SOURCE_CAPTURE_SCHEMA_VERSION {
             for (_, sql) in host_source_guards::CAPTURE_SCHEMA { tx.execute_batch(sql)?; }
+            tx.pragma_update(None, "user_version", SOURCE_CAPTURE_SCHEMA_VERSION)?;
+        }
+        if version != 0 && version < SCHEMA_VERSION {
+            for (_,sql) in host_source_requests::SCHEMA { tx.execute_batch(sql)?; }
+            host_source_requests::migrate(&tx)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         // Reopen checks the exact schema and scalar graph head/readiness state.

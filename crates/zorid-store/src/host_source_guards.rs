@@ -105,7 +105,7 @@ impl HostSourceGuard {
     }
 }
 
-fn valid_owner(value: &OperationId) -> bool {
+pub(super) fn valid_owner(value: &OperationId) -> bool {
     uuid::Uuid::parse_str(value.as_str()).ok()
         .is_some_and(|id| id.hyphenated().to_string() == value.as_str())
 }
@@ -128,7 +128,7 @@ pub(super) fn pending(tx: &Connection, capture: &OperationId) -> Result<Option<H
         Ok(value)
     }).transpose()
 }
-fn usage(tx: &Connection) -> Result<(u64,u64)> {
+pub(super) fn usage(tx: &Connection) -> Result<(u64,u64)> {
     let mut statement=tx.prepare("SELECT capture_id FROM host_source_captures LIMIT 9")?;
     let ids=statement.query_map([], |row|row.get::<_,String>(0))?.collect::<std::result::Result<Vec<_>,_>>()?;
     if ids.len() as u64 > MAX_HOST_SOURCE_CAPTURES { return Err(capture_corrupt()); }
@@ -206,38 +206,39 @@ impl Store {
         if !valid_owner(client)||!valid_owner(token) { return Err(ContractError::InvalidMutation {reason:"invalid conditional source owner".into()}.into()); }
         let value=HostSourceCapture {client_id:client.clone(),lease_token:token.clone(),guard:guard.clone()};
         if let Some(existing)=pending(&tx,&guard.capture_id)? {
+            host_source_requests::validate_capture(&tx,&guard.capture_id)?;
             if existing!=value { return Err(ContractError::IdempotencyConflict {operation_id:guard.capture_id.clone()}.into()); }
             tx.commit()?;return Ok(true);
         }
-        let used:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM host_intent_sources WHERE capture_id=?1)",[guard.capture_id.as_str()],|row|row.get(0))?;
-        if used { return Err(ContractError::IdempotencyConflict {operation_id:guard.capture_id.clone()}.into()); }
-        let (count,bytes)=usage(&tx)?;
+        host_source_requests::admit(&tx,client,guard)?;
+        let (count,bytes)=host_source_requests::validate_pending_set(&tx)?;
         if count>=MAX_HOST_SOURCE_CAPTURES || guard.length>MAX_HOST_SOURCE_TOTAL_BYTES.saturating_sub(bytes) { tx.commit()?;return Ok(false); }
         let encoded=serde_json::to_string(&value)?;
         if encoded.len()>65536 { return Err(ContractError::InvalidMutation {reason:"conditional source evidence exceeds bound".into()}.into()); }
         let length=i64::try_from(guard.length).map_err(|_|capture_corrupt())?;
         tx.execute("INSERT INTO host_source_captures(capture_id,client_id,lease_token,source_length,record) VALUES(?1,?2,?3,?4,?5)",params![guard.capture_id.as_str(),client.as_str(),token.as_str(),length,encoded])?;
+        host_source_requests::insert_pending(&tx,&value,false)?;
         tx.commit()?;Ok(true)
     }
     pub fn host_source_capture(&self, capture:&OperationId) -> Result<Option<HostSourceCapture>> {
-        let tx=self.connection.unchecked_transaction()?;let value=pending(&tx,capture)?;tx.commit()?;Ok(value)
+        let tx=self.connection.unchecked_transaction()?;host_source_requests::validate_capture(&tx,capture)?;let value=pending(&tx,capture)?;tx.commit()?;Ok(value)
     }
     pub fn host_source_capture_usage(&self) -> Result<(u64,u64)> {
-        let tx=self.connection.unchecked_transaction()?;let value=usage(&tx)?;tx.commit()?;Ok(value)
+        let tx=self.connection.unchecked_transaction()?;let value=host_source_requests::validate_pending_set(&tx)?;tx.commit()?;Ok(value)
     }
     /// Current verified ownership of the same client may release an individual
     /// retained capture from a dead lease. It cannot release a foreign client.
     pub fn release_host_source_capture(&mut self, client:&OperationId, capture:&OperationId) -> Result<bool> {
         let tx=self.connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let Some(value)=pending(&tx,capture)? else {tx.commit()?;return Ok(true);};
-        if value.client_id!=*client {tx.commit()?;return Ok(false);}
-        consume(&tx,&value)?;tx.commit()?;Ok(true)
+        host_source_requests::release(&tx,client,capture)?;tx.commit()?;Ok(true)
     }
     /// Exact lease revocation never removes a successor lease's captures.
     pub fn retire_host_source_captures(&mut self, client:&OperationId, token:&OperationId) -> Result<()> {
         let tx=self.connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        usage(&tx)?;
-        tx.execute("DELETE FROM host_source_captures WHERE client_id=?1 AND lease_token=?2",params![client.as_str(),token.as_str()])?;
+        if !valid_owner(client)||!valid_owner(token){return Err(capture_corrupt());}
+        host_source_requests::validate_pending_set(&tx)?;
+        let ids=tx.prepare("SELECT capture_id FROM host_source_requests WHERE client_id=?1 AND state='pending' AND lease_token=?2 LIMIT 9")?.query_map(params![client.as_str(),token.as_str()],|row|row.get::<_,String>(0))?.collect::<std::result::Result<Vec<_>,_>>()?;
+        for id in ids {host_source_requests::release(&tx,client,&OperationId::new(id).map_err(|_|capture_corrupt())?)?;}
         tx.commit()?;Ok(())
     }
     /// Durable host evidence, scoped to the same client and token as the intent.
