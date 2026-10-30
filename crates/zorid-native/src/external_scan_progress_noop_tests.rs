@@ -178,3 +178,92 @@ fn empty_acknowledgement_still_durably_retires_finished_inventory_when_requested
         .1
         .is_none());
 }
+
+fn micro_options() -> ExternalReconcileOptions {
+    ExternalReconcileOptions {
+        scan: ScanOptions {
+            max_duration: std::time::Duration::from_secs(5),
+            ..ScanOptions::default()
+        },
+        max_work_units: std::num::NonZeroU16::new(4).unwrap(),
+    }
+}
+
+fn micro_fixture(count: usize) -> (tempfile::TempDir, NativeVault) {
+    let root = tempfile::tempdir().unwrap();
+    for index in 0..count {
+        std::fs::write(root.path().join(format!("{index:02}.md")), b"stable note\n")
+            .unwrap();
+    }
+    let mut vault = NativeVault::open(root.path()).unwrap();
+    vault
+        .family_enroll(&FamilyScope {
+            realm_id: RealmId::new("micro-realm").unwrap(),
+            vault_id: VaultId::new("micro-vault").unwrap(),
+        })
+        .unwrap();
+    (root, vault)
+}
+
+fn finish_micro(vault: &mut NativeVault) -> (usize, usize) {
+    let mut scan_id = None;
+    let mut units = 0;
+    for turn in 1..=256 {
+        let result = vault
+            .reconcile_external_quantum(micro_options(), ExternalFileMode::Auto)
+            .unwrap();
+        assert!(result.work_units <= 4);
+        if let Some(expected) = &scan_id {
+            assert_eq!(&result.reconciliation.run.scan_id, expected);
+        } else {
+            scan_id = Some(result.reconciliation.run.scan_id.clone());
+        }
+        units += usize::from(result.work_units);
+        if !result.pending {
+            assert!(result.reconciliation.complete, "{result:?}");
+            return (turn, units);
+        }
+    }
+    panic!("stable micro-quantum inventory did not finish");
+}
+
+#[test]
+fn micro_quantum_exact_present_audit_has_no_empty_absence_work() {
+    let (_root, mut vault) = micro_fixture(32);
+    finish_micro(&mut vault);
+    let before = vault.list().unwrap();
+    let (turns, units) = finish_micro(&mut vault);
+    assert_eq!(vault.list().unwrap(), before);
+    eprintln!("stable 32-file audit: turns={turns}, work_units={units}");
+    // Discovery, complete-authority positive retries, publication, and its one
+    // final check remain. Exact Present captures need no absence inspection.
+    assert_eq!(units, 32 * 3 + 1);
+}
+
+#[test]
+fn micro_quantum_unchanged_current_directory_writes_only_advanced_cursor() {
+    let (_root, mut vault) = micro_fixture(12);
+    let _lock = vault.paths.lock(vault.options.lock_timeout).unwrap();
+    let options = micro_options();
+    let mut budget = super::super::external_scan_quantum::ExternalWorkBudget::new(&options)
+        .unwrap();
+    let mut first = vault
+        .external_progress_scan_with_budget(options.scan.clone(), Some(&mut budget))
+        .unwrap();
+    assert_eq!(first.run.observed, 4);
+    first
+        .record_processed_retaining(&mut vault, &first.pending_paths(), true)
+        .unwrap();
+    let before = revisions(&mut vault);
+    let mut budget = super::super::external_scan_quantum::ExternalWorkBudget::new(&options)
+        .unwrap();
+    let second = vault
+        .external_progress_scan_with_budget(options.scan, Some(&mut budget))
+        .unwrap();
+    assert_eq!(second.run.scan_id, first.run.scan_id);
+    assert_eq!(second.run.observed, 8);
+    assert!(!second.run.complete);
+    let added = revisions(&mut vault) - before;
+    eprintln!("unchanged current-directory batch checkpoint revisions: {added}");
+    assert_eq!(added, 1, "only the newly advanced cursor needs a revision");
+}
