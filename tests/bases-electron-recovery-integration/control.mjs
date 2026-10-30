@@ -22,7 +22,7 @@ export async function createNativeRelay({native,directory}) {
     async events(){try{const source=await fs.readFile(path.join(directory,'events.jsonl'),'utf8');assert.ok(source.length<8*1024*1024);return source.slice(0,source.lastIndexOf('\n')+1).split('\n').filter(Boolean).map(line=>JSON.parse(line));}catch(error){if(error.code==='ENOENT')return[];throw error;}},
     async dispose(){
       const events=await this.events(),held=events.findLast(value=>value.kind==='held');
-      if(held&&!events.some(value=>['released','watchdog-released'].includes(value.kind)&&value.token===held.token))await this.release(held.token);
+      if(held&&!events.some(value=>['released','watchdog-released','held-child-closed'].includes(value.kind)&&value.token===held.token))await this.release(held.token);
       await fs.rm(path.join(directory,'arm.json'),{force:true});
     },
   };
