@@ -62,7 +62,7 @@ test('simulated prepared hold forwards the original checkpoint error and byte-ex
  let child,relay;const chunks=[],errors=[];
  const entry={id:'mock-entry',path:'Failures/Live.base',kind:'file',revision:'before',deleted:false};
  const intent={token:'mock-token',client_id:'mock-client',operation_id:'mock-operation',entry_id:entry.id,state:'prepared'};
- const negative={code:'checkpoint_storage',commit_uncertain:true};
+ const negative={code:'filesystem_failed',commit_uncertain:true};
  try{
   const protocol=fileURLToPath(new URL('./protocol.mjs',import.meta.url));
   await fs.writeFile(script,`import {Frames} from ${JSON.stringify(protocol)};
@@ -106,7 +106,7 @@ let attempts=0;const parser=new Frames();for await(const chunk of process.stdin)
   const dispatched=events.filter(value=>value.kind==='native-write-request');assert.deepEqual(dispatched.map(value=>value.method),['prepare_intent','checkpoint_cas','checkpoint_cas']);
   for(const request of dispatched.slice(1)){assert.equal(request.key,command.key);assert.equal(request.expectedRevision,command.expected_revision);assert.equal(request.nextRevision,command.next_revision);assert.equal(request.commandSha256,digest(Buffer.from(JSON.stringify(command))));assert.equal(request.bodySha256,digest(checkpointBody));assert.equal(JSON.stringify(request).includes(checkpointBody.toString()),false);}
   assert.ok(events.indexOf(dispatched[0])<events.findIndex(value=>value.kind==='native-prepared-write'));assert.ok(events.indexOf(dispatched[1])<events.indexOf(failure));assert.ok(events.indexOf(dispatched[2])<events.indexOf(success));
-  assert.equal(failure.ok,false);assert.equal(failure.errorCode,'checkpoint_storage');assert.equal(failure.commitUncertain,true);assert.equal(success.ok,true);
+  assert.equal(failure.ok,false);assert.equal(failure.errorCode,'filesystem_failed');assert.equal(failure.commitUncertain,true);assert.equal(success.ok,true);
   for(const row of checkpointEvents){assert.equal(row.key,command.key);assert.equal(row.commandSha256,digest(Buffer.from(JSON.stringify(command))));assert.equal(row.bodySha256,digest(checkpointBody));}
   assert.equal(failure.responseSha256,digest(rejected));assert.equal(success.responseSha256,digest(replayed));
   assert.notEqual(failure.requestSha256,success.requestSha256,'Transport request IDs may change while the identical CAS command/body replay');

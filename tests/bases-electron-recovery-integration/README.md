@@ -52,7 +52,7 @@ made valid by this recovery-only setup.
 
 | Scenario | Interruption and independent oracle |
 | --- | --- |
-| Terminal checkpoint ACK, Review/Copy, ordinary Save, explicit raw B | Hold only the real inert `prepare_intent` reply for exact A bytes. Type B in the same mounted editor and let its 250ms debounce elapse while A is pending. Set only the owned disposable `.zorid/vault.lock` to mode0000 and release the unchanged prepared reply. Require a genuine `checkpoint_storage`/`commit_uncertain:true` checkpoint CAS response, retained disabled B and read-only Review/Copy. Restore the exact inode's original mode in `finally`; whole physical/bridge source must still be S0. Review must expose exact S0/A/B, Copy must acknowledge its clipboard write, and neither action may dispatch a native mutation/checkpoint request or replacement intent, with a normal-bridge read barrier before the final event comparison. Use the ordinary Save current changes command-palette action to settle only A; the identical checkpoint CAS command/body must succeed before the original native A token commits. B must remain raw/unsubmitted for a bounded interval, then a normal explicit Tab commit saves B without retyping or replacing the editor. Check whole B, every unrelated fixture, visible value12, normal close/quit and fresh-launch readback. This access-denial case is terminal under the strict retry policy; it does not establish automatic host/admission recovery. |
+| Terminal checkpoint ACK, Review/Copy, ordinary Save, explicit raw B | Hold only the real inert `prepare_intent` reply for exact A bytes. Type B in the same mounted editor and let its 250ms debounce elapse while A is pending. Set only the owned disposable `.zorid/vault.lock` to mode0000 and release the unchanged prepared reply. Require a genuine `filesystem_failed`/`commit_uncertain:true` checkpoint CAS response correlated to one original dispatched `checkpoint_cas` method/key/command/body digest and Native process, retained disabled B and read-only Review/Copy. Restore the exact inode's original mode in `finally`; whole physical/bridge source must still be S0. Review must expose exact S0/A/B, Copy must acknowledge its clipboard write, and neither action may dispatch a native mutation/checkpoint request or replacement intent, with a normal-bridge read barrier before the final event comparison. Use the ordinary Save current changes command-palette action to settle only A; the identical checkpoint CAS command/body must succeed before the original native A token commits. B must remain raw/unsubmitted for a bounded interval, then a normal explicit Tab commit saves B without retyping or replacing the editor. Check whole B, every unrelated fixture, visible value12, normal close/quit and fresh-launch readback. This access-denial case is terminal under the strict retry policy; it does not establish automatic host/admission recovery. |
 | Accepted A, newer B, close | Arm exact saved Base entry/path and exact A bytes. Observe its real prepared token and committed native receipt, hold only that successful reply, type B through the mounted summary editor and request tab close. The panel retains B while disk contains A. Release the same encoded reply; exactly one A and one B write finish. Close safely, quit normally and verify exact B after restart. |
 | Lost New reply, restart | Arm the exact destination and complete template digest. Suppress the first genuine successful create reply, gracefully stop that real host before presenting EOF, and observe mounted New uncertainty/close refusal. Repeated New cannot create a second note through the fenced transport. A separately labeled forced app shutdown and restart recovers the durable requested checkpoint. The native replay must have the same command/body, operation ID, entry ID, revision and receipt sequence; only one file with exact template bytes exists. |
 
@@ -72,7 +72,7 @@ are verified/restored in `finally`; an unexpected replacement fails the case.
 After the prepared reply, `NoteDurableState.resume` must checkpoint `op.ref`
 before querying or committing it. Native checkpoint CAS freshly opens the vault
 lock read/write before Store CAS. Mode0000 denies that open and maps to genuine
-`checkpoint_storage` uncertainty. This is a failed checkpoint ACK, not a logical
+`filesystem_failed` uncertainty. This is a failed checkpoint ACK, not a logical
 commit with pending public-file publication. The accepted configuration already retains its original saved-source guard;
 denying public-folder access would not isolate this checkpoint boundary. The public sources, private directory, database and actor files remain
 accessible. No production guard or semantic fault API is added for the test.
@@ -117,7 +117,8 @@ Pure protocol checks require no application or native executable:
 node --test --test-concurrency=1 tests/bases-electron-recovery-integration/protocol.test.mjs \
   tests/bases-electron-recovery-integration/relay-process.test.mjs \
   tests/bases-electron-recovery-integration/configuration-review.test.mjs \
-  tests/bases-electron-recovery-integration/collection-scene.test.mjs
+  tests/bases-electron-recovery-integration/collection-scene.test.mjs \
+  tests/bases-electron-recovery-integration/terminal-checkpoint-failure.test.mjs
 ```
 
 Those checks verify framing, arming, committed/prepared success selection, request-digest
@@ -134,3 +135,10 @@ request-hash correlation, never a claimed native checkpoint failure.
 The failed-live-save extension is **authored only**. Earlier recovery runs do not
 cover it; a new frozen actual campaign with matching
 native products is required.
+
+The lock-open denial is a terminal filesystem permission error: Native preserves
+the typed IO cause, maps it to `filesystem_failed`, and keeps commit uncertainty
+on the exact checkpoint request. The frontend does not retry that code
+automatically. Pure policy checks exercise this boundary and the distinct typed
+transient `filesystem_io_retryable` continuation; they establish no packaged
+host-rebind or OS/storage recovery acceptance.

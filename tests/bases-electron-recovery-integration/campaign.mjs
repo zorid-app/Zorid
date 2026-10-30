@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {delay,until} from '../tasks-electron-integration/cdp.mjs';
 import {digest} from './protocol.mjs';
+import {terminalLockCheckpointFailure} from './terminal-checkpoint-failure.mjs';
 import {captureFocusedSummaryInput,continueFocusedSummaryInput,disposeFocusedSummaryInput,summaryEditor} from './focused-summary-input.mjs';
 export {createNativeRelay} from './control.mjs';
 
@@ -116,7 +117,7 @@ async function failedLiveWriteWithNewerDraft(c){
     await fs.chmod(lock,0o000);assert.equal((await sameLock()).mode&0o7777,0);
     c.evidence.actions.push({action:'owned-negative-checkpoint-lock-access',lock,dev:identity.dev,ino:identity.ino,originalMode:mode,mode:'0000',phase:'after-inert-prepare-before-ref-checkpoint',at:Date.now()});
     await c.relay.release(token);await event(c,'released',token,3000);
-    negative=await until(async()=>{const row=(await c.relay.events()).slice(offset).find(e=>e.kind==='native-checkpoint-response'&&e.key==='note/v1/'+before.entryId&&!e.ok);assert.ok(row);assert.equal(row.errorCode,'checkpoint_storage');assert.equal(row.commitUncertain,true);return row;},10000);
+    negative=await until(async()=>{const row=terminalLockCheckpointFailure((await c.relay.events()).slice(offset),'note/v1/'+before.entryId,held);assert.ok(row);return row;},10000);
     await c.ui.wait(`const p=document.querySelector(${JSON.stringify(panel)}),review=p?[...p.querySelectorAll('button')].find(b=>b.textContent==='Review retained changes'):null;return p?.getAttribute('aria-busy')==='false'&&!!p.querySelector('[role="alert"]')?.textContent?.trim()&&review&&!review.hidden&&!review.disabled;`,'A terminal checkpoint fault exposes read-only retained summary review',10000);
     failed=await summaryFrame(c);assert.equal(failed.draft,'values.sum() + 7');assert.equal(failed.visibleDraft,failed.draft);assert.equal(failed.disabled,true);assert.equal(failed.readonly,'true');assert.equal(failed.review,true);assert.equal(failed.manualRetry,false);assert.equal(await summaryPanelIdentity(c),panelId);assert.equal(await summaryPanelIdentity(c,`${panel} ${summaryEditor}`),focused.editorBackendNodeId);
     const events=(await c.relay.events()).slice(offset);assert.equal(events.filter(e=>e.kind==='native-mutation-response'&&e.ok&&e.state==='committed'&&e.preparedBodySha256===digest(Buffer.from(failedA))).length,0,'Failed checkpoint acknowledgement must precede any successful A commit');
@@ -125,7 +126,7 @@ async function failedLiveWriteWithNewerDraft(c){
     await sameLock();await fs.chmod(lock,mode);assert.equal((await sameLock()).mode&0o7777,mode);
     c.evidence.actions.push({action:'restore-owned-checkpoint-lock-access',lock,dev:identity.dev,ino:identity.ino,mode,at:Date.now()});
   }
-  // Access-denied checkpoint_storage is terminal under the strict retry policy.
+  // Access-denied filesystem_failed is terminal under the strict retry policy.
   // Review/Copy never retries it. After restoring access, ordinary Save settles
   // accepted A; newer raw B requires its own explicit commit in the same editor.
   await c.saved(failedPath,source=>assert.equal(source,failedBase),'failed-summary-restored-original-physical-and-logical-source');
@@ -244,6 +245,6 @@ async function droppedCreateAndRestart(c){
 
 export async function journey(c){
   assert.ok(c.relay&&c.forceShutdown,'Common runner must provide its reviewed test-only relay/process ownership seam');
-  c.evidence.limitations.push('The failed-summary phase denies only the owned vault.lock open before the prepared-ref checkpoint and requires genuine uncertain checkpoint_storage. The access denial is terminal under the strict retry policy: read-only Review/Copy and ordinary Save resolve accepted A, and raw B requires explicit commit. This is not routine host/admission recovery, postcommit publication, SQLite/device failure or power-loss coverage.', 'Other held/dropped responses follow real core success; those transport cases are not failed saves. A newer draft blocked behind a native call is not claimed crash-durable before its checkpoint can run.');
+  c.evidence.limitations.push('The failed-summary phase denies only the owned vault.lock open before the prepared-ref checkpoint and requires genuine uncertain filesystem_failed. The access denial is terminal under the strict retry policy: read-only Review/Copy and ordinary Save resolve accepted A, and raw B requires explicit commit. This is not routine host/admission recovery, postcommit publication, SQLite/device failure or power-loss coverage.', 'Other held/dropped responses follow real core success; those transport cases are not failed saves. A newer draft blocked behind a native call is not claimed crash-durable before its checkpoint can run.');
   await failedLiveWriteWithNewerDraft(c);await heldWriteAndClose(c);await droppedCreateAndRestart(c);await noFaults(c);
 }
