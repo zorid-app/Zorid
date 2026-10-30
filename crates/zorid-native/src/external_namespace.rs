@@ -1009,10 +1009,20 @@ impl NativeVault {
             }
             let snapshot = &scan.entries[&path];
             let attempt = (|| -> Result<Option<CommitResult>> {
-                if snapshot.kind == EntryKind::File { self.point("external_positive_file_proof"); }
-                if !scan.confirm_snapshot(self, &path)? {
-                    return Err(Error::Busy("external capture changed before enrollment"));
-                }
+                // The file proof already checks inventory authority, parent
+                // markers, inode and exact bytes. Keep that immutable result
+                // only for this attempt; observe/import still reverify their
+                // actual source before any authored mutation.
+                let expected = if snapshot.kind == EntryKind::File {
+                    self.point("external_positive_file_proof");
+                    Some(scan.file_snapshot(self, &path)?
+                        .ok_or(Error::Busy("external capture changed before enrollment"))?)
+                } else {
+                    if !scan.confirm_snapshot(self, &path)? {
+                        return Err(Error::Busy("external capture changed before enrollment"));
+                    }
+                    None
+                };
                 if snapshot.kind == EntryKind::File { self.point("external_positive_snapshot_captured"); }
                 let owner = self.store.physical_owner_by_inode(&snapshot.identity)?;
                 if owner.as_ref().is_some_and(|b| b.state.path != path) {
@@ -1029,14 +1039,11 @@ impl NativeVault {
                         ));
                     }
                     return if snapshot.kind == EntryKind::File {
-                        self.point("external_positive_file_proof");
-                        let expected = scan
-                            .file_snapshot(self, &path)?
-                            .ok_or(Error::Busy("file snapshot missing"))?;
+                        let expected = expected.as_ref().ok_or(Error::Busy("file snapshot missing"))?;
                         self.observe_streamed_file_with_scan(
                             &path,
                             &parent,
-                            &expected,
+                            expected,
                             &observe_origin,
                             Some(&enrolled),
                         )
@@ -1075,10 +1082,7 @@ impl NativeVault {
                     )
                     .map(Some)
                 } else {
-                    self.point("external_positive_file_proof");
-                    let expected = scan
-                        .file_snapshot(self, &path)?
-                        .ok_or(Error::Busy("file snapshot missing"))?;
+                    let expected = expected.as_ref().ok_or(Error::Busy("file snapshot missing"))?;
                     let selected = external_create::select_external_file_mode_from_facts(
                         &path,
                         expected.valid_utf8,
@@ -1088,7 +1092,7 @@ impl NativeVault {
                     self.observe_new_family_stream_with_scan(
                         &path,
                         &parent,
-                        &expected,
+                        expected,
                         selected,
                         &create_origin,
                         Some(&enrolled),
