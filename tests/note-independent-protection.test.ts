@@ -36,7 +36,7 @@ async function fixture(t:TestContext){
         current={...current,content:input.content,revision:`file-${commits+1}`,stat:{...current.stat,size:input.content.length}};await adapter.write('One.md',current.content);
         const intent:DurableWriteIntent={ref,state:'committed',acknowledged:false,receipt:{operationId:ref.operationId,entryId:ref.entryId,revision:current.revision,sequence:String(commits)}};intents.set(ref.operationId,intent);return structuredClone(intent);},
       acknowledge:async(ref)=>{assertLive();const intent=intents.get(ref.operationId)!;if(intent.state==='committed'||intent.state==='rejected')intents.set(ref.operationId,{...intent,acknowledged:true});},listUnacknowledged:async()=>[],
-      captureSavedSource:async witness=>({captureId:'original-capture',logicalWitness:{...witness},source:current.content}),releaseSavedSource:async()=>{},
+      captureSavedSource:async request=>({...request,source:current.content}),releaseSavedSource:async()=>{},listSavedSourceRequests:async()=>[],
     };
     const journalScope={...scope,incarnationId},branch=(entryId:string,writer:string,incarnation=incarnationId)=>`${incarnation}:${entryId}:${writer}`;
     const receipt=(request:IndependentDraftChange|IndependentDraftRetirement,deleted:boolean):IndependentDraftReceipt=>({...journalScope,incarnationId:'incarnationId'in request?request.incarnationId:incarnationId,entryId:request.entryId,writer:request.writer,revision:request.nextRevision,generation:request.generation,deleted});

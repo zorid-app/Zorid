@@ -1,5 +1,5 @@
 const delays=[500,1500,4000,30_000] as const;
-const transientHostCodes=new Set(['storage_busy','storage_io_retryable','storage_capacity','filesystem_io_retryable','lock_timeout']);
+const transientHostCodes=new Set(['storage_busy','storage_io_retryable','storage_capacity','source_capture_capacity','filesystem_io_retryable','lock_timeout']);
 const admissionCodes=new Set(['host_exited','client_not_admitted','client_ownership_lost','desktop_recovery_pending','desktop_recovery_stale_reply']);
 const cancelled=()=>Object.assign(new Error('The note load owner was cancelled.'),{code:'note_load_cancelled'});
 const own=(value:object,key:string):unknown=>{const field=Object.getOwnPropertyDescriptor(value,key);return field&&Object.hasOwn(field,'value')?field.value:undefined;};

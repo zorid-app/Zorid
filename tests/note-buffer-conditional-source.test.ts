@@ -5,6 +5,7 @@ import {Vault} from '../src/core/vault.ts';
 import {NoteBuffer} from '../src/ui/note-buffer.ts';
 import {DurableWritePlanningError} from '../src/core/durable-writes.ts';
 import type {DurableWrites,DurableWriteInput,DurableWriteIntent,DurableWriteRead,ConditionalSavedSourceCapture} from '../src/core/durable-writes.ts';
+import type {IndependentDraftProvider,IndependentDraftRead} from '../src/core/independent-drafts.ts';
 import type {Checkpoint} from '../src/core/durable-checkpoints.ts';
 
 const logical='---\nscore: 9\n---\nLogical body';
@@ -12,6 +13,7 @@ const physical='---\nscore: 7\n---\nPhysical body';
 async function fixture(){
   const scope={vaultId:'vault',clientId:'client'},checkpoints=new Map<string,Checkpoint>();
   const captures=new Map<string,ConditionalSavedSourceCapture>(),intents=new Map<string,DurableWriteIntent>(),intentInputs=new Map<string,{input:DurableWriteInput;source?:string}>();
+  const requestIds:string[]=[];
   const planned:DurableWriteInput[]=[],prepared:string[]=[],committed:string[]=[],released:string[]=[];
   let saved=physical,captureCount=0,current:DurableWriteRead={entryId:'entry',revision:'r1',path:'One.md',content:logical,stat:{ctime:1,mtime:1,size:logical.length}};
   let onPlan:((input:DurableWriteInput)=>Promise<void>)|undefined,onCommit:(()=>Promise<void>)|undefined,onCheckpoint:(()=>Promise<void>)|undefined,onRelease:(()=>Promise<void>)|undefined;
@@ -25,8 +27,9 @@ async function fixture(){
       checkpoints.set(change.key,row);return structuredClone(row);
     },list:async()=>({items:[],cursor:null,highWater:'0'}),changes:async()=>({items:[],cursor:null,highWater:'0'})},
     readText:async()=>structuredClone(current),readTextById:async id=>id===current.entryId?structuredClone(current):null,
-    captureSavedSource:async witness=>{captureCount++;const capture={captureId:`capture-${captureCount}`,logicalWitness:{...witness},source:saved};captures.set(capture.captureId,capture);return structuredClone(capture);},
+    captureSavedSource:async request=>{captureCount++;requestIds.push(request.captureId);const capture={captureId:request.captureId,logicalWitness:{...request.logicalWitness},source:saved};captures.set(capture.captureId,capture);return structuredClone(capture);},
     releaseSavedSource:async id=>{if(onRelease)await onRelease();released.push(id);captures.delete(id);},
+    listSavedSourceRequests:async()=>[...captures.values()].map(({captureId,logicalWitness})=>({captureId,logicalWitness,legacy:false})),
     planWrite:async input=>{planned.push(structuredClone(input));if(onPlan)await onPlan(input);return{version:1,...scope,operationId:input.operationId,entryId:input.expectedEntryId,encodedPlan:JSON.stringify(input)};},
     prepare:async plan=>{prepared.push(plan.encodedPlan);const old=intents.get(plan.operationId);if(old)return structuredClone(old);
       const input=JSON.parse(plan.encodedPlan) as DurableWriteInput,capture=input.conditionalSavedSource?captures.get(input.conditionalSavedSource.captureId):undefined;
@@ -41,9 +44,13 @@ async function fixture(){
     },
     query:async ref=>structuredClone(intents.get(ref.token)??null),listUnacknowledged:async()=>[],acknowledge:async ref=>{const intent=intents.get(ref.token)!;if(intent.state==='committed'||intent.state==='rejected')intents.set(ref.token,{...intent,acknowledged:true});},
   };
-  adapter.durableWrites=writes;const vault=new Vault(adapter);await vault.initialize();
+  const journalScope={...scope,incarnationId:'owned-renderer'},journal=new Map<string,Exclude<IndependentDraftRead,null>>();
+  const provider:IndependentDraftProvider={scope:journalScope,list:async options=>[...journal.values()].filter(row=>!row.deleted&&(!options||row.entryId===options.entryId)),read:async address=>journal.get(address.writer)??null,
+    compareAndSwap:async request=>{const old=journal.get(request.writer);assert.equal(request.expectedRevision,old?.revision??null);const row={...journalScope,entryId:request.entryId,writer:request.writer,revision:request.nextRevision,generation:request.generation,deleted:false as const,baseline:request.baseline,draft:request.draft,checkpointRevision:request.checkpointRevision,pendingOperation:request.pendingOperation};journal.set(request.writer,row);const{baseline,draft,checkpointRevision,pendingOperation,...receipt}=row;return receipt;},
+    retire:async request=>{const row={...journalScope,entryId:request.entryId,writer:request.writer,revision:request.nextRevision,generation:request.generation,deleted:true as const};journal.set(request.writer,row);return row;}};
+  Object.assign(adapter,{independentDrafts:provider});adapter.durableWrites=writes;const vault=new Vault(adapter);await vault.initialize();
   const buffer=new NoteBuffer(vault,'One.md',{debounceMs:60000});await buffer.load();
-  return{buffer,vault,writes,planned,prepared,committed,released,captures,checkpoints,get saved(){return saved;},get capturesTaken(){return captureCount;},get current(){return current;},state:()=>JSON.parse(checkpoints.get('note/v1/entry')!.encodedState!),setPlan(fn:typeof onPlan){onPlan=fn;},setCommit(fn:typeof onCommit){onCommit=fn;},setCheckpoint(fn:typeof onCheckpoint){onCheckpoint=fn;},setRelease(fn:typeof onRelease){onRelease=fn;},external(text:string){saved=text;},async advanceLogical(text:string){current={...current,content:text,revision:'peer-revision'};saved=text;await adapter.write('One.md',text);},async reopen(){const reopened=new NoteBuffer(vault,'One.md',{debounceMs:60000});await reopened.load();return reopened;}};
+  return{buffer,vault,writes,requestIds,planned,prepared,committed,released,captures,checkpoints,get saved(){return saved;},get capturesTaken(){return captureCount;},get current(){return current;},state:()=>JSON.parse(checkpoints.get('note/v1/entry')!.encodedState!),setPlan(fn:typeof onPlan){onPlan=fn;},setCommit(fn:typeof onCommit){onCommit=fn;},setCheckpoint(fn:typeof onCheckpoint){onCheckpoint=fn;},setRelease(fn:typeof onRelease){onRelease=fn;},external(text:string){saved=text;},async advanceLogical(text:string){current={...current,content:text,revision:'peer-revision'};saved=text;await adapter.write('One.md',text);},async reopen(){const reopened=new NoteBuffer(vault,'One.md',{debounceMs:60000});await reopened.load();return reopened;}};
 }
 const witness={entryId:'entry',revision:'r1',path:'One.md'};
 async function stop(buffer:NoteBuffer){try{await buffer.dispose();}catch{ /* conflict remains intentionally retained */ }}
@@ -67,7 +74,7 @@ test('foreign, stale and already attached captures cannot mutate the shared draf
 test('superseded capture releases the unattached proof and cannot adopt physical text',async()=>{
   const f=await fixture();let valid=true;const acquire=f.writes.captureSavedSource!;f.writes.captureSavedSource=async w=>{const capture=await acquire(w);valid=false;return capture;};
   await assert.rejects(f.buffer.captureConditionalSavedSource(witness,()=>{if(!valid)throw new Error('retired');}),/retired/);
-  assert.deepEqual(f.released,['capture-1']);assert.equal(f.buffer.text,logical);assert.deepEqual(f.buffer.savedDurableWitness,witness);assert.equal(f.planned.length,0);await stop(f.buffer);
+  assert.deepEqual(f.released,[f.requestIds[0]]);assert.equal(f.buffer.text,logical);assert.deepEqual(f.buffer.savedDurableWitness,witness);assert.equal(f.planned.length,0);await stop(f.buffer);
 });
 
 test('conditional planning checkpoints the original request and retries the identical input after a lost reply',async()=>{
@@ -121,7 +128,7 @@ test('terminal release failure retains the settled request and retries release w
 });
 
 test('browser providers without the capability retain their existing logical save path',async()=>{
-  const f=await fixture();delete f.writes.captureSavedSource;delete f.writes.releaseSavedSource;
+  const f=await fixture();delete f.writes.captureSavedSource;delete f.writes.releaseSavedSource;delete f.writes.listSavedSourceRequests;
   assert.equal(await f.buffer.captureConditionalSavedSource(witness),undefined);f.buffer.update('ordinary browser draft');await f.buffer.flush();assert.equal(f.planned[0].conditionalSavedSource,undefined);assert.equal(f.saved,'ordinary browser draft');await stop(f.buffer);
 });
 
@@ -166,7 +173,7 @@ test('an abandoned capture with an uncertain release is released before acquirin
   await assert.rejects(f.buffer.captureConditionalSavedSource(witness,()=>{if(!valid)throw new Error('retired');}),/release reply lost/);
   f.writes.captureSavedSource=acquire;
   const capture=(await f.buffer.captureConditionalSavedSource(witness))!;
-  assert.deepEqual(f.released,['capture-1']);assert.equal(capture.captureId,'capture-2');assert.equal(f.captures.size,1);
+  assert.deepEqual(f.released,[f.requestIds[0]]);assert.equal(capture.captureId,f.requestIds[1]);assert.equal(f.captures.size,1);
   await f.buffer.releaseConditionalSavedSource(capture);await stop(f.buffer);
 });
 
@@ -221,7 +228,7 @@ test('a capture crossing retirement is abandoned and released before the buffer 
   const f=await fixture();let enter!:()=>void,finish!:()=>void;const entered=new Promise<void>(resolve=>{enter=resolve;}),gate=new Promise<void>(resolve=>{finish=resolve;});
   const acquire=f.writes.captureSavedSource!;f.writes.captureSavedSource=async w=>{const capture=await acquire(w);enter();await gate;return capture;};
   const acquiring=f.buffer.captureConditionalSavedSource(witness);await entered;const closing=f.buffer.dispose();finish();
-  await assert.rejects(acquiring,/closing/);await closing;assert.deepEqual(f.released,['capture-1']);assert.equal(f.planned.length,0);assert.equal(f.captures.size,0);
+  await assert.rejects(acquiring,/closing/);await closing;assert.deepEqual(f.released,[f.requestIds[0]]);assert.equal(f.planned.length,0);assert.equal(f.captures.size,0);
 });
 
 test('failed retirement does not release a pending conditional guard or lose its original input',async()=>{
@@ -234,5 +241,5 @@ test('failed retirement does not release a pending conditional guard or lose its
 test('retirement retries a release for an abandoned post-validation capture',async()=>{
   const f=await fixture();let valid=true;const acquire=f.writes.captureSavedSource!;f.writes.captureSavedSource=async w=>{const capture=await acquire(w);valid=false;return capture;};
   f.setRelease(async()=>{throw new Error('release reply lost');});await assert.rejects(f.buffer.captureConditionalSavedSource(witness,()=>{if(!valid)throw new Error('retired');}),/release reply lost/);
-  f.setRelease(undefined);await f.buffer.dispose();assert.deepEqual(f.released,['capture-1']);assert.equal(f.captures.size,0);
+  f.setRelease(undefined);await f.buffer.dispose();assert.deepEqual(f.released,[f.requestIds[0]]);assert.equal(f.captures.size,0);
 });

@@ -1,16 +1,18 @@
 import type { Vault } from '../core/vault.ts';
 import {DurableWritePlanningError} from '../core/durable-writes.ts';
-import type { DurableWrites, DurableWriteRead, DurableWritePlan, DurableWriteRef, DurableWriteOutcome, DurableWriteInput, ConditionalSavedSourceWitness, ConditionalSavedSourceCapture, ConditionalSavedSourceStatus } from '../core/durable-writes.ts';
+import type { DurableWrites, DurableWriteRead, DurableWritePlan, DurableWriteRef, DurableWriteOutcome, DurableWriteInput, ConditionalSavedSourceWitness, ConditionalSavedSourceRequest, ConditionalSavedSourceCapture, ConditionalSavedSourceStatus } from '../core/durable-writes.ts';
 import type { Checkpoint,CheckpointChange } from '../core/durable-checkpoints.ts';
 import { boundedUtf8,checkpointRevision,checkpointStateLimit,snapshotCheckpointChange } from '../core/checkpoint-input.ts';
 import {NoteDraftProtection} from './note-draft-protection.ts';
 import {NoteLoadSupervisor} from './note-load-supervisor.ts';
 import type {NoteDraftCapture,NoteDraftProtectionStatus} from './note-draft-protection.ts';
-import type {IndependentDraftReceipt,IndependentDraftCandidate,IndependentDraftRetirement} from '../core/independent-drafts.ts';
+import type {IndependentDraftReceipt,IndependentDraftCandidate,IndependentDraftRetirement,IndependentDraftScope} from '../core/independent-drafts.ts';
+import type {DraftProtectionAcknowledgement} from './draft-protection.ts';
 interface Operation { plan?:DurableWritePlan; input?:DurableWriteInput; content:string; ref?:DurableWriteRef; pendingAck?:DurableWriteOutcome; planningRejected?:string }
 interface State {version:1;writer:string;generation:number;base:DurableWriteRead;draft:string;conflict:boolean;operation?:Operation}
 interface CoreCoverage {writer:string;generation:number;base:DurableWriteRead;draft:string;clean:boolean;revision:string}
 interface JournalCandidatePlan {canonical:State;exact?:CheckpointChange}
+interface ProtectedCaptureRequest extends ConditionalSavedSourceRequest {readonly scope:IndependentDraftScope}
 const journalError=(code:string)=>Object.assign(new Error('Independent draft inventory could not be verified; candidates were retained.'),{code});
 const validId=(value:unknown):value is string=>typeof value==='string'&&!!value&&value.length<=256&&!value.includes('\0');
 const validGeneration=(value:unknown):value is number=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0&&!Object.is(value,-0);
@@ -65,6 +67,10 @@ export class DurableNoteState {
   private activeCaptures=new Map<string,ConditionalSavedSourceCapture>();
   private abandonedCaptures=new Set<string>();
   private releasingCaptures=new WeakMap<ConditionalSavedSourceCapture,Promise<void>>();
+  private captureRequests=new Map<string,ProtectedCaptureRequest>();
+  private captureRequestsVersion=0;
+  private captureReleases=new Map<string,{supervisor:NoteLoadSupervisor;task:Promise<void>}>();
+  private pendingCaptureOwners=new Map<string,{controller:AbortController;supervisor:NoteLoadSupervisor}>();
   error:Error|null=null;
   private vault:Vault;
   private writes:DurableWrites;
@@ -88,7 +94,7 @@ export class DurableNoteState {
   private candidateRetryTimer:ReturnType<typeof setTimeout>|undefined;
   private candidateRetryWake?:()=>void;
   private coreRecoveryPending=false;
-  private phase?:{operation?:Operation;input?:DurableWriteInput;plan?:DurableWritePlan;ref?:DurableWriteRef;ack?:DurableWriteOutcome;rejected?:string;conflict:boolean;checkpoint?:CheckpointChange;capture:Readonly<object>|null};
+  private phase?:{operation?:Operation;input?:DurableWriteInput;plan?:DurableWritePlan;ref?:DurableWriteRef;ack?:DurableWriteOutcome;rejected?:string;conflict:boolean;checkpoint?:CheckpointChange;requestsVersion:number;capture:Readonly<object>|null};
   private coverage?:CoreCoverage;
   private uncertainCoverage?:Omit<CoreCoverage,'revision'>;
   private loadPrepared=false;
@@ -135,6 +141,8 @@ export class DurableNoteState {
   coreAdmissionAvailable(scope:{vaultId:string;clientId:string}):boolean{
     if(scope.vaultId!==this.noteScope.vaultId||scope.clientId!==this.noteScope.clientId||this.writes.checkpoints.scope.vaultId!==scope.vaultId||this.writes.checkpoints.scope.clientId!==scope.clientId)return false;
     this.sourceRecovery?.supervisor.admissionAvailable();
+    for(const owner of this.pendingCaptureOwners.values())owner.supervisor.admissionAvailable();
+    for(const release of this.captureReleases.values())release.supervisor.admissionAvailable();
     return true;
   }
   /** Called only AFTER NoteBuffer has made the validated raw draft usable. */
@@ -153,6 +161,7 @@ export class DurableNoteState {
   }
   private admitProtection():void{
     if(this.protectionStopped)return;
+    void this.cleanupAbandonedCaptureRequests();
     this.protectionAdmitted=true;const pending=this.deferredProtectionInventory;this.deferredProtectionInventory=undefined;
     if(pending)this.protection?.markInventory(pending.state,pending.error);
     this.captureProtection();
@@ -168,7 +177,7 @@ export class DurableNoteState {
   private coverageFor(state:State):Omit<CoreCoverage,'revision'> {return{writer:state.writer,generation:state.generation,base:{...state.base,stat:{...state.base.stat}},draft:state.draft,clean:!state.conflict&&!state.operation&&state.draft===state.base.content};}
   private covered(state:Pick<State,'writer'|'generation'|'base'|'draft'>):boolean {
     const current=this.state,confirmed=this.coverage;
-    return !!current&&!!confirmed&&confirmed.clean&&!this.error&&!this.uncertain&&!current.operation&&!current.conflict&&this.revision===confirmed.revision
+    return !this.captureRequests.size&&!!current&&!!confirmed&&confirmed.clean&&!this.error&&!this.uncertain&&!current.operation&&!current.conflict&&this.revision===confirmed.revision
       &&state.writer===current.writer&&state.generation===current.generation&&state.draft===current.draft&&current.draft===current.base.content
       &&confirmed.writer===current.writer&&confirmed.generation===current.generation&&confirmed.draft===current.draft
       &&['entryId','path','revision','content'].every(key=>confirmed.base[key as keyof DurableWriteRead]===current.base[key as keyof DurableWriteRead])
@@ -177,14 +186,15 @@ export class DurableNoteState {
   private captureProtection():void {
     const state=this.state;if(!state||!this.protection||!this.protectionAdmitted)return;
     // An unopened clean baseline needs no independent body copy.
-    if(!this.protection.status.sequence&&!state.operation&&!state.conflict&&state.draft===state.base.content
+    if(!this.protection.status.sequence&&!this.captureRequests.size&&!state.operation&&!state.conflict&&state.draft===state.base.content
       &&(!this.uncertain||!this.protectionAuthoringStarted&&!this.recoveredIndependent))return;
     try{
       const op=state.operation,prior=this.phase;
       if(!prior||prior.operation!==op||prior.input!==op?.input||prior.plan!==op?.plan||prior.ref!==op?.ref||prior.ack!==op?.pendingAck
-        ||prior.rejected!==op?.planningRejected||prior.conflict!==state.conflict||prior.checkpoint!==this.uncertain){
-        const capture=op||state.conflict||this.uncertain?Object.freeze({schemaVersion:1,conflict:state.conflict,operation:op?frozenPhase(op):null,checkpoint:this.uncertain?frozenPhase(this.uncertain):null}):null;
-        this.phase={operation:op,input:op?.input,plan:op?.plan,ref:op?.ref,ack:op?.pendingAck,rejected:op?.planningRejected,conflict:state.conflict,checkpoint:this.uncertain,capture};
+        ||prior.rejected!==op?.planningRejected||prior.conflict!==state.conflict||prior.checkpoint!==this.uncertain||prior.requestsVersion!==this.captureRequestsVersion){
+        const common={conflict:state.conflict,operation:op?frozenPhase(op):null,checkpoint:this.uncertain?frozenPhase(this.uncertain):null};
+        const capture=this.captureRequests.size?Object.freeze({schemaVersion:2,...common,captureRequests:Object.freeze([...this.captureRequests.values()])}):op||state.conflict||this.uncertain?Object.freeze({schemaVersion:1,...common}):null;
+        this.phase={operation:op,input:op?.input,plan:op?.plan,ref:op?.ref,ack:op?.pendingAck,rejected:op?.planningRejected,conflict:state.conflict,checkpoint:this.uncertain,requestsVersion:this.captureRequestsVersion,capture};
       }
       this.protection.capture({writer:state.writer,snapshot:{generation:state.generation,baseline:{entryId:state.base.entryId,path:state.base.path,revision:state.base.revision,content:state.base.content},draft:state.draft,
         checkpointRevision:this.uncertain?this.uncertain.expectedRevision:this.revision,pendingOperation:this.phase!.capture}});this.protectionCaptureError=null;
@@ -264,11 +274,111 @@ export class DurableNoteState {
     if(this.protection)void this.queue(()=>this.persist()).catch(()=>{});
     return true;
   }
+  /** V1 remains exact. V2 adds only a bounded, immutable request collection. */
+  private captureCapsule(candidate:IndependentDraftCandidate):{conflict:boolean;operation:Record<string,any>|null;checkpoint:Record<string,any>|null;captureRequests:readonly ProtectedCaptureRequest[]}|undefined {
+    if(candidate.pendingOperation===null)return;
+    try{
+      const value=JSON.parse(candidate.pendingOperation);
+      if(!object(value)||!['schemaVersion','conflict','operation','checkpoint','captureRequests'].every(key=>Object.hasOwn(value,key))||Object.keys(value).length!==5
+        ||value.schemaVersion!==2||typeof value.conflict!=='boolean'||!(value.operation===null||object(value.operation))||!(value.checkpoint===null||object(value.checkpoint))
+        ||!Array.isArray(value.captureRequests)||!value.captureRequests.length||value.captureRequests.length>8)return;
+      const ids=new Set<string>();
+      for(const request of value.captureRequests){
+        if(!object(request)||Object.keys(request).length!==3||typeof request.captureId!=='string'||!/^([0-9a-f]{8}-)([0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(request.captureId)||ids.has(request.captureId)
+          ||!object(request.logicalWitness)||Object.keys(request.logicalWitness).length!==3||request.logicalWitness.entryId!==candidate.entryId||!validId(request.logicalWitness.revision)||typeof request.logicalWitness.path!=='string'
+          ||!object(request.scope)||Object.keys(request.scope).length!==3||!['vaultId','clientId','incarnationId'].every(key=>request.scope[key]===candidate[key as keyof IndependentDraftCandidate]))return;
+        ids.add(request.captureId);
+      }
+      return{conflict:value.conflict,operation:value.operation,checkpoint:value.checkpoint,captureRequests:value.captureRequests};
+    }catch{return;}
+  }
+  /** Every unsettled serialized operation remains reachable, including an old
+   * uncertain CAS and journal writes superseded in memory but not acknowledged. */
+  private captureReferenced(id:string):boolean {
+    const references=(value:unknown,depth=0):boolean=>{
+      if(depth>20)return true;
+      if(!value||typeof value!=='object')return false;
+      if(Array.isArray(value))return value.some(item=>references(item,depth+1));
+      const record=value as Record<string,unknown>;
+      if(record.captureId===id)return true;
+      return Object.values(record).some(item=>references(item,depth+1));
+    };
+    const encodedReferences=(encoded:string|null|undefined):boolean=>{if(!encoded)return false;try{return references(JSON.parse(encoded));}catch{return true;}};
+    if(references(this.state?.operation)||encodedReferences(this.confirmedState)||encodedReferences(this.uncertain?.encodedState))return true;
+    for(const write of this.protection?.retainedWriteRequests??[]){
+      if(!write.pendingOperation)continue;
+      try{const capsule=JSON.parse(write.pendingOperation);if(references(capsule.operation)||encodedReferences(capsule.checkpoint?.encodedState))return true;}catch{return true;}
+    }
+    return false;
+  }
+  private captureCleanup?:Promise<void>;
+  /** Bounded pending discovery supplies entry IDs; no vault/index/body scan.
+   * A matching old journal claim plus a trusted retired-owner certificate is
+   * required. Missing, legacy, corrupt, or ambiguous evidence stays protected. */
+  private cleanupAbandonedCaptureRequests():Promise<void>{
+    if(this.captureCleanup)return this.captureCleanup;
+    const provider=this.vault.adapter.independentDrafts;
+    if(!provider?.isRetiredIncarnation||!this.writes.listSavedSourceRequests||!this.writes.releaseSavedSource)return Promise.resolve();
+    const cleanup=(async()=>{
+      this.assertLoadScope();const pending=await this.writes.listSavedSourceRequests!();
+      if(!Array.isArray(pending)||pending.length>8)return;
+      const entries=new Map<string,typeof pending>();
+      for(const request of pending){if(!object(request)||request.legacy!==false||!validId(request.captureId)||!object(request.logicalWitness)||!validId(request.logicalWitness.entryId))continue;
+        entries.set(request.logicalWitness.entryId,[...(entries.get(request.logicalWitness.entryId)??[]),request]);}
+      for(const[entryId,requests]of entries){
+        const rows=await provider.list({entryId});if(!Array.isArray(rows)||rows.length>16||!rows.length||rows.some(row=>!this.validJournalReceipt(row)||row.entryId!==entryId||row.deleted))continue;
+        const candidates:IndependentDraftCandidate[]=[];let verified=true,bytes=0;
+        // Certification drains old Core RPCs before reading evidence. A live,
+        // unknown, or legacy owner cannot authorize speculative abandonment.
+        for(const row of rows)if(row.incarnationId===provider.scope.incarnationId||await provider.isRetiredIncarnation!(row.incarnationId)!==true){verified=false;break;}
+        if(!verified)continue;
+        for(const row of rows){const value=await provider.read({entryId,writer:row.writer,incarnationId:row.incarnationId});
+          if(!value||value.deleted||!this.validJournalReceipt(value)||!['vaultId','clientId','incarnationId','entryId','writer','revision','generation','deleted'].every(key=>value[key as keyof IndependentDraftReceipt]===row[key as keyof IndependentDraftReceipt])
+            ||!object(value.baseline)||value.baseline.entryId!==entryId||!validId(value.baseline.revision)||typeof value.baseline.path!=='string'||typeof value.baseline.content!=='string'||typeof value.draft!=='string'
+            ||!validCheckpointReference(value.checkpointRevision)||!(value.pendingOperation===null||typeof value.pendingOperation==='string')){verified=false;break;}
+          bytes+=(value.baseline.content.length+value.draft.length+(value.pendingOperation?.length??0))*2;if(bytes>32*1024*1024){verified=false;break;}candidates.push(value);
+        }
+        if(!verified)continue;
+        const head=await this.writes.checkpoints.load(`note/v1/${entryId}`);
+        // Validate through the ordinary note receipt checks where applicable;
+        // unopened entries still require the complete bound checkpoint shape.
+        if(head!==null&&(!object(head)||head.vaultId!==this.noteScope.vaultId||head.clientId!==this.noteScope.clientId||head.key!==`note/v1/${entryId}`||head.version!==1
+          ||Reflect.ownKeys(head).length!==9||!validCheckpointReference(head.revision)||head.revision===null||typeof head.sequence!=='string'||!/^[1-9][0-9]{0,19}$/.test(head.sequence)||BigInt(head.sequence)>18446744073709551615n
+          ||!Number.isSafeInteger(head.byteLength)||head.byteLength<0||head.byteLength>checkpointStateLimit||!(head.encodedState===null||typeof head.encodedState==='string')||head.deleted!==(head.encodedState===null)
+          ||(head.encodedState===null?head.byteLength!==0:boundedUtf8(head.encodedState,checkpointStateLimit)!==head.byteLength)))continue;
+        const canonical=head?.encodedState?plainCheckpointState(head.encodedState):null;
+        if(head?.encodedState&&!canonical||canonical&&canonical.base.entryId!==entryId)continue;
+        for(const request of requests){
+          if(this.captureRequests.has(request.captureId)||this.captureReferenced(request.captureId))continue;
+          let owner:IndependentDraftCandidate|undefined,blocked=false;
+          const references=(value:unknown):boolean=>{if(!value||typeof value!=='object')return false;if(Array.isArray(value))return value.some(references);const object=value as Record<string,unknown>;return object.captureId===request.captureId||Object.values(object).some(references);};
+          if(references(canonical?.operation))continue;
+          for(const candidate of candidates){
+            if(candidate.pendingOperation===null)continue;
+            let capsule:any;try{capsule=JSON.parse(candidate.pendingOperation);}catch{blocked=true;break;}
+            const decoded=this.captureCapsule(candidate);
+            if(!decoded){
+              // Strict old capsules may retain an operation or original CAS.
+              if(!object(capsule)||capsule.schemaVersion!==1||Object.keys(capsule).length!==4||typeof capsule.conflict!=='boolean'||!(capsule.operation===null||object(capsule.operation))||!(capsule.checkpoint===null||object(capsule.checkpoint))){blocked=true;break;}
+            }
+            if(capsule.operation!==null){blocked=true;break;}
+            if(capsule.checkpoint!==null){try{if(!object(capsule.checkpoint)||Object.keys(capsule.checkpoint).length!==4||capsule.checkpoint.key!==`note/v1/${entryId}`||!plainCheckpointState(capsule.checkpoint.encodedState)){blocked=true;break;}}catch{blocked=true;break;}}
+            const claim=decoded?.captureRequests.find(value=>value.captureId===request.captureId);
+            if(claim){if(owner||!['entryId','revision','path'].every(key=>claim.logicalWitness[key as keyof ConditionalSavedSourceWitness]===request.logicalWitness[key as keyof ConditionalSavedSourceWitness])){blocked=true;break;}owner=candidate;}
+          }
+          if(blocked||!owner||owner.incarnationId===provider.scope.incarnationId)continue;
+          this.assertLoadScope();if(this.captureRequests.has(request.captureId)||this.captureReferenced(request.captureId))continue;
+          await this.releaseCapture(request.captureId);
+        }
+      }
+    })().catch(()=>{/* Unknown evidence never grants release or blocks startup. */});
+    this.captureCleanup=cleanup;void cleanup.finally(()=>{if(this.captureCleanup===cleanup)this.captureCleanup=undefined;});return cleanup;
+  }
   private checkpointCapsule(candidate:IndependentDraftCandidate):JournalCandidatePlan|undefined {
     if(candidate.pendingOperation===null)return;
     let capsule:any;try{capsule=JSON.parse(candidate.pendingOperation);}catch{return;}
     const request=capsule?.checkpoint;
-    if(!object(capsule)||Object.keys(capsule).length!==4||capsule.schemaVersion!==1||capsule.conflict!==false||capsule.operation!==null||!object(request)
+    if(!object(capsule)||!(capsule.schemaVersion===1&&Object.keys(capsule).length===4||!!this.captureCapsule(candidate))||capsule.conflict!==false||capsule.operation!==null||!object(request)
       ||Object.keys(request).length!==4||request.key!==this.key||request.expectedRevision!==candidate.checkpointRevision
       ||request.nextRevision===request.expectedRevision||typeof request.encodedState!=='string')return;
     let exact:CheckpointChange;
@@ -282,7 +392,9 @@ export class DurableNoteState {
     if(before.operation||before.conflict||!sameBase(candidate.baseline,before.base)||candidate.generation<before.generation||!object(before.base.stat)
       ||!['ctime','mtime','size'].every(key=>typeof before.base.stat[key as keyof typeof before.base.stat]==='number'&&Number.isFinite(before.base.stat[key as keyof typeof before.base.stat])&&before.base.stat[key as keyof typeof before.base.stat]>=0)
       ||!Number.isSafeInteger(before.base.stat.size))return;
-    if(candidate.pendingOperation!==null){
+    const capsule=this.captureCapsule(candidate);
+    if(capsule&&(capsule.conflict||capsule.operation!==null))return;
+    if(candidate.pendingOperation!==null&&!(capsule&&capsule.checkpoint===null)){
       const plan=this.checkpointCapsule(candidate);if(!plan?.exact)return;
       const exact=plan.exact,stored=plan.canonical;
       if(this.uncertain&&['key','expectedRevision','nextRevision','encodedState'].some(key=>this.uncertain![key as keyof CheckpointChange]!==exact[key as keyof CheckpointChange]))return;
@@ -342,6 +454,7 @@ export class DurableNoteState {
     if(this.sourceCleanupRunning)return this.sourceCleanupRunning;
     const candidate=this.recoveredJournalCandidate,provider=this.vault.adapter.independentDrafts,state=this.state;
     if(!candidate||!provider||!state||this.protectionStopped||!this.protectionAdmitted||candidate.incarnationId===provider.scope.incarnationId||this.sourceCleanupError&&!retry)return Promise.resolve();
+    if(candidate.pendingOperation!==null){const capsule=this.captureCapsule(candidate);if(capsule?.captureRequests.length)return Promise.resolve();}
     if(!this.sourceRetirement){
       if(!this.covered(state)||!this.protection?.status.currentJournalAcknowledged||candidate.writer!==state.writer||candidate.generation!==state.generation||candidate.draft!==state.draft)return Promise.resolve();
       const next=BigInt(candidate.revision)+1n;if(next>18446744073709551615n)return Promise.resolve();
@@ -379,31 +492,76 @@ export class DurableNoteState {
     const base=this.base;
     if(!witness||witness.entryId!==base.entryId||witness.revision!==base.revision||witness.path!==base.path)throw failure('conditional source belongs to another logical baseline');
   }
-  captureConditionalSavedSource(witness:ConditionalSavedSourceWitness,validate:()=>void):Promise<ConditionalSavedSourceCapture|undefined>{return this.queue(async()=>{
-    validate();this.checkWitness(witness);
-    if(!this.writes.captureSavedSource&&!this.writes.releaseSavedSource)return undefined;
-    if(!this.writes.captureSavedSource||!this.writes.releaseSavedSource)throw failure('conditional saved-source capability is incomplete');
-    // A lost release reply must not consume one registry slot on every retry.
-    for(const id of this.abandonedCaptures){await this.writes.releaseSavedSource(id);this.abandonedCaptures.delete(id);}
-    if(this.state!.conflict||this.state!.operation)throw failure('settle the retained note write before capturing another conditional source');
-    const capture=await this.writes.captureSavedSource({...witness});
+  private captureRequestAcknowledged(ack:DraftProtectionAcknowledgement,request:ProtectedCaptureRequest):boolean {
+    if(ack.receipt.vaultId!==request.scope.vaultId||ack.receipt.clientId!==request.scope.clientId||ack.receipt.incarnationId!==request.scope.incarnationId||ack.request.entryId!==request.logicalWitness.entryId||typeof ack.request.pendingOperation!=='string')return false;
+    try{const capsule=JSON.parse(ack.request.pendingOperation);
+      return object(capsule)&&capsule.schemaVersion===2&&Array.isArray(capsule.captureRequests)&&capsule.captureRequests.some((value:any)=>
+        object(value)&&value.captureId===request.captureId&&object(value.logicalWitness)&&['entryId','revision','path'].every(key=>value.logicalWitness[key]===request.logicalWitness[key as keyof ConditionalSavedSourceWitness])
+        &&object(value.scope)&&['vaultId','clientId','incarnationId'].every(key=>value.scope[key]===request.scope[key as keyof IndependentDraftScope]));
+    }catch{return false;}
+  }
+  private forgetCaptureRequest(id:string):void {if(this.captureRequests.delete(id)){this.captureRequestsVersion++;this.captureProtection();}}
+  /** Freeze and protect the identity before either serialized save lane. Only
+   * Native dispatch joins those lanes; the independent ACK never waits for Rust. */
+  captureConditionalSavedSource(witness:ConditionalSavedSourceWitness,validate:()=>void,serialize:<T>(run:()=>Promise<T>)=>Promise<T>=run=>run()):Promise<ConditionalSavedSourceCapture|undefined>{
+    let request:ProtectedCaptureRequest,owner:{controller:AbortController;supervisor:NoteLoadSupervisor};
     try{
       validate();this.checkWitness(witness);
-      if(!capture||typeof capture.captureId!=='string'||!capture.captureId||typeof capture.source!=='string')throw failure('invalid conditional saved-source capture');
-      boundedUtf8(capture.source,8*1024*1024,'capture_too_large');
-      this.checkWitness(capture.logicalWitness);
-      if(this.state!.conflict||this.state!.operation)throw failure('the note write changed during source capture');
-      const owned=Object.freeze({...capture,logicalWitness:Object.freeze({...capture.logicalWitness})});
-      this.captures.set(owned,'unattached');this.activeCaptures.set(owned.captureId,owned);return owned;
-    }catch(error){
-      if(capture&&typeof capture.captureId==='string')try{await this.writes.releaseSavedSource(capture.captureId);}catch(releaseError){this.abandonedCaptures.add(capture.captureId);throw releaseError;}
-      throw error;
-    }
-  });}
+      if(!this.writes.captureSavedSource&&!this.writes.releaseSavedSource&&!this.writes.listSavedSourceRequests)return Promise.resolve(undefined);
+      if(!this.writes.captureSavedSource||!this.writes.releaseSavedSource||!this.writes.listSavedSourceRequests)throw failure('conditional saved-source capability is incomplete');
+      const provider=this.vault.adapter.independentDrafts;
+      if(!provider||!this.protection||!this.protectionAdmitted||provider.scope.vaultId!==this.noteScope.vaultId||provider.scope.clientId!==this.noteScope.clientId)throw failure('conditional saved-source capture requires independent protection');
+      if(this.captureRequests.size>=8)throw failure('too many retained capture requests');
+      request=Object.freeze({captureId:crypto.randomUUID(),logicalWitness:Object.freeze({...witness}),scope:Object.freeze({...provider.scope})});
+      owner={controller:new AbortController(),supervisor:new NoteLoadSupervisor()};this.pendingCaptureOwners.set(request.captureId,owner);
+      this.captureRequests.set(request.captureId,request);this.captureRequestsVersion++;this.captureProtection();
+      if(this.protectionCaptureError)throw this.protectionCaptureError;
+    }catch(error){return Promise.reject(error);}
+    const acknowledged=this.protection!.flushCapture(ack=>this.captureRequestAcknowledged(ack,request),{signal:owner.controller.signal});
+    void acknowledged.catch(()=>{});
+    const check=()=>{validate();this.assertLoadScope();this.checkWitness(request.logicalWitness);if(owner.controller.signal.aborted)throw failure('conditional source owner was cancelled');};
+    const task=serialize(()=>this.queue(async()=>{
+      let received=false,dispatched=false;
+      try{
+        await acknowledged;check();await this.cleanupAbandonedCaptureRequests();check();
+        for(const id of this.abandonedCaptures){await this.releaseCapture(id);this.abandonedCaptures.delete(id);this.forgetCaptureRequest(id);}
+        if(this.state!.conflict||this.state!.operation)throw failure('settle the retained note write before capturing another conditional source');
+        const claim=Object.freeze({captureId:request.captureId,logicalWitness:request.logicalWitness});
+        const capture=await owner.supervisor.run(async()=>{
+          try{dispatched=true;return await this.writes.captureSavedSource!(claim);}
+          catch(error){if(error&&typeof error==='object'&&Object.getOwnPropertyDescriptor(error,'source')?.value==='host'&&Object.getOwnPropertyDescriptor(error,'code')?.value==='source_capture_capacity')await this.cleanupAbandonedCaptureRequests();throw error;}
+        },check,{signal:owner.controller.signal});
+        received=true;check();
+        if(!capture||capture.captureId!==request.captureId||typeof capture.source!=='string')throw failure('invalid conditional saved-source capture');
+        boundedUtf8(capture.source,8*1024*1024,'capture_too_large');this.checkWitness(capture.logicalWitness);
+        if(this.state!.conflict||this.state!.operation)throw failure('the note write changed during source capture');
+        const owned=Object.freeze({...capture,logicalWitness:Object.freeze({...capture.logicalWitness})});
+        this.captures.set(owned,'unattached');this.activeCaptures.set(owned.captureId,owned);return owned;
+      }catch(error){
+        // Unknown outcomes retain the original claim. Explicit cancellation and
+        // invalid late replies fence that exact ID even if its first ACK was lost.
+        let cancelled=owner.controller.signal.aborted;try{check();}catch(ownerError){cancelled=true;error=ownerError;}
+        if(!dispatched||received||cancelled){
+          try{await this.releaseCapture(request.captureId);this.forgetCaptureRequest(request.captureId);}
+          catch(releaseError){this.abandonedCaptures.add(request.captureId);throw releaseError;}
+        }
+        throw error;
+      }finally{owner.supervisor.stop();this.pendingCaptureOwners.delete(request.captureId);}
+    }));
+    return task;
+  }
+  cancelPendingConditionalSavedSources():void {for(const owner of this.pendingCaptureOwners.values())owner.controller.abort();}
+  private releaseCapture(id:string):Promise<void>{
+    const existing=this.captureReleases.get(id);if(existing)return existing.task;
+    const supervisor=new NoteLoadSupervisor();
+    const task=supervisor.run(()=>this.writes.releaseSavedSource!(id),()=>this.assertLoadScope());
+    const owner={supervisor,task};this.captureReleases.set(id,owner);
+    void task.finally(()=>{supervisor.stop();if(this.captureReleases.get(id)===owner)this.captureReleases.delete(id);}).catch(()=>{});return task;
+  }
   releaseConditionalSavedSource(capture:ConditionalSavedSourceCapture):Promise<void>{
     const pending=this.releasingCaptures.get(capture);if(pending)return pending;
     if(this.conditionalSavedSourceStatus(capture)!=='unattached')return Promise.reject(failure('only an unattached conditional source can be released by its caller'));
-    const releasing=(async()=>{await this.writes.releaseSavedSource!(capture.captureId);this.captures.set(capture,'settled');this.activeCaptures.delete(capture.captureId);})();
+    const releasing=(async()=>{await this.releaseCapture(capture.captureId);this.captures.set(capture,'settled');this.activeCaptures.delete(capture.captureId);this.forgetCaptureRequest(capture.captureId);})();
     this.releasingCaptures.set(capture,releasing);
     void releasing.finally(()=>{if(this.releasingCaptures.get(capture)===releasing)this.releasingCaptures.delete(capture);}).catch(()=>{});
     return releasing;
@@ -412,7 +570,9 @@ export class DurableNoteState {
    * Join an existing release; failed cleanup keeps this buffer owned/retryable. */
   releaseUnattachedConditionalSavedSources():Promise<void>{return this.queue(async()=>{
     for(const capture of this.activeCaptures.values())if(this.conditionalSavedSourceStatus(capture)==='unattached')await this.releaseConditionalSavedSource(capture);
-    for(const id of this.abandonedCaptures){await this.writes.releaseSavedSource!(id);this.abandonedCaptures.delete(id);}
+    for(const request of this.captureRequests.values())if(!this.captureReferenced(request.captureId)){
+      await this.releaseCapture(request.captureId);this.abandonedCaptures.delete(request.captureId);this.forgetCaptureRequest(request.captureId);
+    }
   });}
   validateConditionalSavedSource(capture:ConditionalSavedSourceCapture):void {
     if(this.conditionalSavedSourceStatus(capture)!=='unattached')throw failure('conditional source was already attached or belongs to another buffer');
@@ -423,7 +583,8 @@ export class DurableNoteState {
   private async releaseOperationCapture(op:Operation):Promise<void>{
     const guard=op.input?.conditionalSavedSource;if(!guard)return;
     if(!this.writes.releaseSavedSource)throw failure('conditional source release is unavailable');
-    await this.sourceIO(()=>this.writes.releaseSavedSource!(guard.captureId));
+    await this.sourceIO(()=>this.releaseCapture(guard.captureId));
+    this.forgetCaptureRequest(guard.captureId);
     const capture=this.activeCaptures.get(guard.captureId);
     if(capture){this.captures.set(capture,'settled');this.activeCaptures.delete(guard.captureId);}
   }

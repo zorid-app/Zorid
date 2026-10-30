@@ -152,13 +152,9 @@ export class NoteBuffer {
    * it never replaces savedText or the durable logical baseline. */
   captureConditionalSavedSource(witness:ConditionalSavedSourceWitness,validate:()=>void=()=>{}):Promise<ConditionalSavedSourceCapture|undefined>{
     if(this.disposing)return Promise.reject(new Error('This note buffer is closing'));
-    return this.enqueueResult(async()=>{
-      this.requireLoaded();if(this.disposing)throw new Error('This note buffer is closing');if(!this.durable)return undefined;
-      const capture=await this.durable.captureConditionalSavedSource(witness,()=>{validate();if(this.disposing)throw new Error('This note buffer is closing');});
-      try{validate();if(this.disposing)throw new Error('This note buffer is closing');}
-      catch(error){if(capture)await this.durable.releaseConditionalSavedSource(capture);throw error;}
-      return capture;
-    });
+    try{this.requireLoaded();}catch(error){return Promise.reject(error);}
+    if(!this.durable)return Promise.resolve(undefined);
+    return this.durable.captureConditionalSavedSource(witness,()=>{validate();if(this.disposing)throw new Error('This note buffer is closing');},run=>this.enqueueResult(run));
   }
   conditionalSavedSourceStatus(capture:ConditionalSavedSourceCapture):ConditionalSavedSourceStatus{return this.durable?.conditionalSavedSourceStatus(capture)??'foreign';}
   releaseConditionalSavedSource(capture:ConditionalSavedSourceCapture):Promise<void>{
@@ -573,6 +569,6 @@ export class NoteBuffer {
       // Facts cleanup must never become a durable save failure.
       await this.closeMetadataProjection();this.disposed=true;this.durable?.stopDraftProtection();
     }).finally(()=>{if(this.disposing===closing)this.disposing=undefined;});
-    this.disposing=closing;return closing;
+    this.disposing=closing;this.durable?.cancelPendingConditionalSavedSources();return closing;
   }
 }
