@@ -1,5 +1,22 @@
 # User findings queue
 
+## Measured Base interaction delay / responsiveness continuation — 2026-10-30
+
+Latest user transfers sole ownership after the recovery session completed; root
+owns main/build/native/install with no further coordination. Installed combined
+runtime4efdee5c includes earlier startup/config and redundant-read fixes. Actual
+four accepted Base edits still take1.60–1.73s versus native mutation median64ms,
+with340–388refresh requests per edit. Fifth lost foreground; full campaign
+incomplete and no normal-close acceptance from its failure cleanup.
+
+Root `codex/snappy-index-refresh` targets bounded proven-record reuse128total/
+32fresh rather than globally raising parsing budgets or skipping runtime ACKs.
+Source review/tests/native/UI/install gates stay separate. Pre-ready startup
+c07ed20a and pure-core selected observation8549814a remain isolated; no measured
+pre-ready win, selected-first or800ms completion claimed.
+See [responsiveness evidence](plans/editor-responsiveness-20261030.md).
+
+
 ## File recovery scope follow-up — 2026-10-30
 
 User requests current Zorid/Obsidian comparison and removal of extra recovery

@@ -2,6 +2,17 @@
 
 ## Execution checkpoint — shared-core coordinator
 
+**SOLE RESPONSIVENESS OWNER / MEASURED BASE DELAY — 2026-10-30.**
+User says the other session completed, no coordination needed, all ownership
+transferred here. Root owns isolated `codex/snappy-index-refresh` from59ce6b6a
+and canonical integration/build/native/install. Installed combined4ef remains
+accepted. Four exact-data verified Base edits1.60–1.73s vs native RPC64ms median
+and340–388refresh requests motivate bounded unchanged-record batching.
+Named worker/reviewer/tests and artifact limits in
+[responsiveness evidence](plans/editor-responsiveness-20261030.md). Pre-ready
+startup and selected-file primitives stay isolated; no800ms/selected-first claim.
+
+
 **RECOVERY POLICY SIMPLIFICATION / COMBINED DELIVERY — 2026-10-30.**
 Root retains sole main/native/install ownership. Removed recurring failed-reconnect
 and independent-backup timer policy while preserving retained data and exact-write
