@@ -2,6 +2,9 @@ import type { CheckpointScope } from '../core/durable-checkpoints.ts';
 import type { VaultEntry } from '../core/types';
 import type { ContextMenuRequest } from './context-menu';
 
+/** Positive conditional saved-source advertisement means the caller-owned V2
+ * capture/release/bounded-list triple, with a same-scope independentJournal.
+ * The old server-generated capture identity is never a fallback capability. */
 export interface DesktopDurableContext { conditionalSavedSourceAvailable?:true; textCreateReceiptsAvailable?:true; workBlocks?:true; databases?:true; documentSemantics?:true; documentMaintenance?:true; metadataRowsAvailable?:boolean; propertyTargetsAvailable?:boolean; basePreviewAvailable?:boolean; draftsAvailable?:boolean; admissionId: string; scope: CheckpointScope; binaryLimits?:import('../core/binary-streams.ts').BinaryStreamLimits }
 export interface DesktopIndependentJournalGrant {readonly token:string;readonly scope:import('../core/independent-drafts.ts').IndependentDraftScope}
 export interface DesktopDurableContext {readonly independentJournal?:DesktopIndependentJournalGrant}

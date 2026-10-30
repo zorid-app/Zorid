@@ -22,7 +22,7 @@ const independentJournal=async request=>{
 };
 const durableMethods = new Set(['readText','readTextById','composeNote','planWrite','prepare','commit','query','listUnacknowledged','acknowledge',
   'checkpoints.load','checkpoints.compareAndSwap','checkpoints.list','checkpoints.changes','createText','createTextReceipt','fileCommand',
-  'captureSavedSource','releaseSavedSource','databaseCommand','workblockCommand','documentCommand','documentDrafts','binaryCommand',
+  'captureSavedSource','releaseSavedSource','listSavedSourceRequests','databaseCommand','workblockCommand','documentCommand','documentDrafts','binaryCommand',
   'documentRuntimeObserve','documentRuntimeControl','documentRuntimeAckControl','documentRuntimeAckOutcome']);
 const durable = (name, ...args) => runDurable(false,name,args);
 const durableRequest = request => {
@@ -87,7 +87,7 @@ const runDurable = async (typed, name, args) => {
     return {notePlanning:true,schemaVersion:1,ok:false,error:{code:valid?reply.error.code:'invalid_planning_response',source:'host',commitUncertain:valid?reply.error.commitUncertain:true}};
   }
   if (!reply?.ok) {
-    const savedSource = name === 'durableInvoke' && ['captureSavedSource','releaseSavedSource'].includes(args[2]);
+    const savedSource = name === 'durableInvoke' && ['captureSavedSource','releaseSavedSource','listSavedSourceRequests'].includes(args[2]);
     const error = reply?.error;
     // Main redacts failures to this bounded shape. contextBridge preserves the
     // message but drops custom Error fields, so explain only a definitive guard

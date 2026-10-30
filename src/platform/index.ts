@@ -23,6 +23,8 @@ type AdapterReads=Required<Pick<VaultAdapter,'list'|'stat'|'read'|'readBinary'>>
 // consumers or bypassing any layer's release and generation checks.
 const adapterReadRunners=new WeakMap<VaultAdapter,(method:keyof AdapterReads,path:string|undefined,budget:ReadBudget)=>Promise<unknown>>();
 const noteReadRunners=new WeakMap<DurableWrites,(method:'readText'|'readTextById',key:string,budget:ReadBudget)=>Promise<DurableWriteRead|null>>();
+type SavedSourceMethod='captureSavedSource'|'releaseSavedSource'|'listSavedSourceRequests';
+const savedSourceRunners=new WeakMap<DurableWrites,(method:SavedSourceMethod,input:unknown,budget:ReadBudget)=>Promise<unknown>>();
 
 export interface PlatformVault {
   /** Recovery preserves retained durable write identities; derived owners are rebuilt. */
@@ -76,6 +78,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
   const transport=createDesktopDurableTransport(bridge);
   const binding = recoveredBinding??await transport.getDurableContext?.(info.path);
   const independentDrafts=binding&&Object.hasOwn(binding,'independentJournal')?createDesktopIndependentDraftProvider(bridge,info.path,binding.scope,binding.independentJournal):undefined;
+  if(binding?.conditionalSavedSourceAvailable===true&&!independentDrafts)throw Object.assign(new Error('Incomplete conditional saved-source request capability: an independent draft journal is required.'),{code:'unsupported_host_capability',source:'protocol',commitUncertain:false});
   let durableWrites: DurableWrites | undefined;
   let release: (() => Promise<void>) | undefined;
   let recovery:PlatformVault['recovery'];
@@ -235,7 +238,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
       trash:path=>execute({kind:'trash',path}),remove:(path,force)=>execute({kind:'delete',path,force}),
     };
     const originalWrites = Object.freeze<DurableWrites>({
-      ...createDesktopConditionalSavedSources(async(method,input)=>{const value=await call(method,input);if(released)throw Object.assign(new Error('Durable desktop context released'),{code:'client_not_admitted',source:'host'});return value;},binding.conditionalSavedSourceAvailable===true),
+      ...createDesktopConditionalSavedSources(async(method,input)=>{const value=await(method==='listSavedSourceRequests'?call(method):call(method,input));if(released)throw Object.assign(new Error('Durable desktop context released'),{code:'client_not_admitted',source:'host'});return value;},binding.conditionalSavedSourceAvailable===true),
       readText: path => call('readText',path), readTextById: id => call('readTextById',id),
       ...(binding.databases===true?{composeNote:(input:import('../core/durable-writes.ts').DurableNoteCompositionInput)=>call<import('../core/durable-writes.ts').DurableNoteComposition|null>('composeNote',input)}:{}),
       planWrite: async input => {const captured=snapshotDesktopNoteWriteInput(input);if(captured.conditionalSavedSource&&binding.conditionalSavedSourceAvailable!==true)return Promise.reject(Object.assign(new Error('Conditional saved-source capture is unavailable.'),{code:'unsupported_host_capability',source:'host',commitUncertain:false}));return call('planWrite',captured).then(reply=>decodeDesktopNotePlan(captured,scope,reply));}, prepare: plan => call('prepare',plan),
@@ -252,15 +255,23 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
       if(method==='readTextById'&&value!==null&&(!value||value.entryId!==key))throw Object.assign(new Error('The note read returned another entry identity.'),{code:'invalid_durable_response',source:'protocol',commitUncertain:false});
       return value;
     },false,budget);
+    // Caller-owned immutable request identities make these exact operations
+    // replayable after positive same-scope admission. Share the existing retry
+    // budget across replacement proxies, just like identity-bound note reads.
+    const savedSource=(method:SavedSourceMethod,input?:unknown,budget?:ReadBudget)=>readOnly(async shared=>{
+      const runner=savedSourceRunners.get(retainedTarget);
+      return runner?runner(method,input,shared):retainedCall(method,method==='listSavedSourceRequests'?[]:[input]);
+    },false,budget);
     durableWrites=Object.freeze<DurableWrites>({
       readText:path=>readNote('readText',path) as Promise<DurableWriteRead>,readTextById:id=>readNote('readTextById',id),
       ...(originalWrites.composeNote?{composeNote:(input:import('../core/durable-writes.ts').DurableNoteCompositionInput)=>retainedCall<import('../core/durable-writes.ts').DurableNoteComposition|null>('composeNote',[input])}:{}),
       planWrite:input=>retainedCall('planWrite',[input]),prepare:plan=>retainedCall('prepare',[plan]),commit:ref=>retainedCall('commit',[ref]),query:ref=>retainedCall('query',[ref]),
       listUnacknowledged:()=>retainedCall('listUnacknowledged',[]),acknowledge:(ref,outcome)=>retainedCall('acknowledge',[ref,outcome]),
-      captureSavedSource:input=>retainedCall('captureSavedSource',[input]),releaseSavedSource:input=>retainedCall('releaseSavedSource',[input]),
+      ...createDesktopConditionalSavedSources((method,input)=>savedSource(method,input),binding.conditionalSavedSourceAvailable===true),
       checkpoints:Object.freeze<DurableWrites['checkpoints']>({scope,load:key=>retainedCheckpoint('load',[key]),compareAndSwap:change=>retainedCheckpoint('compareAndSwap',[change]),list:options=>retainedCheckpoint('list',[options]),changes:options=>retainedCheckpoint('changes',[options])}),
     });
     noteReadRunners.set(durableWrites,readNote);
+    savedSourceRunners.set(durableWrites,savedSource);
     let binaryDrained=false,documentsDrained=false,draftsDrained=false;
     type EntryCommand=Extract<DatabaseRequest,{op:'set_entry'}>;
     type EntryCapsule={command:EntryCommand;fingerprint:string;attempt:number;claims:number;promise?:Promise<DatabaseResponse>;resolve?:(value:DatabaseResponse)=>void;reject?:(error:unknown)=>void;response?:DatabaseResponse;error?:unknown};

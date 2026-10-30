@@ -79,11 +79,20 @@ test('new renderer retains old bridge behavior and dynamic legacy recovery capab
 });
 
 test('conditional saved-source rejection keeps its bounded factual message only for its definitive guard',async()=>{
-  for(const method of ['captureSavedSource','releaseSavedSource','commit'])for(const commitUncertain of [false,true]){
+  for(const method of ['captureSavedSource','releaseSavedSource','listSavedSourceRequests','commit'])for(const commitUncertain of [false,true]){
     const f=preload(async()=>({ok:false,error:{code:'conditional_source_changed',commitUncertain}}));
     await assert.rejects(createDesktopDurableTransport(f.bridge).durableInvoke!('/vault','a',method,[{}]),error=>{
       assert.equal((error as any).code,'conditional_source_changed');
       assert.equal((error as Error).message.includes('file changed or was replaced'),method!=='commit'&&!commitUncertain);return true;
+    });
+  }
+});
+
+test('shared source-capture capacity crosses the real preload with host provenance and exact code',async()=>{
+  for(const method of ['captureSavedSource','releaseSavedSource','listSavedSourceRequests']){
+    const f=preload(async()=>({ok:false,error:{code:'source_capture_capacity',commitUncertain:false}}));
+    await assert.rejects(createDesktopDurableTransport(f.bridge).durableInvoke!('/vault','admission',method,[]),error=>{
+      assert.equal((error as any).code,'source_capture_capacity');assert.equal((error as any).source,'host');assert.equal((error as any).commitUncertain,false);return true;
     });
   }
 });
@@ -137,7 +146,7 @@ test('preload rejects unlisted routes and malformed request records before IPC',
 test('current admitted generic, checkpoint, document and binary methods are all routed',async()=>{
   const methods=['readText','readTextById','composeNote','planWrite','prepare','commit','query','listUnacknowledged','acknowledge',
     'checkpoints.load','checkpoints.compareAndSwap','checkpoints.list','checkpoints.changes','createText','createTextReceipt','fileCommand',
-    'captureSavedSource','releaseSavedSource','databaseCommand','workblockCommand','documentCommand','documentDrafts','binaryCommand',
+    'captureSavedSource','releaseSavedSource','listSavedSourceRequests','databaseCommand','workblockCommand','documentCommand','documentDrafts','binaryCommand',
     'documentRuntimeObserve','documentRuntimeControl','documentRuntimeAckControl','documentRuntimeAckOutcome'];
   const f=preload(async()=>({ok:true,result:'accepted'})),transport=createDesktopDurableTransport(f.bridge);
   for(const method of methods)await transport.durableInvoke!('/vault','a',method,[]);

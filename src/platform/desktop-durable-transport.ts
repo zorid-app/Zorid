@@ -17,7 +17,7 @@ function decode(value:unknown,request:DesktopDurableRequest){
     ||typeof detail.commitUncertain!=='boolean'||!['host','transport','protocol'].includes(detail.source as string))
     throw failure('invalid_durable_response',true,'protocol');
   const {code,commitUncertain,source}=detail;
-  const savedSource=request.kind==='invoke'&&['captureSavedSource','releaseSavedSource'].includes(request.method);
+  const savedSource=request.kind==='invoke'&&['captureSavedSource','releaseSavedSource','listSavedSourceRequests'].includes(request.method);
   throw failure(code,commitUncertain,source as string,savedSource&&source==='host'&&code==='conditional_source_changed'&&!commitUncertain
     ?'The file changed or was replaced. Your draft was kept; refresh before saving.':genericMessage);
 }
