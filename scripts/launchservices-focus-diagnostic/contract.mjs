@@ -19,5 +19,5 @@ export function authenticate(identity,expected,rows,wrapperPid){
 export function assertLifetime(owner,rows){const row=rows.find(row=>row.pid===owner.pid);assert.ok(row&&row.started===owner.started&&row.command===owner.command,'Owned app lifetime differs');return owner.pid;}
 export function cleanupVerdict({wrapper,final,remaining,forced,appPid}){
   const nativeNormal=!!final?.nativePids?.length&&final.nativePids.every(pid=>final.nativeExits?.some(exit=>exit.pid===pid&&exit.code===0&&exit.signal===null));
-  return {normalLifecycle:!forced&&wrapper?.code===0&&wrapper.signal===null&&final?.pid===appPid&&final.normalQuitObserved===true&&final.quitExitCode===0&&nativeNormal&&final.errors?.length===0&&Array.isArray(remaining)&&remaining.length===0,appKernelExitStatus:'unknown',nativeNormal};
+  return {normalLifecycle:!forced&&wrapper?.code===0&&wrapper.signal===null&&Number.isSafeInteger(appPid)&&appPid>1&&final?.pid===appPid&&final.normalQuitObserved===true&&final.quitExitCode===0&&nativeNormal&&final.errors?.length===0&&Array.isArray(remaining)&&remaining.length===0,appKernelExitStatus:'unknown',nativeNormal};
 }
