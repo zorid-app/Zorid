@@ -6,7 +6,7 @@ import type { DecorationSet } from '@codemirror/view';
 import { inlineBaseRequest } from '../bases/inline-base.ts';
 import type { InlineBaseRequest } from '../bases/inline-base.ts';
 import { bodyStart } from './live-properties.ts';
-import { intersectsRenderExclusion, renderExclusions } from './render-exclusions.ts';
+import { intersectsRenderExclusion, renderExclusions, sameRenderExclusions } from './render-exclusions.ts';
 import type { RenderExclusionOptions } from './render-exclusions.ts';
 import { icon } from '../ui/icons.ts';
 
@@ -47,13 +47,17 @@ export function liveBases(render: InlineBaseRenderer, options: RenderExclusionOp
     ignoreEvent(): boolean { return true; }
     destroy(dom: HTMLElement): void { owners.get(dom)?.(); owners.delete(dom); }
   }
-  function collect(state: EditorState, previous: readonly Span[], map: (position: number) => number): Span[] {
-    const source = state.doc.toString(), prefix = bodyStart(state), excluded = renderExclusions(state, options.excludes), spans: Span[] = [];
+  function collect(state: EditorState, previous: readonly Span[], map: (position: number) => number, excluded: ReturnType<typeof renderExclusions>): Span[] {
+    const prefix = bodyStart(state), spans: Span[] = [];
+    let source: string | undefined;
     syntaxTree(state).iterate({ enter(node) {
       if (node.name === 'FencedCode') {
         if (node.from < prefix || intersectsRenderExclusion(excluded, node.from, node.to)) return false;
+        const info = node.node.getChild('CodeInfo'), closing = node.node.lastChild;
+        if (!info || !/^[ \t]*base[ \t]*$/.test(state.sliceDoc(info.from, info.to))
+          || closing?.name !== 'CodeMark' || closing.from <= info.to) return false;
         const from = state.doc.lineAt(node.from).from;
-        const request = inlineBaseRequest(source, from, node.to);
+        const request = inlineBaseRequest(source ??= state.doc.toString(), from, node.to);
         if (request) {
           const retained = previous.find(({request:before}) => {
             if(map(before.from)!==from)return false;
@@ -78,13 +82,16 @@ export function liveBases(render: InlineBaseRenderer, options: RenderExclusionOp
   const decorations = (state: EditorState, spans: readonly Span[], focused: boolean): DecorationSet => Decoration.set(spans
     .filter(({ request }) => !focused || !state.selection.ranges.some(range => range.from <= request.to && range.to >= request.from))
     .map(span => Decoration.replace({ widget: new BaseWidget(span), block: true }).range(span.request.from, span.request.to)), true);
-  const field = StateField.define<{ spans: readonly Span[]; decorations: DecorationSet; focused: boolean }>({
-    create(state) { const spans = collect(state, [], value => value); return { spans, focused: false, decorations: decorations(state, spans, false) }; },
+  const field = StateField.define<{ spans: readonly Span[]; decorations: DecorationSet; focused: boolean; exclusions: ReturnType<typeof renderExclusions> }>({
+    create(state) { const exclusions = renderExclusions(state, options.excludes), spans = collect(state, [], value => value, exclusions); return { spans, exclusions, focused: false, decorations: decorations(state, spans, false) }; },
     update(value, transaction) {
-      const spans = collect(transaction.state, value.spans, position => transaction.changes.mapPos(position));
+      const exclusions = renderExclusions(transaction.state, options.excludes);
+      const changed = transaction.docChanged || syntaxTree(transaction.startState) !== syntaxTree(transaction.state)
+        || !sameRenderExclusions(value.exclusions, exclusions);
+      const spans = changed ? collect(transaction.state, value.spans, position => transaction.changes.mapPos(position), exclusions) : value.spans;
       let focused = value.focused;
       for (const effect of transaction.effects) if (effect.is(focus)) focused = effect.value;
-      return { spans, focused, decorations: decorations(transaction.state, spans, focused) };
+      return { spans, exclusions, focused, decorations: decorations(transaction.state, spans, focused) };
     },
     provide: value => EditorView.decorations.from(value, state => state.decorations),
   });
