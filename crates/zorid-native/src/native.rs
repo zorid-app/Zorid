@@ -42,6 +42,8 @@ mod external_scan;
 mod external_scan_progress;
 #[path = "external_scan_quantum.rs"]
 mod external_scan_quantum;
+#[path = "external_positive_continuation.rs"]
+mod external_positive_continuation;
 #[cfg(test)]
 #[path = "external_scan_progress_tests.rs"]
 mod external_scan_progress_tests;
@@ -102,6 +104,9 @@ pub struct NativeVault {
     recovery_queue: Option<local_recovery::MaintenanceCursor>,
     external_publication: Option<external_scan_quantum::PublicationCursor>,
     external_rebaseline: Option<external_namespace::RebaselineCursor>,
+    external_positive_seed: Option<external_positive_continuation::PositiveSeed>,
+    external_positive_armed: Option<external_positive_continuation::PositiveSeed>,
+    external_positive_hints: Option<external_positive_continuation::PositiveHints>,
     // Optional immutable Base data belongs to this vault handle, never to a
     // query pin, lease, transaction or source-write capability. Drop releases it.
     base_preparation_cache: std::cell::RefCell<zorid_bases::BasePreparationCache>,
@@ -159,6 +164,9 @@ impl NativeVault {
             recovery_queue: None,
             external_publication: None,
             external_rebaseline: None,
+            external_positive_seed: None,
+            external_positive_armed: None,
+            external_positive_hints: None,
             base_preparation_cache: std::cell::RefCell::new(
                 zorid_bases::BasePreparationCache::new(),
             ),
@@ -416,6 +424,9 @@ impl NativeVault {
     pub fn recover(&mut self) -> Result<ReconcileReport> {
         self.external_publication = None;
         self.external_rebaseline = None;
+        self.external_positive_seed = None;
+        self.external_positive_armed = None;
+        self.external_positive_hints = None;
         let _guard = self.paths.lock(self.options.lock_timeout)?;
         self.recover_locked()
     }
@@ -1078,6 +1089,8 @@ impl NativeVault {
             .store
             .mark_projection(&a.attempt_id, ProjectionPhase::Staged, Some(stage_id))?;
         self.point("staged");
+        let positive_continuation = backup.is_none() && dest.is_some()
+            && self.can_continue_after_own_publication(&a, &proof)?;
         if backup.is_none() && dest.is_some() {
             self.paths.verify_parent(&a.target.state.path, &parent)?;
             fs::rename_new(&parent, &name, &self.paths.private, &previous)?;
@@ -1157,6 +1170,9 @@ impl NativeVault {
         let _ = self.retire_settled_previous(&a.attempt_id);
         if changed {
             return Err(Error::Busy("published content externally edited; retained"));
+        }
+        if positive_continuation {
+            self.external_positive_armed = self.external_positive_seed.take();
         }
         Ok(())
     }

@@ -327,7 +327,10 @@ impl NativeVault {
     }
 }
 impl NativeVault {
-    fn reject_external_rebaseline(&mut self, mut cursor: RebaselineCursor) -> Result<RebaselineProgress> {
+    fn reject_external_rebaseline(
+        &mut self,
+        mut cursor: RebaselineCursor,
+    ) -> Result<RebaselineProgress> {
         cursor.phase = 5;
         self.external_rebaseline = Some(cursor);
         Ok(RebaselineProgress::NotEquivalent)
@@ -342,46 +345,112 @@ impl NativeVault {
         started: std::time::Instant,
         duration: std::time::Duration,
     ) -> Result<bool> {
-        if !scan.run.finished || !scan.run.complete || !scan.issues.is_empty() { return Ok(false); }
+        if !scan.run.finished || !scan.run.complete || !scan.issues.is_empty() {
+            return Ok(false);
+        }
         let bindings = self.store.physical_bindings()?;
-        if !bindings.iter().any(|binding| scan.entries.get(&binding.state.path).is_some_and(|entry|
-            entry.identity != binding.physical.inode || entry.parent_identity != binding.physical.parent_inode))
-        { return Ok(false); }
+        if !bindings.iter().any(|binding| {
+            scan.entries.get(&binding.state.path).is_some_and(|entry| {
+                entry.identity != binding.physical.inode
+                    || entry.parent_identity != binding.physical.parent_inode
+            })
+        }) {
+            return Ok(false);
+        }
         // Retained recovery occupants must remain tied to their original proofs.
         for attempt in self.store.projection_attempts(true)? {
             for suffix in ["stage", "previous"] {
-                if started.elapsed() >= duration || fs::node_type(&self.paths.private, &format!("{}.{suffix}", attempt.attempt_id.as_str()))?.is_some() { return Ok(false); }
+                if started.elapsed() >= duration
+                    || fs::node_type(
+                        &self.paths.private,
+                        &format!("{}.{suffix}", attempt.attempt_id.as_str()),
+                    )?
+                    .is_some()
+                {
+                    return Ok(false);
+                }
             }
         }
         for attempt in self.store.directory_attempts(true)? {
-            if started.elapsed() >= duration || fs::node_type(&self.paths.private, &format!("{}.directory", attempt.attempt_id.as_str()))?.is_some() { return Ok(false); }
+            if started.elapsed() >= duration
+                || fs::node_type(
+                    &self.paths.private,
+                    &format!("{}.directory", attempt.attempt_id.as_str()),
+                )?
+                .is_some()
+            {
+                return Ok(false);
+            }
         }
         for attempt in self.store.namespace_attempt_metadata(true)? {
             for member in attempt.members {
                 for suffix in ["namespace", "directory"] {
-                    if started.elapsed() >= duration || fs::node_type(&self.paths.private, &format!("{}.{}.{suffix}", attempt.job.job_id.as_str(), member.index))?.is_some() { return Ok(false); }
+                    if started.elapsed() >= duration
+                        || fs::node_type(
+                            &self.paths.private,
+                            &format!("{}.{}.{suffix}", attempt.job.job_id.as_str(), member.index),
+                        )?
+                        .is_some()
+                    {
+                        return Ok(false);
+                    }
                 }
             }
         }
-        let locations: std::collections::BTreeMap<_, _> = scan.entries.iter().map(|(path, entry)| (&entry.identity, path)).collect();
+        let locations: std::collections::BTreeMap<_, _> = scan
+            .entries
+            .iter()
+            .map(|(path, entry)| (&entry.identity, path))
+            .collect();
         let mut current = Vec::with_capacity(bindings.len());
         let mut seen = BTreeSet::new();
         for binding in &bindings {
-            if started.elapsed() >= duration { return Ok(false); }
-            let Some(entry) = scan.entries.get(&binding.state.path) else { return Ok(false); };
-            if entry.kind != binding.state.kind || !seen.insert(&entry.identity)
-                || locations.get(&binding.physical.inode).is_some_and(|path| **path != binding.state.path)
-                || self.store.read_metadata(&binding.state.id)?.is_none_or(|entry| entry.state != binding.state)
+            if started.elapsed() >= duration {
+                return Ok(false);
+            }
+            let Some(entry) = scan.entries.get(&binding.state.path) else {
+                return Ok(false);
+            };
+            if entry.kind != binding.state.kind
+                || !seen.insert(&entry.identity)
+                || locations
+                    .get(&binding.physical.inode)
+                    .is_some_and(|path| **path != binding.state.path)
+                || self
+                    .store
+                    .read_metadata(&binding.state.id)?
+                    .is_none_or(|entry| entry.state != binding.state)
                 || !scan.confirm_snapshot(self, &binding.state.path)?
-            { return Ok(false); }
+            {
+                return Ok(false);
+            }
             if entry.kind == EntryKind::File {
-                let Some(base) = self.store.projection_baseline(&binding.state.id)?.filter(|base| base.state == binding.state) else { return Ok(false); };
-                let Some(disk) = scan.file_snapshot(self, &binding.state.path)? else { return Ok(false); };
-                if !snapshot_matches_content(&disk, &base.content) { return Ok(false); }
-            } else if self.store.directory_baseline(&binding.state.id)?.is_none_or(|base|
-                base.state != binding.state || base.identity != binding.physical.inode)
-            { return Ok(false); }
-            current.push(PhysicalIdentity { inode: entry.identity.clone(), parent_inode: entry.parent_identity.clone() });
+                let Some(base) = self
+                    .store
+                    .projection_baseline(&binding.state.id)?
+                    .filter(|base| base.state == binding.state)
+                else {
+                    return Ok(false);
+                };
+                let Some(disk) = scan.file_snapshot(self, &binding.state.path)? else {
+                    return Ok(false);
+                };
+                if !snapshot_matches_content(&disk, &base.content) {
+                    return Ok(false);
+                }
+            } else if self
+                .store
+                .directory_baseline(&binding.state.id)?
+                .is_none_or(|base| {
+                    base.state != binding.state || base.identity != binding.physical.inode
+                })
+            {
+                return Ok(false);
+            }
+            current.push(PhysicalIdentity {
+                inode: entry.identity.clone(),
+                parent_inode: entry.parent_identity.clone(),
+            });
         }
         scan.revalidate(self)?;
         // Cursor retirement precedes the atomic Store writer. Even a stale CAS
@@ -390,10 +459,15 @@ impl NativeVault {
         scan.discard_for_rebaseline(self)?;
         self.point("equivalent_rebaseline_before_verify");
         for binding in &bindings {
-            if !scan.confirm_snapshot(self, &binding.state.path)? { return Err(Error::Busy("equivalent projection changed before rebaseline")); }
+            if !scan.confirm_snapshot(self, &binding.state.path)? {
+                return Err(Error::Busy(
+                    "equivalent projection changed before rebaseline",
+                ));
+            }
         }
         self.paths.verify()?;
-        self.store.rebaseline_idle_physical_bindings(&bindings, &current)?;
+        self.store
+            .rebaseline_idle_physical_bindings(&bindings, &current)?;
         Ok(true)
     }
 
@@ -424,6 +498,9 @@ impl NativeVault {
         options: ScanOptions,
         mode: ExternalFileMode,
     ) -> Result<ExternalReconcileReport> {
+        self.external_positive_seed = None;
+        self.external_positive_armed = None;
+        self.external_positive_hints = None;
         let _guard = self.paths.lock(self.options.lock_timeout)?;
         self.paths.verify()?;
         let enrolled = EnrolledScan::admit(self, &_guard)?;
@@ -443,6 +520,11 @@ impl NativeVault {
         let _guard = self.paths.lock(self.options.lock_timeout)?;
         self.paths.verify()?;
         let enrolled = EnrolledScan::admit(self, &_guard)?;
+        if let Some(continuation) =
+            self.continue_positive_hints(&options, mode, &enrolled, &mut budget)?
+        {
+            return Ok(continuation);
+        }
         let (mut reconciliation, mut scan) =
             self.reconcile_external_locked(options.scan, mode, &enrolled, Some(&mut budget))?;
         if !scan.active() {
@@ -484,7 +566,8 @@ impl NativeVault {
         let (done, publication) =
             self.recover_external_quantum_locked(&scan.run.scan_id, &mut budget)?;
         enrolled.finish(self)?;
-        reconciliation.complete = done && publication.blocked.is_empty() && reconciliation.issues.is_empty();
+        reconciliation.complete =
+            done && publication.blocked.is_empty() && reconciliation.issues.is_empty();
         let phase = if !done {
             ExternalWorkPhase::Publication
         } else if reconciliation.complete {
@@ -507,16 +590,105 @@ impl NativeVault {
     /// fresh point read with the complete saved baseline validation intact.
     fn validate_namespace_candidate(&self, expected: &PhysicalBinding) -> Result<PhysicalBinding> {
         self.paths.verify()?;
-        let current = self.store
+        let current = self
+            .store
             .physical_binding(&expected.state.id)?
             .ok_or(Error::Busy("external namespace binding disappeared"))?;
         if &current != expected {
-            return Err(Error::Busy("external namespace binding changed during planning"));
+            return Err(Error::Busy(
+                "external namespace binding changed during planning",
+            ));
         }
         self.paths.verify()?;
         Ok(current)
     }
 
+    /// Shared owner routing for independently verified positive facts. A hint
+    /// supplies no scan/namespace authority; source retention rechecks bytes.
+    pub(super) fn import_external_positive(
+        &mut self,
+        path: &VaultPath,
+        snapshot: &external_scan::ExternalSnapshot,
+        expected: Option<&crate::fs_stream::StreamSnapshot>,
+        mode: ExternalFileMode,
+        enrolled: &EnrolledScan<'_>,
+    ) -> Result<Option<CommitResult>> {
+        let owner = self.store.physical_owner_by_inode(&snapshot.identity)?;
+        if owner.as_ref().is_some_and(|b| b.state.path != *path) {
+            return Err(Error::Busy("external inode retains another physical path"));
+        }
+        let (parent, _) = self.paths.parent(path)?;
+        if let Some(owner) = owner {
+            let visible = self
+                .store
+                .read_path_metadata(path)?
+                .filter(|entry| entry.state.id == owner.state.id && entry.state.path == *path);
+            if visible.is_none() {
+                return Err(Error::Busy(
+                    "external physical branch retained for recovery",
+                ));
+            }
+            return if snapshot.kind == EntryKind::File {
+                let expected = expected.ok_or(Error::Busy("file snapshot missing"))?;
+                self.observe_streamed_file_with_scan(
+                    path,
+                    &parent,
+                    expected,
+                    &OperationId::new("native_external_observe")?,
+                    Some(enrolled),
+                )
+            } else {
+                Ok(None)
+            };
+        }
+        if let Some(parent_path) = path.parent() {
+            let valid_parent = if let Some(binding) = self.store.physical_owner_at(&parent_path)? {
+                binding.state.kind == EntryKind::Folder
+                    && binding.physical.inode == snapshot.parent_identity
+                    && self
+                        .store
+                        .read_path_metadata(&parent_path)?
+                        .is_some_and(|entry| {
+                            entry.state.id == binding.state.id && entry.state.path == parent_path
+                        })
+            } else {
+                false
+            };
+            if !valid_parent {
+                return Err(Error::Busy(
+                    "external parent has no matching visible physical owner",
+                ));
+            }
+        }
+        if snapshot.kind == EntryKind::Folder {
+            self.observe_new_family_directory(
+                path,
+                &parent,
+                &PhysicalIdentity {
+                    inode: snapshot.identity.clone(),
+                    parent_inode: snapshot.parent_identity.clone(),
+                },
+            )
+            .map(Some)
+        } else {
+            let expected = expected.ok_or(Error::Busy("file snapshot missing"))?;
+            let selected = external_create::select_external_file_mode_from_facts(
+                path,
+                expected.valid_utf8,
+                expected.has_nul,
+                mode,
+            )?;
+            self.observe_new_family_stream_with_scan(
+                path,
+                &parent,
+                expected,
+                selected,
+                &OperationId::new("native_external_create")?,
+                Some(enrolled),
+            )
+            .map(Some)
+        }
+    }
     fn reconcile_external_locked(
         &mut self,
         options: ScanOptions,
@@ -528,8 +700,6 @@ impl NativeVault {
         external_scan_progress::ProgressScan,
     )> {
         let namespace_origin = OperationId::new("native_external_namespace")?;
-        let observe_origin = OperationId::new("native_external_observe")?;
-        let create_origin = OperationId::new("native_external_create")?;
         let started = budget
             .as_ref()
             .map_or_else(std::time::Instant::now, |b| b.started());
@@ -546,7 +716,10 @@ impl NativeVault {
                         // retirement. Restart discovery, keeping this ordinary
                         // continuation pending rather than reporting a conflict.
                         if !scan.active() {
-                            scan = self.external_progress_scan_with_budget(options.clone(), Some(budget))?;
+                            scan = self.external_progress_scan_with_budget(
+                                options.clone(),
+                                Some(budget),
+                            )?;
                         }
                         self.paths.verify()?;
                         enrolled.finish(self)?;
@@ -1015,90 +1188,20 @@ impl NativeVault {
                 // actual source before any authored mutation.
                 let expected = if snapshot.kind == EntryKind::File {
                     self.point("external_positive_file_proof");
-                    Some(scan.file_snapshot(self, &path)?
-                        .ok_or(Error::Busy("external capture changed before enrollment"))?)
+                    Some(
+                        scan.file_snapshot(self, &path)?
+                            .ok_or(Error::Busy("external capture changed before enrollment"))?,
+                    )
                 } else {
                     if !scan.confirm_snapshot(self, &path)? {
                         return Err(Error::Busy("external capture changed before enrollment"));
                     }
                     None
                 };
-                if snapshot.kind == EntryKind::File { self.point("external_positive_snapshot_captured"); }
-                let owner = self.store.physical_owner_by_inode(&snapshot.identity)?;
-                if owner.as_ref().is_some_and(|b| b.state.path != path) {
-                    return Err(Error::Busy("external inode retains another physical path"));
+                if snapshot.kind == EntryKind::File {
+                    self.point("external_positive_snapshot_captured");
                 }
-                let (parent, _) = self.paths.parent(&path)?;
-                if let Some(owner) = owner {
-                    let visible = self.store.read_path_metadata(&path)?.filter(|entry| {
-                        entry.state.id == owner.state.id && entry.state.path == path
-                    });
-                    if visible.is_none() {
-                        return Err(Error::Busy(
-                            "external physical branch retained for recovery",
-                        ));
-                    }
-                    return if snapshot.kind == EntryKind::File {
-                        let expected = expected.as_ref().ok_or(Error::Busy("file snapshot missing"))?;
-                        self.observe_streamed_file_with_scan(
-                            &path,
-                            &parent,
-                            expected,
-                            &observe_origin,
-                            Some(&enrolled),
-                        )
-                    } else {
-                        Ok(None)
-                    };
-                }
-                if let Some(parent_path) = path.parent() {
-                    let valid_parent =
-                        if let Some(binding) = self.store.physical_owner_at(&parent_path)? {
-                            binding.state.kind == EntryKind::Folder
-                                && binding.physical.inode == snapshot.parent_identity
-                                && self.store.read_path_metadata(&parent_path)?.is_some_and(
-                                    |entry| {
-                                        entry.state.id == binding.state.id
-                                            && entry.state.path == parent_path
-                                    },
-                                )
-                        } else {
-                            false
-                        };
-                    if !valid_parent {
-                        return Err(Error::Busy(
-                            "external parent has no matching visible physical owner",
-                        ));
-                    }
-                }
-                if snapshot.kind == EntryKind::Folder {
-                    self.observe_new_family_directory(
-                        &path,
-                        &parent,
-                        &PhysicalIdentity {
-                            inode: snapshot.identity.clone(),
-                            parent_inode: snapshot.parent_identity.clone(),
-                        },
-                    )
-                    .map(Some)
-                } else {
-                    let expected = expected.as_ref().ok_or(Error::Busy("file snapshot missing"))?;
-                    let selected = external_create::select_external_file_mode_from_facts(
-                        &path,
-                        expected.valid_utf8,
-                        expected.has_nul,
-                        mode,
-                    )?;
-                    self.observe_new_family_stream_with_scan(
-                        &path,
-                        &parent,
-                        expected,
-                        selected,
-                        &create_origin,
-                        Some(&enrolled),
-                    )
-                    .map(Some)
-                }
+                self.import_external_positive(&path, snapshot, expected.as_ref(), mode, enrolled)
             })();
             match attempt {
                 Ok(Some(commit)) => report.imported.push(commit),
@@ -1130,6 +1233,7 @@ impl NativeVault {
             &processed.into_iter().collect::<Vec<_>>(),
             budget.is_some(),
         )?;
+        scan.refresh_positive_seed(self, mode)?;
         self.paths.verify()?;
         enrolled.finish(self)?;
         report.complete =

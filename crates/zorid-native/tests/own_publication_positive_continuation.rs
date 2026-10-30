@@ -56,6 +56,7 @@ fn fixture() -> (tempfile::TempDir, NativeVault, OperationId) {
         .unwrap();
     create(&mut vault, "own", "a-own.md");
     create(&mut vault, "missing", "b-missing.md");
+    create(&mut vault, "tracked", "c-tracked.md");
     fs::remove_file(root.path().join("b-missing.md")).unwrap();
     for index in 0..24 {
         fs::write(
@@ -164,6 +165,10 @@ fn own_saves_drain_finite_positive_hints_before_a_fresh_namespace_inventory() {
         assert!(next.pending, "{next:?}");
         assert_eq!(next.phase, ExternalWorkPhase::Discovery);
         assert!(!next.reconciliation.complete && !next.reconciliation.run.complete);
+        assert!(
+            next.reconciliation.issues.is_empty(),
+            "owned continuation stays quiet: {next:?}"
+        );
         assert!(next.reconciliation.namespace.is_empty() && next.publication.projected.is_empty());
         assert_fenced(root.path(), &old_scan);
         assert_eq!(proof(root.path(), &old_scan), immutable_proof);
@@ -242,4 +247,67 @@ fn unknown_root_mutation_before_own_publication_keeps_normal_invalidation() {
         .any(|issue| issue.reason.contains("root marker changed")));
     let fresh = turn(&mut vault);
     assert_ne!(fresh.reconciliation.run.scan_id, old_scan);
+}
+
+#[test]
+fn mixed_hint_pass_defers_external_add_move_and_replacement_to_fresh_inventory() {
+    for race in ["add", "move", "replace"] {
+        let (root, mut vault, old_scan) = fixture();
+        let held = tempfile::tempdir().unwrap();
+        let tracked = EntryId::new("tracked").unwrap();
+        let original = vault.read(&tracked).unwrap().unwrap();
+        save(&mut vault, 0);
+        match race {
+            "add" => fs::write(root.path().join("00-added.md"), b"new pre-cursor file\n").unwrap(),
+            "move" => fs::rename(
+                root.path().join("c-tracked.md"),
+                root.path().join("00-moved.md"),
+            )
+            .unwrap(),
+            "replace" => {
+                fs::rename(
+                    root.path().join("c-tracked.md"),
+                    held.path().join("retained.md"),
+                )
+                .unwrap();
+                fs::write(root.path().join("c-tracked.md"), b"initial saved body\n").unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let mut reached_tail = false;
+        let mut fresh = false;
+        for _ in 0..40 {
+            let next = turn(&mut vault);
+            if next.reconciliation.run.scan_id != old_scan {
+                assert!(
+                    reached_tail,
+                    "a mixed pass restarted source progress: {race}"
+                );
+                fresh = true;
+                break;
+            }
+            assert!(
+                next.pending && !next.reconciliation.complete,
+                "{race}: {next:?}"
+            );
+            assert!(next.reconciliation.namespace.is_empty());
+            assert!(next.publication.projected.is_empty());
+            assert_fenced(root.path(), &old_scan);
+            let retained = vault.read(&tracked).unwrap().unwrap();
+            assert_eq!(
+                retained.state, original.state,
+                "hint cannot move/rebind tracked state: {race}"
+            );
+            assert_eq!(
+                retained.content, original.content,
+                "hint cannot replace tracked bytes: {race}"
+            );
+            assert!(!listed(&vault, "00-added.md") && !listed(&vault, "00-moved.md"));
+            reached_tail |= listed(&vault, "z-last.md");
+        }
+        assert!(
+            fresh,
+            "finite mixed hints must hand off to fresh inventory: {race}"
+        );
+    }
 }

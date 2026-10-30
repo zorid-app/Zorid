@@ -16,8 +16,8 @@ use zorid_store::{
 };
 
 const MAX_INVENTORY: u32 = 100_000;
-type Marker = (u64, u64, i64, i64, i64, i64);
-fn marker(file: &File) -> Result<Marker> {
+pub(super) type Marker = (u64, u64, i64, i64, i64, i64);
+pub(super) fn marker(file: &File) -> Result<Marker> {
     let m = file.metadata()?;
     Ok((
         m.dev(),
@@ -275,6 +275,50 @@ pub(super) struct ProgressScan {
     active: bool,
 }
 impl ProgressScan {
+    pub(super) fn refresh_positive_seed(
+        &self,
+        vault: &mut NativeVault,
+        mode: ExternalFileMode,
+    ) -> Result<()> {
+        let Some(seed) = vault.external_positive_seed.as_mut() else {
+            return Ok(());
+        };
+        if !self.active
+            || self.run.finished
+            || self.inventory.ready
+            || self.inventory.publication_started
+            || self.inventory.absence_bindings.is_some()
+            || seed.scan_id != self.run.scan_id
+        {
+            vault.external_positive_seed = None;
+            return Ok(());
+        }
+        seed.revision = self.checkpoint_revision.clone();
+        seed.mode = mode;
+        seed.authority = Some(vault.store.identity()?);
+        seed.processed = self
+            .inventory
+            .processed
+            .iter()
+            .filter(|path| {
+                path.parent() == seed.scope()
+                    && matches!(
+                        self.proofs.get(*path),
+                        Some(ExternalScanProof::Present {
+                            entry_kind: EntryKind::File,
+                            ..
+                        })
+                    )
+            })
+            .cloned()
+            .collect();
+        seed.paths
+            .retain(|path| !self.inventory.processed.contains(path));
+        if seed.paths.is_empty() {
+            vault.external_positive_seed = None;
+        }
+        Ok(())
+    }
     /// A no-op must retain the old CAS's scope/revision/corruption fence without
     /// allocating another durable revision. This is a fresh checked read, never
     /// a cached admission. The caller still holds the outer native vault lock.
@@ -535,6 +579,44 @@ impl NativeVault {
                 .save_external_scan_progress(revision.as_deref(), inventory)?,
         );
         self.paths.verify()
+    }
+    /// This is only a scheduling handoff. Validate the exact old checkpoint
+    /// before retiring any namespace authority; never replace a foreign CAS.
+    pub(super) fn retire_inventory_for_positive_hints(
+        &mut self,
+        seed: &external_positive_continuation::PositiveSeed,
+    ) -> Result<Option<ScanRun>> {
+        let (mut revision, inventory) = self.store.external_scan_progress::<Inventory>()?;
+        let Some(inventory) = inventory else {
+            return Ok(None);
+        };
+        inventory.validate()?;
+        if revision != seed.revision
+            || inventory.scan_id != seed.scan_id
+            || inventory.ready
+            || inventory.publication_started
+            || inventory.absence_bindings.is_some()
+            || !inventory.authority_matches(self)?
+        {
+            return Ok(None);
+        }
+        let run = self.store.scan_run(&seed.scan_id)?;
+        if run.complete
+            || run.finished
+                && run.issue.as_deref()
+                    != Some("own publication requires a fresh namespace inventory")
+        {
+            return Ok(None);
+        }
+        let retired = self.store.finish_scan(
+            &seed.scan_id,
+            false,
+            Some("own publication requires a fresh namespace inventory".into()),
+        )?;
+        self.save_inventory(&mut revision, None)?;
+        self.external_publication = None;
+        self.external_rebaseline = None;
+        Ok(Some(retired))
     }
     fn progress_result(
         &self,
@@ -886,6 +968,42 @@ impl NativeVault {
                     }
                 };
             let mut directory_complete = true;
+            if budget.is_some() && names.len() <= external_positive_continuation::MAX_POSITIVE_HINTS
+            {
+                let ancestors = inventory
+                    .directories
+                    .iter()
+                    .filter(|directory| {
+                        directory.path.is_none()
+                            || saved.path.as_ref().is_some_and(|scope| {
+                                directory.path.as_ref().is_some_and(|parent| {
+                                    scope == parent
+                                        || scope
+                                            .as_str()
+                                            .starts_with(&format!("{}/", parent.as_str()))
+                                })
+                            })
+                    })
+                    .map(|directory| external_positive_continuation::HintDirectory {
+                        path: directory.path.clone(),
+                        identity: directory.identity.clone(),
+                        marker: directory.marker,
+                    })
+                    .collect();
+                let paths = names
+                    .iter()
+                    .map(|name| child_path(saved.path.as_ref(), name))
+                    .collect::<Result<Vec<_>>>();
+                self.external_positive_seed = paths.ok().and_then(|paths| {
+                    external_positive_continuation::PositiveSeed::new(
+                        inventory.scan_id.clone(),
+                        ancestors,
+                        paths,
+                    )
+                });
+            } else {
+                self.external_positive_seed = None;
+            }
             for name in names
                 .into_iter()
                 .filter(|name| saved.last_name.as_ref().is_none_or(|last| name > last))
