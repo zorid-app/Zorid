@@ -256,6 +256,82 @@ function successful(command, result, bytes, expectedBytes) {
   }
 }
 
+// Diagnostic-only companion to Main's opt-in chronology. Never retain raw
+// stderr, and never let an observer failure change transport admission/lifetime.
+function observeNativeStartup(child) {
+  if (process.env.ZORID_PROFILE_STARTUP !== '1') return null;
+  let stop;
+  try {
+    const spawnedAtMs = performance.now(), profile = globalThis.__zoridStartupProfile;
+    if (!object(profile) || profile.version !== 1 || !Number.isFinite(profile.timeOrigin) || profile.timeOrigin <= 0
+      || !Number.isFinite(profile.moduleEntryUptimeMs) || profile.moduleEntryUptimeMs < 0 || typeof profile.truncated !== 'boolean'
+      || !Array.isArray(profile.phases) || !profile.phases.length || profile.phases.length > 128
+      || profile.phases[0]?.phase !== 'module.entry'
+      || !profile.phases.every((row, index, rows) => object(row) && typeof row.phase === 'string' && row.phase.length <= 80
+        && /^[A-Za-z_]+(?:\.[A-Za-z_]+)*$/.test(row.phase) && Number.isFinite(row.atMs) && row.atMs >= 0
+        && (!index || row.atMs >= rows[index - 1].atMs))
+      || !Number.isSafeInteger(child.pid) || child.pid <= 0 || !child.stderr) return null;
+    if (profile.nativeEvents === undefined) profile.nativeEvents = [];
+    if (profile.nativeEventsTruncated === undefined) profile.nativeEventsTruncated = false;
+    const events = profile.nativeEvents;
+    if (!Array.isArray(events) || events.length > 128 || typeof profile.nativeEventsTruncated !== 'boolean') return null;
+    if (events.length === 128) { profile.nativeEventsTruncated = true; return null; }
+    // hostIndex is the index of this exact spawn row, not a host counter.
+    const hostIndex = events.length, pid = child.pid;
+    const append = (kind, extra = {}, atMs = performance.now()) => {
+      if (events.length >= 128) { profile.nativeEventsTruncated = true; return; }
+      events.push({ kind, hostIndex, pid, atMs, ...extra });
+    };
+    append('spawn', {}, spawnedAtMs);
+    let partial = Buffer.alloc(256), used = 0, dropping = false, examined = 0, stopped = false, failed = false;
+    let lastPhase = -1, lastElapsed = -1;
+    const phases = ['entry', 'vault_open', 'recovery_ready', 'document_cache_ready', 'sync_ready', 'reconciliation_yielded'];
+    stop = () => {
+      if (stopped) return;
+      stopped = true;
+      child.stderr.off('data', onData); child.stderr.off('end', stop); child.stderr.off('close', stop); child.off('close', stop);
+      partial.fill(0); partial = null; used = 0;
+    };
+    const onData = chunk => {
+      try {
+        // A noisy/malformed host cannot make profiling parse an unbounded log.
+        const count = Math.min(chunk.length, 16384 - examined);
+        for (let index = 0; index < count; index++) {
+          const byte = chunk[index];
+          if (byte === 10) {
+            if (!dropping) {
+              const match = /^zorid_startup phase=(entry|vault_open|recovery_ready|document_cache_ready|sync_ready|reconciliation_yielded) elapsed_ms=([0-9]{1,12}\.[0-9]{3})$/.exec(partial.toString('utf8', 0, used));
+              if (match) {
+                const phaseIndex = phases.indexOf(match[1]), elapsedMs = Number(match[2]);
+                // Native elapsed/order is checked only within stderr. Its pipe
+                // may deliver phases after stdout's already-validated hello.
+                if (phaseIndex > lastPhase && Number.isFinite(elapsedMs) && elapsedMs >= lastElapsed && elapsedMs <= 86400000) {
+                  append('native_phase', { phase: match[1], elapsedMs });
+                  lastPhase = phaseIndex; lastElapsed = elapsedMs;
+                }
+              }
+            }
+            used = 0; dropping = false;
+          } else if (!dropping) {
+            if (used === partial.length) { used = 0; dropping = true; }
+            else partial[used++] = byte;
+          }
+          if (events.length >= 128) { profile.nativeEventsTruncated = true; stop(); return; }
+        }
+        examined += count;
+        if (examined >= 16384) { profile.nativeEventsTruncated = true; stop(); }
+      } catch { failed = true; stop(); }
+    };
+    child.stderr.on('data', onData);
+    child.stderr.once('end', stop); child.stderr.once('close', stop); child.once('close', stop);
+    return { hello() {
+      if (failed) return;
+      try { append('hello'); if (events.length >= 128) { profile.nativeEventsTruncated = true; stop(); } }
+      catch { failed = true; stop(); }
+    } };
+  } catch { try { stop?.(); } catch {} return null; }
+}
+
 /** Private main-process transport, NOT yet the path-based VaultService adapter.
  * Every mutation comes from an explicit caller-owned durable operation intent.
  * No automatic new operation IDs, storage policy or raw filesystem writes.
@@ -297,6 +373,7 @@ class RustVaultService {
     // Only trusted main selects this protected fixture config. No framed RPC can change it.
     const args = ['--vault', root, ...(initializeLocal ? ['--initialize-local'] : []), ...(fixtureSyncConfig === undefined ? [] : ['--fixture-sync-config', fixtureSyncConfig])];
     this.child = spawn(executable, args, { stdio: ['pipe', 'pipe', 'pipe'], shell: false, windowsHide: true });
+    const startupObserver = observeNativeStartup(this.child);
     this.exit = new Promise(resolve => { this.resolveExit = resolve; });
     this.ready = this.expect('0').then(({ result, bytes }) => {
       if (bytes.length || result?.transport !== 'zorid-native-stdio' || result.max_header !== MAX_HEADER || result.max_body !== MAX_BODY
@@ -314,6 +391,7 @@ class RustVaultService {
       this.binaryLimits=result.capabilities.includes('binary_streams')?Object.freeze({...result.binary_limits}):undefined;
       this.reconciliation=result.reconciliation?structuredClone(result.reconciliation):null;
       this.capabilities = Object.freeze([...(result.capabilities ?? [])]);
+      startupObserver?.hello();
     });
     // The host deliberately redacts diagnostics. Do not forward even unexpected
     // stderr to renderer/logs, and keep draining so diagnostics cannot deadlock it.
