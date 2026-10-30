@@ -281,6 +281,7 @@ interface MountedView {
   captureRawDraft?():BaseTableRawDraft|undefined;
   restoreRawDraft?(draft:BaseTableRawDraft):'restored'|'pending'|'conflict';
   rawPropertyElement?(entryId:string,path:string,property:string):HTMLElement|undefined;
+  resumePropertyCompletion?(): void;
   completePropertyEdit?(element: HTMLElement, presentation: BasePropertyPresentation, intent: BasePropertyEditorCompletionIntent): void;
 }
 
@@ -468,6 +469,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       scheduled = undefined;
       if(!admissionRecovery)releaseUnownedCollectionAttempts();
       if (deferred && !pending.size && !activeDraft()) { deferred = undefined; render(controller.state); }
+      if(!closing&&!admissionRecovery)mounted?.resumePropertyCompletion?.();
       if (!closing && !admissionRecovery && editsWerePending && !editsPending()) { editsWerePending = false; try { options.onEditsSettled?.(); } catch (error) { report(error); } }
     }, 0);
   };
@@ -1339,7 +1341,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     // Toolbar rebases its own in-flight configuration without replacing row drafts.
     if (pending.size || activeDraft()) { deferred = state; return; }
     deferred = undefined;
-    if (mountedResult === result && mountedDefinitionsRevision === definitionsRevision && mountedWritable === writable) return;
+    if (mountedResult === result && mountedDefinitionsRevision === definitionsRevision && mountedWritable === writable) {mounted?.resumePropertyCompletion?.();return;}
     rememberWidgetResult(result, state.source);
     const acknowledgeWidget = (original: BasePropertyPresentation, savedValue?: import('./expression.ts').BaseExpressionValue): BasePropertyWidgetAcknowledgement | undefined => {
       const before = widgetResults.get(original.version), latest = controller.state.result;
@@ -1526,7 +1528,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         mountedType = result.view.type; mountedIndex = selectedIndex; mountedMove = moveEnabled; mountedWritable = writable;
       }
     } finally { renderingResult = undefined; }
-    mountedResult = result; mountedDefinitionsRevision = definitionsRevision; renderStatus(state);
+    mountedResult = result; mountedDefinitionsRevision = definitionsRevision; renderStatus(state);mounted?.resumePropertyCompletion?.();
   }
   const switchViewKey = (event: KeyboardEvent) => {
     if (event.defaultPrevented || event.isComposing || !event.shiftKey || !(event.metaKey || event.ctrlKey) || event.altKey || !['PageUp', 'PageDown'].includes(event.key)) return;

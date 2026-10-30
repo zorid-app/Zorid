@@ -373,3 +373,26 @@ test('a disconnected table owner cannot reopen its summary editor chooser portal
     assert.deepEqual(f.errors, []);
   } finally { await f.cleanup(); }
 });
+
+test('sequential keyboard cell edits retain focus through queued table paints and schema refresh',async()=>{
+  const f=await fixture(undefined,false,true);
+  try{
+    for(const value of [11,12,13,14,15]){
+      const cell=f.host.querySelector<HTMLElement>(`[data-property="${scoreKey}"][role="gridcell"]`)!;
+      if(value===11)cell.focus();else assert.equal(f.dom.window.document.activeElement,cell,'the next keyboard edit starts from the retained cell');
+      f.key(cell,'Enter');const input=cell.querySelector<HTMLInputElement>('input')!;assert.ok(input);input.value=String(value);
+      f.host.querySelector('.zorid-bases-table')!.dispatchEvent(new f.dom.window.Event('scroll'));
+      f.key(input,'Enter');await f.session.flush();await tick();
+      await f.paint();await f.paint();
+      const current=f.host.querySelector<HTMLElement>(`[data-property="${scoreKey}"][role="gridcell"]`)!;
+      assert.equal(f.member.values[scoreId],value);assert.equal(current.textContent,String(value));assert.equal(current.hasAttribute('data-base-editing'),false);
+      assert.equal(f.dom.window.document.activeElement,current,`acknowledged ${value} must retain its keyboard cell after two paints`);
+      const before=f.requests.filter(request=>request.op==='get').length;
+      await f.vault.create(`Outside${value}.md`,'external refresh');
+      await until(()=>f.requests.filter(request=>request.op==='get').length>before&&!f.session.state.updating&&!f.session.hasPendingChanges()&&f.host.querySelector(`[data-property="${scoreKey}"][role="gridcell"]`)?.getAttribute('aria-disabled')==='false');
+      await f.paint();await f.paint();
+      assert.equal(f.dom.window.document.activeElement,f.host.querySelector(`[data-property="${scoreKey}"][role="gridcell"]`),`later schema/query refresh after ${value} must preserve keyboard focus`);
+    }
+    assert.deepEqual(f.errors,[]);
+  }finally{await f.cleanup();}
+});

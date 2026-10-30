@@ -86,7 +86,7 @@ export interface BaseTableRawDraft {
   readonly state:{value:string;checked:boolean;focus:boolean;selectionStart:number|null;selectionEnd:number|null;selectionDirection:'forward'|'backward'|'none'|null};
   readonly ready:Promise<void>;
 }
-export interface BaseTableView { canCaptureRawDraft():boolean; captureRawDraft():BaseTableRawDraft|undefined; restoreRawDraft(draft:BaseTableRawDraft):'restored'|'pending'|'conflict'; rawPropertyElement(entryId:string,path:string,property:string):HTMLElement|undefined; editFileTitle(path: string, entryId: string): boolean; completePropertyEdit(element: HTMLElement, presentation: BasePropertyPresentation, intent: BasePropertyEditorCompletionIntent): void; openSummaryPicker(property: string, anchor: HTMLElement, groupIndex?: number | null): void; update(result: BaseQueryResult): void; refreshLayout(): void; hasActiveEdits(): boolean; hasQueuedConfiguration(): boolean; dismissCleanPanels(): void; destroy(): void }
+export interface BaseTableView { canCaptureRawDraft():boolean; captureRawDraft():BaseTableRawDraft|undefined; restoreRawDraft(draft:BaseTableRawDraft):'restored'|'pending'|'conflict'; rawPropertyElement(entryId:string,path:string,property:string):HTMLElement|undefined; editFileTitle(path: string, entryId: string): boolean; completePropertyEdit(element: HTMLElement, presentation: BasePropertyPresentation, intent: BasePropertyEditorCompletionIntent): void; resumePropertyCompletion(): void; openSummaryPicker(property: string, anchor: HTMLElement, groupIndex?: number | null): void; update(result: BaseQueryResult): void; refreshLayout(): void; hasActiveEdits(): boolean; hasQueuedConfiguration(): boolean; dismissCleanPanels(): void; destroy(): void }
 type Item = { row: BaseQueryRow; groupIndex: number; rowIndex: number; group?: never; summary?: never } | { group: number; row?: never; summary?: never } | { summary: number | null; row?: never; group?: never };
 type TableMenuEntry = { label: string; action?: () => void; disabled?: boolean; checked?: boolean; submenu?: readonly TableMenuEntry[] };
 type CellPoint = { group: number; row: number; column: number };
@@ -225,6 +225,37 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
   const cellOwners = new WeakMap<HTMLElement, CellOwner>();
   const editFocusEpochs = new WeakMap<HTMLElement, number>();
   let focusEpoch = 0;
+  let pendingCompletion: {owner:CellOwner;intent:BasePropertyEditorCompletionIntent;epoch:number;context:string;stop():void}|undefined;
+  function clearPendingCompletion() { const pending=pendingCompletion;pendingCompletion=undefined;pending?.stop(); }
+  const completionContext=()=>JSON.stringify([options.getConfigurationIdentity?.(),result.view.id,result.view.name,result.view.type,baseViewSource(result.view)]);
+  function deferPropertyCompletion(owner:CellOwner,intent:BasePropertyEditorCompletionIntent) {
+    clearPendingCompletion();
+    const sameCell=(target:EventTarget|null)=>{
+      const cell=(target as Element|null)?.closest?.<HTMLElement>('[role="gridcell"][data-path]'),current=cell&&cellOwners.get(cell);
+      return !!current&&current.scope===owner.scope&&current.property===owner.property&&(owner.entryId?current.entryId===owner.entryId:current.path===owner.path&&current.version===owner.version);
+    };
+    const focus=(event:FocusEvent)=>{if(!sameCell(event.target))clearPendingCompletion();};
+    const pointer=(event:PointerEvent)=>{const target=event.target as Node|null,owner=target?basePropertyPopoverOwner(target):undefined;if(!sameCell(target)&&!sameCell(owner??null))clearPendingCompletion();};
+    const navigate=(event:KeyboardEvent)=>{if(!['Shift','Control','Alt','Meta'].includes(event.key))clearPendingCompletion();};
+    const leave=()=>clearPendingCompletion();
+    const visibility=()=>{if(doc.hidden)clearPendingCompletion();};
+    const stop=()=>{doc.removeEventListener('focusin',focus,true);doc.removeEventListener('pointerdown',pointer,true);doc.removeEventListener('keydown',navigate,true);doc.removeEventListener('visibilitychange',visibility);win?.removeEventListener('blur',leave);};
+    pendingCompletion={owner:{...owner},intent,epoch:focusEpoch,context:completionContext(),stop};
+    doc.addEventListener('focusin',focus,true);doc.addEventListener('pointerdown',pointer,true);doc.addEventListener('keydown',navigate,true);doc.addEventListener('visibilitychange',visibility);win?.addEventListener('blur',leave);
+  }
+  function resumePropertyCompletion() {
+    const pending=pendingCompletion;if(!pending)return;
+    const {owner,intent,epoch}=pending,item=currentOwner(owner);
+    if(destroyed||!root.isConnected||doc.hidden||epoch!==focusEpoch||pending.context!==completionContext()||!item?.row){clearPendingCompletion();return;}
+    const active=doc.activeElement,cell=(active as Element|null)?.closest?.<HTMLElement>('[role="gridcell"][data-path]'),activeOwner=cell&&cellOwners.get(cell);
+    if(active&&active!==doc.body&&active!==doc.documentElement&&(!activeOwner||activeOwner.scope!==owner.scope||activeOwner.property!==owner.property||(owner.entryId?activeOwner.entryId!==owner.entryId:activeOwner.path!==owner.path))){clearPendingCompletion();return;}
+    if(propertyAdmissionBlocked()||hasActiveEdits())return;
+    clearPendingCompletion();
+    if(blockedActivation&&replayBlockedActivation())return;
+    const point={group:item.groupIndex,row:item.rowIndex,column:result.properties.indexOf(owner.property)};
+    if(intent.reason==='tab')moveAfterTab(point,intent.direction);
+    else{range=undefined;anchor=undefined;focusCell(item.row.path,owner.property,point);paintRange();}
+  }
   let blockedActivation: { cell: HTMLElement; event: MouseEvent; open: boolean; title: boolean; checkbox: boolean } | undefined;
   const collapsed = new Set<string>();
   let collapsedContext: ReturnType<typeof collapseContext> | undefined;
@@ -576,10 +607,14 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     if (item?.row) { range = undefined; anchor = undefined; focusCell(item.row.path, result.properties[column], { group: item.groupIndex, row: item.rowIndex, column }); paintRange(); }
   }
   function replayBlockedActivation(): boolean {
-    const blocked = blockedActivation; blockedActivation = undefined;
+    const blocked = blockedActivation;
     if (!blocked) return false;
     const owner = cellOwners.get(blocked.cell), item = owner && currentOwner(owner);
-    if (!owner || !item?.row || propertyAdmissionBlocked() || hasActiveEdits()) return false;
+    if (!owner || !item?.row) { blockedActivation=undefined;return false; }
+    // A still-blocked acknowledgement cannot consume the user's original click.
+    // The pending completion resumes this exact destination after admission.
+    if (propertyAdmissionBlocked() || hasActiveEdits()) return false;
+    blockedActivation = undefined;
     const point = { group: item.groupIndex, row: item.rowIndex, column: result.properties.indexOf(owner.property) };
     if (!blocked.event.shiftKey || blocked.event.metaKey || blocked.event.ctrlKey) { range = undefined; anchor = undefined; focusCell(item.row.path, owner.property, point); paintRange(); }
     const cell = [...body.querySelectorAll<HTMLElement>('[role="gridcell"][data-path]')].find(cell => cell.dataset.group === String(point.group) && cell.dataset.row === String(point.row) && cell.dataset.column === String(point.column));
@@ -590,7 +625,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
   }
   function completePropertyEdit(element: HTMLElement, presentation: BasePropertyPresentation, intent: BasePropertyEditorCompletionIntent) {
     const owner = cellOwners.get(element);
-    if (!owner || owner.property !== presentation.property || owner.entryId && owner.entryId !== presentation.row.entryId || editFocusEpochs.get(element) !== focusEpoch || propertyAdmissionBlocked() || hasActiveEdits()) return;
+    if (!owner || owner.property !== presentation.property || owner.entryId && owner.entryId !== presentation.row.entryId || editFocusEpochs.get(element) !== focusEpoch) return;
     const item = currentOwner(owner);
     if (!item?.row) return;
     const active = doc.activeElement;
@@ -598,6 +633,8 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     if (blockedActivation && replayBlockedActivation()) return;
     if (intent.reason === 'pointer') return; // The browser's original click still owns a click that was not blocked.
     if (active && active !== doc.body && active !== doc.documentElement && active !== element && !element.contains(active)) return;
+    if(propertyAdmissionBlocked()||hasActiveEdits()){deferPropertyCompletion(owner,intent);return;}
+    clearPendingCompletion();
     const point = { group: item.groupIndex, row: item.rowIndex, column: result.properties.indexOf(owner.property) };
     if (intent.reason === 'tab') moveAfterTab(point, intent.direction);
     else { range = undefined; anchor = undefined; focusCell(item.row.path, owner.property, point); paintRange(); }
@@ -1298,7 +1335,8 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
   const resize = win && 'ResizeObserver' in win ? new win.ResizeObserver(() => { dimensions(); rebuildItems(); schedule(); }) : undefined;
   resize?.observe(root);
   function update(next: BaseQueryResult) {
-    if (destroyed || (initialized && next === result)) return;
+    if (destroyed) return;
+    if(initialized&&next===result){resumePropertyCompletion();return;}
     const selectedEntryId = selection && result.rows.find(row => row.path === selection!.path)?.entryId;
     const entryId = options.getConfigurationIdentity?.();
     const nextCollapseContext = collapseContext(next, entryId);
@@ -1346,9 +1384,10 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     if (!result.rows.length) status.textContent += `${status.textContent ? ' ' : ''}No results`;
     if (configurationConflict) reportConfigurationConflict();
     scheduleResizeCommands();
+    resumePropertyCompletion();
   }
   update(result);
-  return { canCaptureRawDraft:()=>rawEditor?.canCapture()===true,captureRawDraft:()=>rawEditor?.capture(),restoreRawDraft,rawPropertyElement,editFileTitle, completePropertyEdit, openSummaryPicker(property, anchor, groupIndex = null) {
+  return { canCaptureRawDraft:()=>rawEditor?.canCapture()===true,captureRawDraft:()=>rawEditor?.capture(),restoreRawDraft,rawPropertyElement,editFileTitle, completePropertyEdit, resumePropertyCompletion, openSummaryPicker(property, anchor, groupIndex = null) {
     if (destroyed || !root.isConnected || !result.properties.includes(property)) return;
     const origin = summaryOrigins.get(anchor);
     if (!origin || origin.property !== property || origin.scope !== configurationScope || origin.overall !== (groupIndex === null)) return;
@@ -1360,5 +1399,5 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     // still invalidate its picker by revision; group anchors remain virtual.
     const target = groupIndex === null ? headerCell : anchor.isConnected && root.contains(anchor) ? anchor : replacement ?? headerCell;
     if (target) showSummaryPicker(property, target, groupIndex);
-  }, update, dismissCleanPanels() { closeMenu?.(); closePicker?.(); }, refreshLayout() { if (!destroyed) { dimensions(); rebuildItems(); renderRows(); } }, hasActiveEdits, hasQueuedConfiguration: () => !destroyed && !!resizeCommands.length, destroy() { if (destroyed) return; destroyed = true; stopRename?.(); resizeCommands.length = 0; awaitingConfigurationResult = undefined; revision++; stopDrag?.(); stopResize?.(); closeMenu?.(); closePicker?.(); draggedColumn = undefined; editObserver?.disconnect(); for (const cell of [...widgetDisposers.keys()]) releaseCell(cell); root.removeEventListener('click', protectRangeClick, true); root.removeEventListener('dblclick', protectRangeClick, true); root.removeEventListener('keydown', protectRangeKey, true); root.removeEventListener('paste', onPaste); root.removeEventListener('keydown', onHistory); root.removeEventListener('copy', onCopy); root.removeEventListener('pointerdown', onPointerDown); root.removeEventListener('focusin', onEditFocus); doc.removeEventListener('pointerdown', onDocumentPointerDown, true); win?.removeEventListener('blur', onWindowBlur); blockedActivation = undefined; editing = undefined; if (frame !== undefined) win?.cancelAnimationFrame(frame); resize?.disconnect(); root.removeEventListener('scroll', schedule); root.remove(); status.remove(); } };
+  }, update, dismissCleanPanels() { closeMenu?.(); closePicker?.(); }, refreshLayout() { if (!destroyed) { dimensions(); rebuildItems(); renderRows(); } }, hasActiveEdits, hasQueuedConfiguration: () => !destroyed && !!resizeCommands.length, destroy() { if (destroyed) return; clearPendingCompletion(); destroyed = true; stopRename?.(); resizeCommands.length = 0; awaitingConfigurationResult = undefined; revision++; stopDrag?.(); stopResize?.(); closeMenu?.(); closePicker?.(); draggedColumn = undefined; editObserver?.disconnect(); for (const cell of [...widgetDisposers.keys()]) releaseCell(cell); root.removeEventListener('click', protectRangeClick, true); root.removeEventListener('dblclick', protectRangeClick, true); root.removeEventListener('keydown', protectRangeKey, true); root.removeEventListener('paste', onPaste); root.removeEventListener('keydown', onHistory); root.removeEventListener('copy', onCopy); root.removeEventListener('pointerdown', onPointerDown); root.removeEventListener('focusin', onEditFocus); doc.removeEventListener('pointerdown', onDocumentPointerDown, true); win?.removeEventListener('blur', onWindowBlur); blockedActivation = undefined; editing = undefined; if (frame !== undefined) win?.cancelAnimationFrame(frame); resize?.disconnect(); root.removeEventListener('scroll', schedule); root.remove(); status.remove(); } };
 }

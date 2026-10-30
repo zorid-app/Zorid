@@ -174,3 +174,55 @@ test('trailing add-property control is outside data columns and invokes only the
     f.view.update({ ...f.result, version: 2 }); add.click(); assert.equal(calls.length, 1);
   } finally { f.close(); }
 });
+
+for(const [key,shift,expected] of [['Enter',false,'note.text'],['Tab',false,'note.next'],['Tab',true,'file.name']] as const)test(`accepted ${shift?'Shift+':''}${key} waits for current admission before restoring its owned keyboard target`,async()=>{
+  let admitted=true,baseIdentity='base-entry';const f=fixture({canBeginPropertyEdit:()=>admitted,getConfigurationIdentity:()=>baseIdentity});
+  try{
+    f.cell('note.text').click();const input=f.cell('note.text').querySelector<HTMLInputElement>('input')!;input.value='Changed';f.key(input,key,shift);admitted=false;f.release();await tick();
+    assert.equal(f.doc.activeElement,f.doc.body,'the completed input was removed while query admission is pending');
+    admitted=true;const rows=f.rows.map((row,index)=>index?row:{...row,revision:'r2',values:{...row.values,'note.text':{type:'string' as const,value:'Changed'}}});
+    f.view.update({...f.result,version:2,rows,groups:[{key:null,rows}]});await tick();
+    assert.equal((f.doc.activeElement as HTMLElement).dataset.property,expected,'accepted key intent survives the current-result handoff');
+    assert.equal((f.doc.activeElement as HTMLElement).dataset.path,'One.md');
+  }finally{f.close();}
+});
+
+for(const change of ['outside-focus','dialog-then-body','outside-pointer','navigation','window-blur','other-cell','new-view','new-view-id','new-source','hidden','replacement-base','replacement-actor','removed-row','removed-property','destroy'] as const)test(`a deferred accepted keyboard completion cannot reclaim focus after ${change}`,async()=>{
+  let admitted=true,baseIdentity='base-entry';const f=fixture({canBeginPropertyEdit:()=>admitted,getConfigurationIdentity:()=>baseIdentity});
+  try{
+    f.cell('note.text').click();const input=f.cell('note.text').querySelector<HTMLInputElement>('input')!;input.value='Changed';f.key(input,'Enter');admitted=false;f.release();await tick();
+    assert.equal(f.doc.activeElement,f.doc.body);
+    const outside=f.doc.querySelector<HTMLElement>('#outside')!;
+    if(change==='outside-focus')outside.focus();
+    if(change==='dialog-then-body'){const dialog=f.doc.createElement('div');dialog.tabIndex=-1;dialog.setAttribute('role','dialog');f.doc.body.append(dialog);dialog.focus();dialog.remove();assert.equal(f.doc.activeElement,f.doc.body);}
+    if(change==='outside-pointer')outside.dispatchEvent(new f.dom.window.MouseEvent('pointerdown',{bubbles:true}));
+    if(change==='navigation')f.key(f.doc.body,'Tab');
+    if(change==='window-blur')f.dom.window.dispatchEvent(new f.dom.window.Event('blur'));
+    if(change==='hidden'){Object.defineProperty(f.doc,'hidden',{value:true,configurable:true});f.doc.dispatchEvent(new f.dom.window.Event('visibilitychange'));Object.defineProperty(f.doc,'hidden',{value:false,configurable:true});}
+    if(change==='replacement-base'){baseIdentity='replacement-base';f.view.resumePropertyCompletion();}
+    if(change==='other-cell')f.cell('note.next').focus();
+    if(change==='destroy'){f.view.destroy();admitted=true;f.view.resumePropertyCompletion();assert.equal(f.doc.activeElement,f.doc.body);return;}
+    admitted=true;
+    let rows=f.rows.map((row,index)=>index?row:{...row,revision:'r2',values:{...row.values,'note.text':{type:'string' as const,value:'Changed'}}});
+    if(change==='replacement-actor')rows=rows.map((row,index)=>index?row:{...row,entryId:'replacement-entry'});
+    if(change==='removed-row')rows=rows.slice(1);
+    const next={...f.result,version:2,rows,groups:[{key:null,rows}],...(change==='new-view'?{view:{...f.result.view,name:'Another view'}}:{}),...(change==='new-view-id'?{view:{...f.result.view,id:'abcdefghijkl'}}:{}),...(change==='new-source'?{view:{...f.result.view,source:{kind:'collection',id:'abcdefghijkl'}}}:{}),...(change==='removed-property'?{properties:f.result.properties.filter(property=>property!=='note.text')}:{})};
+    f.view.update(next);await tick();f.view.resumePropertyCompletion();
+    assert.notEqual((f.doc.activeElement as HTMLElement)?.dataset.property,'note.text',change);
+    if(change==='outside-focus')assert.equal(f.doc.activeElement,outside);
+  }finally{f.close();}
+});
+
+test('a cell click captured before accepted Enter survives the still-blocked completion handoff',async()=>{
+  let admitted=true;const f=fixture({canBeginPropertyEdit:()=>admitted});
+  try{
+    f.cell('note.text').click();const input=f.cell('note.text').querySelector<HTMLInputElement>('input')!;input.value='Changed';f.key(input,'Enter');
+    f.pointerClick(f.cell('note.next'));admitted=false;f.release();await tick();
+    assert.equal(f.doc.activeElement,f.doc.body);
+    admitted=true;const rows=f.rows.map((row,index)=>index?row:{...row,revision:'r2',values:{...row.values,'note.text':{type:'string' as const,value:'Changed'}}});
+    f.view.update({...f.result,version:2,rows,groups:[{key:null,rows}]});await tick();
+    const destination=f.cell('note.next'),nextInput=destination.querySelector<HTMLInputElement>('input');
+    assert.ok(nextInput,'the original blocked destination click must remain actionable');assert.equal(f.doc.activeElement,nextInput);
+    assert.equal(f.writes.length,1,'replaying the user destination does not resubmit the accepted source');
+  }finally{f.close();}
+});
