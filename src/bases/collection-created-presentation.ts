@@ -93,7 +93,7 @@ function receiptIdentity(entry:DatabaseEntry):string {
  * changes a receipt, or searches for a similar Base, view, path or occurrence. */
 export function createCollectionCreatedPresentation(capture:CollectionCreatedPresentationCapture):CollectionCreatedPresentation {
   const original=guard(capture),requested=data(capture)&&data(capture.requested)?capture.requested:undefined;
-  if(!original||!requested||!['entryId','path','collectionId'].every(key=>text(requested[key])))throw new Error('The original created-entry presentation identity is incomplete.');
+  if(!original||!requested||!(['entryId','path','collectionId'] as const).every(key=>text(requested[key])))throw new Error('The original created-entry presentation identity is incomplete.');
   const target=Object.freeze({entryId:requested.entryId,path:requested.path,collectionId:requested.collectionId});
   let frozen=false,cancelled=false,entry:DatabaseEntry|undefined,identity:string|undefined;
   return{
