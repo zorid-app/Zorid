@@ -212,3 +212,17 @@ test('close metadata is primitive typed and digest validated before entering gen
     assert.equal(registry.observe(initial).generations[0].closeObservations.length,0,'Malformed metadata never commits into evidence');
   }
 });
+
+
+test('command mismatch preserves the exact process row without inferring exit from its name',()=>{
+  const args=input.events[0].args,relay=[input.identity.executable,...input.identity.args,...args].join(' '),native=[input.native,...args].join(' ');
+  const launched=relayProcessOwnership({...input,rows:[{pid:11,parent:10,state:'S',command:relay},{pid:12,parent:11,state:'S',command:native}],requireLineage:true});
+  for(const state of ['S','SE','?',undefined]){
+    const row={pid:12,parent:11,state,command:'(zorid-desktop-ho)'};
+    assert.throws(()=>relayProcessOwnership({...input,rows:[row],previouslyOwned:launched}),error=>{
+      assert.equal(error.code,'ERR_ASSERTION');
+      assert.ok(error.message.includes('Exact owned process command; observed row '+JSON.stringify({...row,state:state??null})));
+      return true;
+    });
+  }
+});

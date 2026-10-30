@@ -38,7 +38,7 @@ export function relayProcessOwnership({events,rows,native,vault,identity,appPid,
       assert.ok(prior,'Exited-not-reaped process requires exact prior launch authentication');
       owned.exitedNotReaped={state:live.state,parent:live.parent,command:live.command};
     }else{
-      assert.equal(live.command,owned.command,'Exact owned process command');
+      assert.equal(live.command,owned.command,`Exact owned process command; observed row ${JSON.stringify({pid:live.pid,parent:live.parent,state:live.state??null,command:live.command})}`);
       if(requireLineage){assert.equal(live.parent,owned.parent,'Actual app → relay → genuine-native lineage');owned.authenticatedAtLaunch=true;}
     }
     owned.observedParent=live.parent;owned.observedState=live.state;
