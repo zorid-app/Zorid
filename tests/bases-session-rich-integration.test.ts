@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 import { parse } from 'yaml';
 import { MemoryAdapter, Vault } from '../src/core/index.ts';
+import type {DatabaseService,DatabaseCollection} from '../src/core/databases.ts';
 import type { DocumentBaseResult, DocumentService, DocumentBaseValue } from '../src/core/document-semantics.ts';
 import { NoteBuffer } from '../src/ui/note-buffer.ts';
 import { BaseDocument } from '../src/bases/document.ts';
@@ -13,18 +14,21 @@ import type { BaseExpressionValue } from '../src/bases/expression.ts';
 const tick = () => new Promise<void>(resolve => setTimeout(resolve, 8));
 async function until(check: () => boolean | Promise<boolean>) { for (let i = 0; i < 100; i++) { if (await check()) return; await tick(); } assert.ok(await check()); }
 class Adapter extends MemoryAdapter {
-  documentSemantics?: DocumentService;
+  documentSemantics?: DocumentService;databases?:DatabaseService;
   revisions = new Map<string, number>();
-  fail = false;
+  fail = false;attempts=0;
   identify<T extends { path: string }>(row: T) { return { ...row, entryId: row.path, revision: `r${this.revisions.get(row.path) ?? 1}` }; }
   override async list() { return (await super.list()).map(row => this.identify(row)); }
   override async stat(path: string) { const row = await super.stat(path); return row && this.identify(row); }
-  override async write(path: string, text: string) { if (this.fail && path === 'Work.base') throw new Error('Summary disk unavailable'); await super.write(path, text); this.revisions.set(path, (this.revisions.get(path) ?? 1) + 1); }
+  override async write(path: string, text: string) { if(path==='Work.base')this.attempts++;if (this.fail && path === 'Work.base') throw new Error('Summary disk unavailable'); await super.write(path, text); this.revisions.set(path, (this.revisions.get(path) ?? 1) + 1); }
 }
 const snapshot = { localStoreId: 'store', generationEpoch: 'epoch', generation: '1', versions: { schema: 1, extraction: 'md1', resolver: 'r1', query: 'q1' } }, source = { localStoreId: 'store', watermark: '1' };
 const summaryBase = 'views:\n  - type: table\n    name: Table\n    order: [file.name, score, projects]\n    summaries: {score: Sum}\n  - type: cards\n    name: Cards\n    summaries: {score: Sum}\n';
-async function fixture(base = summaryBase, omitRaw = false, controlPaint = false) {
+async function fixture(base = summaryBase, omitRaw = false, controlPaint = false,collectionSummary=false) {
+  if(collectionSummary){const document=BaseDocument.parse(base);document.updateView(0,{id:'aaaaaaaaaaaa',source:{kind:'collection',id:'abcdefghijkl'},order:['file.name','scorevalueid'],summaries:{scorevalueid:'Sum'}});base=document.toString();}
   const adapter = new Adapter({ 'Work.base': base, 'One.md': '---\nscore: 10\nprojects: ["[[Projects/A|My alias]]", "[[Unknown|Keep me]]"]\n---\nBody', 'Properties.yaml': 'properties:\n  projects:\n    type: relation\n    relation: {multiple: true}\n' });
+  if(collectionSummary){const collection:DatabaseCollection={id:'abcdefghijkl',name:'Summary fixture',revision:'schema-r1',deleted:false,properties:[{id:'scorevalueid',name:'Score',datatype:'number',options:[]}]};adapter.databases={async request(command){assert.equal(command.op,'get');return{collections:[collection],entries:[{entryId:'One.md',collectionId:collection.id,revision:'member-r1',fileRevision:'r1',path:'One.md',values:{scorevalueid:10},deleted:false,pendingProjection:false}],projection:{pending:0,issues:[]}};}} as DatabaseService;}
+  const scoreKey=collectionSummary?'note.scorevalueid':'note.score';
   let dropGroups = false;
   const definition = async () => { const row = (await adapter.stat('Work.base'))!; return { id: row.entryId, revision: row.revision, path: row.path, kind: 'file' as const, deleted: false }; };
   const unused = async (): Promise<never> => { throw new Error('Unexpected core operation'); };
@@ -41,8 +45,8 @@ async function fixture(base = summaryBase, omitRaw = false, controlPaint = false
         const identity = (await adapter.stat('One.md'))!;
         const projects: DocumentBaseValue = { type: 'list', value: raw.projects.map(() => ({ type: 'link', path: 'Projects/A', display: 'Rendered label', external: false })) };
         const selections = (view.summaries ?? {}) as Record<string, string>;
-        const result: DocumentBaseResult = { snapshotId: snapshot, view, rows: [{ entryId: identity.entryId, revision: identity.revision, path: 'One.md', values: { 'file.name': { type: 'string', value: 'One' }, 'note.score': { type: 'number', value: 10 }, 'note.projects': projects }, ...(!omitRaw ? { editValues: { 'note.projects': { type: 'list', value: raw.projects.map(value => ({ type: 'string' as const, value })) } } } : {}) }],
-          groups: view.groupBy && !dropGroups ? [{ key:{type:'number',value:10},keyId:'ten',entryIds:['One.md'],summaries:{'note.score':{type:'number',value:10}} },{key:{type:'number',value:20},keyId:'twenty',entryIds:[],summaries:{'note.score':{type:'number',value:0}}}] : [{ key: null, keyId: null, entryIds: ['One.md'] }], groupOptions: [], properties: ['file.name', 'note.score', 'note.projects'], availableProperties: ['file.name', 'note.score', 'note.projects'], counts: { scanned: 1, matched: 1, afterGroupOrder: 1, afterSearch: 1, returned: 1 }, diagnostics: [], relationshipsAvailable: true, metadataComplete: true, metadataIssues: [], stepsUsed: 1,
+        const result: DocumentBaseResult = { snapshotId: snapshot, view, rows: [{ entryId: identity.entryId, revision: identity.revision, path: 'One.md', values: { 'file.name': { type: 'string', value: 'One' }, [scoreKey]: { type: 'number', value: 10 }, 'note.projects': projects }, ...(!omitRaw ? { editValues: { 'note.projects': { type: 'list', value: raw.projects.map(value => ({ type: 'string' as const, value })) } } } : {}) }],
+          groups: view.groupBy && !dropGroups ? [{ key:{type:'number',value:10},keyId:'ten',entryIds:['One.md'],summaries:{[scoreKey]:{type:'number',value:10}} },{key:{type:'number',value:20},keyId:'twenty',entryIds:[],summaries:{[scoreKey]:{type:'number',value:0}}}] : [{ key: null, keyId: null, entryIds: ['One.md'] }], groupOptions: [], properties: ['file.name', scoreKey, 'note.projects'], availableProperties: ['file.name', scoreKey, 'note.projects'], counts: { scanned: 1, matched: 1, afterGroupOrder: 1, afterSearch: 1, returned: 1 }, diagnostics: [], relationshipsAvailable: true, metadataComplete: true, metadataIssues: [], stepsUsed: 1,
           summaries: Object.fromEntries(Object.keys(selections).map(key => [`note.${key.replace(/^note\./, '')}`, { type: 'number' as const, value: 10 }])), summaryPreviews: { Sum: { type: 'number', value: 10 }, Empty: { type: 'number', value: 0 } },
         };
         return { source, snapshot, coverageComplete: true, value: { definition: await definition(), result } };
@@ -181,17 +185,17 @@ test('file title opening forwards its captured row identity and image acquisitio
 });
 
 
-test('failed live summary saves lock and retry the exact accepted configuration draft', async () => {
-  const f = await fixture();
+test('terminal live summary saves retain read-only review and ordinary Save settles the exact accepted draft', async () => {
+  const f = await fixture(summaryBase,false,false,true);
   try {
-    f.host.querySelector<HTMLButtonElement>('[data-summary-property="note.score"]')!.click(); await until(() => !!f.dom.window.document.querySelector('[aria-label="Edit Sum"]'));
+    f.host.querySelector<HTMLButtonElement>('[data-summary-property="note.scorevalueid"]')!.click(); await until(() => !!f.dom.window.document.querySelector('[aria-label="Edit Sum"]'));
     f.dom.window.document.querySelector<HTMLButtonElement>('[aria-label="Edit Sum"]')!.click(); await until(() => !!f.dom.window.document.querySelector('[aria-label="Summary name"]'));
     const before = await f.vault.read('Work.base'); f.adapter.fail = true;
     const expression = f.dom.window.document.querySelector<HTMLTextAreaElement>('[aria-label="Summary expression"]')!; expression.focus(); expression.value = 'values.length'; expression.dispatchEvent(new f.dom.window.Event('input', { bubbles: true }));
-    await until(() => [...f.dom.window.document.querySelectorAll<HTMLButtonElement>('.bases-summary-editor button')].some(button => button.textContent === 'Retry save' && !button.hidden));
+    await until(() => [...f.dom.window.document.querySelectorAll<HTMLButtonElement>('.bases-summary-editor button')].some(button => button.textContent === 'Review retained changes' && !button.hidden));
     assert.equal(await f.vault.read('Work.base'), before); assert.equal(expression.closest('fieldset')!.disabled, true); assert.equal(expression.disabled, true); assert.equal(expression.value, 'values.length'); assert.equal(f.session.hasPendingChanges(), true);
-    f.adapter.fail = false; [...f.dom.window.document.querySelectorAll<HTMLButtonElement>('.bases-summary-editor button')].find(button => button.textContent === 'Retry save')!.click();
-    await until(async () => (BaseDocument.parse(await f.vault.read('Work.base')).getRoot('summaries') as Record<string,string>).Sum === 'values.length'); await until(() => !f.session.hasPendingChanges());
+    const accepted=BaseDocument.parse(before);accepted.editViewSummary(0,'Sum','Sum','values.length');const desired=accepted.toString(),attempts=f.adapter.attempts;[...f.dom.window.document.querySelectorAll<HTMLButtonElement>('.bases-summary-editor button')].find(button => button.textContent === 'Review retained changes')!.click();await tick();assert.equal(f.adapter.attempts,attempts,'Review dispatches no persistence attempt');assert.equal(f.dom.window.document.querySelector<HTMLTextAreaElement>('[aria-label="Accepted configuration"]')!.value,desired);assert.equal(await f.vault.read('Work.base'),before,'Review never authors the summary');f.adapter.fail=false;await f.session.flush();
+    await until(async () => (BaseDocument.parse(await f.vault.read('Work.base')).views[0].summaryDefinitions as Record<string,string>).Sum === 'values.length'); await until(() => !f.session.hasPendingChanges());
     assert.equal(expression.closest('fieldset')!.disabled, false); assert.equal(expression.disabled, false); assert.equal(expression.value, 'values.length'); assert.equal(f.adapter.revisions.get('Work.base'), 3, 'one builtin seed and one accepted summary write');
   } finally { await f.cleanup(); }
 });

@@ -200,14 +200,14 @@ test('Add view exposes every layout setting and commits its initial draft in one
  }
 });
 
-test('Add view persistence retry retains its exact atomic layout patch without an update command',async()=>{
+test('terminal Add view review retains its exact atomic layout patch until the accepted save is acknowledged',async()=>{
  const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),doc=dom.window.document;
- const document=BaseDocument.parse('views: [{type: table, name: A}]');let version=1,selectedIndex=0,retries=0;
+ let document=BaseDocument.parse('views: [{type: table, name: A}]');let version=1,selectedIndex=0,retries=0,completeAccepted:(()=>Promise<void>)|undefined;
  const calls:unknown[][]=[],errors:unknown[]=[];
  const toolbar=createBaseToolbar(doc.querySelector('main')!,{immediate:true,preflight(){},async selectView(){},async save(){assert.fail('creation must not issue a followup save');},commands:{
   async addView(expected,type,name,initial){
    calls.push([expected,type,name,initial]);assert.equal(expected,version);
-   throw new BaseToolbarSaveError('disk failed',async()=>{retries++;selectedIndex=document.addView(type,name!);document.updateView(selectedIndex,initial!);version++;refresh();});
+   const projected=BaseDocument.parse(document.toString()),index=projected.addView(type,name!);projected.updateView(index,initial!);const desired=projected.toString();completeAccepted=async()=>{retries++;selectedIndex=index;document=BaseDocument.parse(desired);version++;refresh();};throw new BaseToolbarSaveError('disk failed',completeAccepted,{saved:document.toString(),desired});
   },async updateView(){assert.fail('creation must not issue a followup update');},
  },onDraftChange(){},onError(error){errors.push(error);}});
  function refresh(){const result=executeBaseQuery(document,{version,files:[]},{viewIndex:selectedIndex});toolbar.update({result,views:document.views,selectedIndex,readOnly:false,allowRename:true,label:p=>p});}refresh();
@@ -217,9 +217,9 @@ test('Add view persistence retry retains its exact atomic layout patch without a
   doc.querySelector<HTMLButtonElement>('[role="combobox"][aria-label="Layout"]')!.focus();const layout=get<HTMLSelectElement>('Layout');layout.value='cards';layout.dispatchEvent(new dom.window.Event('change',{bubbles:true}));await tick();
   const size=get<HTMLInputElement>('Card size');size.value='440';size.dispatchEvent(new dom.window.Event('input',{bubbles:true}));name.focus();name.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));await tick();
   assert.deepEqual(calls,[[1,'cards','Gallery',{cardSize:440}]]);assert.equal(name.value,'Gallery');assert.equal(size.value,'440');assert.equal(size.disabled,true);assert.equal(toolbar.hasDraft(),true);
-  const retry=doc.querySelector<HTMLButtonElement>('button[type="submit"]')!;assert.equal(retry.textContent,'Retry save');
-  doc.body.dispatchEvent(new dom.window.MouseEvent('pointerdown',{bubbles:true}));assert.equal(retry.isConnected,true,'outside cannot discard a retained accepted-save retry');assert.equal(toolbar.hasDraft(),true);retry.click();await tick();
-  assert.equal(calls.length,1);assert.equal(retries,1);assert.match(String(document.views.at(-1)?.id),/^[a-z0-9]{12}$/);assert.deepEqual(document.views.at(-1),{type:'cards',name:'Gallery',id:document.views.at(-1)?.id,cardSize:440});assert.equal(toolbar.hasDraft(),false);assert.equal(doc.querySelector('[role="dialog"]'),null);assert.equal(errors.length,1);
+  const review=doc.querySelector<HTMLButtonElement>('button[type="submit"]')!;assert.equal(review.textContent,'Review retained changes');
+  doc.body.dispatchEvent(new dom.window.MouseEvent('pointerdown',{bubbles:true}));assert.equal(review.isConnected,true,'outside cannot discard retained accepted changes');assert.equal(toolbar.hasDraft(),true);review.click();await tick();assert.equal(retries,0,'read-only review never invokes persistence');assert.equal(document.views.length,1);const reviewed=doc.querySelector<HTMLTextAreaElement>('[aria-label="Accepted configuration"]')!;assert.equal(reviewed.readOnly,true);const desired=reviewed.value;
+  const acknowledge=toolbar.captureSaveAcknowledgement();await completeAccepted!();acknowledge();await tick();assert.equal(calls.length,1);assert.equal(retries,1);assert.equal(document.toString(),desired,'external Save installs the exact original accepted source and allocated ID');assert.match(String(document.views.at(-1)?.id),/^[a-z0-9]{12}$/);assert.deepEqual(document.views.at(-1),{type:'cards',name:'Gallery',id:document.views.at(-1)?.id,cardSize:440});assert.equal(toolbar.hasDraft(),false);assert.equal(doc.querySelector('[role="dialog"]'),null);assert.equal(errors.length,1);
  }finally{toolbar.destroy();dom.window.close();}
 });
 
@@ -254,29 +254,29 @@ test('property and sort grip drops reorder only their live configuration panel',
  }finally{f.cleanup();other.cleanup();}
 });
 
-test('persistence retry settles its original generation then saves the newer queued form exactly once',async()=>{
+test('external acknowledgement of terminal accepted A retains newer form B until a fresh explicit submission',async()=>{
  const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),doc=dom.window.document;
  let document=BaseDocument.parse('views: [{type: table, name: A}]'),version=1;
- const calls:unknown[][]=[];let rejectFirst:((error:unknown)=>void)|undefined,retries=0;
+ const calls:unknown[][]=[];let rejectFirst:((error:unknown)=>void)|undefined,retries=0,completeAccepted:(()=>Promise<void>)|undefined;
  const toolbar=createBaseToolbar(doc.querySelector('main')!,{immediate:true,preflight(){},async selectView(){},async save(expected,patch){calls.push([expected,patch]);assert.equal(expected,version);if(calls.length===1)await new Promise<void>((_resolve,reject)=>{rejectFirst=reject;});document.updateView(0,patch);document=BaseDocument.parse(document.toString());version++;refresh();},onDraftChange(){},onError(){}});
  function refresh(){const result=executeBaseQuery(document,{version,files:[]});toolbar.update({result,views:document.views,selectedIndex:0,readOnly:false,allowRename:true,label:p=>p});}refresh();
  try{
   openBaseToolbarPanel(doc,'Results');const input=doc.querySelector<HTMLInputElement>('[aria-label="Limit"]')!;input.focus();input.value='10';input.dispatchEvent(new dom.window.Event('input',{bubbles:true}));await new Promise(resolve=>setTimeout(resolve,280));assert.equal(calls.length,1);
-  input.value='20';input.dispatchEvent(new dom.window.Event('input',{bubbles:true}));rejectFirst!(new BaseToolbarSaveError('disk failed',async()=>{retries++;document.updateView(0,{limit:10});document=BaseDocument.parse(document.toString());version++;refresh();}));await tick();assert.equal(input.value,'20');assert.equal(input.disabled,true);
-  const retry=doc.querySelector<HTMLButtonElement>('button[type="submit"]')!;assert.equal(retry.textContent,'Retry save');retry.click();await tick();await tick();assert.deepEqual(calls,[[1,{limit:10}],[2,{limit:20}]]);assert.equal(retries,1);assert.equal(document.views[0].limit,20);assert.equal(toolbar.hasDraft(),false);assert.equal(doc.querySelector('[role="dialog"]'),null);
+  input.value='20';input.dispatchEvent(new dom.window.Event('input',{bubbles:true}));completeAccepted=async()=>{retries++;document.updateView(0,{limit:10});document=BaseDocument.parse(document.toString());version++;refresh();};rejectFirst!(new BaseToolbarSaveError('disk failed',completeAccepted));await tick();assert.equal(input.value,'20');assert.equal(input.disabled,true);
+  const review=doc.querySelector<HTMLButtonElement>('button[type="submit"]')!;assert.equal(review.textContent,'Review retained changes');review.click();await tick();assert.equal(retries,0);assert.deepEqual(calls,[[1,{limit:10}]],'Review cannot author either generation');const acknowledge=toolbar.captureSaveAcknowledgement();await completeAccepted!();acknowledge();await tick();assert.equal(input.value,'20');assert.equal(input.disabled,false);assert.equal(document.views[0].limit,10);assert.deepEqual(calls,[[1,{limit:10}]],'accepted A acknowledgement never submits raw B');input.focus();input.dispatchEvent(new dom.window.Event('input',{bubbles:true}));doc.querySelector<HTMLFormElement>('form')!.dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));await tick();await tick();assert.deepEqual(calls,[[1,{limit:10}],[2,{limit:20}]]);assert.equal(retries,1);assert.equal(document.views[0].limit,20);assert.equal(toolbar.hasDraft(),false);assert.equal(doc.querySelector('[role="dialog"]'),null);
  }finally{toolbar.destroy();dom.window.close();}
 });
 
-test('formula retry preserves its accepted identity before applying a newer queued rename',async()=>{
+test('external formula acknowledgement retains a newer raw rename until explicit resubmission',async()=>{
  const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),doc=dom.window.document;
  let document=BaseDocument.parse('formulas: {Original: "score * 2"}\nviews: [{type: table, name: A, order: [file.name, formula.Original]}]'),version=1,pendingDocument:BaseDocument|undefined;
- const calls:unknown[][]=[];let rejectFirst:((error:unknown)=>void)|undefined;
+ const calls:unknown[][]=[];let rejectFirst:((error:unknown)=>void)|undefined,completeAccepted:(()=>Promise<void>)|undefined;
  const toolbar=createBaseToolbar(doc.querySelector('main')!,{immediate:true,preflight(){},async selectView(){},async save(){},commands:{async updateRoot(){},async editFormula(expected,original,name,expression){assert.equal(expected,version);calls.push([original,name,expression]);const next=BaseDocument.parse(document.toString());if(original&&original!==name)next.renameFormula(original,name);next.setFormula(name,expression);if(calls.length===1){pendingDocument=next;await new Promise<void>((_resolve,reject)=>{rejectFirst=reject;});}document=BaseDocument.parse(next.toString());version++;refresh();}},onDraftChange(){},onError(){}});
  function refresh(){const result=executeBaseQuery(document,{version,files:[{path:'One.md',properties:{score:4}}]});toolbar.update({result,views:document.views,root:{formulas:document.getRoot('formulas')!},selectedIndex:0,readOnly:false,allowRename:true,label:p=>p});}refresh();
  const get=<T extends HTMLElement>(label:string)=>{const node=doc.querySelector<T>(`[aria-label="${label}"]`);assert.ok(node,label);return node;};
  try{
   openBaseToolbarPanel(doc,'Properties');get<HTMLButtonElement>('Configure property formula.Original').click();get<HTMLButtonElement>('Edit formula').click();const name=get<HTMLInputElement>('Formula name');name.focus();name.value='Accepted';name.dispatchEvent(new dom.window.Event('input',{bubbles:true}));name.blur();await tick();assert.equal(calls.length,1);
-  name.focus();name.value='Newest';name.dispatchEvent(new dom.window.Event('input',{bubbles:true}));name.blur();rejectFirst!(new BaseToolbarSaveError('disk failed',async()=>{document=BaseDocument.parse(pendingDocument!.toString());version++;refresh();}));await tick();assert.equal(name.value,'Newest');doc.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();await tick();await tick();assert.deepEqual(calls,[['Original','Accepted','score * 2'],['Accepted','Newest','score * 2']]);assert.deepEqual(document.views[0].order,['file.name','formula.Newest']);assert.equal((document.getRoot('formulas') as any).Newest,'score * 2');assert.equal(toolbar.hasDraft(),false);
+  name.focus();name.value='Newest';name.dispatchEvent(new dom.window.Event('input',{bubbles:true}));name.blur();completeAccepted=async()=>{document=BaseDocument.parse(pendingDocument!.toString());version++;refresh();};rejectFirst!(new BaseToolbarSaveError('disk failed',completeAccepted));await tick();assert.equal(name.value,'Newest');doc.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();await tick();assert.deepEqual(calls,[['Original','Accepted','score * 2']],'Review cannot dispatch a rename');const acknowledge=toolbar.captureSaveAcknowledgement();await completeAccepted!();acknowledge();await tick();assert.equal(name.value,'Newest');assert.equal(name.disabled,false);assert.deepEqual(document.views[0].order,['file.name','formula.Accepted']);assert.deepEqual(calls,[['Original','Accepted','score * 2']],'acknowledging A keeps B raw');name.focus();name.dispatchEvent(new dom.window.Event('input',{bubbles:true}));name.blur();await tick();await tick();assert.deepEqual(calls,[['Original','Accepted','score * 2'],['Accepted','Newest','score * 2']]);assert.deepEqual(document.views[0].order,['file.name','formula.Newest']);assert.equal((document.getRoot('formulas') as any).Newest,'score * 2');assert.equal(toolbar.hasDraft(),false);
  }finally{toolbar.destroy();dom.window.close();}
 });
 

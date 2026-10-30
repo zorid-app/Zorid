@@ -61,24 +61,22 @@ test('named config edit waiting on a host cannot patch another view after reorde
   } finally { release(); controller.dispose(); await f.dispose(); }
 });
 
-test('named Kanban preserves exact failed configuration retry and leaves sibling view intact', async () => {
-  class Failing extends MemoryAdapter { fail = false; override async write(path: string, text: string) { if (this.fail && path === 'Work.base') throw new Error('disk full'); await super.write(path, text); } }
+test('named Kanban reviews its exact terminal configuration draft and ordinary Save leaves sibling view intact', async () => {
+  class Failing extends MemoryAdapter { fail = false;attempts=0; override async write(path: string, text: string) { if(path==='Work.base')this.attempts++;if (this.fail && path === 'Work.base') throw new Error('disk full'); await super.write(path, text); } }
   const adapter = new Failing({ 'Work.base': source(undefined, true), 'One.md': '---\nstatus: Todo\n---\nBody', 'Two.md': '---\nstatus: Done\n---\nBody' });
   const f = await fixture(adapter), dom = new JSDOM('<main></main>', { pretendToBeVisual: true }), host = dom.window.document.querySelector('main')!;
   const session = createBaseSession(host, { vault: f.vault, basePath: 'Work.base', viewName: 'Target', buffers: f.host, validate() {}, openFile() {} });
   try {
     await session.ready; adapter.fail = true;
-    openBaseToolbarPanel(dom.window.document,'Group');
-    const checkbox = dom.window.document.querySelector<HTMLInputElement>('input[aria-label="Show group Todo"]')!;
-    assert.ok(checkbox); checkbox.click();
-    for(let i=0;i<100&&!dom.window.document.querySelector('form')?.textContent?.includes('Retry save');i++)await new Promise(resolve=>setTimeout(resolve,5));
+    openBaseToolbarPanel(dom.window.document,'Results');
+    const limit=dom.window.document.querySelector<HTMLInputElement>('[aria-label="Limit"]')!;assert.ok(limit);limit.value='7';limit.dispatchEvent(new dom.window.Event('input',{bubbles:true}));dom.window.document.querySelector<HTMLFormElement>('form')!.dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));
+    for(let i=0;i<100&&!dom.window.document.querySelector('form')?.textContent?.includes('Review retained changes');i++)await new Promise(resolve=>setTimeout(resolve,5));
     const buffer = await f.host.getBuffer('Work.base'); assert.equal(buffer.dirty, true); assert.ok(buffer.error);
-    assert.deepEqual(BaseDocument.parse(buffer.text).views[1].groupOrder, ['Done']);
-    assert.deepEqual(BaseDocument.parse(await f.vault.read('Work.base')).views[1].groupOrder, ['Todo', 'Done']);
-    adapter.fail = false;
-    const retry = [...dom.window.document.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='Retry save');assert.ok(retry);
-    retry.click();for(let i=0;i<100&&session.hasPendingChanges();i++)await new Promise(resolve=>setTimeout(resolve,5));await session.flush();
-    const saved = BaseDocument.parse(await f.vault.read('Work.base')); assert.deepEqual(saved.views[1].groupOrder, ['Done']); assert.deepEqual(saved.views[0].groupOrder, ['Todo', 'Done']);
+    assert.equal(BaseDocument.parse(buffer.text).views[1].limit,7);assert.deepEqual(BaseDocument.parse(buffer.text).views[1].groupOrder,['Todo','Done']);
+    assert.equal(BaseDocument.parse(await f.vault.read('Work.base')).views[1].limit,undefined);assert.deepEqual(BaseDocument.parse(await f.vault.read('Work.base')).views[1].groupOrder, ['Todo', 'Done']);
+    const review = [...dom.window.document.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='Review retained changes');assert.ok(review);
+    const desired=buffer.text,attempts=adapter.attempts;review.click();await tick();assert.equal(adapter.attempts,attempts,'Review dispatches no persistence attempt');assert.equal(dom.window.document.querySelector<HTMLTextAreaElement>('[aria-label="Accepted configuration"]')!.value,desired);assert.deepEqual(BaseDocument.parse(await f.vault.read('Work.base')).views[1].groupOrder,['Todo','Done'],'Review does not save');adapter.fail=false;await session.flush();
+    const saved=BaseDocument.parse(await f.vault.read('Work.base'));assert.equal(saved.views[1].limit,7);assert.equal(saved.views[0].limit,undefined);assert.deepEqual(saved.views[1].groupOrder,['Todo','Done']);assert.deepEqual(saved.views[0],BaseDocument.parse(source(undefined,true)).views[0]);assert.equal(await adapter.read('One.md'),'---\nstatus: Todo\n---\nBody');assert.equal(await adapter.read('Two.md'),'---\nstatus: Done\n---\nBody');
     assert.equal(session.state.result!.view.name, 'Target'); assert.equal(host.querySelector('select')!.value, '1');
   } finally { adapter.fail = false; await session.close(); await f.dispose(); dom.window.close(); }
 });
