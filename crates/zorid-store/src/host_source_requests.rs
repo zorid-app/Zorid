@@ -350,6 +350,29 @@ pub(super) fn migrate(tx: &Connection) -> Result<()> {
     Ok(())
 }
 impl Store {
+    /// Prepare/cancellation status only: a Write may no longer know the old
+    /// path. This does not admit a capture or replace exact-witness lookup.
+    pub fn host_source_request_status(
+        &self,
+        client: &OperationId,
+        capture: &OperationId,
+    ) -> Result<HostSourceRequestLookup> {
+        if !guards::valid_owner(client) {
+            return Err(conflict(capture));
+        }
+        let tx = self.connection.unchecked_transaction()?;
+        let value = match load(&tx, capture)? {
+            Some(value) => {
+                if value.client_id != *client {
+                    return Err(conflict(capture));
+                }
+                outcome(&tx, &value)?
+            }
+            None => HostSourceRequestLookup::Missing,
+        };
+        tx.commit()?;
+        Ok(value)
+    }
     pub fn host_source_request(
         &self,
         client: &OperationId,

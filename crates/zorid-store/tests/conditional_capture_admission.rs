@@ -522,3 +522,20 @@ fn capture_request_legacy_prepare_cannot_bypass_pending_or_terminal_receipts() {
         assert_eq!(store.host_source_capture_usage().unwrap(),if pending {(1,8)}else{(0,0)});
     }
 }
+
+#[test]
+fn capture_request_status_needs_no_invented_witness_and_never_creates_authority() {
+    use zorid_store::HostSourceRequestLookup::*;
+    let directory=tempfile::tempdir().unwrap();let path=directory.path().join("db");
+    let (mut store,_,guard)=fixture(&path);let client=uuid(1);
+    assert_eq!(store.host_source_request_status(&client,&guard.capture_id).unwrap(),Missing);
+    assert_eq!(Connection::open(&path).unwrap().query_row("SELECT count(*) FROM host_source_requests",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    store.register_host_source_capture(&client,&uuid(10),&guard).unwrap();
+    assert!(matches!(store.host_source_request_status(&client,&guard.capture_id).unwrap(),Pending(_)));
+    store.record_host_source_request_changed(&client,&request(&guard)).unwrap();
+    assert_eq!(store.host_source_request_status(&client,&guard.capture_id).unwrap(),Changed);
+    assert!(store.host_source_request_status(&uuid(2),&guard.capture_id).is_err());
+    store.release_host_source_capture(&client,&uuid(999)).unwrap();
+    assert_eq!(store.host_source_request_status(&client,&uuid(999)).unwrap(),Released);
+    assert_eq!(store.host_source_capture_usage().unwrap(),(0,0));
+}
