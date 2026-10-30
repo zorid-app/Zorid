@@ -15,7 +15,7 @@ import {nativeContextMenuMode,nativeContextMenuRequest,NATIVE_MENU_CASES,waitFor
 import {fixtureFiles,template} from './fixtures.mjs';
 import {journey} from './journey.mjs';
 import {CAMPAIGN_DIRECTORIES,validateFixtureName,readFixture,writeFixture,campaignClosure} from './owned-fixtures.mjs';
-import {relayProcessOwnership,livingOwnedProcesses,discoverUnannouncedRelayProcesses,parseProcessRows} from './native-ownership.mjs';
+import {relayProcessOwnership,livingOwnedProcesses,discoverUnannouncedRelayProcesses,parseProcessRows,createNativeGenerationRegistry} from './native-ownership.mjs';
 import {windowMode,assertNativeWindowVisible,assertRendererVisible,nativeWindowAdapterSource} from './window-visibility.mjs';
 import {assertRelayCampaign,assertRelayProvenance} from './relay-admission.mjs';
 import {verifyPreparedSceneFiles} from '../bases-electron-recovery-integration/collection-scene.mjs';
@@ -36,6 +36,8 @@ const campaignPath=campaignRequested?await fs.realpath(campaignRequested):undefi
 if(campaignPath){
   assert.ok(CAMPAIGN_DIRECTORIES.some(name=>campaignPath===path.join(path.dirname(harness),name,'campaign.mjs')),'Only an explicitly owned supplemental campaign module is admitted');
 }
+const recoveryCampaign=campaignPath===path.join(path.dirname(harness),'bases-electron-recovery-integration','campaign.mjs');
+const autoRecoveryCampaign=campaignPath===path.join(path.dirname(harness),'bases-electron-auto-recovery-integration','campaign.mjs');
 const campaign=campaignPath?await import(pathToFileURL(campaignPath).href):undefined;
 if(campaign)assert.ok(typeof campaign.fixtureFiles==='function'&&typeof campaign.journey==='function','Explicit supplemental campaign exports');
 const cuaMode=nativeSelectCuaMode(process.argv,{windowMode:requestedWindowMode,bootstrap:windowBootstrapProbe,campaignPath,minimalCampaignPath:path.join(path.dirname(harness),'bases-electron-native-select-integration/campaign.mjs'),allowedCampaignPaths:CAMPAIGN_DIRECTORIES.map(name=>path.join(path.dirname(harness),name,'campaign.mjs'))});
@@ -58,7 +60,10 @@ async function tree(directory){const result=[];async function visit(relative='')
 async function provenance(){if(externalCliArtifact)await assertExternalCli(externalCliArtifact);assert.equal(git('rev-parse','HEAD').trim(),head,'Frozen integration HEAD changed');assert.equal(git('diff','--name-only','HEAD').trim(),'','Frozen tracked source changed');const names=git('ls-files','-z','desktop','src','crates','scripts','Cargo.toml','Cargo.lock','package.json','pnpm-lock.yaml','vite.config.mjs','index.html').split('\0').filter(Boolean).sort();return{head,tracked:await Promise.all(names.map(async name=>[name,await hash(path.join(root,name))])),dist:await tree(path.join(root,'dist')),native:{file:native,sha256:await hash(native)},...(externalCliArtifact?{externalCli:externalCliArtifact}:{}),...(relay?{relay:{executable:relayExecutable,identity:relayIdentity,files:await Promise.all(relayFiles.map(async file=>[file,await hash(file)])),node:{file:relayIdentity.executable,sha256:await hash(await fs.realpath(relayIdentity.executable))}}}:{}),electron:{file:electron,sha256:await hash(electron)},harness:await tree(harness),campaigns:await campaignClosure(path.dirname(harness),tree),cdpHelper:await hash(path.join(harness,'../tasks-electron-integration/cdp.mjs'))};}
 const processes=()=>parseProcessRows(execFileSync('ps',['-ww','-axo','pid=,ppid=,stat=,command='],{encoding:'utf8'}));
 let child,cdp,browserCDP,ui,record,before,failure,relay,relayExecutable,relayIdentity,relayFiles=[],externalCliConflicts,fixtureScene;
+const electronArgs=[path.join(root,'desktop/main.cjs'),'--user-data-dir='+profile,'--remote-debugging-address=127.0.0.1','--remote-debugging-port=0','--no-first-run'];
+const appCommand=[electron,...electronArgs].join(' ');
 const natives=new Map();let cuaCheckpointCount=0;
+let nativeRegistry,nativePoll,nativeObservationTail=Promise.resolve(),nativeObservationFailure;
 let nativeMenuCheckpointCount=0;
 async function nativeContextMenu(caseId){
   assert.ok(cuaNativeContextMenus&&child&&!exited(),'Explicit owned native context menu mode required');
@@ -91,13 +96,49 @@ async function nativeSelectInput(request){
 }
 
 const exited=()=>!child||child.exitCode!==null||child.signalCode!==null;
+// All event reads and ps observations are serialized; a delayed event read must
+// not roll generation evidence back behind a later authenticated observation.
+function inspectNativeGenerations(faultGeneration){
+  const pending=nativeObservationTail.then(async()=>{
+    const events=await relay.events(),rows=processes();
+    // Keep the previously reviewed fail-cleanup fallback for a process that dies
+    // before appending started. These rows never enter positive registry authority.
+    for(const row of discoverUnannouncedRelayProcesses({rows,native,vault,identity:relayIdentity}))if(!natives.has(row.pid))natives.set(row.pid,row);
+    let observed=nativeRegistry.observe({events,rows,appPid:child?.pid}),fault;
+    if(faultGeneration!==undefined){
+      if(nativeObservationFailure)throw nativeObservationFailure;
+      fault=nativeRegistry.killCurrent(faultGeneration,{events,rows,appPid:child?.pid,kill:(pid,signal)=>process.kill(pid,signal)});
+      observed=nativeRegistry.observe({events,rows,appPid:child?.pid});
+      evidence.actions.push({action:'intentional-current-native-fault',...fault});
+    }
+    for(const generation of observed.generations)for(const value of generation.processes)natives.set(value.pid,value);
+    evidence.nativeGenerations=observed.generations;
+    return{observed,events,rows,fault};
+  });
+  nativeObservationTail=pending.catch(error=>{nativeObservationFailure??=error;});
+  return pending;
+}
+async function observeNativeGenerations(){
+  assert.ok(relay&&child,'An owned relay app is required for generation observation');
+  const result=await inspectNativeGenerations();if(nativeObservationFailure)throw nativeObservationFailure;
+  return result.observed;
+}
+async function killNativeGeneration(generation){
+  assert.ok(autoRecoveryCampaign&&relay&&child&&!exited(),'Only the explicit automatic-recovery campaign may fault a current Native');
+  // The entire final event read → real ps → exact Native signal is serialized
+  // with background observations. No await separates ps from the signal.
+  const {fault}=await inspectNativeGenerations(generation);
+  return fault;
+}
 async function nativeChildren(requireLineage=false){
-  const rows=processes();
-  if(!relay){const owned=rows.filter(row=>row.parent===child?.pid&&row.command.startsWith(native+' --vault '+vault));for(const row of owned)natives.set(row.pid,row);return owned;}
-  for(const row of discoverUnannouncedRelayProcesses({rows,native,vault,identity:relayIdentity}))if(!natives.has(row.pid))natives.set(row.pid,row);
-  const events=(await relay.events()).slice(record?.relayEventOffset??0);if(!events.some(event=>event.kind==='started')){assert.ok(!requireLineage,'Relay launch event required');return livingOwnedProcesses(natives.values(),rows);}
-  const owned=relayProcessOwnership({events,rows,native,vault,identity:relayIdentity,appPid:child?.pid,requireLineage,previouslyOwned:natives.values()});
-  for(const value of owned)natives.set(value.pid,value);return livingOwnedProcesses(owned,rows);
+  if(!relay){const rows=processes(),owned=rows.filter(row=>row.parent===child?.pid&&row.command.startsWith(native+' --vault '+vault));for(const row of owned)natives.set(row.pid,row);return owned;}
+  const {observed,events,rows}=await inspectNativeGenerations();
+  if(requireLineage){
+    assert.ok(observed.current,'A live authenticated current relay generation is required');
+    const owned=relayProcessOwnership({events,rows,native,vault,identity:relayIdentity,appPid:child.pid,generation:observed.current.generation,requireLineage:true,previouslyOwned:observed.current.processes});
+    return livingOwnedProcesses(owned,rows);
+  }
+  return livingOwnedProcesses(natives.values(),rows);
 }
 function appKit(action){
   assert.ok(['hide','show','observe','terminate'].includes(action));assert.ok(child&&!exited());
@@ -129,7 +170,8 @@ async function diskGuard(){
 async function stop(){
   let externalCliCleanupFailure;try{await externalCliConflicts?.dispose();}catch(error){externalCliCleanupFailure=error;}
   browserCDP?.close();browserCDP=undefined;if(!child){if(externalCliCleanupFailure)throw externalCliCleanupFailure;return;}
-  let ownershipFailure;try{await nativeChildren();}catch(error){ownershipFailure=error;}
+  clearInterval(nativePoll);nativePoll=undefined;await nativeObservationTail;
+  let ownershipFailure=nativeObservationFailure;try{await nativeChildren();}catch(error){ownershipFailure??=error;}
   if(cdp){record.events=cdp.events;cdp.close();cdp=undefined;}
   if(relay)try{await relay.dispose();}catch(error){ownershipFailure??=error;}
   const shutdown={pid:child.pid,method:exited()?'already-exited':'SIGTERM-cleanup'};
@@ -140,7 +182,7 @@ async function stop(){
   const alive=()=>livingOwnedProcesses(natives.values(),processes());let leaked=[];
   try{await until(async()=>assert.equal(alive().length,0),5000);}catch{leaked=alive();for(const value of leaked)process.kill(value.pid,'SIGKILL');await until(async()=>assert.equal(alive().length,0),5000);}
   Object.assign(shutdown,{exitCode:child.exitCode,signal:child.signalCode,nativeChildren:[...natives.values()],leaked});
-  if(relay){shutdown.relayEvents=await relay.events();evidence.relayEvents=shutdown.relayEvents;}
+  if(relay){shutdown.relayEvents=await relay.events();evidence.relayEvents=shutdown.relayEvents;shutdown.nativeGenerations=evidence.nativeGenerations;}
   evidence.runtime.push({shutdown});child=undefined;natives.clear();
   assert.deepEqual(leaked,[],'Owned native/relay processes leaked; cleaned, acceptance fails');if(ownershipFailure)throw ownershipFailure;if(externalCliCleanupFailure)throw externalCliCleanupFailure;
 }
@@ -149,7 +191,7 @@ async function forceShutdown(name){
   evidence.actions.push({action:'forced-negative-app-interruption',name,pid:child.pid,at:Date.now()});
   await stop();evidence.checks.push({name,kind:'forced-negative-app-interruption',gracefulAcceptance:false});
 }
-async function launch(name){await diskGuard();assert.ok(!child);await fs.rm(path.join(profile,'DevToolsActivePort'),{force:true});const env={...process.env,ZORID_DESKTOP_HOST_BIN:relayExecutable??native,ZORID_LOCAL_DATA_DIR:path.join(sandbox,'app-data')};for(const name of ['ELECTRON_RUN_AS_NODE','ZORID_DEV_URL','ZORID_DESKTOP_FAMILY_FIXTURE','ZORID_EDITOR_RUST','ZORID_FIXTURE_VAULT','ZORID_FIXTURE_SYNC_CONFIG','ZORID_FIXTURE_CLIENT_ID'])delete env[name];record={name,stdout:'',stderr:'',...(relay?{relayEventOffset:(await relay.events()).length}:{})};evidence.runtime.push(record);child=spawn(electron,[path.join(root,'desktop/main.cjs'),'--user-data-dir='+profile,'--remote-debugging-address=127.0.0.1','--remote-debugging-port=0','--no-first-run'],{cwd:root,env,stdio:['ignore','pipe','pipe']});let spawnError;child.on('error',error=>{spawnError=error;});for(const stream of ['stdout','stderr'])child[stream].on('data',bytes=>{if(record[stream].length<256000)record[stream]+=bytes.toString();});const port=await until(async()=>{if(spawnError)throw spawnError;assert.ok(!exited(),record.stderr);let value;try{value=(await fs.readFile(path.join(profile,'DevToolsActivePort'),'utf8')).split('\n')[0];}catch{value=record.stderr.match(/DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)\//)?.[1];}assert.match(value,/^[1-9][0-9]{0,4}$/);return value;},30000);const target=await until(async()=>{const rows=await fetch(`http://127.0.0.1:${port}/json/list`,{signal:AbortSignal.timeout(2000)}).then(r=>r.json());const value=rows.find(r=>r.type==='page'&&r.url.startsWith('file:')&&r.url.includes('/dist/index.html'));assert.ok(value);return value;},30000);cdp=new CDP(target.webSocketDebuggerUrl);ui=new UI(cdp,evidence.actions,cuaNativeSelect?{nativeSelectInput}:undefined);await cdp.call('Runtime.enable');await cdp.call('Log.enable');await cdp.call('Page.enable');await ui.wait('return !!(window.zorid&&document.querySelector(".workspace"));','Normal Workspace',45000);const admitted=await cdp.evaluate('window.zorid.getVault()');assert.equal(admitted.path,vault,'Only owned disposable vault');record.pid=child.pid;record.url=target.url;record.cdpPort=port;record.nativeChildren=await nativeChildren(!!relay);assert.equal(record.nativeChildren.length,relay?2:1,'Exactly the owned matching host or relay/native pair');if(requestedWindowMode==='visible'){
+async function launch(name){await diskGuard();assert.ok(!child);await fs.rm(path.join(profile,'DevToolsActivePort'),{force:true});const env={...process.env,ZORID_DESKTOP_HOST_BIN:relayExecutable??native,ZORID_LOCAL_DATA_DIR:path.join(sandbox,'app-data')};for(const name of ['ELECTRON_RUN_AS_NODE','ZORID_DEV_URL','ZORID_DESKTOP_FAMILY_FIXTURE','ZORID_EDITOR_RUST','ZORID_FIXTURE_VAULT','ZORID_FIXTURE_SYNC_CONFIG','ZORID_FIXTURE_CLIENT_ID'])delete env[name];nativeObservationFailure=undefined;record={name,stdout:'',stderr:''};evidence.runtime.push(record);child=spawn(electron,electronArgs,{cwd:root,env,stdio:['ignore','pipe','pipe']});if(relay){nativePoll=setInterval(()=>{void inspectNativeGenerations().catch(()=>{});},100);nativePoll.unref();}let spawnError;child.on('error',error=>{spawnError=error;});for(const stream of ['stdout','stderr'])child[stream].on('data',bytes=>{if(record[stream].length<256000)record[stream]+=bytes.toString();});const port=await until(async()=>{if(spawnError)throw spawnError;assert.ok(!exited(),record.stderr);let value;try{value=(await fs.readFile(path.join(profile,'DevToolsActivePort'),'utf8')).split('\n')[0];}catch{value=record.stderr.match(/DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)\//)?.[1];}assert.match(value,/^[1-9][0-9]{0,4}$/);return value;},30000);const target=await until(async()=>{const rows=await fetch(`http://127.0.0.1:${port}/json/list`,{signal:AbortSignal.timeout(2000)}).then(r=>r.json());const value=rows.find(r=>r.type==='page'&&r.url.startsWith('file:')&&r.url.includes('/dist/index.html'));assert.ok(value);return value;},30000);cdp=new CDP(target.webSocketDebuggerUrl);ui=new UI(cdp,evidence.actions,cuaNativeSelect?{nativeSelectInput}:undefined);await cdp.call('Runtime.enable');await cdp.call('Log.enable');await cdp.call('Page.enable');await ui.wait('return !!(window.zorid&&document.querySelector(".workspace"));','Normal Workspace',45000);const admitted=await cdp.evaluate('window.zorid.getVault()');assert.equal(admitted.path,vault,'Only owned disposable vault');record.pid=child.pid;record.url=target.url;record.cdpPort=port;record.nativeChildren=await nativeChildren(!!relay);assert.equal(record.nativeChildren.length,relay?2:1,'Exactly the owned matching host or relay/native pair');if(requestedWindowMode==='visible'){
   const frontRequest={requested:true};try{await cdp.call('Page.bringToFront');frontRequest.accepted=true;}catch(error){frontRequest.accepted=false;frontRequest.error=error.message;}
   const nativeVisibility=appKit('show');
   const observeDocument=()=>ui.dom('return {visibilityState:document.visibilityState,hidden:document.hidden,hasFocus:document.hasFocus()};');
@@ -159,7 +201,7 @@ async function launch(name){await diskGuard();assert.ok(!child);await fs.rm(path
   evidence.checks.push({name:'owned-native-window-and-renderer-actually-visible',...record.visibility});
 }else{record.hidden=appKit('hide');assert.equal(record.hidden.hidden,true,'Owned test app verified hidden');}
 return ui;}
-async function quit(name){assert.ok(child&&!exited());await nativeChildren();const request=appKit('terminate');await until(async()=>assert.ok(exited(),'Normal application quit'),20000);assert.equal(child.exitCode,0);assert.equal(child.signalCode,null,'A cleanup signal cannot satisfy normal quit');evidence.checks.push({name,request,exitCode:child.exitCode,signal:child.signalCode});await stop();}
+async function quit(name){assert.ok(child&&!exited());await nativeChildren();const request=appKit('terminate');await until(async()=>assert.ok(exited(),'Normal application quit'),20000);assert.equal(child.exitCode,0);assert.equal(child.signalCode,null,'A cleanup signal cannot satisfy normal quit');if(relay){await until(async()=>{const {events,rows}=await inspectNativeGenerations();return nativeRegistry.assertShutdown({events,rows,appPid:child.pid});},5000);if(nativeObservationFailure)throw nativeObservationFailure;}evidence.checks.push({name,request,exitCode:child.exitCode,signal:child.signalCode});await stop();}
 async function read(file){return readFixture(vault,file);}
 async function saved(file,check,name){const source=await until(async()=>{const source=await read(file);await check(source);return source;},45000);const normal=await cdp.evaluate(`(async()=>{const v=await window.zorid.getVault();return window.zorid.read(v.path,${JSON.stringify(file)});})()`);assert.equal(normal,source,'Normal bridge read equals actual saved bytes');evidence.checks.push({name,file,sha256:createHash('sha256').update(source).digest('hex'),source});return source;}
 function frontmatter(source){const match=source.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);assert.ok(match,'Frontmatter present');return yaml.parse(match[1]);}
@@ -181,7 +223,7 @@ try{
     const directoryStat=await fs.lstat(directory);assert.ok(directoryStat.isDirectory()&&!directoryStat.isSymbolicLink());assert.equal(await fs.realpath(directory),directory,'Owned relay control directory');
     assert.equal(relay.directory,directory);relayExecutable=await fs.realpath(relay.executable);assert.equal(relayExecutable,path.join(directory,'native-relay'),'Owned generated relay executable');
     const stat=await fs.lstat(relay.executable);assert.ok(stat.isFile()&&!stat.isSymbolicLink()&&(stat.mode&0o111),'Regular executable relay wrapper');
-    relayIdentity=structuredClone(relay.processIdentity);assert.ok(path.isAbsolute(relayIdentity?.executable)&&Array.isArray(relayIdentity.args),'Immutable relay process identity');
+    relayIdentity=structuredClone(relay.processIdentity);nativeRegistry=createNativeGenerationRegistry({native,vault,identity:relayIdentity,appCommand});assert.ok(path.isAbsolute(relayIdentity?.executable)&&Array.isArray(relayIdentity.args),'Immutable relay process identity');
     relayFiles=[...new Set(relay.provenanceFiles)];assert.ok(relayFiles.includes(relayExecutable),'Relay wrapper is in immutable provenance');
     assertRelayProvenance(relayFiles,{testsRoot:path.dirname(harness),wrapper:relayExecutable});
     for(const file of relayFiles){assert.equal(await fs.realpath(file),file,'Relay provenance file cannot alias');assert.ok((await fs.lstat(file)).isFile(),'Relay provenance is a regular file');}
@@ -189,7 +231,7 @@ try{
   before=await provenance();await fs.writeFile(path.join(out,'provenance-before.json'),JSON.stringify(before,null,2));
   await fs.mkdir(vault,{recursive:true});await fs.mkdir(profile);await fs.mkdir(path.join(sandbox,'app-data'));if(!campaign&&!windowBootstrapProbe)await fs.mkdir(path.join(vault,'Created'));
   if(campaign?.prepareScene){
-    assert.equal(campaignPath,path.join(path.dirname(harness),'bases-electron-recovery-integration','campaign.mjs'),'Only the owned recovery scene may provision native collection fixtures');
+    assert.ok(recoveryCampaign||autoRecoveryCampaign,'Only the exact owned recovery scenes may provision native collection fixtures');
     evidence.fixtureSetupStage='prelaunch-native-collection-scene';
     try{fixtureScene=await campaign.prepareScene({native,root,vault,localData:path.join(sandbox,'app-data'),outputDirectory:out,evidence,nativeSha256:before.native.sha256});evidence.fixtureSetupStage='native-collection-scene-published';}catch(error){evidence.fixtureSetupStage='failed-before-app-launch';throw error;}
   }
@@ -204,7 +246,7 @@ try{
   evidence.fixtureManifest=await tree(vault);
   if(externalCliArtifact){const env={...process.env,ZORID_LOCAL_DATA_DIR:path.join(sandbox,'app-data')};for(const key of ['DISPLAY','ZORID_IPC_ENDPOINT','ZORID_DESKTOP_ENDPOINT','ZORID_FIXTURE_VAULT','ZORID_FIXTURE_CLIENT_ID'])delete env[key];externalCliConflicts=await createExternalCliConflicts({artifact:externalCliArtifact,vault,outputDirectory:out,evidence,env});}
   if(windowBootstrapProbe){await launch('owned-visible-window-bootstrap');await screenshot('owned-visible-window-bootstrap');await quit('owned-window-bootstrap-normal-quit');}
-  else await (campaign?.journey??journey)({get ui(){return ui;},get cdp(){return cdp;},vault,yaml,fixtureScene,template:campaign?(campaign.template??''):template,evidence,outputDirectory:out,...(cuaNativeContextMenus?{nativeContextMenu}:{}),...(externalCliConflicts?{externalCliConflicts}:{}),...(relay?{relay:Object.freeze({arm:input=>relay.arm(input),release:token=>relay.release(token),events:()=>relay.events()}),forceShutdown}:{}),launch,quit,read,saved,frontmatter,screenshot,external,diskGuard,prepareDownloads});
+  else await (campaign?.journey??journey)({get ui(){return ui;},get cdp(){return cdp;},vault,yaml,fixtureScene,template:campaign?(campaign.template??''):template,evidence,outputDirectory:out,...(cuaNativeContextMenus?{nativeContextMenu}:{}),...(externalCliConflicts?{externalCliConflicts}:{}),...(relay?{relay:Object.freeze({arm:input=>relay.arm(input),release:token=>relay.release(token),events:()=>relay.events()}),forceShutdown,observeNativeGenerations,...(autoRecoveryCampaign?{killNativeGeneration}:{})}:{}),launch,quit,read,saved,frontmatter,screenshot,external,diskGuard,prepareDownloads});
   if(cuaNativeContextMenus)assert.equal(nativeMenuCheckpointCount,NATIVE_MENU_CASES.length,'All five original native menus must reach their CUA checkpoint');
   const after=await provenance();await fs.writeFile(path.join(out,'provenance-after.json'),JSON.stringify(after,null,2));assert.deepEqual(after,before,'Exact source/artifact freeze survived journey');evidence.provenanceVerified=true;evidence.status='passed';
 }catch(error){failure=error;evidence.status='failed';evidence.failure={message:error.message,stack:error.stack};if(cdp)try{evidence.failureDOM=await ui.dom(`
