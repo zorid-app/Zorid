@@ -23,7 +23,7 @@ pub use resolver::{
 pub use snapshot::{
     allocate_index_snapshot,
     EntryWitness, IndexError, IndexSnapshotId, Manifest, PublicationFence, SemanticVersions,
-    SourceSnapshotId, SourceWatermark, MAX_PUMP_BYTES, MAX_PUMP_DOCUMENTS,
+    SourceSnapshotId, SourceWatermark, MAX_PUMP_BYTES, MAX_PUMP_DOCUMENTS, MAX_PUMP_RECORDS,
 };
 
 /// Canonical metadata projection; this crate does not define a second parser result.

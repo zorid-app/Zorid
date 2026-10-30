@@ -10,7 +10,7 @@ use zorid_index::{
     LiteralQuery, LiteralToken, Manifest, MetadataProjection, MetadataRequest, PublicationFence,
     ParseCacheOutcome, PreviewCaptureError, PreviewCaptureOwner, PreviewSnapshot, SemanticVersions,
     SourceSnapshotId, SourceWatermark, INDEX_SCHEMA_VERSION, LITERAL_QUERY_VERSION,
-    MAX_GENERATION_METADATA_BYTES, MAX_PUMP_BYTES, RESOLVER_VERSION,
+    MAX_GENERATION_METADATA_BYTES, MAX_PUMP_BYTES, MAX_PUMP_DOCUMENTS, RESOLVER_VERSION,
 };
 
 /// Control is tiny; each generation's header/manifest plus encoded facts share
@@ -1446,6 +1446,26 @@ impl Store {
         DocumentIndexProgress,
         Option<std::result::Result<T, PreviewCaptureError<E>>>,
     )> {
+        let started = std::time::Instant::now();
+        self.pump_document_index_capture_with_clock(stage, capture, check, &mut || started.elapsed(), finish)
+    }
+    fn pump_document_index_capture_with_clock<E, T>(
+        &mut self,
+        stage: &DocumentIndexStage,
+        capture: Option<DocumentPreviewCaptureRequest>,
+        check: impl FnMut(usize) -> std::result::Result<(), E>,
+        elapsed: &mut dyn FnMut() -> std::time::Duration,
+        finish: impl FnOnce(
+            &Store,
+            PreviewSnapshot,
+            &Header,
+            usize,
+            &mut dyn FnMut(usize) -> std::result::Result<(), E>,
+        ) -> std::result::Result<T, PreviewCaptureError<E>>,
+    ) -> IndexResult<(
+        DocumentIndexProgress,
+        Option<std::result::Result<T, PreviewCaptureError<E>>>,
+    )> {
         let (admission, mut b, previous) = {
             let tx = self.document_transaction(TransactionBehavior::Deferred)?;
             let admission = PendingPumpSource::begin(&tx)?.admit(&tx, &stage.snapshot)?;
@@ -1470,7 +1490,7 @@ impl Store {
             (admission, b, previous)
         };
         let h = &admission.header;
-        let pending = b.pending_entries();
+        let pending = if previous.is_some() { b.pending_entries_with_reuse() } else { b.pending_entries() };
         // The admitted header is immutable for this request. Resolve its exact
         // IDs once rather than searching the whole namespace for every witness.
         let mut originals = std::collections::HashMap::new();
@@ -1488,7 +1508,15 @@ impl Store {
         let mut encoded_bytes = 0usize;
         let mut reused_documents = 0;
         let mut parse_cache = DocumentParseCacheProgress::default();
+        // Mandatory admission/restoration is paid once regardless of this slice.
+        // Budget only new record work, so a costly large-stage restore cannot
+        // collapse every later pump to one record.
+        let loop_started = elapsed();
         'pending: for witness in pending {
+            // Preserve the legacy bounded 32-record slice. Only its unchanged
+            // record extension uses this soft deadline; expensive existing work
+            // never collapses to one record or admits more extension work.
+            if prepared.len() >= MAX_PUMP_DOCUMENTS && elapsed().saturating_sub(loop_started) >= std::time::Duration::from_millis(8) { break; }
             let original = originals
                 .get(&witness.entry().id)
                 .copied()
@@ -1512,6 +1540,16 @@ impl Store {
                     return Err(IndexError::StaleSource.into());
                 }
                 let reused = reusable_record(&tx, previous.as_ref(), b.manifest(), original)?;
+                // Determine reuse from exact metadata before reading source text.
+                // A warm mixed batch must not fetch a 33rd new body just because
+                // unchanged candidates have a larger allowance.
+                if reused.is_none() {
+                    match b.preflight_extraction(&witness, bytes as usize) {
+                        Ok(()) => {},
+                        Err(IndexError::PumpLimit) if !prepared.is_empty() => break 'pending,
+                        Err(error) => return Err(error.into()),
+                    }
+                }
                 let text = match &original.content {
                     Some(ContentMetadata::BinaryRef { .. }) => None,
                     Some(ContentMetadata::InlineBytes { bytes, .. })
@@ -1563,11 +1601,6 @@ impl Store {
                                     .as_str()
                                     .to_ascii_lowercase()
                                     .ends_with(".md");
-                                match b.preflight_extraction(&witness, request.source.len()) {
-                                    Ok(()) => {},
-                                    Err(IndexError::PumpLimit) if !prepared.is_empty() => break 'pending,
-                                    Err(error) => return Err(error.into()),
-                                }
                                 let mode = if markdown {
                                     ExtractionMode::Markdown
                                 } else {
@@ -1600,7 +1633,7 @@ impl Store {
             }
             let id = record.witness().entry().id.clone();
             let bytes = record.text_bytes();
-            match b.add(record) {
+            match if reused_this_record { b.add_reused(record) } else { b.add(record) } {
                 Ok(()) => {}
                 Err(IndexError::PumpLimit) if !prepared.is_empty() => break,
                 Err(e) => return Err(e.into()),
@@ -3054,3 +3087,7 @@ mod stage_recovery_tests;
 #[cfg(test)]
 #[path = "document_metadata_registration_tests.rs"]
 mod metadata_registration_tests;
+
+#[cfg(test)]
+#[path = "document_index_reuse_tests.rs"]
+mod reuse_budget_tests;

@@ -1,7 +1,7 @@
 use crate::{
     extract_content, ContentExtractionOutcome, EntryWitness, ExtractionDomain, ExtractionMode,
     ExtractionScope, IndexError, IndexSnapshotId, Manifest, PublicationFence, MAX_PUMP_BYTES,
-    MAX_PUMP_DOCUMENTS, RESOLVER_VERSION,
+    MAX_PUMP_DOCUMENTS, MAX_PUMP_RECORDS, RESOLVER_VERSION,
 };
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, sync::Arc};
@@ -206,6 +206,7 @@ pub struct GenerationBuilder {
     records: BTreeMap<EntryId, Arc<IndexRecord>>,
     total_bytes: usize,
     pump_documents: usize,
+    pump_new_documents: usize,
     pump_source_bytes: usize,
     pump_output_bytes: usize,
 }
@@ -227,6 +228,7 @@ impl GenerationBuilder {
             records: BTreeMap::new(),
             total_bytes: 0,
             pump_documents: 0,
+            pump_new_documents: 0,
             pump_source_bytes: 0,
             pump_output_bytes: 0,
         })
@@ -255,11 +257,19 @@ impl GenerationBuilder {
         self.total_bytes
     }
     pub fn pending_entries(&self) -> Vec<EntryWitness> {
+        self.pending_entries_bounded(MAX_PUMP_DOCUMENTS)
+    }
+    /// Only an exact unchanged-record proof may use the larger reuse allowance.
+    /// Hosts still charge every source/output byte and their preparation deadline.
+    pub fn pending_entries_with_reuse(&self) -> Vec<EntryWitness> {
+        self.pending_entries_bounded(MAX_PUMP_RECORDS)
+    }
+    fn pending_entries_bounded(&self, limit: usize) -> Vec<EntryWitness> {
         self.manifest
             .entries()
             .iter()
             .filter(|entry| entry.kind == EntryKind::File && !self.records.contains_key(&entry.id))
-            .take(MAX_PUMP_DOCUMENTS)
+            .take(limit)
             .map(|entry| self.manifest.witness(&entry.id).expect("validated file"))
             .collect()
     }
@@ -272,7 +282,7 @@ impl GenerationBuilder {
             == self.records.len()
     }
     /// Prefer this entry point for new work: the known source budget is checked
-    /// before parsing. Reused rows use add(). Errors do not advance any head.
+    /// before parsing. Proven reused rows use add_reused(). Errors never advance heads.
     pub fn extract_and_add(
         &mut self,
         witness: EntryWitness,
@@ -295,7 +305,8 @@ impl GenerationBuilder {
         } else {
             source_bytes
         };
-        if self.pump_documents == MAX_PUMP_DOCUMENTS
+        if self.pump_new_documents == MAX_PUMP_DOCUMENTS
+            || self.pump_documents == MAX_PUMP_RECORDS
             || (self.pump_documents > 0 && self.pump_source_bytes + source_bytes > MAX_PUMP_BYTES)
         {
             return Err(IndexError::PumpLimit);
@@ -305,10 +316,20 @@ impl GenerationBuilder {
     /// Start another bounded pump after returning control to the caller.
     pub fn begin_pump(&mut self) {
         self.pump_documents = 0;
+        self.pump_new_documents = 0;
         self.pump_source_bytes = 0;
         self.pump_output_bytes = 0;
     }
     pub fn add(&mut self, record: IndexRecord) -> Result<(), IndexError> {
+        self.add_budgeted(record, false)
+    }
+    /// Budget-only admission for a host-proven unchanged record. This supplies no
+    /// reuse or publication authority; the host retains its exact previous/current
+    /// source, content and final commit checks. All bytes count normally.
+    pub fn add_reused(&mut self, record: IndexRecord) -> Result<(), IndexError> {
+        self.add_budgeted(record, true)
+    }
+    fn add_budgeted(&mut self, record: IndexRecord, reused: bool) -> Result<(), IndexError> {
         self.manifest.check_witness(record.witness())?;
         if record.metadata.as_ref().is_some_and(|metadata| {
             metadata.schema_version != SCHEMA_VERSION || metadata.dialect_version != DIALECT_VERSION
@@ -320,7 +341,8 @@ impl GenerationBuilder {
             return Err(IndexError::InvalidRecord);
         }
         let bytes = record.encoded_size()?;
-        if self.pump_documents == MAX_PUMP_DOCUMENTS
+        if (!reused && self.pump_new_documents == MAX_PUMP_DOCUMENTS)
+            || self.pump_documents == MAX_PUMP_RECORDS
             || (self.pump_documents > 0
                 && (self.pump_source_bytes + record.text_bytes > MAX_PUMP_BYTES
                     || self.pump_output_bytes + bytes > MAX_PUMP_BYTES))
@@ -331,6 +353,7 @@ impl GenerationBuilder {
             return Err(IndexError::GenerationLimit);
         }
         self.pump_documents += 1;
+        if !reused { self.pump_new_documents += 1; }
         self.pump_source_bytes += record.text_bytes;
         self.pump_output_bytes += bytes;
         self.total_bytes += bytes;
@@ -372,5 +395,60 @@ impl PreparedGeneration {
     /// Inspection of staging never certifies durable publication.
     pub fn into_parts(self) -> (PublicationFence, Generation) {
         (self.fence, self.generation)
+    }
+}
+
+#[cfg(test)]
+mod reuse_pump_budget_tests {
+    use super::*;
+    use crate::{SemanticVersions, SourceSnapshotId, SourceWatermark};
+    use zorid_core::{EntryState, OperationId, Revision, VaultPath};
+    fn builder(documents: usize) -> GenerationBuilder {
+        let local = OperationId::new("reuse-budget-store").unwrap();
+        let source = SourceSnapshotId::new(local.clone(), SourceWatermark::new("1").unwrap());
+        let entries = (0..documents).map(|n| EntryState {id: EntryId::new(format!("entry-{n:04}")).unwrap(), path: VaultPath::new(format!("Note{n}.md")).unwrap(), revision: Revision::new("r1").unwrap(), kind: EntryKind::File, deleted:false }).collect();
+        let manifest = Manifest::new(source.clone(), entries).unwrap();
+        let snapshot = IndexSnapshotId::new(local, OperationId::new("reuse-budget-epoch").unwrap(), 1, SemanticVersions::new(INDEX_SCHEMA_VERSION, document_extraction_version(), RESOLVER_VERSION, LITERAL_QUERY_VERSION).unwrap()).unwrap();
+        GenerationBuilder::new(manifest, PublicationFence::new(source, None, snapshot).unwrap()).unwrap()
+    }
+    fn record(builder: &GenerationBuilder, index: usize, source: String) -> IndexRecord {
+        let id = EntryId::new(format!("entry-{index:04}")).unwrap();
+        IndexRecord::text(builder.manifest().witness(&id).unwrap(), &MetadataRequest {entry_id:id,content_revision:Revision::new("r1").unwrap(),source}, true).unwrap()
+    }
+    #[test]
+    fn reuse_total_and_new_record_budgets_are_independent_and_reset_together() {
+        let mut b = builder(129);
+        assert_eq!(b.pending_entries().len(), 32);
+        assert_eq!(b.pending_entries_with_reuse().len(), 128);
+        for index in 0..32 { b.add_reused(record(&b,index,"body".into())).unwrap(); }
+        for index in 32..64 { b.add(record(&b,index,"body".into())).unwrap(); }
+        let next = record(&b,64,"body".into());
+        assert_eq!(b.preflight_extraction(next.witness(),4), Err(IndexError::PumpLimit));
+        assert_eq!(b.add(next.clone()), Err(IndexError::PumpLimit));
+        b.add_reused(next).unwrap();
+        for index in 65..128 { b.add_reused(record(&b,index,"body".into())).unwrap(); }
+        assert_eq!(b.prepared_records(),128);
+        let final_record=record(&b,128,"body".into());
+        assert_eq!(b.add_reused(final_record.clone()),Err(IndexError::PumpLimit));
+        assert_eq!(b.preflight_extraction(final_record.witness(),4),Err(IndexError::PumpLimit));
+        b.begin_pump();b.add(final_record).unwrap();assert!(b.ready());
+    }
+    #[test]
+    fn reused_sources_and_new_records_share_the_existing_byte_budget() {
+        let mut b=builder(3);
+        b.add_reused(record(&b,0,"x".repeat(600*1024))).unwrap();
+        let next=record(&b,1,"x".repeat(600*1024));
+        assert_eq!(b.add_reused(next.clone()),Err(IndexError::PumpLimit));
+        assert_eq!(b.preflight_extraction(next.witness(),600*1024),Err(IndexError::PumpLimit));
+        b.add(record(&b,2,"small".into())).unwrap();
+    }
+    #[test]
+    fn reused_and_new_records_share_the_encoded_output_budget() {
+        let mut b=builder(3);
+        let large=|builder:&GenerationBuilder,index|{let mut record=record(builder,index,"small".into());record.metadata.as_mut().unwrap().aliases=vec!["x".repeat(600*1024)];record};
+        b.add_reused(large(&b,0)).unwrap();
+        assert_eq!(b.add_reused(large(&b,1)),Err(IndexError::PumpLimit));
+        assert_eq!(b.add(large(&b,1)),Err(IndexError::PumpLimit));
+        b.add(record(&b,2,"small".into())).unwrap();
     }
 }

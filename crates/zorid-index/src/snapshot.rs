@@ -2,7 +2,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use zorid_core::{EntryId, EntryKind, EntryState, OperationId};
 
+// Newly prepared records, including parse-cache hits and exclusions.
 pub const MAX_PUMP_DOCUMENTS: usize = 32;
+// Total newly prepared plus proven unchanged records in one bounded pump.
+pub const MAX_PUMP_RECORDS: usize = 128;
 pub const MAX_PUMP_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
