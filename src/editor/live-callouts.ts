@@ -38,7 +38,7 @@ const ignored = new Set(['FencedCode', 'CodeBlock', 'HTMLBlock', 'CommentBlock',
 
 function discover(state: EditorState, previous: readonly Span[] = [], transaction?: Transaction): Span[] {
   const tree = syntaxTree(state), prefix = bodyStart(state), old = new Map<number, Span>();
-  const documentText = state.doc.toString();
+  let documentText: string | undefined;
   for (const span of previous) {
     const from = transaction ? transaction.changes.mapPos(span.from, 1) : span.from;
     old.set(from, span);
@@ -52,6 +52,7 @@ function discover(state: EditorState, previous: readonly Span[] = [], transactio
     const line = state.doc.lineAt(node.from), first = line.text.match(/^ {0,3}>[ \t]?(.*)$/);
     if (node.from < prefix || !first || !parseCalloutHeader(first[1]) || node.to === tree.length && tree.length < state.doc.length) return false;
     const from = line.from, to = node.to, source = state.doc.sliceString(from, to), prior = old.get(from);
+    documentText ??= state.doc.toString();
     spans.push({ from, to, source, documentText, identity: prior?.identity ?? {}, folds: prior?.source === source ? prior.folds : new Map() });
     return false;
   } });
