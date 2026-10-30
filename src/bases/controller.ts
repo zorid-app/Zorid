@@ -1057,7 +1057,7 @@ export class BaseController {
       // Inline configuration is not the containing note's property transform.
       // The host replaces only its captured fence and retains the whole draft.
       validateSelection();
-      await this.options.inlineSource.transform(expected, desired, validateSelection);
+      await this.options.inlineSource.transform(expected, desired, validateSelection, validateWrite);
     } else await this.options.mutations.transform(this.path, transform, validateSelection, validateWrite, witness, {
       attempt,
       validate(source) {
