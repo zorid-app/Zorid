@@ -7,18 +7,21 @@ import type { DocumentService, DocumentBaseResult } from '../src/core/document-s
 import { BaseDocument } from '../src/bases/document.ts';
 import { createBaseSession } from '../src/bases/session.ts';
 import { NoteBuffer } from '../src/ui/note-buffer.ts';
+import type { DatabaseService, DatabaseCollection } from '../src/core/databases.ts';
 const tick = () => new Promise<void>(done => setTimeout(done,8));
 async function until(check:()=>boolean|Promise<boolean>) {for(let i=0;i<150;i++){if(await check())return;await tick();}assert.ok(await check());}
 function deferred(){let resolve!:()=>void;const promise=new Promise<void>(done=>resolve=done);return {promise,resolve};}
 type Gate={started:ReturnType<typeof deferred>;release:ReturnType<typeof deferred>};
 async function fixture(enhanced=true){
  class Adapter extends MemoryAdapter {
-  documentSemantics?:DocumentService; revision=1;
+  documentSemantics?:DocumentService; databases?:DatabaseService; revision=1;
   override async list(){return(await super.list()).map(row=>({...row,entryId:row.path,revision:row.path==='Work.base'?`r${this.revision}`:'r1'}));}
   override async stat(path:string){return(await this.list()).find(row=>row.path===path)??null;}
   override async write(path:string,text:string){await super.write(path,text);if(path==='Work.base')this.revision++;}
  }
- const adapter=new Adapter({'Work.base':'views: [{type: table, name: Table, order: [score], summaries: {score: Sum}}]\n','One.md':'---\nscore: 10\n---\n'});
+ const adapter=new Adapter({'Work.base':'views: [{id: aaaaaaaaaaaa, type: table, name: Table, source: {kind: collection, id: abcdefghijkl}, order: [scorevalueid], summaries: {scorevalueid: Sum}}]\n','One.md':'---\nscore: 10\n---\n'});
+ const collection:DatabaseCollection={id:'abcdefghijkl',name:'Summary fixture',revision:'schema-r1',deleted:false,properties:[{id:'scorevalueid',name:'Score',datatype:'number',options:[]}]};
+ adapter.databases={async request(command){assert.equal(command.op,'get');return{collections:[collection],entries:[{entryId:'One.md',collectionId:collection.id,revision:'member-r1',fileRevision:'r1',path:'One.md',values:{scorevalueid:10},deleted:false,pendingProjection:false}],projection:{pending:0,issues:[]}};}} as DatabaseService;
  const snapshot={localStoreId:'store',generationEpoch:'epoch',generation:'1',versions:{schema:1,extraction:'md1',resolver:'r1',query:'q1'}},source={localStoreId:'store',watermark:'1'};
  const definition=()=>({id:'Work.base',revision:`r${adapter.revision}`,path:'Work.base',kind:'file' as const,deleted:false});
  const unused=async():Promise<never>=>{throw new Error('Unexpected core effect');};
@@ -26,7 +29,7 @@ async function fixture(enhanced=true){
   open:async()=>({pinId:'pin' as never,source,snapshot,coverageComplete:true,close:async()=>{},search:unused,backlinks:unused,metadata:async()=>({source,snapshot,coverageComplete:true,value:{entry:definition(),metadata:null,exclusion:null}}),
    base:async()=>{
     const view=BaseDocument.parse(await adapter.read('Work.base')).views[0];
-    const result:DocumentBaseResult={snapshotId:snapshot,view,rows:[{entryId:'One.md',revision:'r1',path:'One.md',values:{'note.score':{type:'number',value:10}}}],groups:[{key:null,keyId:null,entryIds:['One.md']}],groupOptions:[],properties:['note.score'],availableProperties:['note.score'],counts:{scanned:1,matched:1,afterGroupOrder:1,afterSearch:1,returned:1},diagnostics:[],relationshipsAvailable:true,metadataComplete:true,metadataIssues:[],stepsUsed:1,summaries:{'note.score':{type:'number',value:10}},summaryPreviews:{Sum:{type:'number',value:10}}};
+    const result:DocumentBaseResult={snapshotId:snapshot,view,rows:[{entryId:'One.md',revision:'r1',path:'One.md',values:{'note.scorevalueid':{type:'number',value:10}}}],groups:[{key:null,keyId:null,entryIds:['One.md']}],groupOptions:[],properties:['note.scorevalueid'],availableProperties:['note.scorevalueid'],counts:{scanned:1,matched:1,afterGroupOrder:1,afterSearch:1,returned:1},diagnostics:[],relationshipsAvailable:true,metadataComplete:true,metadataIssues:[],stepsUsed:1,summaries:{'note.scorevalueid':{type:'number',value:10}},summaryPreviews:{Sum:{type:'number',value:10}}};
     return{source,snapshot,coverageComplete:true,value:{definition:definition(),result}};
    },
   }),
@@ -39,7 +42,7 @@ async function fixture(enhanced=true){
  dom.window.Range.prototype.getBoundingClientRect=()=>new dom.window.DOMRect();
  dom.window.HTMLElement.prototype.scrollIntoView=()=>{};
  const session=createBaseSession(host,{vault,basePath:'Work.base',validate(){},openFile(){},buffers:{validate(){},async getBuffer(path){let buffer=buffers.get(path);if(!buffer){buffer=new NoteBuffer(vault,path);Object.defineProperty(buffer,'savedDurableWitness',{get:()=>({path,entryId:path,revision:path==='Work.base'?`r${adapter.revision}`:'r1'})});buffers.set(path,buffer);}await buffer.load();return buffer;}}});await session.ready;
- host.querySelector<HTMLElement>('[data-summary-property="note.score"]')!.click();await until(()=>!!doc.querySelector('[aria-label="Edit Sum"]'));doc.querySelector<HTMLButtonElement>('[aria-label="Edit Sum"]')!.click();await until(()=>!!doc.querySelector('[aria-label="Summary expression"]'));
+ host.querySelector<HTMLElement>('[data-summary-property="note.scorevalueid"]')!.click();await until(()=>!!doc.querySelector('[aria-label="Edit Sum"]'));doc.querySelector<HTMLButtonElement>('[aria-label="Edit Sum"]')!.click();await until(()=>!!doc.querySelector('[aria-label="Summary expression"]'));
  const expression=doc.querySelector<HTMLTextAreaElement>('textarea[aria-label="Summary expression"]')!;
  const content=enhanced?doc.querySelector<HTMLElement>('.cm-content[aria-label="Summary expression"]')!:expression,view=enhanced?EditorView.findFromDOM(content):undefined;if(enhanced)assert.ok(view);assert.equal(expression.hidden,enhanced);
  const focus=()=>{if(view)view.focus();else expression.focus();};
@@ -56,8 +59,8 @@ for(const enhanced of [false,true])test(`actual ${enhanced?'enhanced':'native'} 
   // Scheduler gate only: the original shared-buffer flush really writes A.
   buffer.flush=async()=>{await originalFlush!();if(!held&&f.expression.value==='values.length'){held=true;gate.started.resolve();await gate.release.promise;}};
   const original=await f.adapter.read('Work.base');
-  assert.ok(original.includes('  Sum: values.sum().round(2)\n'));
-  const sourceA=original.replace('  Sum: values.sum().round(2)\n','  Sum: values.length\n'),sourceB=original.replace('  Sum: values.sum().round(2)\n','  Sum: values.sum() + 7\n');
+  assert.equal(original.split('Sum: values.sum().round(2)').length,2);
+  const sourceA=original.replace('Sum: values.sum().round(2)','Sum: values.length'),sourceB=original.replace('Sum: values.sum().round(2)','Sum: values.sum() + 7');
   f.edit('values.length');await gate.started.promise;assert.equal(await f.adapter.read('Work.base'),sourceA,'A has really saved before its acknowledgement tail is held');
   f.edit('values.sum() + 7');await new Promise(done=>setTimeout(done,300));
   const outside=f.doc.querySelector<HTMLButtonElement>('#outside')!;
