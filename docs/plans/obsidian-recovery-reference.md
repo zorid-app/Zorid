@@ -121,3 +121,47 @@ backoff and independent-draft failed-backup timer retries. Initial native host
 readmission and exact uncertain-write reconciliation remain architecture duties.
 Access to existing protected draft versions remains to avoid stranding user data;
 this is a known Zorid-specific compatibility surface, not claimed Obsidian parity.
+
+Reviewed follow-up cuts are integrated in the delivery branch as `390446f4`
+(failed-readmission timer) and `3603eb04` (failed-backup timer). Exact pending
+requests, explicit actions and real availability-driven attempts remain. The
+combined 250-test run passes with zero skips, including no-timed-replay tests,
+conditional-capture failure before Native dispatch, exact retained CAS reuse,
+Workspace admission/custody and history. TypeScript and native renderer build pass;
+Electron 44.9.1 package verification checks 361 files. Rust source is unchanged;
+the previously verified release host is reused at SHA256
+`7eb957c8aaee17004c03160f88d2f3b658b6ee93cf42f644331297a855f72447`.
+
+Actual packaged save/normal-quit/restart/readback passes in an isolated profile
+(`/private/tmp/zorid-recovery-scope-package-smoke001/receipt.json`), both app exits
+0 with no signal. Native fault attempt002 passes 17 semantic checks including
+retained editable B, no automatic publication, exact original A checkpoint replay
+and explicit B commit, then fails a shutdown process-identity assertion. Its
+observed exit-name string is not proof of zombie state; test-only diagnostic
+`cf22fd5d` records the exact row without relaxing checks. Full attempt002 is failed,
+not accepted. Rerun and installation are pending.
+
+Final native attempt006 passes all 27 checks at frozen `dfa37839`, using the
+combined product runtime `4efdee5c`; source and artifacts unchanged throughout.
+Evidence: `/private/tmp/zorid-recovery-scope-native-result-20261030-006/result.json`.
+The final test-only graceful-quit sequencing fix stops active polling before the
+guarded normal quit, waits for authenticated PIDs absent/Z, then checks genuine
+normal-close events. Attempt005 actually recorded state S/command(node), so E
+handling must not be presented as its proven explanation. Earlier failures remain
+failed records. The focused ownership/real-relay checks pass 26/26.
+
+The combined product includes the concurrently reviewed startup-overlap, property
+membership deduplication and Base schema-read reuse. Its separate composition run
+passes197/197, zero skips; this overlaps earlier counts. Combined package passes
+361-file verification and isolated save/quit/restart/readback, both app exits0.
+ASAR SHA256 `7b37c3289d28b44b69554e9c384f6226c816578521a3eced654d0841f51fa73e`.
+No 800ms or measured startup improvement is claimed by this recovery delivery.
+
+Installed result: `/Users/ctk/Applications/Zorid.app`, Electron44.9.1/Native7eb/
+ASAR7b37c328. Stage and installed361-file checks pass. Actual installed smoke
+passes save/normal-quit/restart/readback, both exits0/null, no owned test processes
+left. Previous bundle and obsolete agent stage deleted after installed proof.
+Receipt `/private/tmp/zorid-recovery-scope-install.json`; real runningPID87800,
+vaults and preferences preserved. All confirmed source integrated into main.
+This completes the scoped timer-policy cuts and delivery, with the recorded
+reference/type-coverage and protected-journal compatibility differences retained.

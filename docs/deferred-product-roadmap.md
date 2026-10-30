@@ -2,6 +2,23 @@
 
 ## Execution checkpoint — shared-core coordinator
 
+**RECOVERY POLICY SIMPLIFICATION / COMBINED DELIVERY — 2026-10-30.**
+Root retains sole main/native/install ownership. Removed recurring failed-reconnect
+and independent-backup timer policy while preserving retained data and exact-write
+integrity. Combined recovery250 and recovery/performance197 scoped tests pass,
+zero skips (overlap); TS/native renderer and361-file package verification pass.
+Actual native fault006 passes27checks including exact A/B sequencing, restart and
+normal closure. Combined runtime4efdee5c includes reviewed performance404e/651f/5add;
+Native7eb unchanged. User stopped the concurrent performance session; selected-file
+Rust observation and further performance measurement stay isolated/deferred.
+Installed combined app save/restart smoke PASS with both normal0 exits; old bundle
+deleted after proof. Receipt /private/tmp/zorid-recovery-scope-install.json.
+Reference limits and failed prior
+native attempts remain explicit in docs/plans/obsidian-recovery-reference.md.
+This checkpoint supersedes earlier installation blockers for this scoped delivery,
+not broader performance/reference/mobile acceptance. Real appPID87800 untouched.
+
+
 **NOTION UI MERGED/INSTALLED — explicit user request,2026-10-29.**
 User directed this session to merge, then build/install/delete previous bundle.
 Clean main fast-forwarded58da213c (reviewed runtimece974470);408 focused tests,

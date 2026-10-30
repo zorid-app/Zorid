@@ -205,7 +205,7 @@ return ui;}
 async function quit(name){
   assert.ok(child&&!exited());
   // Finish active ownership observation before deliberately tearing its process
-  // tree down. macOS ps can expose an old state with an exiting command name.
+  // tree down. Command identity can disappear before the process PID does.
   clearInterval(nativePoll);nativePoll=undefined;await nativeObservationTail;
   if(nativeObservationFailure)throw nativeObservationFailure;
   await nativeChildren();

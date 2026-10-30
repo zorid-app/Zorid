@@ -2,16 +2,41 @@
 
 ## File recovery scope follow-up — 2026-10-30
 
-User requests a fresh check of current Zorid and Obsidian file recovery and no
-additional recovery policy beyond Obsidian. Root owns integration/build/install
-for this continuation; isolated delivery `codex/recovery-scope-delivery`.
-Independent audit confirms native history already uses five-minute snapshots and
-seven-day retention outside the vault, currently Markdown only. Main already
-includes the Base Review/Copy removal and ordinary failed-save backoff removal.
-Named workers own isolated Workspace failed-reconnect timer removal, independent
-draft backup timer removal, and the test-only hidden-summary-textarea oracle fix.
-Stored snapshots/journals and Rust write-integrity checks stay intact. Validation,
-main integration and installation are pending; no complete parity claim.
+User requests current Zorid/Obsidian comparison and removal of extra recovery
+policy. Independent audit confirms native history already uses five-minute
+snapshots and seven-day retention outside the vault, currently Markdown only.
+Main already included single-attempt history/loading, ordinary failed-save backoff
+removal, and replacement of bespoke Base Review/Copy controls.
+
+Reviewed new cuts remove indefinite failed-readmission timers (`390446f4`) and
+failed independent-backup timers (`3603eb04`). Failed capture barriers now reject
+truthfully; exact retained requests, stored versions, explicit actions and genuine
+availability-driven attempts remain. Rust transaction/receipt/ownership safeguards
+remain. Protected-draft access is retained compatibility, not claimed reference
+parity. See [comparison](plans/obsidian-recovery-reference.md).
+
+Combined recovery run250/250 and recovery/performance composition197/197 pass,
+zero skips (counts overlap). TypeScript/native renderer build and361-file package
+verification pass. Native fault006 passes27 checks, including retained editable B,
+no automatic publication, exact original A checkpoint replay, explicit B commit,
+normal quit and restart readback. Earlier002/003/005 semantic checks passed but
+whole runs FAILED process observer shutdown;004 failed initial actionability.
+005 captured state S with command(node), so do not attribute it to E state.
+Reviewed test-only quit sequencing waits for authenticated PIDs to disappear/Z
+before strict final real-close verification. No product failure is hidden.
+
+At user coordination request, reviewed performance pins404e1a1c/651f0218/5add9180
+were composed as4ab29081/de8580a0/4efdee5c and validated with recovery. Duplicate
+hidden-mirror oracle skipped. User subsequently stopped the performance session;
+selected-file Rust work and further startup measurement remain separate.
+Installed `/Users/ctk/Applications/Zorid.app` with combined runtime4efdee5c,
+Electron44.9.1, unchanged Native7eb and ASAR7b37c328. Installed361-file verification
+and actual isolated note save/normalquit/restart/readback PASS; both exits0/null,
+no owned processes left. Previous bundle deleted only after installed proof.
+Personal runningPID87800, vaults and preferences preserved. Final install receipt:
+`/private/tmp/zorid-recovery-scope-install.json`. Changes are on canonical main;
+this closes scoped recovery simplification/install, not complete reference or
+performance acceptance.
 
 ## Merge now; defer further work — 2026-10-30
 
