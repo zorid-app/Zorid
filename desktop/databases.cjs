@@ -38,13 +38,13 @@ const messages=Object.freeze({
   request_limit:'This collection request exceeds a supported limit. Reduce its size and try again.',
   invalid_database_request:'Check the collection name, property settings and values before trying again.',
   invalid_database_response:'The collection response could not be verified. Refresh the collection.',
-  unsupported_host_capability:'This version of the local core does not support collections. Update Zorid and reopen the vault.',
-  client_not_admitted:'This vault session is no longer active. Reopen the vault before making another change.',
-  client_ownership_lost:'This vault session is no longer active. Reopen the vault before making another change.',
+  unsupported_host_capability:'Collections are unavailable in this version of Zorid.',
+  client_not_admitted:'The collection change could not be completed.',
+  client_ownership_lost:'The collection change could not be completed.',
   durable_scope_changed:'The selected vault changed. Reopen the collection in its current vault.',
 });
 function failure(code,uncertain=false){
-  const message=uncertain?'The collection change could not be confirmed. Keep your draft and retry this change rather than submitting a new one.':Object.hasOwn(messages,code)?messages[code]:'The collection request could not finish. Refresh the collection and try again.';
+  const message=uncertain?'The collection change could not be confirmed.':Object.hasOwn(messages,code)?messages[code]:'The collection request could not finish.';
   return Object.assign(new Error(message),{code,source:'host',commitUncertain:uncertain});
 }
 // Capture inert plain data before awaiting or invoking JSON.stringify. Accessors,

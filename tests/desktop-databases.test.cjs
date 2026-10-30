@@ -21,8 +21,8 @@ function fixture(){
   calls.push({command:structuredClone(command),bytes:bytes&&Buffer.from(bytes)});
   if(command.method==='claim_client'){active=true;return{result:{lease}};}
   if(command.method==='release_client'){active=false;return{result:{released:true,reference:command.reference}};}
+  if(command.method==='identity'){if(reference!==undefined){assert.deepEqual(reference,lease);assert.equal(active,true);}return{result:{identity:{local_store_id:'store',realm_id:null,vault_id:null}},bytes:new Uint8Array()};}
   assert.deepEqual(reference,lease);assert.equal(active,true);
-  if(command.method==='identity')return{result:{identity:{local_store_id:'store',realm_id:null,vault_id:null}},bytes:new Uint8Array()};
   assert.equal(command.method,'database_request');assert.equal(command.request.bytes,bytes.length);
   if(gate)await gate.promise;const request=JSON.parse(bytes.toString());return wire(request.command.op,snapshot(request.command.op));
  };
@@ -108,13 +108,19 @@ test('safe collection errors use static domain messages and keep mutation uncert
   ['collection_name_taken','Choose another name'],['collection_invalid_name','reserved characters'],['collection_stale','Refresh it'],
   ['collection_invalid_value','Correct the value'],['collection_not_found','no longer available'],['collection_deleted','Restore it'],
   ['collection_property_name_taken','unique name'],['collection_option_name_taken','unique label'],['collection_source_conflict','draft was kept'],
-  ['invalid_mutation','Check the name'],['new_unknown_host_code','Refresh the collection'],['__proto__','Refresh the collection'],
+  ['invalid_mutation','Check the name'],['new_unknown_host_code','could not finish'],['__proto__','could not finish'],
+  ['client_not_admitted','could not be completed'],['client_ownership_lost','could not be completed'],['unsupported_host_capability','unavailable'],
  ]){
   const envelope={databases:true,schemaVersion:1,ok:false,error:{code,source:'host',commitUncertain:false}};
   assert.throws(()=>decodeDatabaseEnvelope(request,envelope),error=>error.code===code&&error.commitUncertain===false&&error.message.includes(fragment));
  }
  const envelope={databases:true,schemaVersion:1,ok:false,error:{code:'collection_name_taken',source:'host',commitUncertain:true}};
- assert.throws(()=>decodeDatabaseEnvelope(request,envelope),error=>error.code==='collection_name_taken'&&error.commitUncertain===true&&error.message.includes('retry this change rather than submitting a new one')&&!error.message.includes('Choose another name'));
+ assert.throws(()=>decodeDatabaseEnvelope(request,envelope),error=>error.code==='collection_name_taken'&&error.commitUncertain===true&&error.message.includes('could not be confirmed')&&!error.message.includes('Choose another name'));
+ for(const code of ['client_not_admitted','client_ownership_lost','unsupported_host_capability','new_unknown_host_code'])for(const commitUncertain of [false,true]){
+  assert.throws(()=>decodeDatabaseEnvelope(request,{databases:true,schemaVersion:1,ok:false,error:{code,source:'host',commitUncertain}}),error=>{
+   assert.equal(error.code,code);assert.equal(error.commitUncertain,commitUncertain);assert.doesNotMatch(error.message,/reopen|retry|try again/i);return true;
+  });
+ }
 });
 
 test('preload ignores arbitrary native collection diagnostics instead of showing their paths or source',async()=>{
