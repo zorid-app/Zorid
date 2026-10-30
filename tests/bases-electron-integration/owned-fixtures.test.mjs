@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
-import {validateFixtureName,fixturePath,readFixture,writeFixture,campaignClosure} from './owned-fixtures.mjs';
+import {CAMPAIGN_DIRECTORIES,validateFixtureName,fixturePath,readFixture,writeFixture,campaignClosure} from './owned-fixtures.mjs';
 const setup=async t=>{const root=await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),'zorid-fixture-guard-')));t.after(()=>fs.rm(root,{recursive:true,force:true}));const vault=path.join(root,'vault');await fs.mkdir(vault);return{root,vault};};
 test('read and external-write boundaries reject escape/alias names without changing outside files',async t=>{
   const{root,vault}=await setup(t),outside=path.join(root,'outside.md');await fs.writeFile(outside,'retain outside');
@@ -30,4 +30,19 @@ test('sibling campaign dependency changes and newly appearing folders alter prov
   const before=await campaignClosure(tests,hashTree);await fs.writeFile(path.join(clipboard,'clipboard.mjs'),'changed guard');const after=await campaignClosure(tests,hashTree);assert.notDeepEqual(after,before);assert.notDeepEqual(after['bases-electron-clipboard-integration'],before['bases-electron-clipboard-integration']);
   await fs.mkdir(path.join(tests,'bases-electron-config-integration'));assert.notDeepEqual(await campaignClosure(tests,hashTree),after);
   await fs.symlink(clipboard,path.join(tests,'bases-electron-layouts-integration'));await assert.rejects(campaignClosure(tests,hashTree));
+});
+
+test('automatic-recovery campaign file changes alter the exact admitted closure without changing legacy admission',async t=>{
+  const{root}=await setup(t),tests=path.join(root,'tests'),name='bases-electron-auto-recovery-integration',directory=path.join(tests,name);await fs.mkdir(directory,{recursive:true});
+  const campaign=path.join(directory,'campaign.mjs');await fs.writeFile(campaign,'export const revision = 1;\n');
+  const hashTree=async source=>Promise.all((await fs.readdir(source)).sort().map(async file=>[file,createHash('sha256').update(await fs.readFile(path.join(source,file))).digest('hex')]));
+  const before=await campaignClosure(tests,hashTree);await fs.writeFile(campaign,'export const revision = 2;\n');const after=await campaignClosure(tests,hashTree);
+  assert.notDeepEqual(after,before,'mutating the new campaign must change the frozen source closure');assert.notDeepEqual(after[name],before[name]);
+  assert.equal(CAMPAIGN_DIRECTORIES.filter(value=>value===name).length,1,'the new campaign is admitted exactly once');
+  const legacy=['bases-visual-reference','bases-electron-safety-integration','bases-electron-config-integration','bases-electron-properties-integration','bases-electron-clipboard-integration','bases-electron-layouts-integration','bases-electron-recovery-integration','bases-electron-native-select-integration','bases-electron-filter-integration','bases-electron-sidebar-race-integration','bases-electron-selection-integration','bases-electron-sidebar-pin-integration'];
+  assert.deepEqual(CAMPAIGN_DIRECTORIES.filter(value=>value!==name),legacy,'existing campaign admission and ordering stay exact');for(const existing of legacy)assert.deepEqual(after[existing],before[existing]);
+});
+test('automatic-recovery campaign directory aliases reject even when they target an admitted owned sibling',async t=>{
+  const{root}=await setup(t),tests=path.join(root,'tests'),owned=path.join(tests,'bases-electron-clipboard-integration'),name='bases-electron-auto-recovery-integration';await fs.mkdir(owned,{recursive:true});await fs.symlink(owned,path.join(tests,name));
+  const hashed=[];await assert.rejects(campaignClosure(tests,async directory=>{hashed.push(path.basename(directory));return[];}),/cannot be a symlink/);assert.equal(hashed.includes(name),false,'an aliased campaign is rejected before hashing its target');
 });
