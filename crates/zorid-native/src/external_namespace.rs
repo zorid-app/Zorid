@@ -499,6 +499,20 @@ impl NativeVault {
             work_units: budget.used(),
         })
     }
+    /// Candidate metadata only selects work. Namespace evidence must use a
+    /// fresh point read with the complete saved baseline validation intact.
+    fn validate_namespace_candidate(&self, expected: &PhysicalBinding) -> Result<PhysicalBinding> {
+        self.paths.verify()?;
+        let current = self.store
+            .physical_binding(&expected.state.id)?
+            .ok_or(Error::Busy("external namespace binding disappeared"))?;
+        if &current != expected {
+            return Err(Error::Busy("external namespace binding changed during planning"));
+        }
+        self.paths.verify()?;
+        Ok(current)
+    }
+
     fn reconcile_external_locked(
         &mut self,
         options: ScanOptions,
@@ -684,7 +698,9 @@ impl NativeVault {
         // Only a fully covered and revalidated inventory may interpret a
         // missing path. Positive enrollment below has its own local proofs.
         if scan.run.complete {
-            let mut bindings = self.store.physical_bindings()?;
+            // Routing metadata is not baseline/content authority. Exact
+            // positives and completed namespace work need no unrelated bodies.
+            let mut bindings = self.store.physical_binding_metadata()?;
             self.point("external_namespace_candidates_loaded");
             bindings.sort_by(|a, b| {
                 a.state
@@ -724,6 +740,9 @@ impl NativeVault {
                     });
                     break;
                 }
+                // Keep selected corruption fatal, outside the recoverable
+                // attempt catcher and before acknowledging namespace progress.
+                let before = self.validate_namespace_candidate(before)?;
                 if budget.is_some() {
                     namespace_processed.insert(before.state.id.clone());
                 }
@@ -741,8 +760,14 @@ impl NativeVault {
                             || before.state.kind == EntryKind::Folder
                                 && b.state.path.is_descendant_of(&before.state.path)
                     })
-                    .cloned()
-                    .collect();
+                    .map(|member| {
+                        if member.state.id == before.state.id {
+                            Ok(before.clone())
+                        } else {
+                            self.validate_namespace_candidate(member)
+                        }
+                    })
+                    .collect::<Result<_>>()?;
                 for member in &members {
                     handled.insert(member.state.id.clone());
                 }

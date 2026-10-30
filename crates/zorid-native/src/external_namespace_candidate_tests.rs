@@ -62,6 +62,27 @@ fn authored(root: &Path) -> i64 {
         })
         .unwrap()
 }
+fn capture_ready(vault: &mut NativeVault) {
+    let _lock = vault.paths.lock(vault.options.lock_timeout).unwrap();
+    assert!(
+        vault
+            .external_progress_scan_locked(options().scan)
+            .unwrap()
+            .run
+            .complete
+    );
+}
+fn no_namespace_progress(vault: &mut NativeVault) {
+    let (_, cursor) = vault
+        .store
+        .external_scan_progress::<serde_json::Value>()
+        .unwrap();
+    let cursor = cursor.unwrap();
+    assert!(
+        cursor["namespace_processed"].as_array().unwrap().is_empty(),
+        "fatal validation cannot acknowledge namespace work"
+    );
+}
 fn reconcile_source(vault: &mut NativeVault) -> Result<ExternalReconcileReport> {
     let lock = vault.paths.lock(vault.options.lock_timeout)?;
     let admission = EnrolledScan::admit(vault, &lock)?;
@@ -141,6 +162,7 @@ fn selected_negative_move_and_replacement_reject_damaged_body_before_authoring()
                 std::fs::write(root.path().join("Removed.md"), b"replacement occupant").unwrap();
             }
         }
+        capture_ready(&mut vault);
         corrupt_baseline(root.path(), &ids["Removed.md"]);
         let before = authored(root.path());
         assert!(
@@ -152,6 +174,7 @@ fn selected_negative_move_and_replacement_reject_damaged_body_before_authoring()
             before,
             "no authored namespace mutation: {action}"
         );
+        no_namespace_progress(&mut vault);
         let retained = if action == "move" {
             "Moved.md"
         } else if action == "replacement" {
@@ -180,6 +203,7 @@ fn selected_negative_move_and_replacement_reject_damaged_body_before_authoring()
 fn moved_folder_validates_every_selected_member_before_authoring() {
     let (root, mut vault, ids) = fixture(true);
     std::fs::rename(root.path().join("Folder"), root.path().join("MovedFolder")).unwrap();
+    capture_ready(&mut vault);
     corrupt_baseline(root.path(), &ids["Folder/member.md"]);
     assert!(
         vault
@@ -192,6 +216,7 @@ fn moved_folder_validates_every_selected_member_before_authoring() {
     let before = authored(root.path());
     assert!(reconcile_source(&mut vault).is_err());
     assert_eq!(authored(root.path()), before);
+    no_namespace_progress(&mut vault);
     assert_eq!(
         std::fs::read(root.path().join("MovedFolder/member.md")).unwrap(),
         b"member original"
@@ -226,16 +251,62 @@ fn foreign_corruption_after_candidate_enumeration_cannot_author_a_stale_namespac
     });
     let _clear = ClearForeign;
     vault.fault = Some(foreign_change);
-    let rejected = match reconcile_source(&mut vault) {
-        Err(_) => true,
-        Ok(report) => !report.issues.is_empty(),
-    };
+    let rejected = reconcile_source(&mut vault).is_err();
     assert!(
         FOREIGN_CHANGE.with(|slot| slot.borrow().is_none()),
         "foreign writer actually ran after enumeration"
     );
     assert!(rejected);
     assert_eq!(authored(root.path()), before);
+    no_namespace_progress(&mut vault);
+    assert_eq!(
+        std::fs::read(root.path().join("Kept.md")).unwrap(),
+        b"kept unchanged"
+    );
+}
+
+#[test]
+fn foreign_metadata_change_after_enumeration_cannot_acknowledge_stale_namespace_work() {
+    let (root, mut vault, ids) = fixture(false);
+    std::fs::remove_file(root.path().join("Removed.md")).unwrap();
+    capture_ready(&mut vault);
+    let before = authored(root.path());
+    let mut changed = vault
+        .store
+        .physical_binding(&ids["Removed.md"])
+        .unwrap()
+        .unwrap();
+    changed.physical.inode = "999:999".into();
+    let expected = changed.clone();
+    let database = root.path().join(".zorid/vault.sqlite");
+    FOREIGN_CHANGE.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move || {
+            let sql = rusqlite::Connection::open(database).unwrap();
+            assert_eq!(
+                sql.execute(
+                    "UPDATE physical_bindings SET inode=?1,record=?2 WHERE entry_id=?3",
+                    rusqlite::params![
+                        changed.physical.inode,
+                        serde_json::to_string(&changed).unwrap(),
+                        changed.state.id.as_str()
+                    ]
+                )
+                .unwrap(),
+                1
+            );
+        }))
+    });
+    let _clear = ClearForeign;
+    vault.fault = Some(foreign_change);
+    assert!(matches!(reconcile_source(&mut vault), Err(Error::Busy(_))));
+    assert!(FOREIGN_CHANGE.with(|slot| slot.borrow().is_none()));
+    assert_eq!(
+        vault.store.physical_binding(&ids["Removed.md"]).unwrap(),
+        Some(expected),
+        "changed binding is individually valid, not merely malformed JSON"
+    );
+    assert_eq!(authored(root.path()), before);
+    no_namespace_progress(&mut vault);
     assert_eq!(
         std::fs::read(root.path().join("Kept.md")).unwrap(),
         b"kept unchanged"
