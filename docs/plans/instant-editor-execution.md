@@ -23,73 +23,74 @@ was blocked; that is historical, not a current execution blocker.
 
 ## Latest execution handoff — 2026-10-30, ongoing
 
-Root remains sole integration/build owner in `.worktrees/instant-editor`, branch
-`codex/instant-editor-current`; main7d8006b8 and installed app are UNCHANGED. User
-continues this goal; do not stop from stale built-in blocked status. No other user
-session coordination. Current Root runtime through445d4f58; all source below is
-isolated pending final native/GUI/integration/install gates.
+Root owns integration/builds in `.worktrees/instant-editor`, branch
+`codex/instant-editor-current`. Main remains `7d8006b8`; installed app unchanged.
+User resumed work explicitly; stale built-in blocked state is not a stop request.
+No coordination with the other user session. Product runtime through `09aaa92b`;
+Root HEAD `eb33600c` includes reviewed verification-only successors.
 
-Composed after package009: reviewed Base followups through10223f09; compatibility
-8aa1799f/a0d1ff49; Canvasc2ae75aa (Root15/15); managedPropertiese9537f00
-(Root36+12=48); lazy canonical startup56e126a1/352375d7 (Root80+58=138 checks,
-no800ms claim); capacity9e9d2d77/4aa7b44f/76de89da (Root121/121, preserves exact
-original operations/newer raw drafts); initial Main admission2f1b59b7/84c42f14/
-1877db4e (Root135/135 incl certificate, trusted Native-error brand, same retained
-context promise, scope/cleanup/dispatch fences; no renderer reload/retry loop).
-Pure identity host loss before any authority anchor and healthy unknown claim
-remain deliberately fenced rather than inventing scope or a lease.
+Package011 is verified: Native SHA256
+`2f5851c08d5e42c18b395123e929c0b3f50b2c6dbd3a9439b966afa5602684a3`,
+ASAR `3b7ce134959b229b7bd7513402e9e5c083726b06acb4468cc039e74790c89e1a`.
+Production015 source receipt matches current Rust digest
+`7524534e7c36970c5ed3556ff6bde1ec983a77a70641824b9584a22cb7560a38`.
+TS/Vite/macOS361-file verification passed. Package011 is not installed yet.
 
-Native own-publication continuation: test0c378c9d actualRED2fail/1controlpass;
-producte684d425/337d266a, fixture10d68f2a independently reviewed. RootGREEN001
-compiled6/7; one fixture used /var alias with SQLiteNOFOLLOW; canonical path fix
-retained foreign checkpoint oracle. GREEN0027/7pass. Broader GREEN012 all181
-Native/Host checks pass, source unchanged. Production013 optimizedhost SHA
-3ef526aee653c9b198303c879da074c90113abf5930ea4e7e4729553dfc7b5ad;
-Rust digest9d86cf59a7cc2bf0df8e60c5f9c4e78a90c2bd1fc9e2411a9ace04a5d623d0dc.
-Actual framed tests43c7628c/049361f6/445d4f58: first run1/2 due projection DTO
-assertion expecting string instead of existing object; correction reviewed, second
-run2/2PASS with actual optimizedhost (1.31s), automatic Core polling/fresh namespace/
-normal EOF and old proofs preserved. No scheduler-isolation/performance claim.
+Reviewed source composed: exact capture/retirement through10fd7ffa; Base original
+operation continuation through10223f09; Canvasc2ae75aa; managedPropertiese9537f00;
+lazy selected checkpoint +capacity through76de89da; initial Main admission through
+1877db4e; own-publication scan continuation through337d266a. Background correction
+`de7504b8` supersedes metadata-only-forever: after selected first rAF, classify one
+canonical head per task, preserving unopened recovery/conflict actions, no clean
+SOURCE-body reads or actors. Root419/419 transport/capture checks,271/271 Base/UI,
+65/65 background/capacity checks and TS pass. Logs in tmp/instant-editor-validation:
+capture-request-composed-js003,base-config-composed-green005,
+background-capacity-composed-green002,composed-ts004.
 
-Root found added normal-import repeated seed construction/processed-set filtering.
-capture_native_finish owns bounded immutable per-directory hint reuse + moving
-already-validated bounded metadata maps after final normal use. Test-only RED pin
-e4126078 is READY but NOTCOMPOSED/RUN; no production edits yet at this handoff.
-Concept reviewed; skip budget/combined4096+1MiB caps/authority/CP fences remain.
-Do not lose progress through direct send_message to completed agents: use followup_task.
+Native seed optimization `e002b86d` RED then `09aaa92b` GREEN removes repeated
+seed reconstruction and processed-map cloning; fresh authority/proof validation,
+finite hints, namespace completion and4096/1MiB caps remain. Actual counter RED
+8builds/256paths/36processed visits/256retains; GREEN1/32/0/0. GREEN014 all eight
+Native/Host groups pass. Production015 compiled optimized host; actual framed003
+2/2pass incl original guard/callerID/restart and automatic polling to fresh namespace,
+exact bytes/replay, normal EOF. Prior1000-note reversed Native pairs019/020 mixed;
+no consistent latency claim. These pairs predate final seed optimization.
 
-Native controlled no-own-write pairs019/020 (old frozen6c vs3ef) completed normally:
-019 old9.655s/new10.231s import, audit4.623s/5.238s;
-020 new9.277s/old10.525s import, audit3.842s/3.813s.
-Mixed order/cache effects: NO consistent latency win/regression claim. All1001
-sources/IDs/revisions/cursor exact, audit0imports, normal EOF. Reports under
-Roottmp/instant-editor-validation/own-publication-fresh019,020. Performance resource
-hold on Base worker still needs RELEASE after this checkpoint (Native pair done).
+Real public-API Native collection fixture `84482367` independently prepared and
+verified; strict runner skips prepared files rather than rewriting them. Root full
+Base/UI271pass includes managed collection fixture compatibility. Actual GUI003
+showed scores2/3, writable New and footer5. First held Summary A reached Native;
+second B input failed because autocomplete covered the pointer target. No fault
+injected; watchdog/cleanup released A. SIGTERM cleanup exit0/no leaks is not normal
+acceptance. Reviewed harness `eb33600c` keeps original focused editor and uses real
+keyboard input with identity/focus/selection/IME guards; Root6/6 focused checks pass.
+Actual004 passed focused B input and injected lock denial, then failed because Native
+returned filesystem_failed/commitUncertain rather than expected checkpoint_storage.
+Lock mode restored. Later exact original checkpoint/intent committed during cleanup;
+not recovery acceptance. Cleanup observer rejected relay process command as transient
+(node); subsequent owned PID30552/30563 absence confirmed. Worker owns contract and
+cleanup diagnosis; do not weaken oracle without source evidence.
+Receipts: /private/tmp/zorid-bases-recovery-candidate011-20261030-003 and -004.
 
-Package010 at sourcee953 passedTS/Vite/361fileverification with OLDhost6c;
-ASAR9fc1bb811866ffe133f49a07c797da72b6eab1a527ab786d2b472fd9a9d3a6ed.
-It predates lazy startup, capacity, new Main admission and Native continuation.
-Native recovery preflight001 rejected Root's mistyped fullHEAD before any launch.
-002 matched source/artifacts but FAILED BEFOREfault: legacy vault-view summary
-footer absent (collection-only controls). Cleanup used SIGTERM despite exit0;
-not normal acceptance, leaked[]. Exact receipt /private/tmp/zorid-bases-recovery-
-candidate010-20261030-002/result.json. Do not describe this as successful fault proof.
+Startup harness through `17171f0c` has early navigation-safe observer, original
+spawn clock, mandatory measured foreground/input/body/CAS guards, optional isolated
+empty-profile warm and explicit5MiB large restore via normal UI. Root64checks pass.
+Actual control100 warm failed before measurement: app visible but document unfocused,
+activation attempted once. No reset, measured launch or latency result. App exit0,
+Native normal exit unproven because observer installed after foreground. Existing
+report retains warm case/activation history. Worker index_redundancy owns bounded
+harness correction: read-only unmeasured warm need not activate, lifecycle observation
+independent of focus, passive failure diagnostics; measured guards unchanged.
+Receipt /private/tmp/zorid-packaged-startup-candidate011-control100-20261030.
 
-Base parent reports FULL fixture ports217/217 incl mobile, reviewed pins READY
-372176d4→b6533386→95a15a2e (NOTCOMPOSED). All earlier37 full-gate failures
-proved on byte-identical fixtures at both10fd baseline ande953 before repairs.
-Actual collection scene provisioning7b51340b (NOTCOMPOSED) adds public Native
-prelaunch fixture setup and strict prepared-file skip/no rewrites; pure7contracts
-pass, source review accepted, REAL Native provision/GUI unexecuted. Root ACKed
-narrow common runner hook. Safety scene modernization remains deferred, not ready.
-Do not claim old vault-property Native campaign parity. All worker worktrees clean.
-
-Next: release quiet resource hold; actual seed-work RED then reviewed removal,
-Root7+appropriate broaderRust+optimizedrebuild; compose fixture/scene pins; full
-integrated TS/JS and REAL Native provisioning/fault checks; package newmatchedhost;
-actual800ms startup/reopen+Base validation; integrate main/build/verify/install
-staged replacement per standing authorization. Current free disk~4.6GiB; preserve
-vaults/preferences/installedapp, only own rebuildable caches if necessary.
+Remaining gates: actual recovery campaign success; valid startup/first-import/large
+restore/Base measurements and necessary fixes; scoped final review, main integration,
+final build/verify/staged install. No800ms startup claim. Ordinary185.99ms and432KB
+293.69ms prior package009 opening evidence is narrower than these remaining gates.
+Current disk about1.9GiB. Closed disposable cache archives are byte-verified at
+`tmp/instant-editor-artifacts/closed-fixture-caches001/receipt.json`; public notes,
+profiles, reports, current binaries, real vaults/preferences and installed app remain.
+Historical private cache inodes were removed, not preserved as runnable fixtures.
 
 ## Current execution checkpoint — 2026-10-30
 

@@ -3197,3 +3197,19 @@ predate latest runtime; fault002 failed before injection from outdated readonly
 fixture and had forced cleanup. Actual collection fixture port reviewed but notrun.
 Main/install and actual800ms startup/Base remain OPEN. Latest exactpins/receipts
 are in instant-editor-execution.md latesthandoff.
+
+
+### 2026-10-30 — Continued Native recovery and startup validation
+
+Runtime09aaa92b/package011 builds and verifies; Root419 transport/capture checks,
+271 Base/UI and65 background/capacity checks pass. Unopened recovery actions restored
+with bounded post-first-frame classification; repeated Native seed construction and
+map cloning removed with actual RED/GREEN counters. Actual Native recovery003 reached
+held Summary A but autocomplete blocked test pointer input for B, before fault injection.
+Reviewed focused-editor keyboard harness correction composed; actual004 passed input
+and injected lock denial, then hit Native error-code contract mismatch. Original lock
+mode restored and owned processes confirmed gone; recovery acceptance still open.
+Startup control100 failed during unmeasured warm foreground acquisition; no measured
+launch/reset or800ms result. Harness-only lifecycle/warm correction in progress.
+Main and installed app unchanged; final GUI acceptance/integration/install remain open.
+Exact receipts and pins: docs/plans/instant-editor-execution.md latest handoff.
