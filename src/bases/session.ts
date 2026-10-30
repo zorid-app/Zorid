@@ -17,7 +17,6 @@ import { createBaseClockHost } from './clock.ts';
 import type { BaseClockHost } from './clock.ts';
 import { BaseToolbarSaveError, createBaseToolbar } from './toolbar.ts';
 import { NoteLoadSupervisor } from '../ui/note-load-supervisor.ts';
-import { reviewRetainedBaseConfiguration } from './configuration-review.ts';
 import { baseConfigurationRecoveryFailure } from './configuration-recovery.ts';
 import { mountBaseTooltips } from './tooltips.ts';
 import type { BaseFilterOperandsSnapshot, BaseFilterPropertyDescriptor, BaseToolbarState, BaseToolbarAdmissionDraft } from './toolbar.ts';
@@ -867,7 +866,6 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   const editProperty=(edit:Parameters<typeof actions.editProperty>[0])=>collectionMode()?editCollectionProperty(edit):Promise.reject(new Error('Vault note views are browsing only. Open the note to edit its properties.'));
   function saveConfigurationCommand(operation: () => Promise<void>): Promise<void> {
     action();if(pendingCollectionRestore)throw new Error('Retry the unfinished Restore before changing this view.');if(pendingCollectionCreate||unfinishedNoteCreation())throw new Error('Use New again to finish the original entry creation before changing this view.'); if (options.readOnly) return Promise.reject(new Error('This base is read-only'));
-    const originalSource=configurationSource();
     const attempt: { buffer?: NoteBuffer; text?: string } = {}; configurationAttempt = attempt;
     const accepted={supervisor:new NoteLoadSupervisor(),command:undefined as Promise<void>|undefined,retry:undefined as (()=>Promise<void>)|undefined,error:undefined as unknown};acceptedConfiguration=accepted;
     configurationLifecycle++; renderStatus(controller.state);
@@ -899,7 +897,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     },alive).catch(failure=>{
       const original=lastFailure!==undefined&&failure===baseConfigurationRecoveryFailure(lastFailure)?lastFailure:failure;report(original);
       if(!accepted.retry)throw original;
-      const wrapped=new BaseToolbarSaveError(original instanceof Error?original.message:String(original),()=>track(accepted.retry!),{saved:originalSource,desired:attempt.text??controller.retainedConfigurationSources[0]?.desired??controller.state.source});
+      const wrapped=new BaseToolbarSaveError(original instanceof Error?original.message:String(original),()=>track(accepted.retry!));
       accepted.error=wrapped;throw wrapped;
     }).then(()=>{if(acceptedConfiguration===accepted)acceptedConfiguration=undefined;},error=>{accepted.error=error;throw error;}).finally(()=>{
       if(configurationAttempt===attempt)configurationAttempt=undefined;
@@ -974,13 +972,11 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     const menu = doc.createElement('div'); menu.className = 'bases-summary-actions'; menu.hidden = true; menu.setAttribute('role', 'menu');
     const remove = doc.createElement('button'); remove.type = 'button'; remove.className = 'bases-toolbar-menu-item mod-warning'; remove.textContent = 'Delete summary'; remove.setAttribute('role', 'menuitem'); menu.append(remove);
     const error = doc.createElement('div'); error.className = 'bases-toolbar-error'; error.setAttribute('role', 'alert');
-    const retry = doc.createElement('button'); retry.type = 'button'; retry.textContent = 'Review retained changes'; retry.hidden = true;
     const cancelChanges = doc.createElement('button'); cancelChanges.type = 'button'; cancelChanges.textContent = 'Cancel changes'; cancelChanges.hidden = true;
-    panel.append(heading, fields, menu, error, retry, cancelChanges); doc.body.append(panel); summaryPanel = panel;
+    panel.append(heading, fields, menu, error, cancelChanges); doc.body.append(panel); summaryPanel = panel;
     let summaryFrozen=false,summaryPassive=!!restoring;
     let dirty = false, saving = false, destroyed = false, generation = 0, closeRequest: boolean | undefined, retryPersistence: (() => Promise<void>) | undefined;
     type SummaryAttempt = { name: string; expression: string; source: string; deleted?: boolean };
-    let reviewFailure:BaseToolbarSaveError|undefined;
     let retryAccepted: SummaryAttempt | undefined, timer: ReturnType<typeof setTimeout> | undefined;
     let formulaEditor: BaseFormulaEditor | undefined;
     summaryHasRawDraft = () => name.value !== acceptedName || expression.value !== acceptedExpression;
@@ -1029,8 +1025,10 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     const accept = (next: SummaryAttempt): boolean => {
       if (controller.state.source !== next.source) { fail(new Error('This Base changed before the summary save was acknowledged. Reopen its editor before saving.'), next); return false; }
       acceptedName = next.name; acceptedExpression = next.expression; expectedSource = next.source;
-      title.textContent = `Edit property ${acceptedName}`; retryPersistence = undefined; retryAccepted = undefined; retry.hidden = true; cancelChanges.hidden = true; fields.disabled = false; expression.disabled = false; formulaEditor?.sync(); error.textContent = '';
-      updateDirty();if(dirty)cancelChanges.hidden=false; if (next.deleted) { dirty = false; mark(); close(true); } else if (closeRequest !== undefined && !dirty) close(closeRequest);
+      title.textContent = `Edit property ${acceptedName}`; retryPersistence = undefined; retryAccepted = undefined; cancelChanges.hidden = true; fields.disabled = false; expression.disabled = false; formulaEditor?.sync(); error.textContent = '';
+      updateDirty();if(dirty)cancelChanges.hidden=false;
+      if (next.deleted && !dirty) close(true);
+      else if (closeRequest !== undefined && !dirty) close(closeRequest);
       return true;
     };
     captureSummarySaveAcknowledgement=()=>{
@@ -1039,7 +1037,10 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     };
     const fail = (failure: unknown, next: SummaryAttempt) => {
       error.textContent = failure instanceof Error ? failure.message : String(failure); dirty = true;
-      if (failure instanceof BaseToolbarSaveError) { retryPersistence = failure.retry;reviewFailure=failure; retryAccepted = next; retry.hidden = false;retry.disabled=false; fields.disabled = true; expression.disabled = true; formulaEditor?.sync(); } else { retryPersistence = undefined; retryAccepted = undefined; retry.hidden = true; fields.disabled = false; expression.disabled = false; formulaEditor?.sync(); cancelChanges.hidden = false; }
+      if (failure instanceof BaseToolbarSaveError) { retryPersistence = failure.retry; retryAccepted = next; }
+      else { retryPersistence = undefined; retryAccepted = undefined; }
+      if(!summaryFrozen){fields.disabled = false; expression.disabled = false; formulaEditor?.sync();}
+      cancelChanges.hidden = false;
       mark();
     };
     async function save(): Promise<void> {
@@ -1058,7 +1059,13 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     name.addEventListener('blur', () => { void save(); });
     name.addEventListener('keydown', event => { if (event.isComposing||event.keyCode===229||nameComposing||nameSettling) return; if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); name.value = acceptedName; updateDirty(); name.blur(); } else if (event.key === 'Enter') { event.preventDefault();summaryPassive=false; name.blur(); } });
     expression.addEventListener('input', () => { if(!summaryFrozen)summaryPassive=false;generation++; updateDirty(); if(summaryFrozen)return;if (timer) clearTimeout(timer); timer = setTimeout(() => { timer = undefined; void save(); }, 250); });
-    cancelChanges.addEventListener('click', () => { if (saving || retryPersistence) return; name.value = acceptedName; expression.value = acceptedExpression; dirty = false; mark(); close(true); });
+    cancelChanges.addEventListener('click', () => {
+      if (saving || summaryFrozen) return;
+      // Closing this editor discards only its unsubmitted local continuation.
+      // The accepted configuration remains owned by its buffer and exact intent.
+      if(retryPersistence){cleanup();render(controller.state);schedule();return;}
+      name.value = acceptedName; expression.value = acceptedExpression; dirty = false; mark(); close(true);
+    });
     back.addEventListener('click', () => close(true));
     panel.addEventListener('keydown', event => { if (!event.defaultPrevented && event.key === 'Escape' && !event.isComposing) { event.preventDefault(); event.stopPropagation(); close(true); } });
     const toggleActions = (open: boolean) => {
@@ -1073,10 +1080,6 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       const projected = BaseDocument.parse(expectedSource); projected.removeViewSummary(controller.selectedViewIndex,acceptedName);
       const next: SummaryAttempt = { name: acceptedName, expression: acceptedExpression, deleted: true, source: projected.toString() }; saving = true; fields.disabled = true; expression.disabled = true; formulaEditor?.sync(); mark();
       void saveConfigurationCommand(() => { if (controller.state.source !== expectedSource) throw new Error('This Base changed while the summary was open.'); return controller.removeSummary(controller.state.version, acceptedName); }).then(() => { saving = false; accept(next); }, failure => { saving = false; fields.disabled = false; expression.disabled = false; formulaEditor?.sync(); fail(failure, next); });
-    });
-    retry.addEventListener('click', () => {
-      if(!reviewFailure||saving)return;
-      reviewRetainedBaseConfiguration(panel,reviewFailure.review,`Summary name: ${name.value}\nSummary expression: ${expression.value}`);
     });
     const outside = (event: Event) => { if (!panel.contains(event.target as Node)) close(false); };
     doc.addEventListener('pointerdown', outside, true); win?.addEventListener('resize', place); win?.addEventListener('scroll', scroll, true); resize?.observe(panel); destroySummaryEditor = cleanup;

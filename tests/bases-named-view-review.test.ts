@@ -61,7 +61,7 @@ test('named config edit waiting on a host cannot patch another view after reorde
   } finally { release(); controller.dispose(); await f.dispose(); }
 });
 
-test('named Kanban reviews its exact terminal configuration draft and ordinary Save leaves sibling view intact', async () => {
+test('named Kanban retains its editable terminal configuration draft and ordinary Save leaves sibling view intact', async () => {
   class Failing extends MemoryAdapter { fail = false;attempts=0; override async write(path: string, text: string) { if(path==='Work.base')this.attempts++;if (this.fail && path === 'Work.base') throw new Error('disk full'); await super.write(path, text); } }
   const adapter = new Failing({ 'Work.base': source(undefined, true), 'One.md': '---\nstatus: Todo\n---\nBody', 'Two.md': '---\nstatus: Done\n---\nBody' });
   const f = await fixture(adapter), dom = new JSDOM('<main></main>', { pretendToBeVisual: true }), host = dom.window.document.querySelector('main')!;
@@ -70,12 +70,12 @@ test('named Kanban reviews its exact terminal configuration draft and ordinary S
     await session.ready; adapter.fail = true;
     openBaseToolbarPanel(dom.window.document,'Results');
     const limit=dom.window.document.querySelector<HTMLInputElement>('[aria-label="Limit"]')!;assert.ok(limit);limit.value='7';limit.dispatchEvent(new dom.window.Event('input',{bubbles:true}));dom.window.document.querySelector<HTMLFormElement>('form')!.dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));
-    for(let i=0;i<100&&!dom.window.document.querySelector('form')?.textContent?.includes('Review retained changes');i++)await new Promise(resolve=>setTimeout(resolve,5));
+    for(let i=0;i<100&&!dom.window.document.querySelector('[role="alert"]')?.textContent?.includes('disk full');i++)await new Promise(resolve=>setTimeout(resolve,5));
     const buffer = await f.host.getBuffer('Work.base'); assert.equal(buffer.dirty, true); assert.ok(buffer.error);
     assert.equal(BaseDocument.parse(buffer.text).views[1].limit,7);assert.deepEqual(BaseDocument.parse(buffer.text).views[1].groupOrder,['Todo','Done']);
     assert.equal(BaseDocument.parse(await f.vault.read('Work.base')).views[1].limit,undefined);assert.deepEqual(BaseDocument.parse(await f.vault.read('Work.base')).views[1].groupOrder, ['Todo', 'Done']);
-    const review = [...dom.window.document.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='Review retained changes');assert.ok(review);
-    const desired=buffer.text,attempts=adapter.attempts;review.click();await tick();assert.equal(adapter.attempts,attempts,'Review dispatches no persistence attempt');assert.equal(dom.window.document.querySelector<HTMLTextAreaElement>('[aria-label="Accepted configuration"]')!.value,desired);assert.deepEqual(BaseDocument.parse(await f.vault.read('Work.base')).views[1].groupOrder,['Todo','Done'],'Review does not save');adapter.fail=false;await session.flush();
+    const apply=dom.window.document.querySelector<HTMLButtonElement>('button[type="submit"]')!;assert.equal(apply.textContent,'Apply');assert.equal(limit.disabled,false);
+    const desired=buffer.text,attempts=adapter.attempts;apply.click();await tick();assert.equal(adapter.attempts,attempts,'Apply cannot replay accepted persistence');assert.equal(buffer.text,desired);assert.equal(dom.window.document.querySelector('.bases-configuration-review'),null);assert.deepEqual(BaseDocument.parse(await f.vault.read('Work.base')).views[1].groupOrder,['Todo','Done']);adapter.fail=false;await session.flush();
     const saved=BaseDocument.parse(await f.vault.read('Work.base'));assert.equal(saved.views[1].limit,7);assert.equal(saved.views[0].limit,undefined);assert.deepEqual(saved.views[1].groupOrder,['Todo','Done']);assert.deepEqual(saved.views[0],BaseDocument.parse(source(undefined,true)).views[0]);assert.equal(await adapter.read('One.md'),'---\nstatus: Todo\n---\nBody');assert.equal(await adapter.read('Two.md'),'---\nstatus: Done\n---\nBody');
     assert.equal(session.state.result!.view.name, 'Target'); assert.equal(host.querySelector('select')!.value, '1');
   } finally { adapter.fail = false; await session.close(); await f.dispose(); dom.window.close(); }

@@ -100,14 +100,14 @@ test('accepted summary publication survives host loss and restores newer name an
  }finally{old.adapter.failure=undefined;await settling?.catch(()=>{});await old.cleanup();if(fresh){fresh.doc.querySelector<HTMLButtonElement>('[aria-label="Back to summaries"]')?.click();await fresh.cleanup().catch(()=>{fresh!.dom.window.close();});}}
 });
 
-test('a terminal configuration conflict exposes exact read-only review and copy without retrying or reporting Saved',async()=>{
+test('a terminal configuration conflict retains editable input without a review or retry surface',async()=>{
  const f=await fixture();try{
   f.control<HTMLButtonElement>('New item options').click();f.edit('New item folder','Retained conflict folder');f.adapter.fail=true;f.apply();await until(()=>f.errors.length>0);
   assert.equal(f.session.canRecoverAdmission!(),false,'a real terminal failure cannot authorize routine replay');assert.equal(f.session.hasPendingChanges(),true);const desired=f.buffers.get('Work.base')!.text;
-  const review=f.doc.querySelector<HTMLButtonElement>('button[type="submit"]')!;assert.equal(review.textContent,'Review retained changes');review.click();
-  const original=f.control<HTMLTextAreaElement>('Original saved configuration'),accepted=f.control<HTMLTextAreaElement>('Accepted configuration');assert.equal(original.value,initial);assert.equal(accepted.value,desired);assert.equal(original.readOnly,true);assert.equal(accepted.readOnly,true);
-  let copied:string|undefined;Object.defineProperty(f.dom.window.navigator,'clipboard',{value:{async writeText(text:string){copied=text;}},configurable:true});[...f.doc.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='Copy accepted configuration')!.click();await tick();assert.equal(copied,desired);
-  assert.equal(f.adapter.writes.length,1,'Review/Copy dispatches no persistence retry');assert.equal(await f.adapter.read('Work.base'),initial);assert.equal(f.session.hasPendingChanges(),true);assert.equal(f.doc.body.textContent!.includes('Retry save'),false);
+  const apply=f.doc.querySelector<HTMLButtonElement>('button[type="submit"]')!;assert.equal(apply.textContent,'Apply');apply.click();
+  const input=f.control<HTMLInputElement>('New item folder');assert.equal(input.disabled,false);assert.equal(input.value,'Retained conflict folder');f.edit('New item folder','Newer local folder');f.apply();await tick();
+  assert.equal(input.value,'Newer local folder');assert.equal(f.buffers.get('Work.base')!.text,desired,'accepted A stays distinct from newer raw B');assert.equal(f.doc.querySelector('.bases-configuration-review'),null);
+  assert.equal(f.adapter.writes.length,1,'presentation cannot dispatch a persistence retry');assert.equal(await f.adapter.read('Work.base'),initial);assert.equal(f.session.hasPendingChanges(),true);assert.equal([...f.doc.querySelectorAll('button')].some(button=>/Review retained|Copy accepted|Retry save/.test(button.textContent??'')),false);
  }finally{await f.cleanup();}
 });
 
@@ -122,7 +122,7 @@ test('a late old-host rejection consumes admission that completed while the orig
 test('ordinary shared-buffer resolution acknowledges only accepted A and retains newer toolbar B without authoring it',async()=>{
  const f=await fixture(),held=gate();try{
   f.control<HTMLButtonElement>('Filter').click();f.control<HTMLButtonElement>('Add filter').click();f.edit('Filter property',`note.${score}`,'change');f.edit('Condition','gt','change');f.adapter.hold=held.promise;f.adapter.fail=true;f.edit('Filter value','9');await until(()=>f.adapter.writes.length===1);f.edit('Filter value','9e');held.resolve();await until(()=>f.errors.length>0);
-  assert.equal(f.control<HTMLInputElement>('Filter value').disabled,true);f.adapter.fail=false;f.adapter.hold=undefined;await assert.rejects(f.session.flush(),/Finish or cancel/);
+  assert.equal(f.control<HTMLInputElement>('Filter value').disabled,false);f.adapter.fail=false;f.adapter.hold=undefined;await assert.rejects(f.session.flush(),/Finish or cancel/);
   const input=f.control<HTMLInputElement>('Filter value');assert.equal(input.value,'9e');assert.equal(input.disabled,false);assert.equal(f.adapter.writes.length,2,'only A is retried through ordinary shared-buffer Save');assert.equal(f.session.canRecoverAdmission!(),true,'B is now raw custody, not a stranded failed A');
   const capsule=f.session.prepareAdmissionRecovery!();await capsule.settle();assert.equal(capsule.rawDrafts?.length,1);assert.equal(capsule.rawDrafts![0].kind,'toolbar');assert.equal(f.adapter.writes.length,2);assert.deepEqual(baseViewSetting(BaseDocument.parse(await f.adapter.read('Work.base')),0,'filters'),{and:[`note["${score}"] > 9`]});
  }finally{held.resolve();f.adapter.fail=false;await f.cleanup();}

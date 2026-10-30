@@ -450,7 +450,7 @@ test('terminal fenced configuration review does not acknowledge remount and ordi
     assert.equal(await adapter.read('Source.md'),fencedRenameSource);assert.equal(cm(workspace).state.doc.toString(),fencedRenameSource);
     assert.equal(pane.element.querySelector<HTMLElement>('.cm-live-base [role="gridcell"][tabindex="0"]')?.dataset.property,'note.scorevalueid');
     await assert.rejects(workspace.openNote('Other.md'),originalCommitFailure('fenced save unavailable'));
-    const attemptsBeforeReview=attempts;[...document.querySelectorAll<HTMLButtonElement>('[role=dialog] button')].find(button=>button.textContent==='Review retained changes')!.click();await new Promise(resolve=>setTimeout(resolve,0));assert.equal(document.querySelector<HTMLTextAreaElement>('[aria-label="Accepted configuration"]')!.readOnly,true);assert.equal(attempts,attemptsBeforeReview,'Review cannot persist or remount the containing note');assert.equal(await adapter.read('Source.md'),fencedRenameSource);fail=false;await workspace.flush();
+    const attemptsBeforeReview=attempts;document.querySelector<HTMLButtonElement>('[role=dialog] button[type="submit"]')!.click();await new Promise(resolve=>setTimeout(resolve,0));assert.equal(document.querySelector('.bases-configuration-review'),null);assert.equal(attempts,attemptsBeforeReview,'Apply cannot persist or remount the containing note');assert.equal(await adapter.read('Source.md'),fencedRenameSource);fail=false;await workspace.flush();
     await until(()=>!!pane.element.querySelector('[role="grid"][aria-label="Fence renamed"]'),'ordinary Save acknowledges the exact retained rename');
     closeFencedRename();assert.deepEqual(selectedFencedCell(pane),{path:'A.md',property:'note.scorevalueid'});assert.equal(await adapter.read('Source.md'),fencedRenameExpected);
   }finally{fail=false;adapter.write=write;closeFencedRename();}
@@ -536,7 +536,7 @@ test('nested New failed inline save retains source and explicit Workspace Save c
 });
 
 
-test('terminal inline duplicate review preserves its original command until ordinary Save settles it once',async t=>{
+test('terminal inline duplicate failure preserves its original command until ordinary Save settles it once',async t=>{
   const{workspace,adapter,pane,input}=await startFencedRename(t),write=adapter.write.bind(adapter);let fail=true,writes=0;
   // Cancel the unsubmitted rename draft before choosing the independent command.
   closeFencedRename();pane.element.querySelector<HTMLButtonElement>('.cm-live-base [aria-label="Views"]')!.click();
@@ -544,8 +544,9 @@ test('terminal inline duplicate review preserves its original command until ordi
   adapter.write=async(path,text)=>{if(path==='Source.md'){writes++;if(fail)throw new Error('duplicate save unavailable');}await write(path,text);};
   try{
     [...document.querySelectorAll<HTMLButtonElement>('[role=dialog] button')].find(button=>button.textContent==='Duplicate view')!.click();
-    await until(()=>!!workspace.buffers.get('Source.md')?.error&&!![...document.querySelectorAll('button')].find(button=>button.textContent==='Review retained changes'),'duplicate persistence fails');
-    const beforeReview=writes;[...document.querySelectorAll<HTMLButtonElement>('[role=dialog] button')].find(button=>button.textContent==='Review retained changes')!.click();await new Promise(resolve=>setTimeout(resolve,0));assert.equal(writes,beforeReview,'Review cannot duplicate or retry persistence');assert.equal(await adapter.read('Source.md'),fencedRenameSource);assert.equal(document.querySelector<HTMLTextAreaElement>('[aria-label="Accepted configuration"]')!.readOnly,true);fail=false;await workspace.flush();
+    await until(()=>!!workspace.buffers.get('Source.md')?.error&&!!document.querySelector('[role=dialog] .bases-toolbar-error')?.textContent?.trim(),'duplicate persistence fails');
+    originalCommitFailure('duplicate save unavailable')(workspace.buffers.get('Source.md')!.error);
+    const beforeReview=writes;document.querySelector<HTMLButtonElement>('[role=dialog] button[type="submit"]')!.click();await new Promise(resolve=>setTimeout(resolve,0));assert.equal(writes,beforeReview,'Apply cannot duplicate or retry persistence');assert.equal(await adapter.read('Source.md'),fencedRenameSource);assert.equal(document.querySelector('.bases-configuration-review'),null);fail=false;await workspace.flush();
     await until(()=>workspace.buffers.get('Source.md')?.dirty===false&&!document.querySelector('[role="dialog"][aria-label="View options"]'),'retained duplicate closes after retry');
     const source=await adapter.read('Source.md');assert.equal((source.match(/name: Fence old/g)??[]).length,2);assert.match(source,/name: Fence old 2/);assert.equal(writes,2,'one failed persistence plus one exact retry');await workspace.flush();
   }finally{fail=false;adapter.write=write;closeFencedRename();}

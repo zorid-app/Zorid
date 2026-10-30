@@ -39,8 +39,8 @@ async function fixture(){
  host.querySelector<HTMLElement>('[data-summary-property="note.scorevalueid"]')!.click();await until(()=>!!doc.querySelector('[aria-label="Edit Sum"]'),()=>doc.body.textContent??'Summary picker did not mount');doc.querySelector<HTMLButtonElement>('[aria-label="Edit Sum"]')!.click();await until(()=>!!doc.querySelector('[aria-label="Summary expression"]'));
  const expression=doc.querySelector<HTMLTextAreaElement>('[aria-label="Summary expression"]')!;
  const edit=(value:string)=>{expression.focus();expression.value=value;expression.dispatchEvent(new dom.window.Event('input',{bubbles:true}));};
- return{adapter,vault,dom,doc,buffers,session,expression,edit,gate(){const gate={started:deferred(),release:deferred()};gates.push(gate);return gate;},review:()=>[...doc.querySelectorAll<HTMLButtonElement>('.bases-summary-editor button')].find(button=>button.textContent==='Review retained changes'&&!button.hidden),
-  async cleanup(){adapter.fail=false;for(const gate of gates)gate.release.resolve();if([...doc.querySelectorAll<HTMLButtonElement>('.bases-summary-editor button')].some(button=>button.textContent==='Review retained changes'&&!button.hidden)){if(adapter.rejected&&await adapter.read('Work.base')!==adapter.rejected){await vault.modify('Work.base',adapter.rejected);await buffers.get('Work.base')!.reload();}await session.flush().catch(()=>{});}[...doc.querySelectorAll<HTMLButtonElement>('.bases-summary-editor button')].find(button=>button.textContent==='Cancel changes'&&!button.hidden)?.click();doc.querySelector<HTMLButtonElement>('[aria-label="Back to summaries"]')?.click();await until(()=>!session.hasPendingChanges());await session.close();for(const buffer of buffers.values())await buffer.dispose();dom.window.close();},
+ return{adapter,vault,dom,doc,buffers,session,expression,edit,gate(){const gate={started:deferred(),release:deferred()};gates.push(gate);return gate;},failure:()=>doc.querySelector('.bases-summary-editor [role="alert"]')?.textContent?.includes('Gated summary failure')===true,
+  async cleanup(){adapter.fail=false;for(const gate of gates)gate.release.resolve();if(adapter.rejected){if(adapter.rejected&&await adapter.read('Work.base')!==adapter.rejected){await vault.modify('Work.base',adapter.rejected);await buffers.get('Work.base')!.reload();}await session.flush().catch(()=>{});}[...doc.querySelectorAll<HTMLButtonElement>('.bases-summary-editor button')].find(button=>button.textContent==='Cancel changes'&&!button.hidden)?.click();doc.querySelector<HTMLButtonElement>('[aria-label="Back to summaries"]')?.click();await until(()=>!session.hasPendingChanges());await session.close();for(const buffer of buffers.values())await buffer.dispose();dom.window.close();},
  };
 }
 
@@ -48,7 +48,7 @@ test('ordinary Save resolves terminal accepted summary A while retaining newer B
  const f=await fixture();try{
   const gate=f.gate();f.adapter.gate=gate;f.edit('values.length');await gate.started.promise;
   f.edit('values.sum() + 7');await new Promise(done=>setTimeout(done,300));f.adapter.fail=true;gate.release.resolve();
-  await until(()=>!!f.review());assert.equal(f.expression.value,'values.sum() + 7');assert.equal(f.expression.disabled,true);const before=await f.vault.read('Work.base'),attempts=f.adapter.attempts;f.review()!.click();await tick();assert.equal(f.adapter.attempts,attempts,'Review dispatches no persistence attempt');assert.equal(await f.vault.read('Work.base'),before,'Review cannot save either generation');assert.equal(f.doc.querySelector<HTMLTextAreaElement>('[aria-label="Accepted configuration"]')!.value,f.adapter.rejected);f.adapter.fail=false;await assert.rejects(f.session.flush(),/Finish or cancel/);assert.equal((BaseDocument.parse(await f.vault.read('Work.base')).views[0].summaryDefinitions as Record<string,string>).Sum,'values.length');assert.equal(f.adapter.revision,3);assert.equal(f.expression.value,'values.sum() + 7');assert.equal(f.expression.disabled,false);await new Promise(done=>setTimeout(done,300));assert.equal(f.adapter.revision,3,'exact A acknowledgement does not submit newer B');f.edit('values.sum() + 7');
+  await until(()=>f.failure());assert.equal(f.expression.value,'values.sum() + 7');assert.equal(f.expression.disabled,false,'failure keeps the current summary editable');assert.equal(f.doc.querySelector('.bases-configuration-review'),null);assert.equal([...f.doc.querySelectorAll('button')].some(button=>/Review retained|Copy accepted|Retry/.test(button.textContent??'')),false);const before=await f.vault.read('Work.base'),attempts=f.adapter.attempts;f.doc.querySelector<HTMLButtonElement>('[aria-label="Back to summaries"]')!.click();f.doc.body.dispatchEvent(new f.dom.window.MouseEvent('pointerdown',{bubbles:true}));await tick();assert.equal(f.expression.isConnected,true,'Back and outside retain newer B');assert.equal(f.expression.value,'values.sum() + 7');assert.equal(f.adapter.attempts,attempts,'presentation cannot dispatch a persistence retry');assert.equal(await f.vault.read('Work.base'),before);f.adapter.fail=false;await assert.rejects(f.session.flush(),/Finish or cancel/);assert.equal((BaseDocument.parse(await f.vault.read('Work.base')).views[0].summaryDefinitions as Record<string,string>).Sum,'values.length');assert.equal(f.adapter.revision,3);assert.equal(f.expression.value,'values.sum() + 7');assert.equal(f.expression.disabled,false);await new Promise(done=>setTimeout(done,300));assert.equal(f.adapter.revision,3,'exact A acknowledgement does not submit newer B');f.edit('values.sum() + 7');
   await until(async()=>(BaseDocument.parse(await f.vault.read('Work.base')).views[0].summaryDefinitions as Record<string,string>).Sum==='values.sum() + 7');await until(()=>!f.session.hasPendingChanges());
   assert.equal(f.expression.value,'values.sum() + 7');assert.equal(f.expression.disabled,false);assert.equal(f.adapter.revision,4,'builtin seed, exact retry and one continuation write');
  }finally{await f.cleanup();}
@@ -57,7 +57,7 @@ test('ordinary Save resolves terminal accepted summary A while retaining newer B
 for(const resolved of [false,true])test(`summary ${resolved?'ordinary Save of a terminal accepted draft':'save'} acknowledgement refuses an intervening externally reloaded configuration`,async()=>{
  const f=await fixture();let saving:Promise<void>|undefined;try{
   const gate=f.gate();
-  if(resolved){f.adapter.fail=true;f.edit('values.length');await until(()=>!!f.review());f.adapter.fail=false;f.adapter.queryGate={...gate,revision:3};saving=f.session.flush();void saving.catch(()=>{});}
+  if(resolved){f.adapter.fail=true;f.edit('values.length');await until(()=>f.failure());f.adapter.fail=false;f.adapter.queryGate={...gate,revision:3};saving=f.session.flush();void saving.catch(()=>{});}
   else{f.adapter.queryGate={...gate,revision:3};f.edit('values.length');}
   await gate.started.promise;
   const external=BaseDocument.parse(await f.vault.read('Work.base'));external.updateViewConfiguration(0,{root:{summaries:{Sum:'777'}}});await f.vault.modify('Work.base',external.toString());await f.buffers.get('Work.base')!.reload();gate.release.resolve();
@@ -75,5 +75,27 @@ test('summary deletion acknowledgement retains an intervening external configura
   const external=BaseDocument.parse(await f.vault.read('Work.base'));external.updateViewConfiguration(0,{root:{summaries:{Sum:'777'}}});external.updateView(0,{summaries:{scorevalueid:'Sum'}});await f.vault.modify('Work.base',external.toString());await f.buffers.get('Work.base')!.reload();gate.release.resolve();await f.session.refresh();
   await until(()=>!!f.doc.querySelector('.bases-summary-editor [role="alert"]')?.textContent);assert.match(f.doc.querySelector('.bases-summary-editor [role="alert"]')!.textContent!,/changed before.*acknowledged/);assert.equal(f.session.hasPendingChanges(),true);assert.equal(f.expression.disabled,false);
   assert.equal((BaseDocument.parse(await f.vault.read('Work.base')).views[0].summaryDefinitions as Record<string,string>).Sum,'777');
+ }finally{await f.cleanup();}
+});
+
+
+test('Cancel summary discards only newer local B while the original accepted A remains saveable',async()=>{
+ const f=await fixture();try{
+  const gate=f.gate();f.adapter.gate=gate;f.edit('values.length');await gate.started.promise;f.edit('values.sum() + 7');f.adapter.fail=true;gate.release.resolve();await until(()=>f.failure());
+  f.edit('values.sum() + 9');const accepted=f.buffers.get('Work.base')!.text,attempts=f.adapter.attempts;
+  await new Promise(done=>setTimeout(done,300));assert.equal(f.adapter.attempts,attempts,'typing while A is unresolved remains local');assert.equal(f.expression.value,'values.sum() + 9');assert.equal(f.expression.disabled,false);
+  [...f.doc.querySelectorAll<HTMLButtonElement>('.bases-summary-editor button')].find(button=>button.textContent==='Cancel changes'&&!button.hidden)!.click();
+  assert.equal(f.expression.isConnected,false);assert.equal(f.buffers.get('Work.base')!.text,accepted);assert.equal(f.buffers.get('Work.base')!.dirty,true);assert.notEqual(await f.adapter.read('Work.base'),accepted);
+  f.adapter.fail=false;await f.session.flush();assert.equal(await f.adapter.read('Work.base'),accepted);assert.equal((BaseDocument.parse(accepted).views[0].summaryDefinitions as Record<string,string>).Sum,'values.length');assert.equal(f.adapter.revision,3);assert.equal(f.session.hasPendingChanges(),false);
+ }finally{await f.cleanup();}
+});
+
+
+test('ordinary Save acknowledgement of accepted summary deletion A retains newer B without recreating it',async()=>{
+ const f=await fixture();try{
+  f.adapter.fail=true;f.doc.querySelector<HTMLButtonElement>('[aria-label="Summary actions"]')!.click();[...f.doc.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button=>button.textContent==='Delete summary')!.click();await until(()=>f.failure());
+  const accepted=f.buffers.get('Work.base')!.text;f.edit('values.sum() + 11');assert.equal(f.expression.disabled,false);const attempts=f.adapter.attempts;await new Promise(done=>setTimeout(done,300));assert.equal(f.adapter.attempts,attempts);
+  f.adapter.fail=false;await assert.rejects(f.session.flush(),/Finish or cancel/);
+  assert.equal(await f.adapter.read('Work.base'),accepted,'ordinary Save persists the original deletion only');assert.equal(f.expression.isConnected,true,'deletion acknowledgement cannot discard newer B');assert.equal(f.expression.value,'values.sum() + 11');assert.equal(f.expression.disabled,false);assert.equal(f.session.hasPendingChanges(),true);const settledAttempts=f.adapter.attempts;await new Promise(done=>setTimeout(done,300));assert.equal(f.adapter.attempts,settledAttempts,'B must not recreate the deleted summary automatically');
  }finally{await f.cleanup();}
 });

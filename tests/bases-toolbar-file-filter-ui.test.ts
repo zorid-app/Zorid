@@ -84,7 +84,7 @@ test('failed accepted filter save retries its exact source before a newer queued
   const f=fixture();let reject:(error:unknown)=>void=()=>{};try{
     let first=true;f.setHook(async patch=>{if(first){first=false;await new Promise((_resolve,fail)=>{reject=fail;});}else f.commit(patch);});
     f.click('Filter');f.edit('Filter value','A.md');f.submit();await tick();f.edit('Filter value','B.md');
-    reject(new BaseToolbarSaveError('disk failure',async()=>f.commit({view:{filters:{and:['file.hasLink("A.md")']}}})));await tick();f.submit();await tick();await tick();
+    const completeAccepted=async()=>f.commit({view:{filters:{and:['file.hasLink("A.md")']}}});reject(new BaseToolbarSaveError('disk failure',completeAccepted));await tick();f.submit();await tick();assert.equal(f.calls.length,1,'Apply cannot retry accepted A or author newer B');assert.equal(f.get<HTMLInputElement>('Filter value').disabled,false);const acknowledge=f.toolbar.captureSaveAcknowledgement();await completeAccepted();acknowledge();await tick();assert.equal(f.calls.length,1,'ordinary Save acknowledgement leaves B raw');f.edit('Filter value','B.md');f.submit();await tick();await tick();
     assert.equal(f.calls.length,2);assert.deepEqual(f.calls.map(call=>[call.version,call.patch]),[[1,{view:{filters:{and:['file.hasLink("A.md")']}}}],[2,{view:{filters:{and:['file.hasLink("B.md")']}}}]]);
   }finally{f.cleanup();}
 });

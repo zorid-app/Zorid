@@ -205,8 +205,8 @@ test('saving and retained persistence failure cannot refresh models or replace o
    f.setHook(async()=>{await gate;if(retained)throw new BaseToolbarSaveError('actual retained attempt',async()=>{});});
    f.edit(f.get<HTMLInputElement>('Filter value',f.row(0)),'3');f.submit();await tick();
    assert.equal(f.saves.length,1);const row=f.row(),field=f.get<HTMLInputElement>('Filter value',row);assert.equal(field.disabled,false,'Live edits retain the original editable control while saving');
-   if(retained){release();await tick();await tick();const review=[...f.doc.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='Review retained changes');assert.ok(review);review.click();await tick();assert.equal(f.saves.length,1,'read-only review cannot replay the retained save');assert.equal(f.doc.querySelector<HTMLTextAreaElement>('[aria-label="Current retained input"]')?.readOnly,true);}
-   f.advice();f.refresh();assert.equal(f.row(),row);assert.equal(f.get('Filter value',row),field);assert.equal(field.disabled,retained);assert.equal(f.catalog().includes('notEndsWith'),false);assert.equal(f.saves.length,1);
+   if(retained){release();await tick();await tick();const apply=f.doc.querySelector<HTMLButtonElement>('button[type="submit"]')!;assert.equal(apply.textContent,'Apply');apply.click();await tick();assert.equal(f.saves.length,1,'Apply cannot replay the retained save');assert.equal(f.doc.querySelector('.bases-configuration-review'),null);}
+   f.advice();f.refresh();assert.equal(f.row(),row);assert.equal(f.get('Filter value',row),field);assert.equal(field.disabled,false);assert.equal(f.catalog().includes('notEndsWith'),false);assert.equal(f.saves.length,1);
   }finally{release();await tick();await tick();f.cleanup();}
  }
 });

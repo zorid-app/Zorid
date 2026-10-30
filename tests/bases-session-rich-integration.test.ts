@@ -237,16 +237,16 @@ test('file title opening forwards its captured row identity and image acquisitio
 });
 
 
-test('terminal live summary saves retain read-only review and ordinary Save settles the exact accepted draft', async () => {
+test('terminal live summary saves retain editable input and ordinary Save settles the exact accepted draft', async () => {
   const f = await fixture();
   try {
     f.host.querySelector<HTMLButtonElement>('[data-summary-property="note.scorevalueid"]')!.click(); await until(() => !!f.dom.window.document.querySelector('[aria-label="Edit Sum"]'));
     f.dom.window.document.querySelector<HTMLButtonElement>('[aria-label="Edit Sum"]')!.click(); await until(() => !!f.dom.window.document.querySelector('[aria-label="Summary name"]'));
     const before = await f.vault.read('Work.base'); f.adapter.fail = true;
     const expression = f.dom.window.document.querySelector<HTMLTextAreaElement>('[aria-label="Summary expression"]')!; expression.focus(); expression.value = 'values.length'; expression.dispatchEvent(new f.dom.window.Event('input', { bubbles: true }));
-    await until(() => [...f.dom.window.document.querySelectorAll<HTMLButtonElement>('.bases-summary-editor button')].some(button => button.textContent === 'Review retained changes' && !button.hidden));
-    assert.equal(await f.vault.read('Work.base'), before); assert.equal(expression.closest('fieldset')!.disabled, true); assert.equal(expression.disabled, true); assert.equal(expression.value, 'values.length'); assert.equal(f.session.hasPendingChanges(), true);
-    const accepted=BaseDocument.parse(before);accepted.editViewSummary(0,'Sum','Sum','values.length');const desired=accepted.toString(),attempts=f.adapter.attempts;[...f.dom.window.document.querySelectorAll<HTMLButtonElement>('.bases-summary-editor button')].find(button => button.textContent === 'Review retained changes')!.click();await tick();assert.equal(f.adapter.attempts,attempts,'Review dispatches no persistence attempt');assert.equal(f.dom.window.document.querySelector<HTMLTextAreaElement>('[aria-label="Accepted configuration"]')!.value,desired);assert.equal(await f.vault.read('Work.base'),before,'Review never authors the summary');f.adapter.fail=false;await f.session.flush();
+    await until(() => !!f.dom.window.document.querySelector('.bases-summary-editor [role="alert"]')?.textContent);
+    assert.equal(await f.vault.read('Work.base'), before); assert.equal(expression.closest('fieldset')!.disabled, false); assert.equal(expression.disabled, false); assert.equal(expression.value, 'values.length'); assert.equal(f.session.hasPendingChanges(), true);
+    const accepted=BaseDocument.parse(before);accepted.editViewSummary(0,'Sum','Sum','values.length');const desired=accepted.toString(),attempts=f.adapter.attempts;f.dom.window.document.querySelector<HTMLButtonElement>('[aria-label="Back to summaries"]')!.click();await tick();assert.equal(f.adapter.attempts,attempts,'Back cannot dispatch a persistence retry');assert.equal(f.dom.window.document.querySelector('.bases-configuration-review'),null);assert.equal(await f.vault.read('Work.base'),before);f.adapter.fail=false;await f.session.flush();
     await until(async () => (BaseDocument.parse(await f.vault.read('Work.base')).views[0].summaryDefinitions as Record<string,string>).Sum === 'values.length'); await until(() => !f.session.hasPendingChanges());
     assert.equal(expression.closest('fieldset')!.disabled, false); assert.equal(expression.disabled, false); assert.equal(expression.value, 'values.length'); assert.equal(f.adapter.revisions.get('Work.base'), 3, 'one builtin seed and one accepted summary write');
   } finally { await f.cleanup(); }

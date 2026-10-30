@@ -192,10 +192,10 @@ test('partial named-view reference failure retries the original retained note be
  const f=await fixture({viewName:'Table',files:{'Links.md':'![[Work.base#Table]]\n'}});try{
   f.adapter.failPaths.add('Links.md');f.configure();f.change('View name','Saved name','input');
   f.doc.getElementById('outside')!.dispatchEvent(new f.dom.window.MouseEvent('pointerdown',{bubbles:true}));
-  await until(()=>!!f.dialog()?.textContent?.includes('Review retained changes'),'terminal reference failure retains a reviewable exact draft');
+  await until(()=>f.errors.length>0&&!!f.dialog()?.querySelector('[role="alert"]')?.textContent,'terminal reference failure retains an editable exact draft');
   assert.equal((await f.disk()).views[0].name,'Saved name');assert.equal(f.session.state.result!.view.name,'Saved name');assert.equal(f.renamed.length,1);
   assert.match(await f.vault.read('Links.md'),/#Table/);assert.match((await f.getBuffer('Links.md')).text,/#Saved name/);assert.equal(f.session.hasPendingChanges(),true);
-  const attempts=f.adapter.attempts.length;f.submit();await tick();assert.equal(f.adapter.attempts.length,attempts,'Review does not repeat the original reference plan');assert.equal(f.control<HTMLTextAreaElement>('Accepted configuration').value,(await f.getBuffer('Work.base')).text);assert.match(await f.vault.read('Links.md'),/#Table/);
+  const attempts=f.adapter.attempts.length;f.submit();await tick();assert.equal(f.adapter.attempts.length,attempts,'Apply cannot repeat the original reference plan');assert.equal(f.doc.querySelector('.bases-configuration-review'),null);assert.match(await f.vault.read('Links.md'),/#Table/);
   f.adapter.failPaths.clear();await f.session.flush();
   assert.equal(f.dialog(),null);assert.match(await f.vault.read('Links.md'),/#Saved name/);assert.equal(f.renamed.length,1);
   assert.equal(f.adapter.writes.filter(write=>write.path==='Work.base').length,1);assert.equal(f.adapter.writes.filter(write=>write.path==='Links.md').length,1);
@@ -203,14 +203,14 @@ test('partial named-view reference failure retries the original retained note be
  }finally{await f.cleanup();}
 });
 
-test('terminal accepted save retains exact reviewable draft and ordinary Save persists it without replaying the configuration action',async()=>{
+test('terminal accepted save retains exact editable draft and ordinary Save persists it without replaying the configuration action',async()=>{
  const f=await fixture();try{
   f.adapter.fail=true;f.click('Sort');f.click('Add sort');f.change('Sort property','note.score');f.change('Sort direction','DESC');f.submit();
-  await until(()=>!!f.dialog()?.textContent?.includes('Review retained changes'),'terminal accepted failure offers read-only review');
+  await until(()=>!!f.dialog()?.querySelector('[role="alert"]')?.textContent?.includes('Toolbar disk unavailable'),'terminal accepted failure keeps editable controls');
   const buffer=await f.getBuffer('Work.base'),draft=buffer.text;assert.equal(buffer.dirty,true);assert.equal(await f.adapter.read('Work.base'),source);assert.deepEqual(f.publications,['Work.base']);
-  assert.equal(f.control<HTMLSelectElement>('Sort property').disabled,true);assert.equal(f.session.hasPendingChanges(),true);
+  assert.equal(f.control<HTMLSelectElement>('Sort property').disabled,false);assert.equal(f.session.hasPendingChanges(),true);
   await assert.rejects(f.session.close(),/Toolbar disk unavailable/);assert.ok(f.dialog());
-  const attempts=f.adapter.attempts.length;f.submit();await tick();assert.equal(f.control<HTMLTextAreaElement>('Original saved configuration').value,source);assert.equal(f.control<HTMLTextAreaElement>('Accepted configuration').value,draft);assert.equal(f.control<HTMLTextAreaElement>('Accepted configuration').readOnly,true);assert.equal(f.adapter.attempts.length,attempts,'Review never dispatches a persistence retry');
+  const attempts=f.adapter.attempts.length;f.submit();await tick();assert.equal(buffer.text,draft);assert.equal(f.doc.querySelector('.bases-configuration-review'),null);assert.equal(f.adapter.attempts.length,attempts,'Apply cannot dispatch a persistence retry');
   f.adapter.fail=false;await f.session.flush();assert.equal(f.dialog(),null,'ordinary Save acknowledges only the exact accepted configuration');
   assert.equal(await f.adapter.read('Work.base'),draft);assert.equal(f.adapter.writes.filter(write=>write.path==='Work.base').length,1);assert.deepEqual(f.publications,['Work.base']);
   assert.deepEqual(f.paths(),['Tasks/Gamma.md','Tasks/Alpha.md','Tasks/Beta.md']);await f.unchangedNotes();
@@ -221,12 +221,12 @@ test('failed Configure view command retains its exact shared draft and retries p
  const f=await fixture();try{
   f.adapter.fail=true;f.configure();f.change('Layout','cards');
   f.doc.getElementById('outside')!.dispatchEvent(new f.dom.window.MouseEvent('pointerdown',{bubbles:true}));
-  await until(()=>!!f.dialog()?.textContent?.includes('Review retained changes'),'terminal view command exposes its retained sources for review');
+  await until(()=>!!f.dialog()?.querySelector('[role="alert"]')?.textContent?.includes('Toolbar disk unavailable'),'terminal view command retains its original source');
   const buffer=await f.getBuffer('Work.base'),draft=buffer.text;
   assert.equal(buffer.dirty,true);assert.equal(await f.adapter.read('Work.base'),source);
   assert.equal(BaseDocument.parse(draft).views[0].type,'cards');
-  assert.equal(f.control<HTMLSelectElement>('Layout').disabled,true);assert.deepEqual(f.publications,['Work.base']);
-  const attempts=f.adapter.attempts.length;f.submit();await tick();assert.equal(f.control<HTMLTextAreaElement>('Accepted configuration').value,draft);assert.equal(f.adapter.attempts.length,attempts,'Review does not rerun Configure view');
+  assert.equal(f.control<HTMLSelectElement>('Layout').disabled,false);assert.deepEqual(f.publications,['Work.base']);
+  const attempts=f.adapter.attempts.length;f.submit();await tick();assert.equal(buffer.text,draft);assert.equal(f.doc.querySelector('.bases-configuration-review'),null);assert.equal(f.adapter.attempts.length,attempts,'Apply cannot rerun Configure view');
   f.adapter.fail=false;await f.session.flush();assert.equal(f.dialog(),null,'ordinary Save closes the acknowledged view menu');
   assert.equal(await f.adapter.read('Work.base'),draft);assert.deepEqual(f.publications,['Work.base']);
   assert.equal(f.session.state.result!.view.type,'cards');await f.unchangedNotes();
@@ -236,10 +236,10 @@ test('failed Configure view command retains its exact shared draft and retries p
 test('ordinary Save of a retained terminal draft refuses an externally changed file and keeps both external bytes and recoverable draft',async()=>{
  const f=await fixture();try{
   f.adapter.fail=true;f.click('Sort');f.click('Add sort');f.change('Sort property','note.score');f.change('Sort direction','DESC');f.submit();
-  await until(()=>!!f.dialog()?.textContent?.includes('Review retained changes'),'terminal configuration failure is retained for review');
+  await until(()=>!!f.dialog()?.querySelector('[role="alert"]')?.textContent?.includes('Toolbar disk unavailable'),'terminal configuration failure keeps its original buffer');
   const buffer=await f.getBuffer('Work.base'),draft=buffer.text;f.adapter.fail=false;
   const external=source+'externalChange: preserve\n';await f.adapter.write('Work.base',external);
-  const attempts=f.adapter.attempts.length;f.submit();await tick();assert.equal(f.control<HTMLTextAreaElement>('Accepted configuration').value,draft);assert.equal(f.adapter.attempts.length,attempts,'Review cannot overwrite external bytes');await assert.rejects(f.session.flush(),/outside this editor/);
+  const attempts=f.adapter.attempts.length;f.submit();await tick();assert.equal(buffer.text,draft);assert.equal(f.doc.querySelector('.bases-configuration-review'),null);assert.equal(f.adapter.attempts.length,attempts,'Apply cannot overwrite external bytes');await assert.rejects(f.session.flush(),/outside this editor/);
   assert.equal(await f.adapter.read('Work.base'),external);assert.equal(buffer.text,draft);assert.equal(buffer.dirty,true);assert.ok(f.dialog());
   await f.unchangedNotes();
  }finally{
@@ -259,5 +259,18 @@ test('passive sibling view rebinding preserves its property draft until the save
   assert.equal(input.isConnected,true);assert.equal(input.value,'Retained');assert.equal(f.session.hasPendingChanges(),true);
   f.key(input,'Escape');await until(()=>f.session.state.result?.view.name==='Renamed','sibling refreshed binding');
   assert.equal(f.session.rebindViewName('Table','Renamed'),false);assert.equal(f.requests.some(request=>request.op==='set_entry'),false,'passive rebinding never submits the retained property draft');await f.unchangedNotes();
+ }finally{await f.cleanup();}
+});
+
+
+test('Cancel dismisses only the newer local configuration and ordinary Save still settles accepted A',async()=>{
+ const f=await fixture();try{
+  f.adapter.fail=true;f.click('Sort');f.click('Add sort');f.change('Sort property','note.score');f.submit();
+  await until(()=>f.errors.length>0,'accepted A fails through the real mutation buffer');
+  const buffer=await f.getBuffer('Work.base'),accepted=buffer.text;
+  f.change('Sort direction','DESC');assert.equal(f.control<HTMLSelectElement>('Sort direction').disabled,false);assert.equal(buffer.text,accepted);
+  const attempts=f.adapter.attempts.length;f.doc.getElementById('outside')!.dispatchEvent(new f.dom.window.MouseEvent('pointerdown',{bubbles:true}));assert.ok(f.dialog());assert.equal(f.control<HTMLSelectElement>('Sort direction').value,'DESC');assert.equal(f.adapter.attempts.length,attempts);
+  f.control<HTMLButtonElement>('Cancel').click();assert.equal(f.dialog(),null);assert.equal(buffer.text,accepted);assert.equal(buffer.dirty,true);assert.equal(await f.adapter.read('Work.base'),source);
+  f.adapter.fail=false;await f.session.flush();assert.equal(await f.adapter.read('Work.base'),accepted);assert.equal(f.adapter.writes.filter(write=>write.path==='Work.base').length,1);assert.equal(f.session.hasPendingChanges(),false);await f.unchangedNotes();
  }finally{await f.cleanup();}
 });

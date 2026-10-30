@@ -1,5 +1,3 @@
-import { reviewRetainedBaseConfiguration } from './configuration-review.ts';
-import type { BaseConfigurationReview } from './configuration-review.ts';
 import { BaseDocument } from './document.ts';
 import type { BaseValue, BaseViewConfig, BaseViewPatch } from './document.ts';
 import type { BaseQueryResult } from './query.ts';
@@ -154,12 +152,11 @@ export interface BaseToolbar {
 }
 type FilterNode = BaseFilterNode;
 type PanelName = BaseToolbarPanelName;
-interface Panel { confirmAcceptedAdmission?(state:BaseToolbarState):void;acknowledgeAcceptedSave?():void;suspendAdmission?():BaseToolbarAdmissionDraft|undefined; hasUnfinishedInput?():boolean;canCaptureAdmissionDraft?():boolean;captureFreeze?():BaseToolbarAdmissionDraft|undefined;restoreRaw?(draft:BaseToolbarAdmissionDraft):boolean;rebase?(state: BaseToolbarState, expectedName?: string): boolean; refreshFilterAdvice?(state:BaseToolbarState):void; flush?(): void; name: PanelName; node: HTMLElement; trigger: HTMLElement; dirty: boolean; innerDraft?: boolean; saving: boolean; failure?: object; acceptsSaveAcknowledgement?: () => boolean; close(restore?: boolean): void }
-/** Only a retained, exact accepted configuration may offer a persistence retry. */
+interface Panel { confirmAcceptedAdmission?(state:BaseToolbarState):void;acknowledgeAcceptedSave?():void;suspendAdmission?():BaseToolbarAdmissionDraft|undefined; hasUnfinishedInput?():boolean;canCaptureAdmissionDraft?():boolean;captureFreeze?():BaseToolbarAdmissionDraft|undefined;restoreRaw?(draft:BaseToolbarAdmissionDraft):boolean;rebase?(state: BaseToolbarState, expectedName?: string): boolean; refreshFilterAdvice?(state:BaseToolbarState):void; flush?(): void; name: PanelName; node: HTMLElement; trigger: HTMLElement; dirty: boolean; innerDraft?: boolean; saving: boolean; failure?: object; acceptsSaveAcknowledgement?: () => boolean; close(restore?: boolean, discardLocal?:boolean): void }
+/** Internal persistence handle for the exact already accepted configuration. */
 export class BaseToolbarSaveError extends Error {
   readonly retry: () => Promise<void>;
-  readonly review?:BaseConfigurationReview;
-  constructor(message: string, retry: () => Promise<void>,review?:BaseConfigurationReview) { super(message); this.retry = retry;this.review=review; }
+  constructor(message: string, retry: () => Promise<void>) { super(message); this.retry = retry; }
 }
 const invoke = (operation:()=>Promise<void>):Promise<void> => { try { return Promise.resolve(operation()); } catch (failure) { return Promise.reject(failure); } };
 const mapping = (value: unknown): value is Record<string, BaseValue> => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -291,12 +288,12 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     const heading = doc.createElement('h3'); heading.textContent = name === 'View options' ? 'View settings' : name === 'Add view' ? 'Add a view' : name === 'Sort' ? 'Sort by' : name === 'Group' ? 'Group by' : name; if (['Views','Results','Properties','Filter'].includes(name)) heading.hidden = true;
     if(returnTo){heading.hidden=false;heading.textContent=name==='View options'?'Layout':name==='Properties'?'Property visibility':name;}
     if (returnTo || name === 'View options' || name === 'Add view' || name === 'Formula' || name === 'Property' || name === 'New item settings') {
-      const back = button(doc, '', () => { if(returnTo){navigatePanel(returnTo,returnTo==='View options'?'View settings':undefined);return;} if (name === 'Add view' && !own.saving) { own.close(false); open('Views',trigger); return; } if (hasDraft()) { if (options.immediate) panel?.flush?.(); else report(new Error('Apply or cancel the current changes first.')); return; } panel?.close(false); open(name === 'Formula' || name === 'Property' ? 'Properties' : 'Views',trigger); }, 'Back'); back.className = 'bases-toolbar-menu-next'; back.append(icon('chevron-left',16,doc)); back.dataset.panelAction='back'; heading.prepend(back);
+      const back = button(doc, '', () => { if(returnTo){navigatePanel(returnTo,returnTo==='View options'?'View settings':undefined);return;} if (name === 'Add view' && !own.saving) { if(retryPersistence)return;own.close(false); open('Views',trigger); return; } if (hasDraft()) { if (options.immediate) panel?.flush?.(); else report(new Error('Apply or cancel the current changes first.')); return; } panel?.close(false); open(name === 'Formula' || name === 'Property' ? 'Properties' : 'Views',trigger); }, 'Back'); back.className = 'bases-toolbar-menu-next'; back.append(icon('chevron-left',16,doc)); back.dataset.panelAction='back'; heading.prepend(back);
     }
     const form = doc.createElement('form'), fields = doc.createElement('div'), footer = doc.createElement('div'), error = doc.createElement('div');
     fields.className = 'bases-toolbar-fields'; footer.className = 'bases-toolbar-footer'; error.className = 'bases-toolbar-error'; error.setAttribute('role', 'alert');
     const apply = doc.createElement('button'); apply.type = 'submit'; apply.textContent = 'Apply'; apply.className = 'mod-cta';
-    const cancel = button(doc, 'Cancel', () => { if (!own.saving) own.close(); }); footer.append(cancel, apply); form.append(fields, error, footer); node.append(heading, form); doc.body.append(node);
+    const cancel = button(doc, 'Cancel', () => { if (!own.saving) own.close(true,true); }); footer.append(cancel, apply); form.append(fields, error, footer); node.append(heading, form); doc.body.append(node);
     let autoTimer: ReturnType<typeof setTimeout> | undefined;
     let generation = 0,rawFrozen=false,rawPassive=!!restoring,submitted=false;
     const comboOwners=new Map<HTMLSelectElement,BaseCombobox>(),formulaOwners=new Map<HTMLTextAreaElement,BaseFormulaEditor>(),deferredNativeExpressions=new WeakSet<HTMLTextAreaElement>();
@@ -308,7 +305,6 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     const unfinishedInput=()=>[...activeCompositionTargets].some(target=>target instanceof doc.defaultView!.Node&&node.contains(target))||[...compositions.entries()].some(([input,cycle])=>node.contains(input)&&(cycle.active||cycle.settling));
     const unsubmittedInput=()=>unfinishedInput()||!!rawModel?.hasRawInput?.()||[...comboOwners.values()].some(control=>control.hasRawInput());
     const activateRaw=(event:Event)=>{if(rawFrozen){
-      if(event.target instanceof doc.defaultView!.Element&&event.target.closest('[data-base-review]'))return;
       if(event.type==='keydown'&&event.target&&activeCompositionTargets.has(event.target)){event.stopImmediatePropagation();return;}
       if(event.type==='input'||event.type==='change')return;
       if(event.cancelable)event.preventDefault();event.stopImmediatePropagation();return;
@@ -333,8 +329,8 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     const auto = options.immediate === true && !['Views','Add view','New item settings'].includes(name) && (name !== 'Formula' || !!formulaName);
     if (auto) footer.hidden = true;
     const own: Panel = { name, node, trigger, dirty: false, saving: false, failure: undefined,hasUnfinishedInput:unfinishedInput,
-      close(restore = true) {
-        if (own.saving||rawFrozen&&!destroyed) return;
+      close(restore = true, discardLocal = false) {
+        if (own.saving||!destroyed&&(rawFrozen||!!retryPersistence&&!discardLocal)) return;
         if (autoTimer) clearTimeout(autoTimer);
         activeViewDrag = undefined;
         for (const dispose of disposers.splice(0)) dispose();
@@ -358,8 +354,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       configuration=snapshot;opening=next;result=next.result;version=result.version;configuredView=next.views[selectedIndex]??result.view;refreshPanel?.(result,own.dirty);return true;
     };
     panel = own; trigger.setAttribute('aria-expanded', 'true');
-    let retryPersistence: (() => Promise<void>) | undefined,reviewFailure:BaseToolbarSaveError|undefined;
-    const reviewRetained=()=>reviewRetainedBaseConfiguration(form,reviewFailure?.review,[...fields.querySelectorAll<HTMLInputElement|HTMLTextAreaElement|HTMLSelectElement>('input,textarea,select')].map(input=>`${input.getAttribute('aria-label')??input.name}: ${input.value}`).join('\n'));
+    let retryPersistence: (() => Promise<void>) | undefined;
     type Control = HTMLInputElement | HTMLButtonElement | HTMLSelectElement | HTMLTextAreaElement;
     type AcceptedAttempt = {generation:number;configuration?:ReturnType<typeof configurationSnapshot>;viewName:string;inputs:Map<Control,boolean>;acknowledge?:()=>void};
     let retainedAttempt: AcceptedAttempt | undefined,activeAttempt:AcceptedAttempt|undefined;
@@ -409,9 +404,10 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
           own.saving = false; item.disabled = false; if(autoTimer){clearTimeout(autoTimer);autoTimer=undefined;}
           error.textContent = failure instanceof Error ? failure.message : String(failure);
           if (failure instanceof BaseToolbarSaveError) {
-            own.failure = {}; own.acceptsSaveAcknowledgement = () => generation === commandGeneration; own.dirty = true; retryPersistence = failure.retry;reviewFailure=failure;
+            own.failure = {}; own.acceptsSaveAcknowledgement = () => generation === commandGeneration; own.dirty = true; retryPersistence = failure.retry;
             retainedAttempt = {generation:commandGeneration,viewName:configuredView.name,inputs:commandInputs};
-            footer.hidden = false; apply.disabled = cancel.disabled = false; apply.textContent = 'Review retained changes';apply.dataset.baseReview='true';node.inert=false;
+            if(!rawFrozen)for(const [input,disabled] of commandInputs)input.disabled=disabled;
+            footer.hidden = false; apply.disabled = true; cancel.disabled = false;
           } else for(const [input,disabled] of commandInputs) input.disabled=disabled;
           report(failure); options.onDraftChange();
         });
@@ -1004,7 +1000,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       closeWhenSettled ||= close;
       if (autoTimer) { clearTimeout(autoTimer); autoTimer = undefined; }
       if (own.saving || destroyed || panel !== own) return;
-      if(reviewFailure){reviewRetained();return;}
+      if(retryPersistence)return;
       if(rawFrozen || rawPassive)return;
       if (own.innerDraft) { error.textContent = 'Finish or cancel the unfinished value first.'; return; }
       if (!own.dirty && !own.failure) { if (close) own.close(); return; }
@@ -1015,12 +1011,10 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       expectedPatch = undefined; expectedSnapshot = undefined;
       try {
         options.preflight();
-        if (retryPersistence) operation = retryPersistence;
-        else if (readOperation) operation = readOperation();
+        if (readOperation) operation = readOperation();
         else { const patch = validateToolbarPatch(result, readPatch()); expectedPatch = {view:patch}; operation = () => options.save(version, patch); }
       } catch (failure) { error.textContent = failure instanceof Error ? failure.message : String(failure); return; }
-      const retrying = !!retryPersistence && !!retainedAttempt;
-      const attempt: AcceptedAttempt = retrying ? retainedAttempt! : {
+      const attempt: AcceptedAttempt = {
         generation,configuration:expectedSnapshot??(expectedPatch?applyConfigurationPatch(configuration,expectedPatch,selectedIndex):configuration),
         viewName:name==='View options'||name==='View settings'?form.querySelector<HTMLInputElement>('[aria-label="View name"]')?.value.trim()||configuredView.name:configuredView.name,
         inputs:inputStates(),acknowledge:afterSave,
@@ -1034,7 +1028,6 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       submitted=true;void invoke(operation).then(() => {
         if (destroyed || panel !== own) return;
         own.saving = false; submitted=false; own.failure = undefined; retryPersistence = undefined; retainedAttempt = undefined;
-        if(retrying)for(const [input,wasDisabled] of attempt.inputs) input.disabled=wasDisabled;
         own.dirty = generation !== submittedGeneration;
         if (!expectedConfiguration && own.dirty) {
           own.failure = {}; footer.hidden = false; error.textContent = 'The retained command is saved. Your newer configuration draft is still here. Cancel and reopen the updated view before continuing.'; options.onDraftChange(); return;
@@ -1062,12 +1055,12 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       }, failure => {
         if (destroyed || panel !== own) return; own.saving = false; own.dirty = true;
         if(autoTimer){clearTimeout(autoTimer);autoTimer=undefined;}
-        if (failure instanceof BaseToolbarSaveError) {retryPersistence = failure.retry;reviewFailure=failure;retainedAttempt??=attempt;}
+        if (failure instanceof BaseToolbarSaveError) {retryPersistence = failure.retry;retainedAttempt??=attempt;}
         if (retryPersistence) {
           own.failure ??= {}; own.acceptsSaveAcknowledgement = () => generation === submittedGeneration;
-          error.textContent = `Could not save: ${failure instanceof Error ? failure.message : String(failure)}. The accepted configuration and your newer input are retained for review or copying.`;
-          footer.hidden = false; apply.disabled = false; apply.textContent = 'Review retained changes';apply.dataset.baseReview='true';node.inert=false; cancel.disabled = false;
-          for (const input of node.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('input,select,textarea')) input.disabled = true;
+          error.textContent = `Could not save: ${failure instanceof Error ? failure.message : String(failure)}. Your changes are still here.`;
+          if(!rawFrozen)for(const [input,wasDisabled] of attempt.inputs)input.disabled=wasDisabled;
+          footer.hidden = false; apply.disabled = true; cancel.disabled = false;
         } else {
           own.failure = undefined; footer.hidden = false;
           for (const [input, wasDisabled] of disabled) input.disabled = wasDisabled;
@@ -1108,11 +1101,10 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       if(attempt.configuration)configuration=attempt.configuration;
       if(newer&&deferredState&&!own.rebase?.(deferredState,attempt.viewName))return;
       if(deferredState){state=deferredState;deferredState=undefined;}
-      own.failure=undefined;retryPersistence=undefined;reviewFailure=undefined;retainedAttempt=undefined;submitted=false;
+      own.failure=undefined;retryPersistence=undefined;retainedAttempt=undefined;submitted=false;
       for(const [input,disabled]of attempt.inputs)input.disabled=disabled;
       attempt.acknowledge?.();own.dirty=newer;
-      node.querySelector('.bases-configuration-review')?.remove();
-      if(newer){rawPassive=true;footer.hidden=false;apply.textContent='Apply';delete apply.dataset.baseReview;error.textContent='The accepted configuration is saved. Your newer input is retained. Edit or cancel it to continue.';options.onDraftChange();}
+      if(newer){rawPassive=true;footer.hidden=false;apply.textContent='Apply';error.textContent='The accepted configuration is saved. Your newer input is retained. Edit or cancel it to continue.';options.onDraftChange();}
       else own.close(false);
     };
     let capturingAccepted=false;
@@ -1130,7 +1122,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       const raw=newer?own.captureFreeze?.():undefined;
       rawFrozen=true;if(autoTimer){clearTimeout(autoTimer);autoTimer=undefined;}afterClean=undefined;
       if(newer&&!raw)throw new Error('The newer Base settings are retained while their input finishes.');
-      if(raw)void raw.ready.then(()=>{if(!reviewFailure)node.inert=true;});else node.inert=true;return raw;
+      if(raw)void raw.ready.then(()=>{node.inert=true;});else node.inert=true;return raw;
     };
     let captured:BaseToolbarAdmissionDraft|undefined;
     own.canCaptureAdmissionDraft=()=>!!captured||!!rawModel&&(rawModel.canCapture?.()??true)&&rawModel.controls().every(([,control])=>!(control instanceof doc.defaultView!.HTMLSelectElement)||!comboOwners.has(control)||comboOwners.get(control)?.canCaptureAdmissionDraft()===true)&&(own.dirty||!!own.innerDraft||unsubmittedInput())&&(capturingAccepted||!own.saving&&!own.failure&&!submitted&&!retryPersistence&&!retainedAttempt);

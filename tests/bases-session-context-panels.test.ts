@@ -69,7 +69,7 @@ async function fixture(enhanced = true) {
     gate() { const gate = { started: deferred(), release: deferred() }; releases.push(gate.release.resolve); return gate; },
     async cleanup() {
       releases.forEach(release => release()); adapter.fail = false;
-      if(button('Review retained changes'))await session.flush().catch(()=>{});
+      if(panel.querySelector('[role="alert"]')?.textContent)await session.flush().catch(()=>{});
       const cancel = button('Cancel changes'); if (cancel) cancel.click();
       if (panel.isConnected && session.hasPendingChanges()) { name.focus(); name.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); }
       await until(() => !session.hasPendingChanges(), 'No retained summary draft is discarded during cleanup');
@@ -119,14 +119,14 @@ test('context dismissal preserves a raw whitespace Summary name while ordinary f
   } finally { await f.cleanup(); }
 });
 
-test('a terminal summary save retains its read-only review through a context-transition flush', async () => {
+test('a terminal summary save retains its editable input through a context-transition flush', async () => {
   const f = await fixture();
   try {
     f.adapter.fail = true; f.editExpression('values.length');
-    await until(() => !!f.button('Review retained changes'), 'The real terminal shared-buffer failure exposes read-only review');
-    const review = f.button('Review retained changes')!,attempts=f.adapter.attempts;review.click();await tick();assert.equal(f.adapter.attempts,attempts,'Review dispatches no persistence attempt');assert.equal(f.doc.querySelector<HTMLTextAreaElement>('[aria-label="Accepted configuration"]')!.value,(await f.getBuffer('Work.base')).text);assert.equal(await f.adapter.read('Work.base'),initial,'Review never retries the save');
+    await until(() => !!f.panel.querySelector('[role="alert"]')?.textContent, 'The real terminal shared-buffer failure keeps editable input');
+    const attempts=f.adapter.attempts;f.doc.querySelector<HTMLButtonElement>('[aria-label="Back to summaries"]')!.click();await tick();assert.equal(f.adapter.attempts,attempts,'Back dispatches no persistence attempt');assert.equal(f.doc.querySelector('.bases-configuration-review'),null);assert.equal(f.expression.disabled,false);assert.equal(await f.adapter.read('Work.base'),initial);
     await assert.rejects(f.session.flush({ dismissCleanPanels: true }), /Summary storage unavailable/);
-    assert.equal(f.panel.isConnected, true); assert.equal(f.expression.value, 'values.length'); assert.equal(f.button('Review retained changes'), review); assert.equal(f.session.hasPendingChanges(), true);
+    assert.equal(f.panel.isConnected, true); assert.equal(f.expression.value, 'values.length'); assert.equal(f.expression.disabled,false);assert.equal(f.button('Review retained changes'),undefined); assert.equal(f.session.hasPendingChanges(), true);
     assert.equal(await f.adapter.read('Work.base'), initial); assert.equal(await f.adapter.read('One.md'), note);
   } finally { await f.cleanup(); }
 });
