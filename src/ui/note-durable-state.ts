@@ -553,7 +553,7 @@ export class DurableNoteState {
         const claim=Object.freeze({captureId:request.captureId,logicalWitness:request.logicalWitness});
         const capture=await owner.supervisor.run(async()=>{
           try{dispatched=true;return await this.writes.captureSavedSource!(claim);}
-          catch(error){if(error&&typeof error==='object'&&Object.getOwnPropertyDescriptor(error,'source')?.value==='host'&&Object.getOwnPropertyDescriptor(error,'code')?.value==='source_capture_capacity'){await this.cleanupAbandonedCaptureRequests();check();await recoverNoteCaptureCapacity(this.writes,this.base.entryId,check);}throw error;}
+          catch(error){if(error&&typeof error==='object'&&!('cause'in error)&&Object.getOwnPropertyDescriptor(error,'source')?.value==='host'&&Object.getOwnPropertyDescriptor(error,'code')?.value==='source_capture_capacity'){await this.cleanupAbandonedCaptureRequests();check();await recoverNoteCaptureCapacity(this.writes,this.base.entryId,check);}throw error;}
         },check,{signal:owner.controller.signal});
         received=true;check();
         if(!capture||capture.captureId!==request.captureId||typeof capture.source!=='string')throw failure('invalid conditional saved-source capture');

@@ -182,3 +182,10 @@ test('capacity-owned actors retry their original operation after a temporary pla
     assert.equal(ui.records.get('pending1')!.content,'Original conditional 1');await selected.releaseConditionalSavedSource(captured);
   }finally{ui.adapter.durableWrites.planWrite=plan;await selected.dispose().catch(()=>{});await capturing.catch(()=>{});}
 });
+
+test('a host capacity code with a terminal cause cannot resume another accepted operation',async t=>{
+  const ui=await fixture(t,'clean','canonical',8);await until(()=>ui.started);const terminal=Object.assign(Error('invalid protocol'),{source:'host',code:'invalid_response'});
+  ui.adapter.durableWrites.captureSavedSource=async()=>{throw Object.assign(Error('ambiguous capacity wrapper'),{code:'source_capture_capacity',source:'host',cause:terminal});};
+  const selected=ui.workspace.buffers.get('Selected.md')!;await assert.rejects(selected.captureConditionalSavedSource(selected.savedDurableWitness!),/ambiguous capacity wrapper/);
+  assert.equal([...ui.workspace.buffers.values()].some(buffer=>buffer.savedDurableWitness?.entryId.startsWith('pending')),false);assert.deepEqual(ui.committed,[]);assert.equal(ui.captures.size,8);
+});
