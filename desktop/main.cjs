@@ -18,7 +18,11 @@ function independentJournal(){
     const {openDraftJournal}=require('./draft-journal.cjs');
     const {createLazyDraftJournal}=require('./lazy-draft-journal.cjs');
     const {createDraftJournalAdmissionManager}=require('./draft-journal-admission.cjs');
-    independentJournalManager=createDraftJournalAdmissionManager({broker,journal:createLazyDraftJournal(()=>openDraftJournal(path.join(app.getPath('userData'),'draft-journal-v2')))});
+    independentJournalManager=createDraftJournalAdmissionManager({broker,journal:createLazyDraftJournal(()=>openDraftJournal(path.join(app.getPath('userData'),'draft-journal-v2'))),
+      quiesceCore:(record,root,grant)=>{
+        if(!ownsApplication||!editorCore)throw Object.assign(new Error('Independent draft owner is unavailable.'),{code:'draft_admission_denied'});
+        return editorCore.quiesceJournalOwner(broker,record,root,grant);
+      }});
   }
   return independentJournalManager;
 }
@@ -36,7 +40,8 @@ async function contextWithIndependentJournal(record,event,expectedRoot,operation
   const check=captureJournalOwner(record,event,expectedRoot),context=await operation();check();
   if(!context)return context;
   const grant=independentJournal().attach(record,context);check();
-  return{...context,independentJournal:grant};
+  const admissionId=editorCore.bindIndependentJournal(broker,record,expectedRoot,context.admissionId,grant,check);check();
+  return{...context,admissionId,independentJournal:grant};
 }
 const { createContextMenuController } = require('./context-menu.cjs');
 const { validateMenuHotkeys, workspaceFileMenu } = require('./menu-hotkeys.cjs');

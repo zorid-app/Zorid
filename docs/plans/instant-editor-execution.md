@@ -21,7 +21,40 @@ The user resumed the existing thread goal: it is active. The objective is not
 complete. Earlier create_goal replacement was rejected while the unfinished goal
 was blocked; that is historical, not a current execution blocker.
 
-## Latest delivery state — runtimed180c9b6 / harness7d954b57
+## Current execution checkpoint — 2026-10-30
+
+Root remains sole integration/build owner in `codex/instant-editor-current`;
+main remains `7d8006b8` and the installed application is unchanged. User repeatedly
+resumed this work. The goal tool's stale blocked status is not an execution stop.
+
+Capture identity contract `774cf2d8` is composed through `367a174d`: Store schema20,
+caller-owned IDs, exact independent-journal ACK, bounded pending lookup, restart-safe
+cancellation, native/host wire, renderer claims and sealed cleanup. Store GREEN009
+passed41 focused checks. Native GREEN010 passed181 across six native/host groups;
+Rust source unchanged, digest73159ecba79fb78e5a3400d10e26e299eb96e527efbf8cc71818196219d21d91.
+Native/host test leaves used opt-level0 to bound compilation; functional evidence,
+not production timing. Receipts: tmp/instant-editor-validation/capture-request-
+{store-green009,native-green010}*. Native RED003 reproduced four lost-reply/cancel
+failures before implementation. Independent source reviews do not establish UX.
+
+Root Main retirement certificate/trusted journal binding reviewed; focused checks
+pass. First composed JS gate366/371: four fake-main binding omissions corrected,
+focused checks pass; unchanged one-second fake-host timeout passed isolated.
+Second composed JS run is pending. Raw settings through4be56035 passed254 focused
+checks andTS. Base configuration/summary/inline/reference continuation remains owned
+by base_config_recovery in its isolated worktree, pending product pin/review.
+capture_note_ui_finish owns removing ordinary-admission pending-request discovery,
+keeping before-capture cleanup and exact release wake/claims intact.
+
+Earlier disk-full native attempts produced no behavioral verdict. Only closed,
+rebuildable agent app bundles were removed after identity/process checks. Some
+old binaries were deleted rather than archived: exact cleanup receipt at
+ tmp/instant-editor-artifacts/retired-builds/cleanup-receipt.json.
+Vaults/preferences/installed app/fixture reports preserved. Disk now~7.5GiB;
+heavy builds serialized. Production host/new package/actual GUI timing and faults/
+main integration/install remain required. Package008 predates recovery changes.
+
+## Prior verified performance delivery — runtimed180c9b6 / harness7d954b57
 
 Current acceptance: d180c9b6, independently reviewed; Root140Native +52frontend
 focused checks pass, package008 TS/Vite/361file verification pass. ReversedNative

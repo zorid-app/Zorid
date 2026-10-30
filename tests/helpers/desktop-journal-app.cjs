@@ -10,7 +10,7 @@ const desktop=path.resolve(__dirname,'../../desktop');
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 async function startJournalApp(t){
   const profile=await fs.mkdtemp(path.join(os.tmpdir(),'zorid-journal-app-'));await fs.writeFile(path.join(profile,'vault.json'),JSON.stringify({path:'/vault-one'}));
-  const handlers=new Map(),windows=[],proxies=[],calls=[],services=new Map();let broker,openCount=0,openFailures=0,lostReplies=0,contextGate,recoverGate,releaseGate,invokeGate,openGate,coreAdmission='core-one',postJournal;
+  const handlers=new Map(),windows=[],proxies=[],calls=[],services=new Map(),corePending=new Set();let broker,openCount=0,openFailures=0,lostReplies=0,contextGate,recoverGate,releaseGate,invokeGate,openGate,coreAdmission='core-one',postJournal,boundJournal,documentAdmission=0;
   class FakeWindow extends EventEmitter{
     constructor(){super();this.destroyed=false;this.webContents=new EventEmitter();Object.assign(this.webContents,{id:windows.length+1,mainFrame:{url:''},isDestroyed:()=>this.destroyed,setWindowOpenHandler(){},send(){}});windows.push(this);}
     isDestroyed(){return this.destroyed;}
@@ -23,7 +23,17 @@ async function startJournalApp(t){
   const core={open:async root=>{if(!services.has(root))services.set(root,{root,subscribe:()=>()=>{}});return services.get(root);},owns:()=>false,requireReleased(){},
     context:async()=>{calls.push('context');await contextGate;return{admissionId:coreAdmission,scope:{vaultId:'vault-one',clientId:'client-one'}};},
     recover:async()=>{calls.push('recover');await recoverGate;coreAdmission='core-two';return{admissionId:coreAdmission,scope:{vaultId:'vault-one',clientId:'client-one'}};},
-    release:async()=>{calls.push('release');await releaseGate;},invoke:async()=>{calls.push('coreInvoke');await invokeGate;return{core:true};},retire:async()=>{},close:async()=>{}};
+    bindIndependentJournal(_broker,record,root,admissionId,grant,check){
+      check();if(admissionId!==coreAdmission||root!==record.vault.service.root||grant.scope.clientId!==record.clientSlot.clientId)throw{code:'draft_admission_denied'};
+      if(boundJournal&&boundJournal.grant.token!==grant.token)coreAdmission=`document-core-${++documentAdmission}`;
+      boundJournal={grant,check};return coreAdmission;
+    },
+    async quiesceJournalOwner(_broker,record,root,grant){
+      const owner=boundJournal,id=coreAdmission;
+      const check=()=>{if(!owner||boundJournal!==owner||coreAdmission!==id||owner.grant.token!==grant.token||root!==record.vault.service.root)throw{code:'draft_lease_revoked'};owner.check();};
+      check();while(corePending.size)await Promise.allSettled([...corePending]);check();
+    },
+    release:async()=>{calls.push('release');await releaseGate;},invoke:()=>{calls.push('coreInvoke');const pending=Promise.resolve(invokeGate).then(()=>({core:true}));corePending.add(pending);void pending.then(()=>corePending.delete(pending),()=>corePending.delete(pending));return pending;},retire:async()=>{},close:async()=>{}};
   const electron={app,BrowserWindow:FakeWindow,ipcMain:{handle:(name,handler)=>handlers.set(name,handler)},Menu:{buildFromTemplate:value=>value,setApplicationMenu(){}},shell:{openExternal(){}},dialog:{showOpenDialog:async()=>({canceled:false,filePaths:['/vault-two']}),showErrorBox(message,detail){throw Error(`${message}: ${detail}`);},showMessageBox:async()=>{}}};
   const nativeRequire=name=>{
     if(name==='electron')return electron;

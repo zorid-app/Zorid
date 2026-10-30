@@ -3160,3 +3160,14 @@ mainintegration/install still OPEN; no app-latency claim from these checks.
 Capture initial-ACK request identity remains REQUIRED/open; docs-only contract
 audit assigned, no implementation approval implied. Exactpins/evidence in
 instant-editor-execution.md currentverifiedperformance section.
+
+
+### 2026-10-30 — Automatic recovery and capture identity progress
+
+Capture20 composed through367a174d: Root Store41 and Native/Host181 focused
+checks pass; exact independent journal ACK precedes Native capture, caller IDs
+survive lost replies, cancellation remains restart-safe. Native test leaves opt0
+are functional evidence only. Raw settings254+TS pass. Accepted Base configuration/
+summary/inline/reference recovery remains in progress; ordinary-open cleanup-query
+overhead under scoped follow-up. Actual800ms GUI/faultcampaign, production build,
+main integration/install remain OPEN. See instant-editor-execution checkpoint.

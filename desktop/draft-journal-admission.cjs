@@ -32,9 +32,10 @@ const receiptKeys=['vaultId','clientId','incarnationId','entryId','writer','revi
 function capture(request,scope){
   object(request,['op','args']);
   const {op,args}=request;
-  if(!['list','read','compareAndSwap','retire'].includes(op)||!Array.isArray(args)||Object.getPrototypeOf(args)!==Array.prototype||(op==='list'?args.length>1:args.length!==1)||args.length===1&&!Object.hasOwn(args,'0')
+  if(!['list','read','compareAndSwap','retire','isRetiredIncarnation'].includes(op)||!Array.isArray(args)||Object.getPrototypeOf(args)!==Array.prototype||(op==='list'?args.length>1:args.length!==1)||args.length===1&&!Object.hasOwn(args,'0')
     ||Reflect.ownKeys(args).some(key=>key!=='length'&&(key!=='0'||!Object.hasOwn(Object.getOwnPropertyDescriptor(args,key),'value'))))throw failure('invalid_draft_request');
   if(op==='list')return{op,args:args.length?[{entryId:id(object(args[0],['entryId']).entryId)}]:[]};
+  if(op==='isRetiredIncarnation')return{op,args:[id(args[0])]};
   const value=args[0];
   if(op==='read'){
     object(value,receiptKeys,['entryId','writer']);
@@ -74,9 +75,13 @@ function capture(request,scope){
  * immediately before publication. A filesystem rename already authorized and
  * in flight may finish after revocation; its late response is still denied.
  */
-function createDraftJournalAdmissionManager({journal,broker}={}){
+function createDraftJournalAdmissionManager({journal,broker,quiesceCore}={}){
   if(typeof journal?.bind!=='function'||typeof broker?.authenticate!=='function')throw replyFailure(failure('invalid_draft_admission'));
   const states=new Map();
+  // Main holds the profile singleton. Registered grants remain protected even
+  // when temporarily blocked; only explicit lifecycle revocation removes them.
+  const registered=(scope,incarnation)=>[...states.values()].some(state=>state.grant.scope.vaultId===scope.vaultId
+    &&state.grant.scope.clientId===scope.clientId&&state.grant.scope.incarnationId===incarnation);
   function revoke(record){const state=states.get(record);if(!state)return;states.delete(record);state.lease?.revoke();}
   function attach(record,trustedCoreContext){
     try{
@@ -111,7 +116,17 @@ function createDraftJournalAdmissionManager({journal,broker}={}){
     try{
       authorize();captured=capture(request,state.grant.scope);
       const active=state;
-      return Promise.resolve(active.lease[captured.op](...captured.args)).then(value=>{
+      const work=captured.op==='isRetiredIncarnation'?(async()=>{
+        const incarnation=captured.args[0],scope=active.grant.scope;
+        if(registered(scope,incarnation))return false;
+        if(typeof quiesceCore!=='function')throw failure('draft_admission_denied');
+        // The trusted binder rotates document admission IDs before this drain,
+        // so delayed old RPCs cannot enter after accepted work has settled.
+        if(await quiesceCore(record,expectedRoot,active.grant)!==undefined)throw failure('draft_admission_denied');
+        authorize();if(state!==active)throw failure('draft_lease_revoked');
+        return!registered(scope,incarnation);
+      })():active.lease[captured.op](...captured.args);
+      return Promise.resolve(work).then(value=>{
         try{authorize();if(state!==active)throw failure('draft_lease_revoked');}catch(error){if(captured.op==='compareAndSwap'||captured.op==='retire')error.commitUncertain=true;throw error;}
         return value;
       }).catch(error=>{throw replyFailure(error);});

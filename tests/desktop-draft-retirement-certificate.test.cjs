@@ -73,3 +73,19 @@ test('certificate requests cannot select another scope or execute array accessor
   await assert.rejects(f.manager.dispatch(f.record,event(f.record),'/vault-one',f.grant.token,{op:'isRetiredIncarnation',args}),{code:'invalid_draft_request'});
   assert.equal(executed,0);assert.equal(calls,0);
 });
+
+test('main and preload bind the rotated document context before certifying settled old work',async t=>{
+  const {startJournalApp}=require('./helpers/desktop-journal-app.cjs');
+  const {createDesktopIndependentDraftProvider}=await import('../src/platform/desktop-independent-drafts.ts');
+  const f=await startJournalApp(t),first=await f.bridge.getDurableContext('/vault-one');
+  const hold=deferred();t.after(()=>hold.resolve());f.holdCore(hold.promise);
+  const accepted=f.bridge.durableInvoke('/vault-one',first.admissionId,'readText',['Note.md']);
+  await new Promise(resolve=>setImmediate(resolve));assert.ok(f.calls.includes('coreInvoke'));
+  f.reload();const next=await f.bridge.getDurableContext('/vault-one');
+  assert.notEqual(next.admissionId,first.admissionId);
+  const provider=createDesktopIndependentDraftProvider(f.bridge,'/vault-one',next.scope,next.independentJournal);
+  let settled=false;const certificate=provider.isRetiredIncarnation(first.independentJournal.scope.incarnationId).then(value=>{settled=true;return value;});
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(settled,false);
+  hold.resolve();await accepted;assert.equal(await certificate,true);
+  assert.equal(f.openCount,0,'certification never opens or enumerates the journal');
+});
