@@ -215,29 +215,26 @@ for(const transition of ['choose','close'] as const)test(`a typed host failure b
  }finally{recover.resolve();f.releaseOldAck();if(!finished)await old.recovery!.recover().catch(()=>{});await outcome;await new Promise(resolve=>setImmediate(resolve));await until(()=>!f.internal.lifecycleRecovery);}
 });
 
-for(const [code,source] of [['storage_busy','host'],['durable_transport_lost','transport']] as const)test(`typed ${code} repairs admission automatically without a reconnect action`,async t=>{
+for(const [code,source] of [['storage_busy','host'],['durable_transport_lost','transport'],['host_exited','host']] as const)test(`typed ${code} stops after the bounded handoff and retains an explicit reconnect action`,async t=>{
   const f=await fixture(t),old=f.workspace.platform;f.failRecovery(3,code,source);f.signalRetirement();
-  await until(()=>f.recoveries===3,'the first bounded attempt completes');
+  await until(()=>!!f.root.parentElement?.querySelector('.workspace-reconnect-recovery'));
   const overlay=f.root.parentElement!.querySelector<HTMLElement>('.workspace-reconnect-recovery')!;
-  assert.equal(overlay?.dataset.automatic,'true');assert.doesNotMatch(overlay.textContent??'',/Reconnect notes/);
-  await until(()=>f.workspace.platform!==old&&!f.internal.lifecycleRecovery,'automatic recovery resumes');assert.equal(f.recoveries,4);assert.equal(f.root.inert,false);
+  await new Promise(resolve=>setTimeout(resolve,650));assert.equal(f.recoveries,3,'a failed handoff is not retried by a background timer');assert.equal(f.workspace.platform,old);assert.equal(f.root.inert,true);
+  assert.match(overlay.textContent??'',/could not reconnect/);assert.doesNotMatch(overlay.textContent??'',/automatically/);
+  const retry=[...overlay.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='Reconnect notes');assert.ok(retry);retry.click();
+  await until(()=>f.workspace.platform!==old&&!f.internal.lifecycleRecovery,'explicit reconnect resumes the retained owner');assert.equal(f.recoveries,4);assert.equal(f.root.inert,false);
+  assert.equal(f.root.parentElement?.querySelector('.workspace-reconnect-recovery'),null);assert.equal(f.databaseRequests.filter(call=>call.command.op==='set_entry').length,0);assert.deepEqual(f.notices,[]);
 });
 
 for(const source of ['protocol','renderer'])test(`untrusted ${source} host-exit code cannot start an automatic admission retry loop`,async t=>{
   const f=await fixture(t);f.failRecovery(30,'host_exited',source);f.signalRetirement();
   await until(()=>!!f.root.parentElement?.querySelector('.workspace-reconnect-recovery'));
   await new Promise(resolve=>setTimeout(resolve,650));assert.equal(f.recoveries,3);
-  assert.equal(f.root.parentElement!.querySelector<HTMLElement>('.workspace-reconnect-recovery')!.dataset.automatic,'false');
   f.failRecovery(0);const retry=[...f.root.parentElement!.querySelectorAll<HTMLButtonElement>('.workspace-reconnect-recovery button')].find(button=>button.textContent==='Reconnect notes');retry!.click();
   await until(()=>!f.internal.lifecycleRecovery&&f.admissions===2);
 });
 
- test('a typed transient host failure automatically resumes admission recovery after bounded backoff',async t=>{
-  const f=await fixture(t),old=f.workspace.platform;f.failRecovery(3,'host_exited');f.signalRetirement();
-  const deadline=Date.now()+2200;while(f.workspace.platform===old&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,5));
-  assert.notEqual(f.workspace.platform,old,'healthy replacement resumes without clicking Reconnect');await until(()=>!f.internal.lifecycleRecovery);assert.equal(f.recoveries,4);assert.equal(f.root.parentElement?.querySelector('.workspace-reconnect-recovery'),null);assert.equal(f.databaseRequests.filter(call=>call.command.op==='set_entry').length,0);assert.deepEqual(f.notices,[]);
- });
- test('a changed recovery authority is not retried by the transient supervisor',async t=>{
+ test('a changed recovery authority is not retried in the background',async t=>{
   const f=await fixture(t);f.failRecovery(30,'durable_recovery_scope_changed');f.signalRetirement();await until(()=>!!f.root.parentElement?.querySelector('.workspace-reconnect-recovery'));await new Promise(resolve=>setTimeout(resolve,650));assert.equal(f.recoveries,3);
   f.failRecovery(0);const retry=[...f.root.parentElement!.querySelectorAll<HTMLButtonElement>('.workspace-reconnect-recovery button')].find(button=>button.textContent==='Reconnect notes');retry?.click();await until(()=>!f.internal.lifecycleRecovery&&f.admissions===2);
  });
@@ -258,15 +255,17 @@ for(const source of ['protocol','renderer'])test(`untrusted ${source} host-exit 
   await until(()=>f.workspace.platform!==old&&!f.internal.lifecycleRecovery);const fresh=f.root.querySelector<HTMLInputElement>('[data-property-key="Rating"] .metadata-property-value input')!;assert.ok(fresh,'fresh managed widget restores only after fresh membership/schema');assert.equal(fresh.value,'9.');assert.equal(fresh.selectionStart,1);assert.equal(fresh.selectionEnd,2);assert.equal(f.records.get('One.md')!.content,original);assert.equal(f.databaseRequests.filter(call=>call.command.op==='set_entry').length,0);assert.deepEqual(f.notices,[]);
   input.dispatchEvent(new window.FocusEvent('blur'));key(input,'Enter');fresh.value='9';fresh.dispatchEvent(new window.InputEvent('input',{bubbles:true}));key(fresh,'Enter');await until(()=>f.member().values[propertyId]===9);await until(()=>f.records.get('One.md')!.content.includes('Rating: 9'));assert.equal(f.databaseRequests.filter(call=>call.command.op==='set_entry').length,1);assert.equal(f.databaseRequests.find(call=>call.command.op==='set_entry')!.admission,'admission-2');assert.ok(f.records.get('One.md')!.content.endsWith('Original note'));try{await until(()=>!f.workspace.activePane.properties!.hasPendingChanges());}catch{assert.fail(JSON.stringify({notices:f.notices,dom:f.root.querySelector('.properties-host')?.innerHTML,calls:f.calls.slice(-8)}));}
  });
- test('raw Base custody is captured once across transient recovery attempts',async t=>{
-  const f=await fixture(t),old=f.workspace.platform;ratingDraft(f.root,'9.');f.failRecovery(3,'host_exited');f.signalRetirement();const deadline=Date.now()+2200;while(f.workspace.platform===old&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,5));await until(()=>f.workspace.platform!==old&&!f.internal.lifecycleRecovery);
+ test('raw Base custody is captured once across a failed handoff and explicit reconnect',async t=>{
+  const f=await fixture(t),old=f.workspace.platform;ratingDraft(f.root,'9.');f.failRecovery(3,'host_exited');f.signalRetirement();await until(()=>!!f.root.parentElement?.querySelector('.workspace-reconnect-recovery'));assert.equal(f.recoveries,3);
+  const retry=[...f.root.parentElement!.querySelectorAll<HTMLButtonElement>('.workspace-reconnect-recovery button')].find(button=>button.textContent==='Reconnect notes')!;retry.click();await until(()=>f.workspace.platform!==old&&!f.internal.lifecycleRecovery);
   const inputs=f.root.querySelectorAll<HTMLInputElement>(`[data-property="note.${propertyId}"] input`);assert.equal(inputs.length,1);assert.equal(inputs[0].value,'9.');assert.equal(f.internal.retainedAdmissionRawInputs.length,0);assert.equal(f.databaseRequests.filter(call=>call.command.op==='set_entry').length,0);key(inputs[0],'Escape');
  });
 
- for(const transition of ['choose','close'] as const)test(`a failed ${transition} preflight resumes the owned automatic reconnect timer`,async t=>{
+ for(const transition of ['choose','close'] as const)test(`a failed ${transition} preflight retains explicit reconnect without restarting background recovery`,async t=>{
   const f=await fixture(t),old=f.workspace.platform;f.failRecovery(3,'host_exited');f.signalRetirement();await until(()=>!!f.root.parentElement?.querySelector('.workspace-reconnect-recovery'));assert.equal(f.recoveries,3);
   if(transition==='choose')await f.workspace.chooseVault();else await assert.rejects(f.close(),error=>(error as {code?:string}).code==='workspace_admission_retired');
-  const deadline=Date.now()+2200;while(f.workspace.platform===old&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,5));await until(()=>f.workspace.platform!==old&&!f.internal.lifecycleRecovery);assert.equal(f.recoveries,4);assert.equal(f.pickers,0);assert.notEqual(f.root.inert,true);assert.deepEqual(f.notices,[]);
+  await new Promise(resolve=>setTimeout(resolve,650));assert.equal(f.workspace.platform,old);assert.equal(f.recoveries,3);assert.equal(f.root.inert,true);
+  const retry=[...f.root.parentElement!.querySelectorAll<HTMLButtonElement>('.workspace-reconnect-recovery button')].find(button=>button.textContent==='Reconnect notes')!;retry.click();await until(()=>f.workspace.platform!==old&&!f.internal.lifecycleRecovery);assert.equal(f.recoveries,4);assert.equal(f.pickers,0);assert.notEqual(f.root.inert,true);assert.deepEqual(f.notices,[]);
  });
  test('a direct Base raw draft automatically attaches when its fresh saved publication becomes ready',async t=>{
   const f=await fixture(t),old=f.workspace.platform;ratingDraft(f.root,'9.');f.setBaseNotReady(true);f.signalRetirement();await until(()=>f.workspace.platform!==old&&!f.internal.lifecycleRecovery);assert.equal(f.internal.retainedAdmissionRawInputs.length,1);assert.equal(f.databaseRequests.filter(call=>call.command.op==='set_entry').length,0);

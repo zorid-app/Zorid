@@ -150,9 +150,8 @@ const nameOf = (path: string) => path.split('/').at(-1)!.replace(/\.md$/i, '');
 const parentOf = (path: string) => path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
 const makeId = () => crypto.randomUUID();
 
-/** Only a positively identified transport/admission failure permits another
- * automatic recovery attempt. Unknown errors and authority/data failures keep
- * their explicit retained-state UI. */
+/** Classify temporary admission failures while attaching retained input.
+ * Unknown errors and authority/data failures keep their explicit reason. */
 function transientAdmissionFailure(error:unknown):boolean {
   const seen=new Set<object>();let transient=false;
   for(let depth=0;error&&typeof error==='object'&&depth<16;depth++){
@@ -358,7 +357,7 @@ export class Workspace {
       this.closeCleanup=window.zorid?.onBeforeClose?.(async()=>{
         if(this.closing||this.choosingVault||this.lifecycleRecovery)throw new Error('Window close already pending');
         this.closing=true;const inert=this.root.inert,platform=this.platform,generation=this.vaultGeneration;this.root.inert=true;
-        try{await this.destroy();}catch(error){this.closing=false;if(this.platformDraining||this.platformDrained||this.platformReleased){try{await this.reconnectRetiredPlatform();this.root.inert=inert;}catch(recoveryError){this.showLifecycleRecovery(undefined,recoveryError);}}else this.root.inert=inert;this.resumeStatusCounts(platform,generation);this.resumeCancelledNoteViews();if(this.lifecycleRecoveryRetry?.timer===undefined&&this.lifecycleRecoveryRetry)this.scheduleLifecycleRecoveryRetry(this.lifecycleRecoveryRetry);throw error;}
+        try{await this.destroy();}catch(error){this.closing=false;if(this.platformDraining||this.platformDrained||this.platformReleased){try{await this.reconnectRetiredPlatform();this.root.inert=inert;}catch(recoveryError){this.showLifecycleRecovery();}}else this.root.inert=inert;this.resumeStatusCounts(platform,generation);this.resumeCancelledNoteViews();throw error;}
       });
     }
     try {
@@ -575,7 +574,6 @@ export class Workspace {
   private lifecycleRecovery?:Promise<void>;
   private admissionRecoveryOwner?:{readonly platform:PlatformVault;readonly vault:Vault;readonly generation:number};
   private lifecycleRecoveryView?:HTMLElement;
-  private lifecycleRecoveryRetry?:{platform:PlatformVault;vault:Vault;generation:number;recover:()=>Promise<void>;attempt:number;timer?:ReturnType<typeof setTimeout>};
   private admissionRawPreparations=new WeakMap<Vault,{readonly settlements:readonly {settle():Promise<void>}[];readonly ready:readonly Promise<void>[];readonly collect:()=>RetainedAdmissionRawInput[];collected:boolean}>();
   private retainedAdmissionRawInputs:RetainedAdmissionRawInput[]=[];
   private admissionRestoredTabIds=new WeakMap<Tab,ReadonlySet<string>>();
@@ -705,7 +703,7 @@ export class Workspace {
       const transition=this.choosingVault??this.destroying??this.releasingPlatform;
       if(transition)return transition.catch(()=>{}).then(()=>{if(current())return receive();});
       if(this.closing||this.platformDraining)return;
-      return this.recoverAdmission(platform,vault,generation).catch(error=>{if(owns()){this.showLifecycleRecovery(()=>this.recoverAdmission(platform,vault,generation),error);this.renderStatus();}throw error;});
+      return this.recoverAdmission(platform,vault,generation).catch(error=>{if(owns()){this.showLifecycleRecovery(()=>this.recoverAdmission(platform,vault,generation));this.renderStatus();}throw error;});
     };
     this.disposers.push(platform.recovery.subscribe(receive));
   }
@@ -941,57 +939,25 @@ export class Workspace {
     }
     this.cachedViews.clear();await this.closeVaultMetadata(vault);
   }
-  private cancelLifecycleRecoveryRetry():void {
-    if(this.lifecycleRecoveryRetry?.timer!==undefined)clearTimeout(this.lifecycleRecoveryRetry.timer);
-    this.lifecycleRecoveryRetry=undefined;
-  }
-  private pauseLifecycleRecoveryRetry():()=>void {
-    const state=this.lifecycleRecoveryRetry;
-    if(state?.timer!==undefined){clearTimeout(state.timer);state.timer=undefined;}
-    return()=>{if(state&&this.lifecycleRecoveryRetry===state&&state.timer===undefined)this.scheduleLifecycleRecoveryRetry(state);};
-  }
-  private scheduleLifecycleRecoveryRetry(state:NonNullable<Workspace['lifecycleRecoveryRetry']>):void {
-    const owns=()=>this.lifecycleRecoveryRetry===state&&this.platform===state.platform&&this.vault===state.vault&&this.vaultGeneration===state.generation&&!this.platformReleased&&!this.platformDrained;
-    const current=()=>owns()&&!this.closing&&!this.destroying&&!this.choosingVault;
-    if(!owns()){if(this.lifecycleRecoveryRetry===state)this.cancelLifecycleRecoveryRetry();return;}
-    if(!current())return;
-    state.timer=setTimeout(()=>{
-      state.timer=undefined;if(!current())return;
-      void state.recover().then(()=>{if(this.lifecycleRecoveryRetry===state)this.cancelLifecycleRecoveryRetry();},error=>{
-        if(!current())return;
-        if(transientAdmissionFailure(error)){state.attempt++;this.scheduleLifecycleRecoveryRetry(state);}
-        else{this.cancelLifecycleRecoveryRetry();this.lifecycleRecoveryView?.remove();this.lifecycleRecoveryView=undefined;this.showLifecycleRecovery(state.recover,error);}
-      });
-    },[500,1500,4000][Math.min(state.attempt,2)]);
-  }
-  private showLifecycleRecovery(recover:()=>Promise<void>=()=>this.reconnectRetiredPlatform(),error?:unknown):void{
+  private showLifecycleRecovery(recover:()=>Promise<void>=()=>this.reconnectRetiredPlatform()):void{
     this.root.inert=true;
-    const automatic=transientAdmissionFailure(error);
-    if(!automatic)this.cancelLifecycleRecoveryRetry();
-    if(automatic&&!this.lifecycleRecoveryRetry){
-      const state={platform:this.platform,vault:this.vault,generation:this.vaultGeneration,recover,attempt:0};
-      this.lifecycleRecoveryRetry=state;this.scheduleLifecycleRecoveryRetry(state);
-    }
-    if(this.lifecycleRecoveryView?.isConnected&&this.lifecycleRecoveryView.dataset.automatic===String(automatic))return;
-    this.lifecycleRecoveryView?.remove();
+    if(this.lifecycleRecoveryView?.isConnected)return;
     const view=el('section','workspace-reconnect-recovery');view.setAttribute('role','status');
-    view.dataset.automatic=String(automatic);
-    view.append(el('p','',automatic?'Your drafts are kept here. Zorid is reconnecting automatically.':'Your notes are kept here while Zorid reconnects.'));
+    view.append(el('p','','Zorid could not reconnect. Your notes and drafts are kept here.'));
     const retry=textButton('Reconnect notes',()=>this.run(async()=>{
       retry.disabled=true;
       try{await recover();this.root.inert=false;this.lifecycleRecoveryView?.remove();this.lifecycleRecoveryView=undefined;}
       finally{retry.disabled=false;}
     }));
     const backup=textButton('Copy retained drafts',()=>this.run(async()=>{await navigator.clipboard.writeText(JSON.stringify({version:1,notes:[...this.buffers.values()].map(buffer=>({path:buffer.path,text:buffer.text,savedText:buffer.savedText,witness:buffer.savedDurableWitness}))},null,2));}));
-    if(!automatic)view.append(retry);view.append(backup);this.root.parentElement?.append(view);this.lifecycleRecoveryView=view;
+    view.append(retry,backup);this.root.parentElement?.append(view);this.lifecycleRecoveryView=view;
   }
   async chooseVault():Promise<void>{
     if(this.choosingVault)return this.choosingVault;
     if(this.closing)throw new Error('Window close is pending');
-    const resumeRecovery=this.pauseLifecycleRecoveryRetry();
     const owner=Symbol('vault selection');this.vaultLifecycleOwner=owner;
     const choosing=this.chooseVaultOnce(owner);this.choosingVault=choosing;
-    try{await choosing;}finally{if(this.choosingVault===choosing)this.choosingVault=undefined;if(this.vaultLifecycleOwner===owner)this.vaultLifecycleOwner=undefined;resumeRecovery();if(!this.root.inert&&this.retainedAdmissionRawInputs.length)void this.restoreAdmissionRawInputs().catch(()=>{});}
+    try{await choosing;}finally{if(this.choosingVault===choosing)this.choosingVault=undefined;if(this.vaultLifecycleOwner===owner)this.vaultLifecycleOwner=undefined;if(!this.root.inert&&this.retainedAdmissionRawInputs.length)void this.restoreAdmissionRawInputs().catch(()=>{});}
   }
   private async chooseVaultOnce(owner:symbol):Promise<void>{
     const inert=this.root.inert,platform=this.platform,vault=this.vault,generation=this.vaultGeneration;this.root.inert=true;
@@ -1009,7 +975,7 @@ export class Workspace {
       if(error&&typeof error==='object'&&this.admissionPreflightCancellations.has(error)&&this.platform===platform&&this.vault===vault&&this.vaultGeneration===generation
         &&!this.platformDraining&&!this.platformDrained&&!this.platformReleased)return;
       if(this.platformDraining||this.platformDrained||this.platformReleased){
-        try{await this.reconnectRetiredPlatform(owner);}catch(recoveryError){this.showLifecycleRecovery(undefined,recoveryError);throw error;}
+        try{await this.reconnectRetiredPlatform(owner);}catch(recoveryError){this.showLifecycleRecovery();throw error;}
       }else throw error;
     }finally{if(!this.platformDraining&&!this.platformDrained&&!this.platformReleased)this.root.inert=inert;}
   }
@@ -1326,7 +1292,7 @@ export class Workspace {
     this.hideNativeEditorToolbar();this.nativeEditorCleanup?.();this.nativeEditorCleanup=undefined;
     cancelTasksClose(false);cancelTasksClose=()=>{};
     this.nativeDocumentCleanup?.();this.nativeDocumentCleanup=undefined;
-    this.cancelLifecycleRecoveryRetry();this.admissionRawCandidates?.remove();this.admissionRawCandidates=undefined;
+    this.admissionRawCandidates?.remove();this.admissionRawCandidates=undefined;
     this.platform = platform; this.vault = next; this.platformReleased=false;this.platformDrained=false;this.platformDraining=false;this.buffers=recovered; this.recoveredBufferBindings=new WeakSet(recovered.values()); this.vaultGeneration++;
     this.registerDeferredNoteRecovery(next);
     this.subscribeAdmissionRecovery(platform,next);
@@ -4267,14 +4233,13 @@ export class Workspace {
   async destroy():Promise<void>{
     if(this.destroying)return this.destroying;
     if(this.choosingVault||this.lifecycleRecovery)throw new Error('A vault transition is pending.');
-    const resumeRecovery=this.pauseLifecycleRecoveryRetry();
     const platform=this.platform,vault=this.vault,inert=this.root.inert,wasClosing=this.closing,generation=this.vaultGeneration;
     this.closing=true;this.root.inert=true;
     const current=()=>{if(this.platform!==platform||this.vault!==vault)throw new Error('The vault changed while closing.');};
     const closing=this.destroyOwnedPlatform(current,platform,vault);this.destroying=closing;
     try{await closing;}
     catch(error){if(!this.platformDraining&&!this.platformDrained&&!this.platformReleased){this.closing=wasClosing;this.root.inert=inert;this.resumeStatusCounts(platform,generation);this.resumeCancelledNoteViews();}throw error;}
-    finally{if(this.destroying===closing)this.destroying=undefined;resumeRecovery();}
+    finally{if(this.destroying===closing)this.destroying=undefined;}
   }
   private async destroyOwnedPlatform(current:()=>void,platform:PlatformVault,vault:Vault):Promise<void>{
     let cancelTasksClose:(recover?:boolean)=>void=()=>{};
