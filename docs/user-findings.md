@@ -3225,3 +3225,16 @@ Named isolated owners are investigating safe continuation and history transport;
 remain implementation/verification OPEN. Ordinary note source load/save supervisors
 exist; error strings alone were not counted as additional failures. Audit artifact:
 tmp/instant-editor-validation/recovery-path-audit001-20261030.
+
+
+### 2026-10-30 — Native palette repair and ongoing automatic recovery gates
+
+Actual Native005 found command palette behind retained Base summary popup. Reviewed
+4ffb1025 raises only command/quick-switcher overlay; TS/Vite pass. Native006 passed
+complete terminal-denial Review/Copy→Save originalA→explicit rawB journey17checks,
+then process-row parser stopped Quit. SIGTERM cleanup0/no leaks and all owned PIDs
+absent; full campaign/normal acceptance still OPEN. Package011 predates this CSS.
+Startup002 warm correctly refused unsupported old-baseline journal reset; default003
+both builds failed foreground before input, normal app/Native cleanup. No800ms result.
+Named owners continue DB transient/collection continuation, typed version history and
+genuine SQLitebusy/host-death automatic-recovery verification. See latest plan delta.

@@ -23,6 +23,55 @@ was blocked; that is historical, not a current execution blocker.
 
 ## Latest execution handoff — 2026-10-30, ongoing
 
+**Latest continuation delta:** Root runtime is now `4ffb1025` (two-line palette CSS
+fix); HEAD includes reviewed harness successors through `1c40ed71`. The installed
+app/main are still unchanged. Package011 remains the earlier09aaa runtime with the
+same host2f585/ASAR3b7; rebuilt TS/Vite frontend at4ffb passed and is what Native006
+actually executed. Do not attribute the palette change to the old packaged ASAR.
+
+Native005 passed actual terminal-denial Review/Copy but exposed command palette
+behind retained summary editor. Source review accepted command/quick-switcher-only
+1600 layer above Base1510, below tooltips2000. Native006 then passed the COMPLETE
+first terminal journey17checks: physical/logical originals, genuine permission
+fault, Review/Copy zero authoring, normal palette Save originalA, explicit rawB
+commit, original panel/editor and all unrelated source bytes preserved. It failed
+at normal Quit on process-row parser assertion, not a data oracle. Cleanup was
+SIGTERM-cleanup exit0/nullsignal, leaked[], later all owned66869/66957/66965 absent;
+not full campaign or normal-quit acceptance. Worker owns urgent optional-empty-command
+parser diagnosis/tests alongside separate new multi-generation automatic-fault harness.
+Native005/006 receipts under /private/tmp/zorid-bases-recovery-candidate011-20261030-005,-006.
+Reviewed test-only fixes7080ea27/1c40ed71 passed Root14/14; no retry policy changes.
+
+Startup warm correction54848d8e/a677d140 independently reviewed; Root70/70pass.
+Actual control100-002 attached before800ms and proved normal app+Native exit, but
+baseline lacks independentJournal API in its shipped ASAR. Empty reset stayed
+failclosed; no measured launch/reset. Worker verified installed baseline ASAR33474
+matches receipt; no weaker reset compatibility added. Default control100-003 omitted
+optional warm and launched both builds, but BOTH visible windows/document stayed
+unfocused after Electron activation; no input or valid editor timing. Both app+Native
+normal0/nullsignal and all owned gone, fixtures unchanged, reopens skipped. Source
+worker owns bounded OS AppKit activation proposal, preserving real focus/800 clock.
+Do not call this proven user interference. Receipts use startup-candidate011-control100-
+20261030-002/-003. Built-in goal remains stale blocked; user repeatedly resumed.
+
+New correction owners: capture_note_ui_finish owns A same-admission typed transient
+DB retries (actual RED→GREEN, independent review caught second fresh-retirement capsule
+visibility regression; NOTREADY); B generalized collection submitted-command/config
+continuation design ACKed, mounted RED and product still pending. Exact original
+operation IDs/CAS/source/view witnesses and unsubmitted raw protection mandatory.
+checkpoint_review owns typed admitted history reads/per-operation supervised UI and
+same-buffer positive autosave-pending restoration behavior; mounted UI RED9fail→10green,
+full transport/chain/cancel review pending, NOTCOMPOSED. Shared index.ts/Workspace
+hunks have named nonoverlapping ownership. No Native/GUI acceptance for these changes.
+
+Base owner is implementing separate genuine SQLitebusy + owned-host-death automatic
+recovery campaign. No synthetic errors, manual Save/reload/restart; preserve originalA
+and unsubmittedB. Host rebind may rebuild DOM only at same pane/tab/entry/stable view
+with guarded raw restoration; record replacements explicitly. Multi-generation
+PID/argv/lineage authentication and real exit proof required. Existing campaign's
+queued ACK and explicit app restart do not establish same-mounted automatic recovery.
+
+
 Root owns integration/builds in `.worktrees/instant-editor`, branch
 `codex/instant-editor-current`. Main remains `7d8006b8`; installed app unchanged.
 User resumed work explicitly; stale built-in blocked state is not a stop request.
