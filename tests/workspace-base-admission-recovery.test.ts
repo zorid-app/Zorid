@@ -11,6 +11,8 @@ import type {DatabaseRequest} from '../src/core/databases.ts';
 import type {PlatformVault} from '../src/platform/index.ts';
 import {createPlatformAdapter} from '../src/platform/index.ts';
 import type {EditorHandle} from '../src/ui/editor.ts';
+import type {IndependentDraftRead,IndependentDraftReceipt} from '../src/core/independent-drafts.ts';
+import type {DesktopIndependentJournalRequest} from '../src/platform/bridge';
 
 const collectionId='abcdefghijkl',propertyId='mnopqrstuvwx';
 const baseSource=JSON.stringify({views:[{id:'aaaaaaaaaaaa',type:'table',name:'Recovery table',source:{kind:'collection',id:collectionId},order:['file.name',`note.${propertyId}`]}]});
@@ -27,6 +29,45 @@ async function fixture(t:test.TestContext,propertyNote=false,omitNamespaceIdenti
  if(initialFilter!==undefined){const saved=records.get('Recovery.base')!;saved.content=JSON.stringify({...JSON.parse(baseSource),views:[{...JSON.parse(baseSource).views[0],filters:initialFilter}]});saved.stat.size=saved.content.length;Object.defineProperty(dom.window.Range.prototype,'getClientRects',{configurable:true,value:()=>[]});Object.defineProperty(dom.window.Range.prototype,'getBoundingClientRect',{configurable:true,value:()=>({x:0,y:0,left:0,top:0,right:0,bottom:0,width:0,height:0})});}
  if(secondaryView){const saved=records.get('Recovery.base')!,config=JSON.parse(saved.content);config.views.push({...config.views[0],id:'bbbbbbbbbbbb',name:'Second view'});saved.content=JSON.stringify(config);saved.stat.size=saved.content.length;}
  if(propertyNote){const one=records.get('One.md')!;one.content='---\n_id: one\n_type: Recovery collection\nRating: 1\n---\nOriginal note';one.stat.size=one.content.length;}
+ // The simulated Main grant belongs to this same window/document, independently
+ // of Native admission replacement. It never certifies an incarnation retired.
+ const journalGrant=Object.freeze({token:'00000000-0000-4000-8000-000000000001',scope:Object.freeze({...scope,incarnationId:'00000000-0000-4000-8000-000000000002'})});
+ const journal=new Map<string,Exclude<IndependentDraftRead,null>>(),journalRequests=new Map<string,string>();
+ const journalKey=(incarnationId:string,entryId:string,writer:string)=>JSON.stringify([incarnationId,entryId,writer]);
+ const receipt=(row:Exclude<IndependentDraftRead,null>):IndependentDraftReceipt=>{const{vaultId,clientId,incarnationId,entryId,writer,revision,generation,deleted}=row;return{vaultId,clientId,incarnationId,entryId,writer,revision,generation,deleted};};
+ const independentJournal=async(request:DesktopIndependentJournalRequest)=>{
+  assert.equal(guardedSettings,true,'only the advertised bound provider can use this Main grant');
+  assert.deepEqual(Object.keys(request).sort(),['args','op','token','vault']);assert.equal(request.vault,'/lifecycle-fixture');assert.equal(request.token,journalGrant.token);assert.ok(Array.isArray(request.args));
+  let value:unknown;
+  if(request.op==='isRetiredIncarnation'){assert.equal(request.args.length,1);assert.equal(typeof request.args[0],'string');value=false;}
+  else if(request.op==='list'){
+   assert.ok(request.args.length<=1);const selected=(request.args[0] as {entryId:string}|undefined)?.entryId;
+   value=[...journal.values()].filter(row=>!row.deleted&&(!selected||row.entryId===selected)).map(receipt);
+  }else{
+   assert.equal(request.args.length,1);const input=request.args[0] as any;
+   if(request.op==='read'){value=journal.get(journalKey(input.incarnationId,input.entryId,input.writer))??null;}
+   else{
+    assert.ok(request.op==='compareAndSwap'||request.op==='retire');
+    const incarnationId=request.op==='retire'?input.incarnationId:journalGrant.scope.incarnationId;
+    assert.equal(incarnationId,journalGrant.scope.incarnationId);
+    const key=journalKey(incarnationId,input.entryId,input.writer),old=journal.get(key),next=request.op==='retire'?(BigInt(input.revision)+1n).toString():input.nextRevision;
+    const attempt=JSON.stringify([key,next]),fingerprint=JSON.stringify({op:request.op,input});
+    if(journalRequests.has(attempt)){assert.equal(journalRequests.get(attempt),fingerprint,'exact journal retries preserve immutable input');assert.equal(old?.revision,next);value=receipt(old!);}
+    else if(request.op==='compareAndSwap'){
+     assert.deepEqual(Object.keys(input).sort(),['baseline','checkpointRevision','draft','entryId','expectedRevision','generation','nextRevision','pendingOperation','writer']);
+     assert.equal(input.baseline.entryId,input.entryId);assert.equal(input.expectedRevision,old?.revision??null);assert.equal(BigInt(next),(input.expectedRevision===null?0n:BigInt(input.expectedRevision))+1n);
+     const row={...journalGrant.scope,entryId:input.entryId,writer:input.writer,revision:next,generation:input.generation,deleted:false as const,baseline:structuredClone(input.baseline),draft:input.draft,checkpointRevision:input.checkpointRevision,pendingOperation:input.pendingOperation};
+     journal.set(key,row);journalRequests.set(attempt,fingerprint);value=receipt(row);
+    }else{
+     assert.ok(old&&!old.deleted);assert.deepEqual(input,receipt(old),'retire IPC carries its original full receipt, not a renderer-authored next revision');
+     const row={...journalGrant.scope,entryId:input.entryId,writer:input.writer,revision:next,generation:input.generation,deleted:true as const};
+     journal.set(key,row);journalRequests.set(attempt,fingerprint);value=row;
+    }
+   }
+  }
+  return{independentJournal:true,schemaVersion:1,ok:true,value:structuredClone(value)};
+ };
+ const checkpointRequests=new Map<string,string>(),attachedCaptures=new Set<string>(),releasedCaptures=new Set<string>();
  const collection={id:collectionId,name:'Recovery collection',revision:'schema-1',deleted:false,properties:[{id:propertyId,name:'Rating',datatype:'number',options:[]}]};
  let member={entryId:'one',collectionId,revision:'entry-1',fileRevision:'source-1',path:'One.md',values:{[propertyId]:1},deleted:false,pendingProjection:false};
  const databaseRequests:{admission:string;command:DatabaseRequest}[]=[],applied=new Map<string,unknown>(),oldAcknowledgment=gate(),sourceCaptures=new Map<string,{captureId:string;logicalWitness:any;source:string}>();let withholdDatabaseAck=false,failHeldDatabaseAck=true;
@@ -35,10 +76,10 @@ async function fixture(t:test.TestContext,propertyNote=false,omitNamespaceIdenti
  const receivers:{id:string;retire:()=>void;stopped:boolean}[]=[];let recoveryGate:Promise<void>|undefined;let recoveryFailureCode:string|undefined,recoveryFailureSource:string|undefined;let storageLost=false,recoveries=0,failedRecoveries=0,failedRecoveredLists=0,replayCheck:((input:any)=>void)|undefined;
  let context:string|null=null,admissions=0,releases=0,pickers=0,failedGets=0,releaseGate:Promise<void>|undefined,closeHandler:(()=>Promise<void>)|undefined;
  const calls:{admission:string;method:string;args:any[]}[]=[],metadata=()=>[...records.values()].map(row=>({path:row.path,type:'file',...(!omitNamespaceIdentity?{entryId:row.entryId,revision:row.revision}:{}),...row.stat}));
- const bridge={getWindowInfo:async()=>({id:'main',initialState:'restore'}),getVault:async()=>{if(failedGets-->0)throw Error('Temporary reconnect failure');return{path:'/lifecycle-fixture',name:'Lifecycle'};},
- getDurableContext:async()=>{context??='admission-'+(++admissions);return{admissionId:context,scope,databases:true,conditionalSavedSourceAvailable:guardedSettings};},
+ const bridge={independentJournal,getWindowInfo:async()=>({id:'main',initialState:'restore'}),getVault:async()=>{if(failedGets-->0)throw Error('Temporary reconnect failure');return{path:'/lifecycle-fixture',name:'Lifecycle'};},
+ getDurableContext:async()=>{context??='admission-'+(++admissions);return{admissionId:context,scope,databases:true,conditionalSavedSourceAvailable:guardedSettings,...(guardedSettings?{independentJournal:journalGrant}:{})};},
  releaseDurableContext:async(_root:string,admission:string)=>{releases++;await releaseGate;if(context===admission)context=null;},
- recoverDurableContext:async(_root:string,prior:string)=>{recoveries++;await recoveryGate;if(failedRecoveries-->0)throw Object.assign(Error('Temporary recovery failure'),{...(recoveryFailureCode?{code:recoveryFailureCode}:{}),...(recoveryFailureSource?{source:recoveryFailureSource}:{})});assert.equal(prior,context);context='admission-'+(++admissions);storageLost=false;return{admissionId:context,scope,databases:true,conditionalSavedSourceAvailable:guardedSettings};},
+ recoverDurableContext:async(_root:string,prior:string)=>{recoveries++;await recoveryGate;if(failedRecoveries-->0)throw Object.assign(Error('Temporary recovery failure'),{...(recoveryFailureCode?{code:recoveryFailureCode}:{}),...(recoveryFailureSource?{source:recoveryFailureSource}:{})});assert.equal(prior,context);context='admission-'+(++admissions);storageLost=false;return{admissionId:context,scope,databases:true,conditionalSavedSourceAvailable:guardedSettings,...(guardedSettings?{independentJournal:journalGrant}:{})};},
  onDocumentRuntimeNudge:(_root:string,id:string,_listener:()=>void,retire:()=>void)=>{const receiver={id,retire,stopped:false};receivers.push(receiver);return()=>{receiver.stopped=true;};},
  openVault:async()=>{pickers++;return null;},onChange:(listener:(change:{vault:string;path?:string})=>void)=>{changes.add(listener);return()=>{changes.delete(listener);};},onBeforeClose:(handler:()=>Promise<void>)=>{closeHandler=handler;return()=>{};},dismissContextMenu:async()=>{},
  list:async()=>{if(context!=='admission-1'&&failedRecoveredLists-->0)throw Error('Temporary fresh inventory failure');return metadata();},stat:async(_root:string,path:string)=>metadata().find(row=>row.path===path)??null,read:async(_root:string,path:string)=>records.get(path)!.content,
@@ -54,8 +95,17 @@ async function fixture(t:test.TestContext,propertyNote=false,omitNamespaceIdenti
   }
   if(storageLost)throw Error('Durable editor request failed; retain pending recovery state.');
   const input=args[0],record=()=>[...records.values()].find(row=>row.entryId===(typeof input==='string'?input:input?.expectedEntryId))!;
-  if(method==='captureSavedSource'){const row=records.get(input.path)!;assert.equal(row.entryId,input.entryId);assert.equal(row.revision,input.revision);const capture={captureId:crypto.randomUUID(),logicalWitness:structuredClone(input),source:row.content};sourceCaptures.set(capture.captureId,capture);return structuredClone(capture);}
-  if(method==='releaseSavedSource'){sourceCaptures.delete(input);return;}
+  if(method==='listSavedSourceRequests')return[...sourceCaptures.values()].filter(capture=>!attachedCaptures.has(capture.captureId)).map(({captureId,logicalWitness})=>({captureId,logicalWitness:structuredClone(logicalWitness),legacy:false}));
+  if(method==='captureSavedSource'){
+   assert.deepEqual(Object.keys(input).sort(),['captureId','logicalWitness']);assert.match(input.captureId,/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+   const witness=input.logicalWitness,row=records.get(witness.path)!;assert.equal(row.entryId,witness.entryId);assert.equal(row.revision,witness.revision);
+   const acknowledged=[...journal.values()].filter(row=>!row.deleted&&row.entryId===witness.entryId).flatMap(row=>{assert.equal(row.vaultId,scope.vaultId);assert.equal(row.clientId,scope.clientId);assert.equal(row.incarnationId,journalGrant.scope.incarnationId);const pending=row.pendingOperation===null?null:JSON.parse(row.pendingOperation);return pending?.schemaVersion===2?pending.captureRequests??[]:[];}).filter(claim=>claim.captureId===input.captureId);
+   assert.equal(acknowledged.length,1,'Native capture follows its exact independently acknowledged caller UUID');assert.deepEqual(acknowledged[0].scope,journalGrant.scope);assert.deepEqual(acknowledged[0].logicalWitness,witness);
+   const prior=sourceCaptures.get(input.captureId);if(prior){assert.deepEqual(prior.logicalWitness,witness);return structuredClone(prior);}
+   assert.equal(releasedCaptures.has(input.captureId),false,'a released caller UUID cannot capture newer bytes');
+   const capture={captureId:input.captureId,logicalWitness:structuredClone(witness),source:row.content};sourceCaptures.set(capture.captureId,capture);return structuredClone(capture);
+  }
+  if(method==='releaseSavedSource'){releasedCaptures.add(input);sourceCaptures.delete(input);attachedCaptures.delete(input);return;}
   if(method==='fileCommand'){assert.equal(input.kind,'move');const row=records.get(input.path)!;assert.ok(row);if(input.expectedEntryId)assert.equal(input.expectedEntryId,row.entryId);if(input.expectedRevision)assert.equal(input.expectedRevision,row.revision);records.delete(input.path);row.path=input.destination;records.set(row.path,row);member={...member,path:row.path};return;}
   if(method==='readText')return structuredClone(records.get(input)??null);
   if(method==='composeNote'){const current=structuredClone(records.get(input.path)!);assert.equal(current.entryId,input.entryId);return{current,content:current.content};}
@@ -63,9 +113,9 @@ async function fixture(t:test.TestContext,propertyNote=false,omitNamespaceIdenti
   if(method==='checkpoints.load')return structuredClone(heads.get(input)??null);
   if(method==='checkpoints.list')return{items:[...heads.values()].map(({encodedState,...row})=>row),cursor:null,highWater:String(heads.size)};
   if(method==='checkpoints.changes')return{items:[],cursor:null,highWater:String(heads.size)};
-  if(method==='checkpoints.compareAndSwap'){replayCheck?.(input);const prior=heads.get(input.key);assert.equal(input.expectedRevision,prior?.revision??null);const next={version:1,...scope,key:input.key,revision:input.nextRevision,encodedState:input.encodedState,deleted:false,sequence:String(heads.size+1),byteLength:input.encodedState.length};heads.set(input.key,next);return structuredClone(next);}
+  if(method==='checkpoints.compareAndSwap'){replayCheck?.(input);const prior=heads.get(input.key),attempt=JSON.stringify([input.key,input.nextRevision]),fingerprint=JSON.stringify(input);if(checkpointRequests.has(attempt)){assert.equal(checkpointRequests.get(attempt),fingerprint,'Core CAS replays its complete original request');assert.equal(prior?.revision,input.nextRevision);return structuredClone(prior);}assert.equal(input.expectedRevision,prior?.revision??null);const next={version:1,...scope,key:input.key,revision:input.nextRevision,encodedState:input.encodedState,deleted:false,sequence:String(heads.size+1),byteLength:input.encodedState.length};heads.set(input.key,next);checkpointRequests.set(attempt,fingerprint);return structuredClone(next);}
   if(method==='planWrite'){plans.set(input.operationId,structuredClone(input));return{notePlanning:true,schemaVersion:1,ok:true,value:{version:1,...scope,operationId:input.operationId,entryId:input.expectedEntryId,encodedPlan:JSON.stringify(input.conditionalSavedSource?{operation_id:input.operationId,mutation:{type:'write',id:input.expectedEntryId,expected:input.expectedRevision},source_capture:input.conditionalSavedSource.captureId}:input)}};}
-  if(method==='prepare'){const ref={...scope,entryId:input.entryId,operationId:input.operationId,token:input.operationId};const intent={ref,state:'prepared',acknowledged:false};intents.set(ref.token,intent);return structuredClone(intent);}
+  if(method==='prepare'){const planned=plans.get(input.operationId);if(planned?.conditionalSavedSource){const capture=sourceCaptures.get(planned.conditionalSavedSource.captureId);assert.ok(capture);assert.deepEqual(capture.logicalWitness,planned.conditionalSavedSource.logicalWitness);attachedCaptures.add(capture.captureId);}const ref={...scope,entryId:input.entryId,operationId:input.operationId,token:input.operationId};const intent={ref,state:'prepared',acknowledged:false};intents.set(ref.token,intent);return structuredClone(intent);}
   if(method==='query')return structuredClone(intents.get(input.token));
   if(method==='commit'){const plan=plans.get(input.operationId),row=records.get(plan.path)!;assert.equal(row.revision,plan.expectedRevision);row.content=plan.content;row.revision+='-saved';row.stat.size=row.content.length;const intent={ref:input,state:'committed',acknowledged:false,receipt:{operationId:input.operationId,entryId:input.entryId,revision:row.revision,sequence:'2'}};intents.set(input.token,intent);return structuredClone(intent);}
   if(method==='listUnacknowledged')return[];
