@@ -19,8 +19,6 @@ export interface DesktopReconciliation {
 export interface RecoveryCursor {captured_at_ms:number;snapshot_id:string}
 export interface RecoveryVersion {snapshotId:string;entryId:string;path:string;capturedAtMs:number;byteLength:number}
 export interface RecoveryHistory {
-  /** Positive replacement of the same admitted scope; never a retirement hint. */
-  subscribeAvailable?(listener:()=>void):()=>void;
   list(entryId:string,options:{limit:number;before?:RecoveryCursor}):Promise<{versions:RecoveryVersion[];nextCursor?:RecoveryCursor}>;
   read(entryId:string,snapshotId:string):Promise<{version:RecoveryVersion;content:string}>;
 }

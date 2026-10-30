@@ -129,14 +129,6 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
     };
     const stopRecoveryReceiver=()=>{const stop=recoveryStop;recoveryStop=undefined;try{stop?.();}catch{/* A retired receiver cannot undo the backend acknowledgment. */}};
     const unavailable=(code:string,message:string)=>Object.assign(new Error(message),{code,source:'host',commitUncertain:true});
-    const historyListeners=new Set<()=>void>();let stopHistoryForward:(()=>void)|undefined,historyClosed=false;
-    const publishHistoryAvailable=()=>{if(historyClosed||readClosing)return;for(const listener of [...historyListeners])if(historyListeners.has(listener))try{listener();}catch{/* A presentation listener cannot undo scope recovery. */}};
-    const connectHistoryAvailable=()=>{
-      stopHistoryForward?.();stopHistoryForward=undefined;
-      const target=recovered?.recoveryHistory;
-      if(!historyClosed&&historyListeners.size&&target?.subscribeAvailable)stopHistoryForward=target.subscribeAvailable(()=>{if(!historyClosed&&recovered?.recoveryHistory===target)publishHistoryAvailable();});
-    };
-    const closeHistoryAvailable=()=>{historyClosed=true;stopHistoryForward?.();stopHistoryForward=undefined;historyListeners.clear();};
     let readClosing=false;
     const readWaiters=new Set<()=>void>();
     const wakeReads=()=>{for(const wake of readWaiters)wake();};
@@ -304,10 +296,6 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
       recoveryHistory=Object.freeze({
         list:(entryId:string,options:Parameters<import('./bridge').RecoveryHistory['list']>[1])=>runHistory(captureHistoryList(entryId,options)) as ReturnType<import('./bridge').RecoveryHistory['list']>,
         read:(entryId:string,snapshotId:string)=>runHistory(captureHistoryRead(entryId,snapshotId)) as ReturnType<import('./bridge').RecoveryHistory['read']>,
-        subscribeAvailable(listener:()=>void){
-          if(historyClosed||readClosing)return()=>{};historyListeners.add(listener);if(historyListeners.size===1)connectHistoryAvailable();
-          return()=>{historyListeners.delete(listener);if(!historyListeners.size){stopHistoryForward?.();stopHistoryForward=undefined;}};
-        },
       });historyReadRunners.set(recoveryHistory,runHistory);
     }
 
@@ -481,7 +469,6 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
             // cross this boundary. Native recovery positively retired old derived
             // owners; their closures never adopt replacement pin/runtime IDs.
             retainedTarget=target;recovered=fresh;released=true;recoveryNeeded=false;
-            connectHistoryAvailable();publishHistoryAvailable();
             stopRecoveryReceiver();recoveryListeners.clear();
             documentRuntime?.retire();drafts?.retire();
             if(replayEntries&&fresh.databases)replayEntries(fresh.databases);
@@ -507,7 +494,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
     };
     release=async()=>{
       readClosing=true;wakeReads();
-      try{await releaseOwned();closeHistoryAvailable();}catch(error){if(!released&&!recovered&&!releasePending)readClosing=false;throw error;}
+      try{await releaseOwned();}catch(error){if(!released&&!recovered&&!releasePending)readClosing=false;throw error;}
     };
     const directReads=adapterReads;
     const readAdapter=<K extends keyof AdapterReads>(method:K,path?:string,budget?:ReadBudget):ReturnType<AdapterReads[K]>=>readOnly(async shared=>{

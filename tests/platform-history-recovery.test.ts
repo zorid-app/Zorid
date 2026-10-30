@@ -35,32 +35,38 @@ test('history uses the admitted typed transport with exact entry, cursor and sna
  await f.platform.release!();
 });
 
-test('retained history forwards repeated same-scope availability and exact reads across recovery generations',async t=>{
- const f=await fixture(t),history=f.platform.recoveryHistory!;let available=0;const stop=history.subscribeAvailable!(()=>available++);
- f.retireNext();assert.equal((await history.read('entry','2')).content,'old');assert.equal(available,1);assert.equal(f.generation,2);
- f.retireNext();assert.equal((await history.read('entry','2')).content,'old');assert.equal(available,2);assert.equal(f.generation,3);
- assert.deepEqual(f.calls.filter(row=>row.method==='recoveryRead').map(row=>row.admission),['admission-1','admission-2','admission-2','admission-3']);stop();await f.platform.release!();
+test('retained history forwards exact reads across repeated same-scope recovery generations',async t=>{
+ const f=await fixture(t),history=f.platform.recoveryHistory!;assert.equal('subscribeAvailable'in history,false);
+ f.retireNext();assert.equal((await history.read('entry','2')).content,'old');assert.equal(f.generation,2);
+ f.retireNext();assert.equal((await history.read('entry','2')).content,'old');assert.equal(f.generation,3);
+ assert.deepEqual(f.calls.filter(row=>row.method==='recoveryRead').map(row=>row.admission),['admission-1','admission-2','admission-2','admission-3']);assert.equal(f.legacy,0);await f.platform.release!();
 });
 
-test('foreign recovery scope never grants a history availability event or fresh read authority',async t=>{
- const f=await fixture(t),history=f.platform.recoveryHistory!;let available=0;const stop=history.subscribeAvailable!(()=>available++);f.foreign();
- await assert.rejects(f.platform.recovery!.recover(),{code:'durable_recovery_scope_changed'});assert.equal(available,0);assert.equal(f.calls.length,0);stop();await f.platform.release!();
+test('foreign recovery scope never grants fresh history read authority',async t=>{
+ const f=await fixture(t),history=f.platform.recoveryHistory!;f.foreign();
+ await assert.rejects(f.platform.recovery!.recover(),{code:'durable_recovery_scope_changed'});assert.equal(f.calls.length,0);f.retireNext();await assert.rejects(history.read('entry','2'),{code:'durable_recovery_scope_changed'});assert.deepEqual(f.calls.map(row=>row.admission),['admission-1'],'a rejected foreign binding cannot receive the retained read');assert.equal(f.legacy,0);await f.platform.release!();
 });
 
 
-test('actual mounted history and typed platform heal list IO then retired preview without legacy reads',async t=>{
- t.mock.timers.enable({apis:['setTimeout']});const f=await fixture(t),dom=new JSDOM('<body></body>',{pretendToBeVisual:true}),prior=new Map<string,PropertyDescriptor|undefined>();
+test('mounted history requires explicit reopen after list failure while typed reads retain platform forwarding',async t=>{
+ t.mock.timers.enable({apis:['setTimeout']});t.mock.method(console,'error',()=>{});const f=await fixture(t),dom=new JSDOM('<body></body>',{pretendToBeVisual:true}),prior=new Map<string,PropertyDescriptor|undefined>();
  for(const[key,value]of Object.entries({document:dom.window.document,MutationObserver:dom.window.MutationObserver})){prior.set(key,Object.getOwnPropertyDescriptor(globalThis,key));Object.defineProperty(globalThis,key,{configurable:true,value});}
  t.after(()=>{dom.window.close();for(const[key,value]of prior){if(value)Object.defineProperty(globalThis,key,value);else Reflect.deleteProperty(globalThis,key);}});
- f.busyList();const dialog=openVersionHistory({history:f.platform.recoveryHistory!,entryId:'entry',isCurrent:()=>true,restore:async()=>'restored'});
- await new Promise(resolve=>setImmediate(resolve));assert.doesNotMatch(document.body.textContent!,/try again|unavailable/i);t.mock.timers.tick(500);await new Promise(resolve=>setImmediate(resolve));
- f.retireNext();document.querySelector<HTMLButtonElement>('.version-history-version')!.click();await new Promise(resolve=>setImmediate(resolve));
- assert.equal(document.querySelector<HTMLTextAreaElement>('.version-history-preview')!.value,'old');assert.equal(f.generation,2);assert.equal(f.legacy,0);
- assert.deepEqual(f.calls.map(row=>row.method),['recoveryList','recoveryList','recoveryRead','recoveryRead']);assert.doesNotMatch(document.body.textContent!,/try again|unavailable/i);dialog.close();await f.platform.release!();
+ const history=f.platform.recoveryHistory!,open=()=>openVersionHistory({history,entryId:'entry',isCurrent:()=>true,restore:async()=>'restored'}),settle=()=>new Promise<void>(resolve=>setImmediate(resolve));
+ f.busyList();const first=open();await settle();
+ assert.match(document.body.textContent!,/Version history is unavailable/);assert.equal(document.querySelector('[role=dialog]')!.getAttribute('aria-busy'),'false');assert.equal(f.calls.length,1);assert.equal(document.querySelector('.version-history-version'),null);
+ t.mock.timers.tick(90000);await settle();assert.equal(f.calls.length,1,'elapsed time cannot reissue dialog history work');
+ const fresh=await f.platform.recovery!.recover();await settle();
+ assert.equal(f.generation,2,'the platform positively replaced the same scope');assert.equal(f.calls.length,1,'scope replacement cannot silently retry a failed dialog page');assert.equal(document.querySelector('.version-history-version'),null);assert.match(document.body.textContent!,/Version history is unavailable/);
+ first.close();assert.equal(document.querySelector('[role=dialog]'),null);const second=open();await settle();
+ assert.ok(document.querySelector('.version-history-version'),'only explicitly opening the dialog performs a new list');assert.equal(f.calls.length,2);
+ f.retireNext();document.querySelector<HTMLButtonElement>('.version-history-version')!.click();await settle();
+ assert.equal(document.querySelector<HTMLTextAreaElement>('.version-history-preview')!.value,'old');assert.equal(f.generation,3);assert.equal(f.legacy,0);
+ assert.deepEqual(f.calls.map(row=>({admission:row.admission,method:row.method})),[{admission:'admission-1',method:'recoveryList'},{admission:'admission-2',method:'recoveryList'},{admission:'admission-2',method:'recoveryRead'},{admission:'admission-3',method:'recoveryRead'}]);assert.doesNotMatch(document.body.textContent!,/try again|unavailable/i);second.close();await f.platform.release!();await fresh.release!();
 });
 
-test('history release stops forwarded availability and forbids later reads from its old owner',async t=>{
- const f=await fixture(t),history=f.platform.recoveryHistory!;let available=0;history.subscribeAvailable!(()=>available++);
- const fresh=await f.platform.recovery!.recover();assert.equal(available,1);await f.platform.release!();await fresh.recovery!.recover();assert.equal(available,1);
- await assert.rejects(history.read('entry','2'),{code:'client_not_admitted'});await fresh.release!();
+test('history release forbids later reads from its old owner while fresh owners remain usable',async t=>{
+ const f=await fixture(t),history=f.platform.recoveryHistory!;
+ const fresh=await f.platform.recovery!.recover();await f.platform.release!();const newest=await fresh.recovery!.recover();const before=f.calls.length;
+ await assert.rejects(history.read('entry','2'),{code:'client_not_admitted'});assert.equal(f.calls.length,before,'released history cannot issue a request against a replacement');assert.equal((await newest.recoveryHistory!.read('entry','2')).content,'old');assert.equal(f.calls.at(-1)?.admission,'admission-3');assert.equal(f.legacy,0);await fresh.release!();await newest.release!();
 });
