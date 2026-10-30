@@ -18,6 +18,8 @@ export interface CollectionSubmission {
   readonly submitted:boolean;
   readonly currentCommand:DatabaseRequest|undefined;
   readonly currentReceipt:DatabaseResponse|undefined;
+  /** Observe the installed task only; lifecycle drains never start a retry. */
+  waitForCompletion():Promise<void>;
   canRecover():boolean;
   /** Call settle only after a checked positive same-authority admission ACK. */
   prepareAdmissionRecovery():{settle():Promise<void>}|undefined;
@@ -128,6 +130,6 @@ export function createCollectionSubmission(options:CollectionSubmissionOptions):
     }};
     return record.prepared;
   }
-  return{submit,get pending(){return!!current;},get submitted(){return!!current?.dispatched;},get currentCommand(){return current?.command;},get currentReceipt(){return current?.receipt;},canRecover,prepareAdmissionRecovery,
+  return{submit,get pending(){return!!current;},get submitted(){return!!current?.dispatched;},get currentCommand(){return current?.command;},get currentReceipt(){return current?.receipt;},waitForCompletion:()=>current?.result.promise??Promise.resolve(),canRecover,prepareAdmissionRecovery,
     close(){if(closed)return;closed=true;const record=current;current=undefined;if(!record)return;record.epoch++;let error:unknown=cancelled();try{release(record);}catch(failure){error=failure;}finally{record.cancelled.resolve();record.result.reject(error);}}};
 }

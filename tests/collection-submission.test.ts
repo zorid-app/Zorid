@@ -29,6 +29,11 @@ test('pending exact submissions coalesce and another command cannot replace thei
  const saving=f.owner.submit(command(),async()=>{completed++;});assert.equal(f.owner.submit(command(),async()=>{throw Error('replacement continuation');}),saving);
  await assert.rejects(f.owner.submit(command('new-operation'),async()=>{}),{code:'collection_submission_pending'});assert.equal(f.calls.length,1);native.resolve(reply());await saving;assert.equal(completed,1);assert.equal(f.captures,1);
 });
+test('a lifecycle observer inside synchronous RPC dispatch joins the already installed original task',async()=>{
+ const native=gate<DatabaseResponse>();let owner!:CollectionSubmission,observed:Promise<void>|undefined,calls=0;
+ owner=createCollectionSubmission({service:{request:()=>{calls++;observed=owner.waitForCompletion();return native.promise;}},validate(){},contains:()=>true,hold:()=>()=>{},claim:()=>()=>{}});
+ const saving=owner.submit(command(),async()=>{});assert.equal(observed,saving);assert.equal(owner.waitForCompletion(),saving);assert.equal(calls,1);native.resolve(reply());await observed;await saving;await owner.waitForCompletion();assert.equal(calls,1);
+});
 test('positive settlement retries the exact selected command without awaiting a lost old reply',async()=>{
  const old=gate<DatabaseResponse>(),f=setup(async()=>f.calls.length===1?old.promise:reply()),seen:boolean[]=[];
  const saving=f.owner.submit(command(),async(_reply,recovering)=>{seen.push(recovering);});assert.equal(f.owner.canRecover(),true);const prepared=f.owner.prepareAdmissionRecovery()!;
