@@ -122,3 +122,37 @@ Instantaneous eligibility and pending-frame state are retained as deadline diagn
 The runner normally activates only its authenticated packaged child and single owned window before observer frame checks and each file-open action. Process, executable, ASAR, profile, local-data and window URL are checked on every call. Native activation time stays inside the original spawn/open clock; background throttling is unchanged. Foreground/window and failure document visibility/focus are recorded. Human input while the test window is foreground can invalidate exact-source checks and is never filtered or ignored.
 
 Activation is requested once per boundary and confirmed through passive owned-window focus/visibility plus renderer visibility, within the original time budget. Passive checks during navigation, readiness and Base waits treat foreground/visibility loss as explicit measurement interference and stop; they never refocus continuously or retry input. Frame waits reject visibility loss instead of waiting for hidden RAF. Failures include small Base grid, row-count, busy, error and toolbar diagnostics.
+
+
+`--prewarm-empty-profile` is opt-in. For each pair the runner first launches the
+same app clone, Chromium profile and selected EMPTY fixture vault normally. It
+observes real read-only bridge inventory: zero public entries, a complete empty
+checkpoint page, zero unacknowledged writes, zero independent live drafts, and no
+local draft keys. Preparation must then quit normally with actual native exits,
+no owned processes, no cleanup evidence errors and no disk draft heads. Only after
+all canonical owned-path, single-primary-client and no-symlink inventory checks
+pass does it remove that empty vault's `.zorid` and dedicated app-data contents.
+The Chromium profile, client registry and app clone are preserved. Source fixtures
+are created afterwards, and the measured launch must report a different native
+store ID with the same normal profile client before trusted input. Any retained
+work, unknown proof, extra source, foreign path or live process aborts preparation
+without starting a measurement. There is no session seeding or storage/bridge
+getter override.
+
+This mode is **process-cold, isolated profile/code-warmed, not OS/disk-cold**. Warm
+launches have separate receipts/order and no performance acceptance. The measured
+spawn clock and fixed800ms timer begin anew before that process is spawned; warm
+setup is explicit preparation, never deducted from a measured launch. First import
+still selects Note0000 through the normal file tree INSIDE its spawn clock. Reopen
+still requires the full original verified Note0000 return, fixture restoration,
+Base success and normal cleanup; this option does not waive failed dependencies.
+
+Main and current-child browser/renderer authentication now start independently.
+The passive renderer observer is installed as soon as its authenticated target is
+available, before waiting for native window activation or full native-request
+instrumentation. Both channels are joined, and actual packaged main identity,
+foreground, selected vault and native scope must all be verified before any trusted
+input. Native requests before `nativeObserverAttachedMs` remain censored; early
+observation does not invent earlier native work evidence. Missing800ms attachment
+or incomplete readiness coverage stays indeterminate. No debugger pause, hidden
+window, throttling change, fake packaged mode or launch-clock reset is used.

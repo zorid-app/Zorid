@@ -11,6 +11,7 @@ import {CDP} from '../../tests/tasks-electron-integration/cdp.mjs';
 import {assessNote,baseFixtureSource,clockInterval,DEADLINE_MS,fixtureText,planCampaign,reopenPrepared} from './oracle.mjs';
 import {navigateFileTree} from './file-navigation.mjs';
 import {foregroundSource} from './foreground.mjs';
+import {assertFreshNativeScope,authenticateMain,emptyWarmEvidence,observeEarly,resetEmptyWarmState,validateEmptyWarmEvidence} from './preparation.mjs';
 import {boundedMeasurement,documentVisibilitySource,isMeasurementInterference,MeasurementInterference,requireForeground,visibleFramesSource} from './measurement.mjs';
 import {captureObserverFailure,observerSource,sampleObserverSource} from './observer.mjs';
 import {installMainObserver} from './main-observer.mjs';
@@ -26,12 +27,13 @@ export async function main(args=process.argv.slice(2)){
   assert.ok(candidate.endsWith('.app')&&baseline.endsWith('.app'),'Two explicit .app inputs are required');
   const out=ownedOutput(getOption(args,'--out',`/private/tmp/zorid-packaged-startup-${Date.now()}-${randomUUID().slice(0,8)}`));
   const notes=Number(getOption(args,'--notes','1000')),repetitions=Number(getOption(args,'--repetitions','1')),seed=Number(getOption(args,'--seed','42'));
+  const prewarmEmptyProfile=args.includes('--prewarm-empty-profile');
   const timeoutMs=Number(getOption(args,'--timeout-ms','30000')),shutdownMs=Number(getOption(args,'--shutdown-timeout-ms','60000'));
   assert.ok(Number.isSafeInteger(notes)&&notes>=2&&notes<=10000);assert.ok(Number.isSafeInteger(timeoutMs)&&timeoutMs>=4000&&timeoutMs<=120000&&Number.isSafeInteger(shutdownMs)&&shutdownMs>=10000&&shutdownMs<=120000);
   const schedule=planCampaign(repetitions,seed),asar=await import(pathToFileURL(require.resolve('@electron/asar')).href);
   await fs.mkdir(out,{recursive:false,mode:0o700});await fs.mkdir(path.join(out,'clones'));
   const report={version:1,label:'Real packaged Zorid startup and trusted editor input',out,notes,repetitions,seed,deadlineMs:DEADLINE_MS,
-    harnessHead:execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim(),started:new Date().toISOString(),plannedOrder:schedule,actualOrder:[],apps:{},launches:[],skipped:[],errors:[],limitations:[
+    harnessHead:execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim(),started:new Date().toISOString(),plannedOrder:schedule,actualOrder:[],preparationOrder:[],apps:{},launches:[],preparations:[],skipped:[],errors:[],prewarmEmptyProfile,cacheCondition:prewarmEmptyProfile?'process-cold; isolated profile/code warmed; fresh Native first import; not OS/disk cold':'process-cold; new isolated profile; not OS/disk cold',limitations:[
       'Process-cold, not disk-cold. Fixture creation, hashing, APFS clones and prior repetitions affect filesystem caches.',
       'Actual packaged main/renderer are unchanged; inspectors, buffered observers and automation have overhead recorded separately.',
       'Startup phases before main/renderer attachment are censored. Observer attachment is never a main-module-entry marker.',
@@ -92,7 +94,7 @@ export async function main(args=process.argv.slice(2)){
     let done;record.deadlineDone=new Promise(resolve=>{done=resolve;});record.resolveDeadline=done;record.inputQueue=Promise.resolve();
     record.deadlineTimer=setTimeout(()=>{record.deadlineTask=(async()=>{
       const attempt={name:'deadline',scheduledForMs:record.originMs+DEADLINE_MS,attemptedAtMs:launch.elapsed(),status:'unobservable'};record.dispatches.push(attempt);
-      if(!record.cancelled&&launch.vaultVerified&&record.client&&active?.renderer===record.client&&record.configured&&active.foregroundEstablished){
+      if(!record.cancelled&&launch.vaultVerified&&record.client&&active?.renderer===record.client&&record.configured&&launch.nativeInstrumentationReady&&launch.nativeScopeVerified&&active.foregroundEstablished){
         try{const observed=await record.client.evaluate(serializableState);if(observed?.identity===record.identity){attempt.observation={at:observed.sampledAt,ready:observed.ready,readinessCheck:observed.readinessCheck};if(observed.ready)await sendProbe(launch,record,attempt);else if(observed.readinessCheck?.eligible===false&&observed.readinessCheck.framesPending===false)attempt.status='observed-not-ready';else attempt.status='readiness-unresolved';}}
         catch(error){attempt.error=String(error);if(isMeasurementInterference(error))record.measurementInterference=String(error);}
       }
@@ -101,7 +103,7 @@ export async function main(args=process.argv.slice(2)){
   async function sendProbe(launch,record,attempt){
     record.inputQueue=record.inputQueue.then(async()=>{
       const renderer=record.client;
-      if(record.cancelled||!launch.vaultVerified||active?.renderer!==renderer)throw Error('Owned input scope retired before dispatch');
+      if(record.cancelled||!launch.vaultVerified||!launch.scopeVerified||!launch.nativeInstrumentationReady||!launch.nativeScopeVerified||active?.renderer!==renderer)throw Error('Owned input scope retired before dispatch');
       await checkForeground(launch);
       if(!record.focused){await renderer.evaluate("document.querySelector('.pane.is-active .cm-content').focus();true");await press(renderer,'Home','Home',['moveToBeginningOfDocument']);record.focused=true;}
       await renderer.evaluate(`(()=>{const s=window.__zoridPackagedProbe,p=document.querySelector('.pane.is-active'),n=p?.querySelector('.cm-content'),v=n?.cmTile?.root?.view??n?.cmView?.view;const title=${JSON.stringify(record.path.split('/').at(-1).replace(/\.md$/i,''))};if(s?.identity!==${JSON.stringify(record.identity)}||p?.querySelector('.note-title')?.value!==title||!v||n.closest('[inert]')||n.getAttribute('contenteditable')!=='true'||v.state.doc.length!==${record.expectedCharacters}+s.probes.length||v.state.doc.sliceString(s.probes.length,s.probes.length+${record.prefix.length})!==${JSON.stringify(record.prefix)})throw Error('Selected fixture changed before trusted input');return true;})()`);
@@ -155,6 +157,70 @@ export async function main(args=process.argv.slice(2)){
     record.definitionUnchanged=await hashFile(path.join(pair.vault,'Profile.base'))===hash(pair.sources.get('Profile.base'));
     record.metric='normal Base controls and known fixture row ready; not CodeMirror/protected edit latency';
   }
+
+  async function attachLaunch(launch,pair,pinned,startup){
+    const expectedURL=pathToFileURL(path.join(pinned.archive,'dist/index.html')).href;
+    await observeEarly({
+      connectMain:async()=>{
+        const mainURL=await bounded(()=>{const url=/Debugger listening on (ws:\/\/127\.0\.0\.1:\d+\/[^\s]+)/.exec(launch.stderr)?.[1];assert.ok(url,'Packaged main inspector not observable');return url;},launch);
+        active.main=new CDP(mainURL);await active.main.call('Runtime.enable');launch.mainAttachedMs=launch.elapsed();launch.mainClockSamples=[await clock(active.main,launch)];
+        launch.mainScope=await active.main.evaluate(`(${authenticateMain.toString()})(${JSON.stringify(foregroundConfig(launch,false))})`);return active.main;
+      },
+      connectRenderer:async()=>{
+        const endpoint=await bounded(()=>currentBrowserEndpoint(launch.stderr),launch);launch.browserEndpoint=endpoint;
+        active.browser=new CDP(endpoint.url);await active.browser.opened;
+        const target=await bounded(async()=>{
+          const {targetInfos}=await active.browser.call('Target.getTargets');
+          const owned=targetInfos.filter(t=>t.type==='page'&&(t.url.split('#')[0]===expectedURL||t.url==='about:blank'));assert.equal(owned.length,1,'Expected one current browser page');
+          const response=await fetch(`http://127.0.0.1:${endpoint.port}/json/list`),targets=await response.json();
+          const page=targets.find(t=>t.id===owned[0].targetId&&t.type==='page'&&(t.url.split('#')[0]===expectedURL||t.url==='about:blank'));
+          assert.ok(page,'HTTP page is not the current authenticated browser target');return page;
+        },launch);
+        active.renderer=new CDP(target.webSocketDebuggerUrl);await active.renderer.opened;launch.rendererAttachedMs=launch.elapsed();
+        active.browser.close();active.browser=null;return active.renderer;
+      },
+      installObserver:async()=>{
+        await configure(launch,startup,true);startup.configured=true;launch.rendererObserverInstalledMs=launch.elapsed();
+        await active.renderer.call('Runtime.enable');await active.renderer.call('Page.enable');
+      },
+      foreground:()=>foreground(launch,startup),
+      installNativeObserver:async main=>{
+        launch.nativeObserverScope=await main.evaluate(`(${installMainObserver.toString()})(${JSON.stringify({expectedAppPath:pinned.archive,profile:pair.profile,localDataDirectory:pair.data,outputFile:launch.mainFinalFile})})`);
+        launch.nativeObserverAttachedMs=launch.elapsed();launch.nativeInstrumentationReady=true;launch.mainClockSamples.push(await clock(main,launch));
+      },
+    });
+    await bounded(async()=>assert.equal(await active.renderer.evaluate('location.href.split("#")[0]'),expectedURL),launch);
+    const loadedClock=await clock(active.renderer,launch);
+    if(startup.clockSamples.some(sample=>sample.timeOrigin!==loadedClock.timeOrigin)){startup.preNavigationClockSamples=startup.clockSamples;startup.clockSamples=[];}
+    startup.clockSamples.push(loadedClock);launch.scopeVerified=true;startup.packaged=true;startup.packagedUrlVerified=true;
+    assert.equal((await active.renderer.evaluate('window.zorid.getVault()')).path,pair.vault);launch.vaultVerified=true;
+    launch.nativeScope=await active.renderer.evaluate(`(async()=>{const context=await window.zorid.getDurableContext(${JSON.stringify(pair.vault)});if(!context?.scope)throw Error('Actual native scope unavailable');return context.scope;})()`);
+    if(pair.preparation?.reset)assertFreshNativeScope(pair.preparation.evidence.scope,launch.nativeScope);launch.nativeScopeVerified=true;
+  }
+  function beginLaunch(launch,pair,pinned,measured){
+    launch.measured=measured;const start=performance.now();Object.defineProperty(launch,'elapsed',{value:()=>performance.now()-start});launch.spawnWallClockDiagnostic=new Date().toISOString();
+    const startup=noteCase(launch,'Note 0000.md',measured?'startup-'+launch.mode:'prewarm-empty',0);if(!measured)Object.assign(startup,{path:'__empty_prewarm__.md',original:'',prefix:'',expectedCharacters:0});launch.cases.push(startup);if(measured)arm(launch,startup);
+    const child=spawn(pinned.executable,['--inspect=127.0.0.1:0','--user-data-dir='+pair.profile,'--remote-debugging-address=127.0.0.1','--remote-debugging-port=0','--no-first-run'],{env:launchEnvironment(pair.profile,pair.data),cwd:out,stdio:['ignore','pipe','pipe']});launch.pid=child.pid;
+    const exit=new Promise(resolve=>{child.once('exit',(code,signal)=>{launch.exitCode=code;launch.signal=signal;resolve();});child.once('error',error=>{launch.launchError=String(error);resolve();});});active={child,exit,main:null,renderer:null,launch};(measured?report.actualOrder:report.preparationOrder).push({label:launch.label,pairId:launch.pairId,mode:launch.mode,pid:child.pid});
+    process.stdout.write(JSON.stringify({event:'launch-start',label:launch.label,pairId:launch.pairId,mode:launch.mode,pid:child.pid,app:pinned.app,profile:pair.profile,directory:launch.directory})+'\n');
+    child.stderr.on('data',chunk=>{launch.stderr=(launch.stderr+chunk).slice(-1000000);});child.stdout.on('data',chunk=>{launch.stdout=(launch.stdout+chunk).slice(-1000000);});
+    return startup;
+  }
+  async function prewarmPair(pair,label){
+    const directory=path.join(pair.directory,'prewarm-empty');await fs.mkdir(directory);
+    const pinned=report.apps[label].pinned,launch={label,pairId:path.basename(pair.directory),mode:'prewarm-empty',directory,profile:pair.profile,vault:pair.vault,localDataDirectory:pair.data,mainFinalFile:path.join(directory,'main-final.json'),cases:[],stderr:'',stdout:'',errors:[]};
+    report.preparations.push(launch);pair.preparation=launch;const startup=beginLaunch(launch,pair,pinned,false);
+    try{
+      await attachLaunch(launch,pair,pinned,startup);
+      await bounded(async()=>assert.equal(await active.renderer.evaluate("!!document.querySelector('.workspace')&&!document.querySelector('.cm-content')"),true,'Warm empty workspace not settled'),launch);
+      launch.evidence=await active.renderer.evaluate(`(${emptyWarmEvidence.toString()})(${JSON.stringify(pair.vault)})`);launch.emptyProof=validateEmptyWarmEvidence(launch.evidence);
+    }catch(error){launch.errors.push(error.stack??String(error));await captureObserverFailure(active?.renderer,launch);throw error;}
+    finally{await stop(launch);await fs.writeFile(path.join(directory,'result.json'),JSON.stringify(launch,null,2));await save();}
+    assert.ok(!launch.cleanupErrors?.length,'Warm cleanup evidence failed');
+    const after=await appPins(pinned.app,asar);launch.artifactsUnchanged=['executableSha256','asarSha256','nativeSha256','frameworkSha256','infoSha256'].every(field=>after[field]===pinned[field]);assert.ok(launch.artifactsUnchanged,'Warm app changed');
+    launch.diskJournal=await journalHeads(pair.profile);launch.reset=await resetEmptyWarmState({pair,evidence:launch.evidence,cleanup:launch.cleanup,remaining:ownedProcesses(clones),diskJournal:launch.diskJournal});
+    await fs.writeFile(path.join(directory,'result.json'),JSON.stringify(launch,null,2));await save();
+  }
   try{
     for(const [label,app] of [['baseline',baseline],['candidate',candidate]]){
       const manifest=getOption(args,`--${label}-source-manifest`),original=await appPins(app,asar,manifest);
@@ -171,9 +237,10 @@ export async function main(args=process.argv.slice(2)){
         await fs.mkdir(directory);await fs.mkdir(profile);await fs.mkdir(vault);await fs.mkdir(data);
         const sources=new Map(Array.from({length:notes},(_,index)=>[`Note ${String(index).padStart(4,'0')}.md`,fixtureText(8192,index)]));sources.set('Large 432000.md',fixtureText(432000,notes));
         sources.set('Profile.base',baseFixtureSource());
-        for(const [name,text] of sources)await fs.writeFile(path.join(vault,name),text,{flag:'wx',mode:0o600});
         await fs.writeFile(path.join(profile,'vault.json'),JSON.stringify({path:vault}),{flag:'wx'});
-        pair={directory,profile,vault,data,sources,fixtureHashes:Object.fromEntries([...sources].map(([name,text])=>[name,hash(text)]))};pairs.set(scheduled.pairId,pair);
+        pair={campaign:out,directory,profile,vault,data,sources,fixtureHashes:Object.fromEntries([...sources].map(([name,text])=>[name,hash(text)]))};pairs.set(scheduled.pairId,pair);
+        if(prewarmEmptyProfile)await prewarmPair(pair,scheduled.label);
+        for(const [name,text] of sources)await fs.writeFile(path.join(vault,name),text,{flag:'wx',mode:0o600});
       }
       if(scheduled.mode==='reopen'&&pair.reopenPrepared!==true){
         const skipped={...scheduled,status:'skipped-dependency',reason:'Prior first-import did not complete verified Note0000 return, fixture restoration and normal cleanup',priorResult:path.join(pair.directory,'first-import/result.json')};
@@ -181,39 +248,9 @@ export async function main(args=process.argv.slice(2)){
       }
       const directory=path.join(pair.directory,scheduled.mode);await fs.mkdir(directory);
       const launch={...scheduled,directory,profile:pair.profile,vault:pair.vault,localDataDirectory:pair.data,fixtureHashesBefore:pair.fixtureHashes,mainFinalFile:path.join(directory,'main-final.json'),cases:[],stderr:'',stdout:'',errors:[]};report.launches.push(launch);
-      const start=performance.now();Object.defineProperty(launch,'elapsed',{value:()=>performance.now()-start});launch.spawnWallClockDiagnostic=new Date().toISOString();
-      const startup=noteCase(launch,'Note 0000.md','startup-'+scheduled.mode,0);launch.cases.push(startup);arm(launch,startup);
-      const pinned=report.apps[scheduled.label].pinned;
-      const child=spawn(pinned.executable,['--inspect=127.0.0.1:0','--user-data-dir='+pair.profile,'--remote-debugging-address=127.0.0.1','--remote-debugging-port=0','--no-first-run'],{env:launchEnvironment(pair.profile,pair.data),cwd:out,stdio:['ignore','pipe','pipe']});launch.pid=child.pid;
-      const exit=new Promise(resolve=>{child.once('exit',(code,signal)=>{launch.exitCode=code;launch.signal=signal;resolve();});child.once('error',error=>{launch.launchError=String(error);resolve();});});active={child,exit,main:null,renderer:null};report.actualOrder.push({...scheduled,pid:child.pid});
-      process.stdout.write(JSON.stringify({event:'launch-start',...scheduled,pid:child.pid,app:pinned.app,profile:pair.profile,directory})+'\n');
-      child.stderr.on('data',chunk=>{launch.stderr=(launch.stderr+chunk).slice(-1000000);});child.stdout.on('data',chunk=>{launch.stdout=(launch.stdout+chunk).slice(-1000000);});
+      const pinned=report.apps[scheduled.label].pinned;const startup=beginLaunch(launch,pair,pinned,true);
       try{
-        const mainURL=await bounded(()=>{const url=/Debugger listening on (ws:\/\/127\.0\.0\.1:\d+\/[^\s]+)/.exec(launch.stderr)?.[1];assert.ok(url,'Packaged main inspector not observable');return url;},launch);
-        active.main=new CDP(mainURL);await active.main.call('Runtime.enable');launch.mainAttachedMs=launch.elapsed();launch.mainClockSamples=[await clock(active.main,launch)];
-        launch.mainScope=await active.main.evaluate(`(${installMainObserver.toString()})(${JSON.stringify({expectedAppPath:pinned.archive,profile:pair.profile,localDataDirectory:pair.data,outputFile:launch.mainFinalFile})})`);
-        await foreground(launch,startup);
-        const endpoint=await bounded(()=>currentBrowserEndpoint(launch.stderr),launch);launch.browserEndpoint=endpoint;
-        active.browser=new CDP(endpoint.url);await active.browser.opened;
-        const expectedURL=pathToFileURL(path.join(pinned.archive,'dist/index.html')).href;
-        const target=await bounded(async()=>{
-          // The current child's nonce-bearing browser WS must authenticate the
-          // target ID; a recycled HTTP port cannot grant another app's page.
-          const {targetInfos}=await active.browser.call('Target.getTargets');
-          const owned=targetInfos.filter(t=>t.type==='page'&&(t.url.split('#')[0]===expectedURL||t.url==='about:blank'));assert.equal(owned.length,1,'Expected one current browser page');
-          const response=await fetch(`http://127.0.0.1:${endpoint.port}/json/list`),targets=await response.json();
-          const page=targets.find(t=>t.id===owned[0].targetId&&t.type==='page'&&(t.url.split('#')[0]===expectedURL||t.url==='about:blank'));
-          assert.ok(page,'HTTP page is not the current authenticated browser target');return page;
-        },launch);
-        active.renderer=new CDP(target.webSocketDebuggerUrl);await active.renderer.opened;launch.rendererAttachedMs=launch.elapsed();
-        active.browser.close();active.browser=null;
-        await configure(launch,startup,true);startup.configured=true;
-        await active.renderer.call('Runtime.enable');await active.renderer.call('Page.enable');
-        await bounded(async()=>assert.equal(await active.renderer.evaluate('location.href.split("#")[0]'),expectedURL),launch);
-        const loadedClock=await clock(active.renderer,launch);
-        if(startup.clockSamples.some(sample=>sample.timeOrigin!==loadedClock.timeOrigin)){startup.preNavigationClockSamples=startup.clockSamples;startup.clockSamples=[];}
-        startup.clockSamples.push(loadedClock);launch.scopeVerified=true;startup.packaged=true;startup.packagedUrlVerified=true;
-        assert.equal((await active.renderer.evaluate('window.zorid.getVault()')).path,pair.vault);launch.vaultVerified=true;
+        await attachLaunch(launch,pair,pinned,startup);
         if(scheduled.mode==='first-import')await selectFile(launch,startup,startup.path);
         await finishNote(launch,startup);
         launch.navigationTiming=await active.renderer.evaluate('performance.getEntriesByType("navigation").map(value=>value.toJSON())');
@@ -252,7 +289,7 @@ export async function main(args=process.argv.slice(2)){
     }
   }catch(error){report.errors.push(error.stack??String(error));}
   finally{
-    if(active){const launch=report.launches.at(-1);try{await stop(launch);}catch(error){report.errors.push('Final cleanup: '+error.message);}}
+    if(active){const launch=active.launch;try{await stop(launch);}catch(error){report.errors.push('Final cleanup: '+error.message);}}
     try{report.remainingOwnedProcesses=ownedProcesses(clones);}catch(error){report.errors.push('Owned PID proof unavailable: '+error.message);report.remainingOwnedProcesses=[{unverifiable:true}];}
     if(!report.remainingOwnedProcesses.length&&!args.includes('--keep-clones'))for(const app of clones)await fs.rm(app,{recursive:true});
     report.clonesRetained=args.includes('--keep-clones')||report.remainingOwnedProcesses.length>0;
@@ -266,7 +303,7 @@ export async function main(args=process.argv.slice(2)){
       report.noteSummary.push({label,kind,attempts:cases.length,valid:cases.filter(c=>c.assessment?.valid).length,outcomes:cases.map(c=>c.assessment?.outcome??'missing'),observedInputUpperMs:observed,
         diagnosticMedianUpperMs:observed.length?observed[Math.floor(observed.length/2)]:null,limit:'Observed input timings include diagnostic/indeterminate cases;800ms acceptance is only assessment.usableByDeadline'});
     }
-    report.artifactsValid=report.launches.length===schedule.length&&report.launches.every(l=>!l.errors.length&&!l.cleanupErrors?.length&&l.cleanup?.normal&&l.cleanup.gone&&l.fixturesRestored&&l.sourcePathsExact&&l.artifactsUnchanged);
+    report.artifactsValid=(!prewarmEmptyProfile||report.preparations.length===repetitions*2&&report.preparations.every(p=>p.reset?.freshBeforeFixtures&&!p.errors.length&&!p.cleanupErrors?.length&&p.cleanup?.normal&&p.cleanup.gone&&p.artifactsUnchanged))&&report.launches.length===schedule.length&&report.launches.every(l=>!l.errors.length&&!l.cleanupErrors?.length&&l.cleanup?.normal&&l.cleanup.gone&&l.fixturesRestored&&l.sourcePathsExact&&l.artifactsUnchanged);
     report.candidateTargetMet=report.artifactsValid&&report.launches.filter(l=>l.label==='candidate').every(l=>l.cases.filter(c=>c.kind!=='base').every(c=>c.assessment?.usableByDeadline));
     report.complete=report.launches.length===schedule.length;report.allPlannedProcessed=report.launches.length+report.skipped.length===schedule.length;await save();
   }
