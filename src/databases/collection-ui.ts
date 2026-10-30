@@ -309,7 +309,7 @@ export function mountCollectionPropertyPicker(container: HTMLElement, options: C
   const grid = element(doc, 'div'); grid.className = 'collection-property-type-grid'; grid.setAttribute('role', 'grid'); grid.setAttribute('aria-label', 'Property type');
   const error = element(doc, 'p'); error.setAttribute('role', 'alert'); error.hidden = true;
   const retry = button(doc, 'Retry creation', () => { void save(); }); retry.hidden = true;
-  let destroyed = false, busy = false, dirty = false, selected = 0, request: DatabaseRequest | undefined;
+  let destroyed = false, busy = false, dirty = false, selected = 0, uncertain = false, request: DatabaseRequest | undefined;
   let accepted: DatabaseCollection | undefined;
   const live = () => !destroyed && options.isCurrent();
   const choices: HTMLButtonElement[] = [];
@@ -355,13 +355,14 @@ export function mountCollectionPropertyPicker(container: HTMLElement, options: C
       if (!accepted) {
         await submitCollection(options,request,completeProperty);
       }else if(options.submit&&request)await options.submit(request,completeProperty);else await options.onSaved(accepted);
-      if (live()) { request = undefined; dirty = false; options.onClose(); }
+      if (live()) { request = undefined; uncertain = false; dirty = false; options.onClose(); }
     } catch (problem) {
       if (live()) {
         // Only a verified terminal host rejection permits a new command. Lost
         // replies/publication failures retain the original operation identity.
         const rejected = problem as { source?: unknown; commitUncertain?: unknown };
-        if (!accepted && rejected?.source === 'host' && rejected.commitUncertain === false) request = undefined;
+        if (!accepted && !uncertain && rejected?.source === 'host' && rejected.commitUncertain === false) request = undefined;
+        else if(request&&!(rejected?.source==='host'&&rejected.commitUncertain===false))uncertain=true;
         error.textContent = problemText(problem); error.hidden = false; retry.hidden = false;
         if (request) retry.focus(); else name.focus();
       }
