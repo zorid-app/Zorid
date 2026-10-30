@@ -13,7 +13,12 @@ export interface DraftProtectionSnapshot {
    * identity whenever the submitted operation phase changes. */
   readonly pendingOperation:string|null|Readonly<object>;
 }
-export interface DraftProtectionAcknowledgement {readonly sequence:number;readonly receipt:DraftJournalReceipt}
+export interface DraftProtectionAcknowledgement {
+  readonly sequence:number;readonly receipt:DraftJournalReceipt;
+  /** Exact immutable encoded request acknowledged by storage, never the latest
+   * offered snapshot. A coalesced sequence alone cannot prove capsule contents. */
+  readonly request:DraftJournalChange;
+}
 export interface DraftCleanWitness {readonly entryId:string;readonly writer:string;readonly generation:number;readonly content:string;readonly revision:string}
 export interface DraftProtectionStatus {
   readonly sequence:number;readonly acknowledgedSequence:number;readonly retiredSequence:number;readonly pending:boolean;readonly error:Error|null;
@@ -75,6 +80,14 @@ export class DraftProtection {
   }
   get status():DraftProtectionStatus{return Object.freeze({sequence:this.sequence,acknowledgedSequence:this.acknowledged?.sequence??0,retiredSequence:this.retiredSequence,
     pending:!!this.pending||!!this.latest&&this.latest.sequence>(this.acknowledged?.sequence??0),error:this.errorValue});}
+  /** Actual retained storage responsibility, not an unencoded latest offer.
+   * Known retirement removes its old acknowledged write from reachability. */
+  get retainedWriteRequests():readonly DraftJournalChange[]{
+    const result:DraftJournalChange[]=[];
+    if(this.acknowledged&&this.acknowledged.sequence>this.retiredSequence)result.push(this.acknowledged.request);
+    if(this.pending?.kind==='write'&&!result.includes(this.pending.request))result.push(this.pending.request);
+    return Object.freeze(result);
+  }
   /** Local sequence is independent of edit generation and journal revision. */
   offer(input:DraftProtectionSnapshot):number{
     if(!record(input,['generation','baseline','draft','checkpointRevision','pendingOperation'])||!record(input.baseline,['entryId','path','revision','content']))throw fail('invalid_draft_snapshot');
@@ -152,7 +165,7 @@ export class DraftProtection {
       if(receipt.deleted!==(pending.kind==='retire')||receipt.revision!==pending.request.nextRevision||receipt.generation!==pending.request.generation)throw fail('invalid_draft_receipt');
       this.currentRevision=receipt.revision;
       if(pending.kind==='write'){
-        this.acknowledged=Object.freeze({sequence:pending.sequence,receipt});this.tokens.add(this.acknowledged);
+        this.acknowledged=Object.freeze({sequence:pending.sequence,receipt,request:pending.request});this.tokens.add(this.acknowledged);
       }else{
         this.retiredSequence=pending.sequence;if(this.latest?.sequence===pending.sequence)this.latest=undefined;
         const waiters=this.retirementWaiters;this.retirementWaiters=[];for(const waiter of waiters)waiter.resolve(true);

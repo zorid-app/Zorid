@@ -1,7 +1,7 @@
 import type {CheckpointScope} from '../core/durable-checkpoints.ts';
 import type {IndependentDraftProvider,IndependentDraftReceipt} from '../core/independent-drafts.ts';
 import {DraftProtection} from './draft-protection.ts';
-import type {DraftCleanWitness,DraftProtectionSnapshot,DraftProtectionStatus} from './draft-protection.ts';
+import type {DraftCleanWitness,DraftJournalChange,DraftProtectionAcknowledgement,DraftProtectionSnapshot,DraftProtectionStatus} from './draft-protection.ts';
 
 export interface NoteDraftCapture {readonly writer:string;readonly snapshot:DraftProtectionSnapshot}
 export type NoteDraftInventory='ready'|'unknown'|'retained';
@@ -36,7 +36,9 @@ const delays=[500,1500,4000,30_000] as const;
 const transientCodes=new Set(['draft_storage_failure','draft_journal_busy','draft_transport_lost']);
 type JournalFailureSource='main'|'transport'|'protocol'|'untrusted';
 type JournalFailure=Error&{code?:string;source?:JournalFailureSource};
+type CaptureWaiter={verify:(ack:DraftProtectionAcknowledgement)=>boolean;signal?:AbortSignal;abort:()=>void;resolve:(ack:DraftProtectionAcknowledgement)=>void;reject:(error:Error)=>void};
 const failure=(code:string)=>Object.assign(new Error('Independent note draft protection is incomplete; the draft is retained.'),{code});
+const captureFailure=()=>Object.assign(failure('draft_capture_unacknowledged'),{source:'protocol',commitUncertain:false});
 function sourceOf(value:object):JournalFailureSource|undefined {
   const descriptor=Object.getOwnPropertyDescriptor(value,'source');
   if(!descriptor)return 'source'in value?'untrusted':undefined;
@@ -81,6 +83,8 @@ export class NoteDraftProtection {
   private explicitRequested=false;
   private scheduled=false;
   private stopped=false;
+  private acknowledged?:DraftProtectionAcknowledgement;
+  private readonly captureWaiters=new Set<CaptureWaiter>();
 
   constructor(options:NoteDraftProtectionOptions){
     this.options=options;
@@ -115,6 +119,26 @@ export class NoteDraftProtection {
   }
   /** Explicit barrier retries the retained original CAS before protecting latest. */
   flush():Promise<void> {return this.startFlush(true);}
+  /** Actual encoded writes that can still carry an original operation/request.
+   * The latest unsent capture is not presented as storage evidence. */
+  get retainedWriteRequests():readonly DraftJournalChange[]{return this.protection?.retainedWriteRequests??Object.freeze([]);}
+  /** Unlike a generic protected status, dispatch requires an exact real ACK.
+   * Transient failure waits on this helper's existing backoff/availability lane;
+   * it must not send callers back out to mint another request identity. */
+  flushCapture(verify:(ack:DraftProtectionAcknowledgement)=>boolean,options:{signal?:AbortSignal}={}):Promise<DraftProtectionAcknowledgement>{
+    if(this.stopped)return Promise.reject(failure('draft_protection_stopped'));
+    if(typeof verify!=='function')return Promise.reject(captureFailure());
+    const signal=options.signal;
+    if(signal?.aborted)return Promise.reject(failure('draft_capture_cancelled'));
+    const error=this.failureError();if(error&&!transientFailure(error))return Promise.reject(error);
+    const result=new Promise<DraftProtectionAcknowledgement>((resolve,reject)=>{
+      const waiter:CaptureWaiter={verify,signal,resolve,reject,abort:()=>this.finishCapture(waiter,failure('draft_capture_cancelled'))};
+      this.captureWaiters.add(waiter);signal?.addEventListener('abort',waiter.abort,{once:true});
+      if(signal?.aborted)waiter.abort();
+    });
+    if(this.captureWaiters.size&&!this.running&&this.timer===undefined)void this.startFlush(false).catch(()=>{});
+    return result;
+  }
   private startFlush(explicit:boolean):Promise<void> {
     if(this.stopped)return Promise.reject(failure('draft_protection_stopped'));
     this.cancelTimer();
@@ -131,9 +155,24 @@ export class NoteDraftProtection {
     this.notify();
   }
   availability():void {if(!this.stopped){const error=this.failureError();if(error&&!transientFailure(error))return;this.cancelTimer();this.kick();}}
-  stop():void {this.stopped=true;this.cancelTimer();}
+  stop():void {this.stopped=true;this.cancelTimer();for(const waiter of this.captureWaiters)this.finishCapture(waiter,failure('draft_protection_stopped'));}
 
-  private covered(capture:NoteDraftCapture):boolean {return this.options.coreCovered(capture);}
+  private finishCapture(waiter:CaptureWaiter,error?:Error,ack?:DraftProtectionAcknowledgement):void {
+    if(!this.captureWaiters.delete(waiter))return;
+    waiter.signal?.removeEventListener('abort',waiter.abort);
+    if(error)waiter.reject(error);else waiter.resolve(ack!);
+  }
+  private settleCaptures(error?:Error):void {
+    if(error&&transientFailure(error))return;
+    const ack=this.acknowledged,live=ack&&this.protection&&this.protection.status.retiredSequence<ack.sequence;
+    for(const waiter of this.captureWaiters){
+      if(error){this.finishCapture(waiter,error);continue;}
+      let verified=false;try{verified=!!live&&waiter.verify(ack!)===true;}catch{/* A malformed/mismatched capsule never grants dispatch. */}
+      this.finishCapture(waiter,verified?undefined:captureFailure(),verified?ack:undefined);
+    }
+  }
+
+  private covered(capture:NoteDraftCapture):boolean {return capture.snapshot.pendingOperation===null&&this.options.coreCovered(capture);}
   private failureError():Error|null {return this.inventory==='unknown'?this.inventoryError:this.errorValue??this.protection?.status.error??null;}
   private cancelTimer():void {if(this.timer!==undefined)clearTimeout(this.timer);this.timer=undefined;}
   private scheduleRetry():void {
@@ -178,7 +217,7 @@ export class NoteDraftProtection {
       }
       const protection=this.protection??=this.createProtection(capture);
       if(this.offered?.capture!==capture){const sequence=protection.offer(capture.snapshot);this.offered={capture,sequence};}
-      await protection.flushThrough(this.offered.sequence);this.assertActive();this.errorValue=null;
+      const ack=await protection.flushThrough(this.offered.sequence);this.assertActive();if(ack)this.acknowledged=ack;this.errorValue=null;
       if(this.latest===capture)return;
     }
   }
@@ -192,6 +231,7 @@ export class NoteDraftProtection {
     const offered=this.offered;
     if(protection.status.retiredSequence>=offered.sequence)return;
     const ack=await protection.flushThrough(offered.sequence);this.assertActive();
+    if(ack)this.acknowledged=ack;
     if(!ack||this.latest!==capture||!this.covered(capture))return;
     const witness=this.options.getCleanWitness?.(capture);
     if(!witness||this.latest!==capture||!this.covered(capture))return;
@@ -205,6 +245,12 @@ export class NoteDraftProtection {
       if(this.inventory!=='unknown'&&this.protection?.status.error!==error)this.errorValue=asError(error);
       this.scheduleRetry();
     }else if(!this.status.pending){this.retryStep=0;this.cancelTimer();}
+    const failed=error===undefined?this.failureError()??undefined:asError(error);
+    // A capture can arrive between an async drain returning and this completion
+    // callback. Its queued successor must run before success can decide that
+    // an including-ID acknowledgement is missing.
+    const undrained=!failed&&this.latest&&!this.covered(this.latest)&&this.offered?.capture!==this.latest;
+    if(!undrained)this.settleCaptures(failed);
     this.notify();
     if(error===undefined&&this.latest&&!this.covered(this.latest)&&this.offered?.capture!==this.latest)this.kick();
   }
