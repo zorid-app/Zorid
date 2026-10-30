@@ -15,7 +15,7 @@ import {nativeContextMenuMode,nativeContextMenuRequest,NATIVE_MENU_CASES,waitFor
 import {fixtureFiles,template} from './fixtures.mjs';
 import {journey} from './journey.mjs';
 import {CAMPAIGN_DIRECTORIES,validateFixtureName,readFixture,writeFixture,campaignClosure} from './owned-fixtures.mjs';
-import {relayProcessOwnership,livingOwnedProcesses,discoverUnannouncedRelayProcesses} from './native-ownership.mjs';
+import {relayProcessOwnership,livingOwnedProcesses,discoverUnannouncedRelayProcesses,parseProcessRows} from './native-ownership.mjs';
 import {windowMode,assertNativeWindowVisible,assertRendererVisible,nativeWindowAdapterSource} from './window-visibility.mjs';
 import {assertRelayCampaign,assertRelayProvenance} from './relay-admission.mjs';
 import {verifyPreparedSceneFiles} from '../bases-electron-recovery-integration/collection-scene.mjs';
@@ -56,7 +56,7 @@ const git=(...args)=>execFileSync('git',['-C',root,...args],{encoding:'utf8',max
 async function hash(file){const h=createHash('sha256');for await(const bytes of createReadStream(file))h.update(bytes);return h.digest('hex');}
 async function tree(directory){const result=[];async function visit(relative=''){for(const entry of(await fs.readdir(path.join(directory,relative),{withFileTypes:true})).sort((a,b)=>a.name.localeCompare(b.name))){const name=path.join(relative,entry.name);assert.ok(!entry.isSymbolicLink(),'No artifact symlink: '+name);if(entry.isDirectory())await visit(name);else if(entry.isFile())result.push([name,await hash(path.join(directory,name))]);}}await visit();return result;}
 async function provenance(){if(externalCliArtifact)await assertExternalCli(externalCliArtifact);assert.equal(git('rev-parse','HEAD').trim(),head,'Frozen integration HEAD changed');assert.equal(git('diff','--name-only','HEAD').trim(),'','Frozen tracked source changed');const names=git('ls-files','-z','desktop','src','crates','scripts','Cargo.toml','Cargo.lock','package.json','pnpm-lock.yaml','vite.config.mjs','index.html').split('\0').filter(Boolean).sort();return{head,tracked:await Promise.all(names.map(async name=>[name,await hash(path.join(root,name))])),dist:await tree(path.join(root,'dist')),native:{file:native,sha256:await hash(native)},...(externalCliArtifact?{externalCli:externalCliArtifact}:{}),...(relay?{relay:{executable:relayExecutable,identity:relayIdentity,files:await Promise.all(relayFiles.map(async file=>[file,await hash(file)])),node:{file:relayIdentity.executable,sha256:await hash(await fs.realpath(relayIdentity.executable))}}}:{}),electron:{file:electron,sha256:await hash(electron)},harness:await tree(harness),campaigns:await campaignClosure(path.dirname(harness),tree),cdpHelper:await hash(path.join(harness,'../tasks-electron-integration/cdp.mjs'))};}
-const processes=()=>execFileSync('ps',['-ww','-axo','pid=,ppid=,command='],{encoding:'utf8'}).split('\n').map(line=>{const m=line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);return m?{pid:Number(m[1]),parent:Number(m[2]),command:m[3]}:null;}).filter(Boolean);
+const processes=()=>parseProcessRows(execFileSync('ps',['-ww','-axo','pid=,ppid=,stat=,command='],{encoding:'utf8'}));
 let child,cdp,browserCDP,ui,record,before,failure,relay,relayExecutable,relayIdentity,relayFiles=[],externalCliConflicts,fixtureScene;
 const natives=new Map();let cuaCheckpointCount=0;
 let nativeMenuCheckpointCount=0;
@@ -94,9 +94,9 @@ const exited=()=>!child||child.exitCode!==null||child.signalCode!==null;
 async function nativeChildren(requireLineage=false){
   const rows=processes();
   if(!relay){const owned=rows.filter(row=>row.parent===child?.pid&&row.command.startsWith(native+' --vault '+vault));for(const row of owned)natives.set(row.pid,row);return owned;}
-  for(const row of discoverUnannouncedRelayProcesses({rows,native,vault,identity:relayIdentity}))natives.set(row.pid,row);
+  for(const row of discoverUnannouncedRelayProcesses({rows,native,vault,identity:relayIdentity}))if(!natives.has(row.pid))natives.set(row.pid,row);
   const events=(await relay.events()).slice(record?.relayEventOffset??0);if(!events.some(event=>event.kind==='started')){assert.ok(!requireLineage,'Relay launch event required');return livingOwnedProcesses(natives.values(),rows);}
-  const owned=relayProcessOwnership({events,rows,native,vault,identity:relayIdentity,appPid:child?.pid,requireLineage});
+  const owned=relayProcessOwnership({events,rows,native,vault,identity:relayIdentity,appPid:child?.pid,requireLineage,previouslyOwned:natives.values()});
   for(const value of owned)natives.set(value.pid,value);return livingOwnedProcesses(owned,rows);
 }
 function appKit(action){
