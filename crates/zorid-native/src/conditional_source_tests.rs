@@ -48,6 +48,31 @@ pub(super) fn fixture(root: &Path) -> (NativeVault, ClientLease, ConditionalSave
         },
     )
 }
+fn capture_request(witness: &ConditionalSavedSourceWitness) -> ConditionalSavedSourceRequest {
+    ConditionalSavedSourceRequest {
+        capture_id: OperationId::new(uuid::Uuid::new_v4().to_string()).unwrap(),
+        logical_witness: witness.clone(),
+    }
+}
+fn assert_capture_closed(
+    vault: &mut NativeVault,
+    lease: &ClientLease,
+    witness: &ConditionalSavedSourceWitness,
+    capture: &OperationId,
+) {
+    let operation = request(witness);
+    for _ in 0..2 {
+        assert!(matches!(
+            vault.prepare_guarded_host_intent(lease, &operation, capture),
+            Err(Error::ConditionalSource(ConditionalSourceError::Closed))
+        ));
+    }
+    assert!(vault
+        .store
+        .host_intent_for_operation(&operation.operation_id)
+        .unwrap()
+        .is_none());
+}
 fn request(witness: &ConditionalSavedSourceWitness) -> MutationRequest {
     MutationRequest {
         operation_id: OperationId::new("conditional-undo").unwrap(),
@@ -72,7 +97,7 @@ fn conditional_capture_exposes_actual_physical_text_without_importing_or_replaci
     let cursor = vault.list_snapshot().unwrap().cursor;
     std::fs::write(dir.path().join("A.md"), TOUCHED).unwrap();
     let captured = vault
-        .capture_conditional_saved_source(&lease, &witness)
+        .capture_conditional_saved_source(&lease, &capture_request(&witness))
         .unwrap();
     assert_eq!(captured.source, TOUCHED);
     assert_eq!(captured.logical_witness, witness);
@@ -99,7 +124,7 @@ fn conditional_capture_change_before_prepare_settles_exact_rejected_intent() {
     let dir = tempfile::tempdir().unwrap();
     let (mut vault, lease, witness) = fixture(dir.path());
     let captured = vault
-        .capture_conditional_saved_source(&lease, &witness)
+        .capture_conditional_saved_source(&lease, &capture_request(&witness))
         .unwrap();
     std::fs::write(dir.path().join("A.md"), TOUCHED).unwrap();
     let rejected = vault
@@ -146,7 +171,7 @@ fn conditional_prepared_guard_rejects_changed_physical_source_before_authorship(
     let dir = tempfile::tempdir().unwrap();
     let (mut vault, lease, witness) = fixture(dir.path());
     let captured = vault
-        .capture_conditional_saved_source(&lease, &witness)
+        .capture_conditional_saved_source(&lease, &capture_request(&witness))
         .unwrap();
     let prepared = vault
         .prepare_guarded_host_intent(&lease, &request(&witness), &captured.capture_id)
@@ -181,7 +206,7 @@ fn conditional_prepared_unrelated_physical_branch_keeps_original_crdt_merge() {
     let (mut vault, lease, witness) = fixture(dir.path());
     std::fs::write(dir.path().join("A.md"), UNRELATED).unwrap();
     let captured = vault
-        .capture_conditional_saved_source(&lease, &witness)
+        .capture_conditional_saved_source(&lease, &capture_request(&witness))
         .unwrap();
     assert_eq!(captured.source, UNRELATED);
     let prepared = vault
@@ -213,7 +238,7 @@ fn conditional_prepared_guard_survives_restart_and_lost_prepare_reply() {
     let dir = tempfile::tempdir().unwrap();
     let (mut vault, lease, witness) = fixture(dir.path());
     let captured = vault
-        .capture_conditional_saved_source(&lease, &witness)
+        .capture_conditional_saved_source(&lease, &capture_request(&witness))
         .unwrap();
     let prepared = vault
         .prepare_guarded_host_intent(&lease, &request(&witness), &captured.capture_id)
@@ -242,27 +267,61 @@ fn conditional_prepared_guard_survives_restart_and_lost_prepare_reply() {
 fn conditional_unprepared_capture_survives_restart_without_reissuing_input() {
     let dir = tempfile::tempdir().unwrap();
     let (mut vault, lease, witness) = fixture(dir.path());
-    let captured = vault.capture_conditional_saved_source(&lease, &witness).unwrap();
+    let captured = vault
+        .capture_conditional_saved_source(&lease, &capture_request(&witness))
+        .unwrap();
     let original_request = request(&witness);
     let original_owner = lease.reference().clone();
     // The renderer accepted its original conditional input, but no prepare was
     // ever sent. Host death drops the kernel lease without explicit revocation.
-    assert!(vault.store.host_intent_for_operation(&original_request.operation_id).unwrap().is_none());
+    assert!(vault
+        .store
+        .host_intent_for_operation(&original_request.operation_id)
+        .unwrap()
+        .is_none());
     drop(lease);
     drop(vault);
     let mut vault = NativeVault::open_existing(dir.path()).unwrap();
-    let lease = vault.claim_client(&OperationId::new(CLIENT).unwrap()).unwrap();
+    let lease = vault
+        .claim_client(&OperationId::new(CLIENT).unwrap())
+        .unwrap();
     assert_ne!(lease.reference().token, original_owner.token);
-    let prepared = vault.prepare_guarded_host_intent(&lease, &original_request, &captured.capture_id).unwrap();
+    let prepared = vault
+        .prepare_guarded_host_intent(&lease, &original_request, &captured.capture_id)
+        .unwrap();
     assert_eq!(prepared.state, HostIntentState::Prepared);
     assert_eq!(prepared.operation_id, original_request.operation_id);
-    assert_eq!(vault.store.host_intent_source_guard(&reference(&prepared)).unwrap().unwrap().capture_id, captured.capture_id);
+    assert_eq!(
+        vault
+            .store
+            .host_intent_source_guard(&reference(&prepared))
+            .unwrap()
+            .unwrap()
+            .capture_id,
+        captured.capture_id
+    );
     let committed = vault.commit_host_intent(&reference(&prepared)).unwrap();
     assert_eq!(committed.state, HostIntentState::Committed);
-    assert_eq!(vault.read(&witness.entry_id).unwrap().unwrap().content.unwrap(), AFTER);
-    let replayed = vault.prepare_guarded_host_intent(&lease, &original_request, &captured.capture_id).unwrap();
+    assert_eq!(
+        vault
+            .read(&witness.entry_id)
+            .unwrap()
+            .unwrap()
+            .content
+            .unwrap(),
+        AFTER
+    );
+    let replayed = vault
+        .prepare_guarded_host_intent(&lease, &original_request, &captured.capture_id)
+        .unwrap();
     assert_eq!(replayed.receipt, committed.receipt);
-    assert_eq!(vault.commit_host_intent(&reference(&prepared)).unwrap().receipt, committed.receipt);
+    assert_eq!(
+        vault
+            .commit_host_intent(&reference(&prepared))
+            .unwrap()
+            .receipt,
+        committed.receipt
+    );
 }
 
 #[test]
@@ -270,27 +329,66 @@ fn conditional_unprepared_capture_restart_retains_foreign_owner_and_source_guard
     for mode in ["foreign-client", "changed-bytes", "replaced-inode"] {
         let dir = tempfile::tempdir().unwrap();
         let (mut vault, lease, witness) = fixture(dir.path());
-        let captured = vault.capture_conditional_saved_source(&lease, &witness).unwrap();
+        let captured = vault
+            .capture_conditional_saved_source(&lease, &capture_request(&witness))
+            .unwrap();
         let original_request = request(&witness);
         drop(lease);
         drop(vault);
-        if mode == "changed-bytes" { std::fs::write(dir.path().join("A.md"), TOUCHED).unwrap(); }
+        if mode == "changed-bytes" {
+            std::fs::write(dir.path().join("A.md"), TOUCHED).unwrap();
+        }
         if mode == "replaced-inode" {
             std::fs::rename(dir.path().join("A.md"), dir.path().join("Retained.md")).unwrap();
             std::fs::write(dir.path().join("A.md"), BEFORE).unwrap();
         }
         let mut vault = NativeVault::open_existing(dir.path()).unwrap();
-        let lease = vault.claim_client(&OperationId::new(if mode == "foreign-client" { OTHER } else { CLIENT }).unwrap()).unwrap();
-        let result = vault.prepare_guarded_host_intent(&lease, &original_request, &captured.capture_id);
+        let lease = vault
+            .claim_client(
+                &OperationId::new(if mode == "foreign-client" {
+                    OTHER
+                } else {
+                    CLIENT
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        let result =
+            vault.prepare_guarded_host_intent(&lease, &original_request, &captured.capture_id);
         if mode == "foreign-client" {
-            assert!(matches!(result, Err(Error::ConditionalSource(ConditionalSourceError::Owner))));
-            assert!(vault.store.host_intent_for_operation(&original_request.operation_id).unwrap().is_none());
+            assert!(matches!(
+                result,
+                Err(Error::ConditionalSource(ConditionalSourceError::Owner))
+            ));
+            assert!(vault
+                .store
+                .host_intent_for_operation(&original_request.operation_id)
+                .unwrap()
+                .is_none());
         } else {
             let rejected = result.unwrap();
             assert_eq!(rejected.state, HostIntentState::Rejected);
-            assert_eq!(rejected.error.unwrap().code, HostRejectionCode::ConditionalSourceChanged);
-            assert_eq!(vault.read(&witness.entry_id).unwrap().unwrap().content.unwrap(), BEFORE);
-            assert_eq!(std::fs::read(dir.path().join("A.md")).unwrap(), if mode == "changed-bytes" { TOUCHED } else { BEFORE });
+            assert_eq!(
+                rejected.error.unwrap().code,
+                HostRejectionCode::ConditionalSourceChanged
+            );
+            assert_eq!(
+                vault
+                    .read(&witness.entry_id)
+                    .unwrap()
+                    .unwrap()
+                    .content
+                    .unwrap(),
+                BEFORE
+            );
+            assert_eq!(
+                std::fs::read(dir.path().join("A.md")).unwrap(),
+                if mode == "changed-bytes" {
+                    TOUCHED
+                } else {
+                    BEFORE
+                }
+            );
         }
     }
 }
@@ -299,12 +397,21 @@ fn conditional_unprepared_capture_restart_retains_foreign_owner_and_source_guard
 fn conditional_unprepared_capture_count_budget_does_not_reset_on_restart() {
     let dir = tempfile::tempdir().unwrap();
     let (mut vault, lease, witness) = fixture(dir.path());
-    for _ in 0..MAX_CONDITIONAL_SOURCE_CAPTURES { vault.capture_conditional_saved_source(&lease, &witness).unwrap(); }
+    for _ in 0..MAX_CONDITIONAL_SOURCE_CAPTURES {
+        vault
+            .capture_conditional_saved_source(&lease, &capture_request(&witness))
+            .unwrap();
+    }
     drop(lease);
     drop(vault);
     let mut vault = NativeVault::open_existing(dir.path()).unwrap();
-    let lease = vault.claim_client(&OperationId::new(CLIENT).unwrap()).unwrap();
-    assert!(matches!(vault.capture_conditional_saved_source(&lease, &witness), Err(Error::ConditionalSource(ConditionalSourceError::Limit))));
+    let lease = vault
+        .claim_client(&OperationId::new(CLIENT).unwrap())
+        .unwrap();
+    assert!(matches!(
+        vault.capture_conditional_saved_source(&lease, &capture_request(&witness)),
+        Err(Error::ConditionalSource(ConditionalSourceError::Capacity))
+    ));
 }
 
 #[test]
@@ -315,36 +422,36 @@ fn conditional_capture_ownership_release_and_global_count_are_bounded() {
         .claim_client(&OperationId::new(OTHER).unwrap())
         .unwrap();
     let capture = vault
-        .capture_conditional_saved_source(&lease, &witness)
+        .capture_conditional_saved_source(&lease, &capture_request(&witness))
         .unwrap();
-    assert!(matches!(
-        vault.release_conditional_saved_source(&other, &capture.capture_id),
-        Err(Error::ConditionalSource(ConditionalSourceError::Owner))
-    ));
+    vault
+        .release_conditional_saved_source(&other, &capture.capture_id)
+        .unwrap();
+    assert!(
+        vault
+            .store
+            .host_source_capture(&capture.capture_id)
+            .unwrap()
+            .is_some(),
+        "foreign release neither discloses nor revokes"
+    );
     assert!(matches!(
         vault.prepare_guarded_host_intent(&other, &request(&witness), &capture.capture_id),
         Err(Error::ConditionalSource(ConditionalSourceError::Owner))
     ));
     for _ in 1..MAX_CONDITIONAL_SOURCE_CAPTURES {
         vault
-            .capture_conditional_saved_source(&lease, &witness)
+            .capture_conditional_saved_source(&lease, &capture_request(&witness))
             .unwrap();
     }
     assert!(matches!(
-        vault.capture_conditional_saved_source(&other, &witness),
-        Err(Error::ConditionalSource(ConditionalSourceError::Limit))
+        vault.capture_conditional_saved_source(&other, &capture_request(&witness)),
+        Err(Error::ConditionalSource(ConditionalSourceError::Capacity))
     ));
     vault.retire_conditional_saved_sources(&lease).unwrap();
-    let expired = vault
-        .prepare_guarded_host_intent(&lease, &request(&witness), &capture.capture_id)
-        .unwrap();
-    assert_eq!(expired.state, HostIntentState::Rejected);
-    assert_eq!(
-        expired.error.unwrap().code,
-        HostRejectionCode::SourceCaptureExpired
-    );
+    assert_capture_closed(&mut vault, &lease, &witness, &capture.capture_id);
     assert!(vault
-        .capture_conditional_saved_source(&other, &witness)
+        .capture_conditional_saved_source(&other, &capture_request(&witness))
         .is_ok());
 }
 
@@ -354,7 +461,7 @@ fn conditional_source_replacement_inode_and_symlink_never_retarget_guard() {
         let dir = tempfile::tempdir().unwrap();
         let (mut vault, lease, witness) = fixture(dir.path());
         let capture = vault
-            .capture_conditional_saved_source(&lease, &witness)
+            .capture_conditional_saved_source(&lease, &capture_request(&witness))
             .unwrap();
         let prepared = vault
             .prepare_guarded_host_intent(&lease, &request(&witness), &capture.capture_id)
@@ -381,7 +488,7 @@ fn conditional_unknown_io_retains_exact_prepared_guard_for_retry() {
     let dir = tempfile::tempdir().unwrap();
     let (mut vault, lease, witness) = fixture(dir.path());
     let capture = vault
-        .capture_conditional_saved_source(&lease, &witness)
+        .capture_conditional_saved_source(&lease, &capture_request(&witness))
         .unwrap();
     let prepared = vault
         .prepare_guarded_host_intent(&lease, &request(&witness), &capture.capture_id)
@@ -409,14 +516,12 @@ fn conditional_unknown_io_retains_exact_prepared_guard_for_retry() {
 }
 
 #[test]
-fn conditional_explicitly_released_capture_stays_revoked_across_restart_as_durable_rejection() {
+fn conditional_explicitly_released_capture_stays_closed_across_restart_without_new_intent() {
     let dir = tempfile::tempdir().unwrap();
     let (mut vault, lease, witness) = fixture(dir.path());
     let capture = vault
-        .capture_conditional_saved_source(&lease, &witness)
+        .capture_conditional_saved_source(&lease, &capture_request(&witness))
         .unwrap();
-    // Restart alone preserves a pending capture. Only an explicit release is
-    // the revocation authority in this negative case.
     vault
         .release_conditional_saved_source(&lease, &capture.capture_id)
         .unwrap();
@@ -426,35 +531,7 @@ fn conditional_explicitly_released_capture_stays_revoked_across_restart_as_durab
     let lease = vault
         .claim_client(&OperationId::new(CLIENT).unwrap())
         .unwrap();
-    let rejected = vault
-        .prepare_guarded_host_intent(&lease, &request(&witness), &capture.capture_id)
-        .unwrap();
-    assert_eq!(rejected.state, HostIntentState::Rejected);
-    assert_eq!(
-        rejected.error.as_ref().unwrap().code,
-        HostRejectionCode::SourceCaptureExpired
-    );
-    assert!(rejected.receipt.is_none());
-    assert_eq!(
-        vault
-            .prepare_guarded_host_intent(&lease, &request(&witness), &capture.capture_id)
-            .unwrap(),
-        rejected
-    );
-    assert_eq!(
-        vault.commit_host_intent(&reference(&rejected)).unwrap(),
-        rejected
-    );
-    let acknowledged = vault
-        .acknowledge_host_intent(
-            &reference(&rejected),
-            &HostIntentAcknowledgment::Rejected {
-                operation_id: rejected.operation_id,
-                code: HostRejectionCode::SourceCaptureExpired,
-            },
-        )
-        .unwrap();
-    assert!(acknowledged.acknowledged);
+    assert_capture_closed(&mut vault, &lease, &witness, &capture.capture_id);
     assert_eq!(
         vault
             .read(&witness.entry_id)
@@ -471,16 +548,26 @@ fn conditional_explicitly_released_capture_stays_revoked_across_restart_as_durab
 fn conditional_explicit_lease_retirement_stays_revoked_after_restart() {
     let dir = tempfile::tempdir().unwrap();
     let (mut vault, lease, witness) = fixture(dir.path());
-    let capture = vault.capture_conditional_saved_source(&lease, &witness).unwrap();
+    let capture = vault
+        .capture_conditional_saved_source(&lease, &capture_request(&witness))
+        .unwrap();
     vault.retire_conditional_saved_sources(&lease).unwrap();
     drop(lease);
     drop(vault);
     let mut vault = NativeVault::open_existing(dir.path()).unwrap();
-    let lease = vault.claim_client(&OperationId::new(CLIENT).unwrap()).unwrap();
-    let rejected = vault.prepare_guarded_host_intent(&lease, &request(&witness), &capture.capture_id).unwrap();
-    assert_eq!(rejected.state, HostIntentState::Rejected);
-    assert_eq!(rejected.error.unwrap().code, HostRejectionCode::SourceCaptureExpired);
-    assert_eq!(vault.read(&witness.entry_id).unwrap().unwrap().content.unwrap(), BEFORE);
+    let lease = vault
+        .claim_client(&OperationId::new(CLIENT).unwrap())
+        .unwrap();
+    assert_capture_closed(&mut vault, &lease, &witness, &capture.capture_id);
+    assert_eq!(
+        vault
+            .read(&witness.entry_id)
+            .unwrap()
+            .unwrap()
+            .content
+            .unwrap(),
+        BEFORE
+    );
     assert_eq!(std::fs::read(dir.path().join("A.md")).unwrap(), BEFORE);
 }
 
@@ -488,79 +575,162 @@ fn conditional_explicit_lease_retirement_stays_revoked_after_restart() {
 fn conditional_lease_retirement_cannot_revoke_a_durable_prepared_guard_after_restart() {
     let dir = tempfile::tempdir().unwrap();
     let (mut vault, lease, witness) = fixture(dir.path());
-    let capture = vault.capture_conditional_saved_source(&lease, &witness).unwrap();
+    let capture = vault
+        .capture_conditional_saved_source(&lease, &capture_request(&witness))
+        .unwrap();
     let original = request(&witness);
-    let prepared = vault.prepare_guarded_host_intent(&lease, &original, &capture.capture_id).unwrap();
+    let prepared = vault
+        .prepare_guarded_host_intent(&lease, &original, &capture.capture_id)
+        .unwrap();
     vault.retire_conditional_saved_sources(&lease).unwrap();
     drop(lease);
     drop(vault);
     let mut vault = NativeVault::open_existing(dir.path()).unwrap();
-    let lease = vault.claim_client(&OperationId::new(CLIENT).unwrap()).unwrap();
-    assert_eq!(vault.prepare_guarded_host_intent(&lease, &original, &capture.capture_id).unwrap(), prepared);
+    let lease = vault
+        .claim_client(&OperationId::new(CLIENT).unwrap())
+        .unwrap();
+    assert_eq!(
+        vault
+            .prepare_guarded_host_intent(&lease, &original, &capture.capture_id)
+            .unwrap(),
+        prepared
+    );
     let committed = vault.commit_host_intent(&reference(&prepared)).unwrap();
     assert_eq!(committed.state, HostIntentState::Committed);
-    assert_eq!(vault.commit_host_intent(&reference(&prepared)).unwrap().receipt, committed.receipt);
-    assert_eq!(vault.read(&witness.entry_id).unwrap().unwrap().content.unwrap(), AFTER);
+    assert_eq!(
+        vault
+            .commit_host_intent(&reference(&prepared))
+            .unwrap()
+            .receipt,
+        committed.receipt
+    );
+    assert_eq!(
+        vault
+            .read(&witness.entry_id)
+            .unwrap()
+            .unwrap()
+            .content
+            .unwrap(),
+        AFTER
+    );
 }
 
 #[test]
 fn conditional_current_client_can_individually_release_its_prior_token_capture() {
     let dir = tempfile::tempdir().unwrap();
     let (mut vault, lease, witness) = fixture(dir.path());
-    let prior = vault.capture_conditional_saved_source(&lease, &witness).unwrap();
+    let prior = vault
+        .capture_conditional_saved_source(&lease, &capture_request(&witness))
+        .unwrap();
     drop(lease);
     drop(vault);
     let mut vault = NativeVault::open_existing(dir.path()).unwrap();
-    let lease = vault.claim_client(&OperationId::new(CLIENT).unwrap()).unwrap();
-    let current = vault.capture_conditional_saved_source(&lease, &witness).unwrap();
-    vault.release_conditional_saved_source(&lease, &prior.capture_id).unwrap();
-    vault.release_conditional_saved_source(&lease, &prior.capture_id).unwrap();
-    let rejected = vault.prepare_guarded_host_intent(&lease, &request(&witness), &prior.capture_id).unwrap();
-    assert_eq!(rejected.state, HostIntentState::Rejected);
-    assert_eq!(rejected.error.unwrap().code, HostRejectionCode::SourceCaptureExpired);
+    let lease = vault
+        .claim_client(&OperationId::new(CLIENT).unwrap())
+        .unwrap();
+    let current = vault
+        .capture_conditional_saved_source(&lease, &capture_request(&witness))
+        .unwrap();
+    vault
+        .release_conditional_saved_source(&lease, &prior.capture_id)
+        .unwrap();
+    vault
+        .release_conditional_saved_source(&lease, &prior.capture_id)
+        .unwrap();
+    assert_capture_closed(&mut vault, &lease, &witness, &prior.capture_id);
     let mut current_request = request(&witness);
     current_request.operation_id = OperationId::new("current-capture-after-prior-release").unwrap();
-    let prepared = vault.prepare_guarded_host_intent(&lease, &current_request, &current.capture_id).unwrap();
+    let prepared = vault
+        .prepare_guarded_host_intent(&lease, &current_request, &current.capture_id)
+        .unwrap();
     assert_eq!(prepared.state, HostIntentState::Prepared);
-    assert_eq!(vault.store.host_intent_source_guard(&reference(&prepared)).unwrap().unwrap().capture_id, current.capture_id);
+    assert_eq!(
+        vault
+            .store
+            .host_intent_source_guard(&reference(&prepared))
+            .unwrap()
+            .unwrap()
+            .capture_id,
+        current.capture_id
+    );
 }
 
 #[test]
 fn conditional_current_token_retirement_preserves_prior_token_pending_capture() {
     let dir = tempfile::tempdir().unwrap();
     let (mut vault, lease, witness) = fixture(dir.path());
-    let prior = vault.capture_conditional_saved_source(&lease, &witness).unwrap();
+    let prior = vault
+        .capture_conditional_saved_source(&lease, &capture_request(&witness))
+        .unwrap();
     drop(lease);
     drop(vault);
     let mut vault = NativeVault::open_existing(dir.path()).unwrap();
-    let lease = vault.claim_client(&OperationId::new(CLIENT).unwrap()).unwrap();
-    let current = vault.capture_conditional_saved_source(&lease, &witness).unwrap();
+    let lease = vault
+        .claim_client(&OperationId::new(CLIENT).unwrap())
+        .unwrap();
+    let current = vault
+        .capture_conditional_saved_source(&lease, &capture_request(&witness))
+        .unwrap();
     vault.retire_conditional_saved_sources(&lease).unwrap();
-    let prepared = vault.prepare_guarded_host_intent(&lease, &request(&witness), &prior.capture_id).unwrap();
+    let prepared = vault
+        .prepare_guarded_host_intent(&lease, &request(&witness), &prior.capture_id)
+        .unwrap();
     assert_eq!(prepared.state, HostIntentState::Prepared);
-    assert_eq!(vault.store.host_intent_source_guard(&reference(&prepared)).unwrap().unwrap().capture_id, prior.capture_id);
+    assert_eq!(
+        vault
+            .store
+            .host_intent_source_guard(&reference(&prepared))
+            .unwrap()
+            .unwrap()
+            .capture_id,
+        prior.capture_id
+    );
     let mut current_request = request(&witness);
     current_request.operation_id = OperationId::new("retired-current-token").unwrap();
-    let rejected = vault.prepare_guarded_host_intent(&lease, &current_request, &current.capture_id).unwrap();
-    assert_eq!(rejected.state, HostIntentState::Rejected);
-    assert_eq!(rejected.error.unwrap().code, HostRejectionCode::SourceCaptureExpired);
+    assert!(matches!(
+        vault.prepare_guarded_host_intent(&lease, &current_request, &current.capture_id),
+        Err(Error::ConditionalSource(ConditionalSourceError::Closed))
+    ));
+    assert!(vault
+        .store
+        .host_intent_for_operation(&current_request.operation_id)
+        .unwrap()
+        .is_none());
 }
 
 #[test]
 fn conditional_invalidated_old_lease_cannot_retire_new_token_captures() {
     let dir = tempfile::tempdir().unwrap();
     let (mut vault, old_lease, witness) = fixture(dir.path());
-    vault.capture_conditional_saved_source(&old_lease, &witness).unwrap();
+    vault
+        .capture_conditional_saved_source(&old_lease, &capture_request(&witness))
+        .unwrap();
     let named_lock = dir.path().join(format!(".zorid/client-{CLIENT}.lock"));
     std::fs::rename(&named_lock, dir.path().join(".zorid/retained-client.lock")).unwrap();
-    let current = vault.claim_client(&OperationId::new(CLIENT).unwrap()).unwrap();
+    let current = vault
+        .claim_client(&OperationId::new(CLIENT).unwrap())
+        .unwrap();
     assert_ne!(old_lease.reference().token, current.reference().token);
-    let capture = vault.capture_conditional_saved_source(&current, &witness).unwrap();
+    let capture = vault
+        .capture_conditional_saved_source(&current, &capture_request(&witness))
+        .unwrap();
     assert!(vault.retire_conditional_saved_sources(&old_lease).is_err());
-    assert!(vault.release_conditional_saved_source(&old_lease, &capture.capture_id).is_err());
-    let prepared = vault.prepare_guarded_host_intent(&current, &request(&witness), &capture.capture_id).unwrap();
+    assert!(vault
+        .release_conditional_saved_source(&old_lease, &capture.capture_id)
+        .is_err());
+    let prepared = vault
+        .prepare_guarded_host_intent(&current, &request(&witness), &capture.capture_id)
+        .unwrap();
     assert_eq!(prepared.state, HostIntentState::Prepared);
-    assert_eq!(vault.store.host_intent_source_guard(&reference(&prepared)).unwrap().unwrap().capture_id, capture.capture_id);
+    assert_eq!(
+        vault
+            .store
+            .host_intent_source_guard(&reference(&prepared))
+            .unwrap()
+            .unwrap()
+            .capture_id,
+        capture.capture_id
+    );
 }
 
 #[test]
@@ -569,16 +739,40 @@ fn conditional_foreign_local_store_lease_cannot_prepare_or_revoke_a_capture() {
     let foreign_dir = tempfile::tempdir().unwrap();
     let (mut vault, lease, witness) = fixture(dir.path());
     let (_foreign, foreign_lease, _) = fixture(foreign_dir.path());
-    let capture = vault.capture_conditional_saved_source(&lease, &witness).unwrap();
-    assert_ne!(lease.reference().local_store_id, foreign_lease.reference().local_store_id);
+    let capture = vault
+        .capture_conditional_saved_source(&lease, &capture_request(&witness))
+        .unwrap();
+    assert_ne!(
+        lease.reference().local_store_id,
+        foreign_lease.reference().local_store_id
+    );
     let original = request(&witness);
-    assert!(vault.prepare_guarded_host_intent(&foreign_lease, &original, &capture.capture_id).is_err());
-    assert!(vault.release_conditional_saved_source(&foreign_lease, &capture.capture_id).is_err());
-    assert!(vault.retire_conditional_saved_sources(&foreign_lease).is_err());
-    assert!(vault.store.host_intent_for_operation(&original.operation_id).unwrap().is_none());
-    assert_eq!(vault.prepare_guarded_host_intent(&lease, &original, &capture.capture_id).unwrap().state, HostIntentState::Prepared);
+    assert!(vault
+        .prepare_guarded_host_intent(&foreign_lease, &original, &capture.capture_id)
+        .is_err());
+    assert!(vault
+        .release_conditional_saved_source(&foreign_lease, &capture.capture_id)
+        .is_err());
+    assert!(vault
+        .retire_conditional_saved_sources(&foreign_lease)
+        .is_err());
+    assert!(vault
+        .store
+        .host_intent_for_operation(&original.operation_id)
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        vault
+            .prepare_guarded_host_intent(&lease, &original, &capture.capture_id)
+            .unwrap()
+            .state,
+        HostIntentState::Prepared
+    );
     assert_eq!(std::fs::read(dir.path().join("A.md")).unwrap(), BEFORE);
-    assert_eq!(std::fs::read(foreign_dir.path().join("A.md")).unwrap(), BEFORE);
+    assert_eq!(
+        std::fs::read(foreign_dir.path().join("A.md")).unwrap(),
+        BEFORE
+    );
 }
 
 #[test]
@@ -588,7 +782,9 @@ fn conditional_restart_rechecks_parent_symlink_and_logical_revision_proofs() {
         let root = dir.path().join("vault");
         std::fs::create_dir(&root).unwrap();
         let (mut vault, lease, witness) = fixture(&root);
-        let capture = vault.capture_conditional_saved_source(&lease, &witness).unwrap();
+        let capture = vault
+            .capture_conditional_saved_source(&lease, &capture_request(&witness))
+            .unwrap();
         if mode == "logical-revision" {
             let mut advance = request(&witness);
             advance.operation_id = OperationId::new("advance-logical-before-restart").unwrap();
@@ -597,7 +793,10 @@ fn conditional_restart_rechecks_parent_symlink_and_logical_revision_proofs() {
             // original binding, inode and bytes still match the capture, so
             // only the advanced logical state invalidates this proof.
             vault.store.family_apply(&advance, None).unwrap();
-            assert_eq!(vault.store.physical_binding(&witness.entry_id).unwrap(), physical);
+            assert_eq!(
+                vault.store.physical_binding(&witness.entry_id).unwrap(),
+                physical
+            );
             assert_eq!(std::fs::read(root.join("A.md")).unwrap(), BEFORE);
         }
         drop(lease);
@@ -616,12 +815,33 @@ fn conditional_restart_rechecks_parent_symlink_and_logical_revision_proofs() {
             symlink("other.md", root.join("A.md")).unwrap();
         }
         let mut vault = NativeVault::open_existing(&root).unwrap();
-        let lease = vault.claim_client(&OperationId::new(CLIENT).unwrap()).unwrap();
-        let rejected = vault.prepare_guarded_host_intent(&lease, &request(&witness), &capture.capture_id).unwrap();
+        let lease = vault
+            .claim_client(&OperationId::new(CLIENT).unwrap())
+            .unwrap();
+        let rejected = vault
+            .prepare_guarded_host_intent(&lease, &request(&witness), &capture.capture_id)
+            .unwrap();
         assert_eq!(rejected.state, HostIntentState::Rejected, "{mode}");
-        assert_eq!(rejected.error.unwrap().code, HostRejectionCode::ConditionalSourceChanged, "{mode}");
+        assert_eq!(
+            rejected.error.unwrap().code,
+            HostRejectionCode::ConditionalSourceChanged,
+            "{mode}"
+        );
         assert!(rejected.receipt.is_none());
-        assert_eq!(vault.read(&witness.entry_id).unwrap().unwrap().content.unwrap(), if mode == "logical-revision" { AFTER } else { BEFORE }, "{mode}");
+        assert_eq!(
+            vault
+                .read(&witness.entry_id)
+                .unwrap()
+                .unwrap()
+                .content
+                .unwrap(),
+            if mode == "logical-revision" {
+                AFTER
+            } else {
+                BEFORE
+            },
+            "{mode}"
+        );
         assert_eq!(std::fs::read(root.join("A.md")).unwrap(), BEFORE, "{mode}");
     }
 }
@@ -633,19 +853,43 @@ fn conditional_global_byte_budget_survives_restart_and_prior_release_reclaims_it
     let dir = tempfile::tempdir().unwrap();
     let (mut vault, lease, witness) = fixture(dir.path());
     std::fs::write(dir.path().join("A.md"), vec![b'x'; 5 * 1024 * 1024]).unwrap();
-    let first = vault.capture_conditional_saved_source(&lease, &witness).unwrap().capture_id;
+    let first = vault
+        .capture_conditional_saved_source(&lease, &capture_request(&witness))
+        .unwrap()
+        .capture_id;
     for _ in 1..6 {
-        vault.capture_conditional_saved_source(&lease, &witness).unwrap();
+        vault
+            .capture_conditional_saved_source(&lease, &capture_request(&witness))
+            .unwrap();
     }
     drop(lease);
     drop(vault);
     let mut vault = NativeVault::open_existing(dir.path()).unwrap();
-    let owner = vault.claim_client(&OperationId::new(CLIENT).unwrap()).unwrap();
-    let other = vault.claim_client(&OperationId::new(OTHER).unwrap()).unwrap();
-    assert!(matches!(vault.capture_conditional_saved_source(&other, &witness), Err(Error::ConditionalSource(ConditionalSourceError::Limit))));
-    vault.release_conditional_saved_source(&owner, &first).unwrap();
-    assert!(vault.capture_conditional_saved_source(&other, &witness).is_ok());
-    assert_eq!(vault.read(&witness.entry_id).unwrap().unwrap().content.unwrap(), BEFORE);
+    let owner = vault
+        .claim_client(&OperationId::new(CLIENT).unwrap())
+        .unwrap();
+    let other = vault
+        .claim_client(&OperationId::new(OTHER).unwrap())
+        .unwrap();
+    assert!(matches!(
+        vault.capture_conditional_saved_source(&other, &capture_request(&witness)),
+        Err(Error::ConditionalSource(ConditionalSourceError::Capacity))
+    ));
+    vault
+        .release_conditional_saved_source(&owner, &first)
+        .unwrap();
+    assert!(vault
+        .capture_conditional_saved_source(&other, &capture_request(&witness))
+        .is_ok());
+    assert_eq!(
+        vault
+            .read(&witness.entry_id)
+            .unwrap()
+            .unwrap()
+            .content
+            .unwrap(),
+        BEFORE
+    );
 }
 
 #[test]
@@ -653,7 +897,7 @@ fn conditional_reserved_operation_cannot_bypass_guard_through_native_apply() {
     let dir = tempfile::tempdir().unwrap();
     let (mut vault, lease, witness) = fixture(dir.path());
     let capture = vault
-        .capture_conditional_saved_source(&lease, &witness)
+        .capture_conditional_saved_source(&lease, &capture_request(&witness))
         .unwrap();
     let command = request(&witness);
     let prepared = vault
@@ -689,25 +933,25 @@ fn conditional_capture_byte_budget_is_shared_across_client_leases() {
         .unwrap();
     std::fs::write(dir.path().join("A.md"), vec![b'x'; 5 * 1024 * 1024]).unwrap();
     let first = vault
-        .capture_conditional_saved_source(&lease, &witness)
+        .capture_conditional_saved_source(&lease, &capture_request(&witness))
         .unwrap()
         .capture_id;
     for index in 1..6 {
         vault
             .capture_conditional_saved_source(
                 if index % 2 == 0 { &lease } else { &other },
-                &witness,
+                &capture_request(&witness),
             )
             .unwrap();
     }
     assert!(matches!(
-        vault.capture_conditional_saved_source(&other, &witness),
-        Err(Error::ConditionalSource(ConditionalSourceError::Limit))
+        vault.capture_conditional_saved_source(&other, &capture_request(&witness)),
+        Err(Error::ConditionalSource(ConditionalSourceError::Capacity))
     ));
     vault
         .release_conditional_saved_source(&lease, &first)
         .unwrap();
     assert!(vault
-        .capture_conditional_saved_source(&other, &witness)
+        .capture_conditional_saved_source(&other, &capture_request(&witness))
         .is_ok());
 }

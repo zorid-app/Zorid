@@ -63,6 +63,8 @@ impl From<zorid_native::Error> for Error {
                 zorid_native::ConditionalSourceError::Changed => ("conditional_source_changed", 3),
                 zorid_native::ConditionalSourceError::Owner => ("source_capture_owner", 3),
                 zorid_native::ConditionalSourceError::Limit => ("source_capture_limit", 2),
+                zorid_native::ConditionalSourceError::Capacity => ("source_capture_capacity", 3),
+                zorid_native::ConditionalSourceError::Closed => ("source_capture_closed", 3),
             },
             Contract(e) | Store(zorid_store::StoreError::Contract(e)) => return e.into(),
             UnsafePath(_) => ("unsafe_path", 1),

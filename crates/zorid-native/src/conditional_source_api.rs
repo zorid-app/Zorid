@@ -17,6 +17,22 @@ pub struct ConditionalSavedSourceWitness {
     pub path: VaultPath,
 }
 
+/// Caller identity is a request, never physical-source authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConditionalSavedSourceRequest {
+    pub capture_id: OperationId,
+    pub logical_witness: ConditionalSavedSourceWitness,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PendingSavedSourceRequest {
+    pub capture_id: OperationId,
+    pub logical_witness: ConditionalSavedSourceWitness,
+    pub legacy: bool,
+}
+
 #[derive(Debug)]
 pub struct ConditionalSavedSourceCapture {
     pub capture_id: OperationId,
@@ -30,6 +46,8 @@ pub enum ConditionalSourceError {
     Changed,
     Owner,
     Limit,
+    Capacity,
+    Closed,
 }
 impl fmt::Display for ConditionalSourceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -38,7 +56,9 @@ impl fmt::Display for ConditionalSourceError {
                 "The captured saved source changed; the conditional write was not authored"
             }
             Self::Owner => "The saved-source capture belongs to another owner",
-            Self::Limit => "The bounded saved-source capture capacity was exhausted",
+            Self::Limit => "The saved-source request exceeds its per-request size or path limit",
+            Self::Capacity => "The shared saved-source capture budget is temporarily full",
+            Self::Closed => "The saved-source request is already attached or released",
         })
     }
 }

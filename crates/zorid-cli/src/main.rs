@@ -435,6 +435,8 @@ impl From<zorid_native::Error> for Failure {
                     Changed => ("conditional_source_changed", 3),
                     Owner => ("source_capture_owner", 3),
                     Limit => ("source_capture_limit", 2),
+                    Capacity => ("source_capture_capacity", 3),
+                    Closed => ("source_capture_closed", 3),
                 };
                 Self::new(code, "Conditional source precondition rejected", exit)
             }

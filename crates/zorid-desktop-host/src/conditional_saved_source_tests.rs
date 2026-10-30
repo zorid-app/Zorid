@@ -14,11 +14,100 @@ const EXTERNAL: &str = "---\r\nscore: 7\r\nuntouched: external\r\n---\r\nSaved ð
 
 #[test]
 fn capture_request_wire_requires_caller_identity_and_pending_list_command() {
-    let value=json!({"method":"capture_saved_source","client_id":CLIENT,"capture_id":"30000000-0000-4000-8000-000000000001","entry_id":"entry","revision":"revision","path":"A.md"});
-    assert!(serde_json::from_value::<Command>(value.clone()).is_ok(),"new request identity must be accepted");
-    let mut missing=value.clone();missing.as_object_mut().unwrap().remove("capture_id");assert!(serde_json::from_value::<Command>(missing).is_err(),"old ID-less path must be rejected");
-    let mut extra=value;extra["source"] = json!("untrusted");assert!(serde_json::from_value::<Command>(extra).is_err());
-    assert!(serde_json::from_value::<Command>(json!({"method":"list_saved_source_requests","client_id":CLIENT})).is_ok());
+    let value = json!({"method":"capture_saved_source","client_id":CLIENT,"capture_id":"30000000-0000-4000-8000-000000000001","entry_id":"entry","revision":"revision","path":"A.md"});
+    assert!(
+        serde_json::from_value::<Command>(value.clone()).is_ok(),
+        "new request identity must be accepted"
+    );
+    let mut missing = value.clone();
+    missing.as_object_mut().unwrap().remove("capture_id");
+    assert!(
+        serde_json::from_value::<Command>(missing).is_err(),
+        "old ID-less path must be rejected"
+    );
+    let mut extra = value;
+    extra["source"] = json!("untrusted");
+    assert!(serde_json::from_value::<Command>(extra).is_err());
+    assert!(serde_json::from_value::<Command>(
+        json!({"method":"list_saved_source_requests","client_id":CLIENT})
+    )
+    .is_ok());
+}
+
+#[test]
+fn conditional_wire_lost_capture_reply_replays_one_request_after_host_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut vault, mut leases, lease, witness) = fixture(dir.path());
+    let capture_id = OperationId::new("40000000-0000-4000-8000-000000000001").unwrap();
+    let command = |lease: &ClientLeaseRef| Command::CaptureSavedSource {
+        client_id: lease.client_id.clone(),
+        capture_id: capture_id.clone(),
+        entry_id: witness.entry_id.clone(),
+        revision: witness.revision.clone(),
+        path: witness.path.clone(),
+    };
+    let (first, body) = request(
+        &mut vault,
+        &mut leases,
+        Some(&lease),
+        command(&lease),
+        vec![],
+    )
+    .unwrap();
+    assert_eq!(first["capture"]["capture_id"], capture_id.as_str());
+    drop(leases);
+    drop(vault);
+    let mut vault = NativeVault::open_existing(dir.path()).unwrap();
+    let mut leases = ClientLeases::default();
+    let lease = claim(&vault, &mut leases, CLIENT);
+    let (retry, retried_body) = request(
+        &mut vault,
+        &mut leases,
+        Some(&lease),
+        command(&lease),
+        vec![],
+    )
+    .unwrap();
+    assert_eq!(retry, first);
+    assert_eq!(retried_body, body);
+    let (list, bytes) = request(
+        &mut vault,
+        &mut leases,
+        Some(&lease),
+        Command::ListSavedSourceRequests {
+            client_id: lease.client_id.clone(),
+        },
+        vec![],
+    )
+    .unwrap();
+    assert!(bytes.is_empty());
+    assert_eq!(list["requests"].as_array().unwrap().len(), 1);
+    assert_eq!(list["requests"][0]["capture_id"], capture_id.as_str());
+    assert_eq!(list["requests"][0]["legacy"], false);
+    assert!(list["requests"][0].get("lease_token").is_none());
+    assert!(list["requests"][0].get("source").is_none());
+}
+
+#[test]
+fn conditional_capacity_fault_is_distinct_from_per_request_limit_and_closed() {
+    for (kind, code) in [
+        (
+            zorid_native::ConditionalSourceError::Capacity,
+            "source_capture_capacity",
+        ),
+        (
+            zorid_native::ConditionalSourceError::Limit,
+            "source_capture_limit",
+        ),
+        (
+            zorid_native::ConditionalSourceError::Closed,
+            "source_capture_closed",
+        ),
+    ] {
+        let error = native_fault(zorid_native::Error::ConditionalSource(kind));
+        assert_eq!(error["code"], code);
+        assert_eq!(error["commit_uncertain"], false);
+    }
 }
 
 fn fixture(
@@ -86,8 +175,14 @@ fn request(
 }
 
 fn capture_command(lease: &ClientLeaseRef, witness: &ConditionalSavedSourceWitness) -> Command {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     Command::CaptureSavedSource {
         client_id: lease.client_id.clone(),
+        capture_id: OperationId::new(format!(
+            "30000000-0000-4000-8000-{:012x}",
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ))
+        .unwrap(),
         entry_id: witness.entry_id.clone(),
         revision: witness.revision.clone(),
         path: witness.path.clone(),
@@ -124,16 +219,29 @@ fn conditional_wire_preprepare_host_loss_keeps_original_capture_and_operation() 
     let current = claim(&vault, &mut leases, CLIENT);
     assert_ne!(current.token, lease.token);
     let (reply, body) = request(
-        &mut vault, &mut leases, Some(&current),
-        prepare_command(&current, &witness, "original-preprepare-write", Some(&capture_id)),
+        &mut vault,
+        &mut leases,
+        Some(&current),
+        prepare_command(
+            &current,
+            &witness,
+            "original-preprepare-write",
+            Some(&capture_id),
+        ),
         AFTER.as_bytes().to_vec(),
-    ).unwrap();
+    )
+    .unwrap();
     let prepared = intent(reply, body);
     assert_eq!(prepared.state, HostIntentState::Prepared);
     assert_eq!(prepared.operation_id.as_str(), "original-preprepare-write");
-    let committed = vault.commit_host_intent(&intent_reference(&prepared)).unwrap();
+    let committed = vault
+        .commit_host_intent(&intent_reference(&prepared))
+        .unwrap();
     assert_eq!(committed.state, HostIntentState::Committed);
-    assert_eq!(std::fs::read_to_string(dir.path().join("A.md")).unwrap(), AFTER);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("A.md")).unwrap(),
+        AFTER
+    );
 }
 
 #[test]
@@ -143,22 +251,59 @@ fn conditional_wire_failed_durable_revoke_keeps_kernel_owner_until_retry() {
     let capture_id = capture(&mut vault, &mut leases, &lease, &witness);
     let db = rusqlite::Connection::open(dir.path().join(".zorid/vault.sqlite")).unwrap();
     db.execute_batch("CREATE TRIGGER block_capture_revoke BEFORE DELETE ON host_source_captures BEGIN SELECT RAISE(ABORT,'fixture revoke failure'); END;").unwrap();
-    assert!(request(&mut vault, &mut leases, None, Command::ReleaseClient {reference:lease.clone()}, vec![]).is_err());
+    assert!(request(
+        &mut vault,
+        &mut leases,
+        None,
+        Command::ReleaseClient {
+            reference: lease.clone()
+        },
+        vec![]
+    )
+    .is_err());
     assert!(leases.active.contains_key(lease.token.as_str()));
-    assert!(matches!(vault.claim_client(&lease.client_id), Err(zorid_native::ClientAdmissionError::InUse)));
-    db.execute_batch("DROP TRIGGER block_capture_revoke").unwrap();
-    request(&mut vault, &mut leases, None, Command::ReleaseClient {reference:lease.clone()}, vec![]).unwrap();
+    assert!(matches!(
+        vault.claim_client(&lease.client_id),
+        Err(zorid_native::ClientAdmissionError::InUse)
+    ));
+    db.execute_batch("DROP TRIGGER block_capture_revoke")
+        .unwrap();
+    request(
+        &mut vault,
+        &mut leases,
+        None,
+        Command::ReleaseClient {
+            reference: lease.clone(),
+        },
+        vec![],
+    )
+    .unwrap();
     assert!(!leases.active.contains_key(lease.token.as_str()));
     let current = claim(&vault, &mut leases, CLIENT);
-    let (reply, body) = request(
-        &mut vault, &mut leases, Some(&current),
-        prepare_command(&current, &witness, "released-preprepare-write", Some(&capture_id)),
+    let error = request(
+        &mut vault,
+        &mut leases,
+        Some(&current),
+        prepare_command(
+            &current,
+            &witness,
+            "released-preprepare-write",
+            Some(&capture_id),
+        ),
         AFTER.as_bytes().to_vec(),
-    ).unwrap();
-    let rejected = intent(reply, body);
-    assert_eq!(rejected.state, HostIntentState::Rejected);
-    assert_eq!(rejected.error.unwrap().code, HostRejectionCode::SourceCaptureExpired);
-    assert_eq!(std::fs::read_to_string(dir.path().join("A.md")).unwrap(), BEFORE);
+    )
+    .unwrap_err();
+    assert_eq!(error["code"], "source_capture_closed");
+    assert!(vault
+        .list_host_intents(&current.client_id, "0", 10)
+        .unwrap()
+        .intents
+        .iter()
+        .all(|intent| intent.operation_id.as_str() != "released-preprepare-write"));
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("A.md")).unwrap(),
+        BEFORE
+    );
 }
 
 fn prepare_command(
@@ -279,7 +424,7 @@ fn saved_source_wire_requires_current_lease_rejects_foreign_capture_and_cleans_u
     .unwrap_err();
     assert_eq!(error["code"], "client_scope_mismatch");
     let capture_id = capture(&mut vault, &mut leases, &lease, &witness);
-    let error = request(
+    let (released, body) = request(
         &mut vault,
         &mut leases,
         Some(&other),
@@ -289,8 +434,24 @@ fn saved_source_wire_requires_current_lease_rejects_foreign_capture_and_cleans_u
         },
         vec![],
     )
-    .unwrap_err();
-    assert_eq!(error["code"], "source_capture_owner");
+    .unwrap();
+    assert_eq!(released, json!({"released":true}));
+    assert!(body.is_empty());
+    let (owned, _) = request(
+        &mut vault,
+        &mut leases,
+        Some(&lease),
+        Command::ListSavedSourceRequests {
+            client_id: lease.client_id.clone(),
+        },
+        vec![],
+    )
+    .unwrap();
+    assert_eq!(
+        owned["requests"].as_array().unwrap().len(),
+        1,
+        "foreign release neither discloses nor revokes the owner's request"
+    );
     let error = request(
         &mut vault,
         &mut leases,
@@ -321,21 +482,21 @@ fn saved_source_wire_requires_current_lease_rejects_foreign_capture_and_cleans_u
     assert_eq!(error["code"], "client_not_admitted");
     let renewed = claim(&vault, &mut leases, CLIENT);
     assert_ne!(renewed.token, lease.token);
-    let (reply, body) = request(
+    let error = request(
         &mut vault,
         &mut leases,
         Some(&renewed),
         prepare_command(&renewed, &witness, "released-capture", Some(&capture_id)),
         AFTER.as_bytes().to_vec(),
     )
-    .unwrap();
-    let rejected = intent(reply, body);
-    assert_eq!(rejected.state, HostIntentState::Rejected);
-    assert_eq!(
-        rejected.error.unwrap().code,
-        HostRejectionCode::SourceCaptureExpired
-    );
-    assert!(rejected.receipt.is_none());
+    .unwrap_err();
+    assert_eq!(error["code"], "source_capture_closed");
+    assert!(vault
+        .list_host_intents(&renewed.client_id, "0", 10)
+        .unwrap()
+        .intents
+        .iter()
+        .all(|intent| intent.operation_id.as_str() != "released-capture"));
     assert_core_and_file(&vault, &root, &witness, BEFORE);
 }
 

@@ -299,7 +299,8 @@ pub enum ExternalFileMode {
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android")))]
 impl NativeVault {
     pub fn database_request(&mut self, _: &DatabaseRequest) -> Result<DatabaseReply> { unsupported() }
-    pub fn capture_conditional_saved_source(&mut self, _: &ClientLease, _: &ConditionalSavedSourceWitness) -> Result<ConditionalSavedSourceCapture> { unsupported() }
+    pub fn capture_conditional_saved_source(&mut self, _: &ClientLease, _: &ConditionalSavedSourceRequest) -> Result<ConditionalSavedSourceCapture> { unsupported() }
+    pub fn list_conditional_saved_source_requests(&mut self, _: &ClientLease) -> Result<Vec<PendingSavedSourceRequest>> { unsupported() }
     pub fn release_conditional_saved_source(&mut self, _: &ClientLease, _: &OperationId) -> Result<()> { unsupported() }
     pub fn retire_conditional_saved_sources(&mut self, _: &ClientLease) -> Result<()> { unsupported() }
     pub fn prepare_guarded_host_intent(&mut self, _: &ClientLease, _: &MutationRequest, _: &OperationId) -> Result<HostIntentView> { unsupported() }

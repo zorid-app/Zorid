@@ -135,6 +135,7 @@ enum Command {
     List,
     CaptureSavedSource {
         client_id: OperationId,
+        capture_id: OperationId,
         entry_id: EntryId,
         revision: Revision,
         path: VaultPath,
@@ -142,6 +143,9 @@ enum Command {
     ReleaseSavedSource {
         client_id: OperationId,
         capture_id: OperationId,
+    },
+    ListSavedSourceRequests {
+        client_id: OperationId,
     },
     PrepareIntent {
         client_id: OperationId,
@@ -310,6 +314,8 @@ fn native_fault_code(error: &zorid_native::Error) -> &'static str {
         ConditionalSource(zorid_native::ConditionalSourceError::Changed) => "conditional_source_changed",
         ConditionalSource(zorid_native::ConditionalSourceError::Owner) => "source_capture_owner",
         ConditionalSource(zorid_native::ConditionalSourceError::Limit) => "source_capture_limit",
+        ConditionalSource(zorid_native::ConditionalSourceError::Capacity) => "source_capture_capacity",
+        ConditionalSource(zorid_native::ConditionalSourceError::Closed) => "source_capture_closed",
         Contract(error) => core_code(error),
         UnsafePath(_) => "unsafe_path",
         Busy(_) => "filesystem_changed",
@@ -552,6 +558,7 @@ impl ClientLeases {
             | Command::PrepareIntent { client_id, .. }
             | Command::CaptureSavedSource { client_id, .. }
             | Command::ReleaseSavedSource { client_id, .. }
+            | Command::ListSavedSourceRequests { client_id }
             | Command::ListIntents { client_id, .. }
             | Command::CreateText { client_id, .. }
             | Command::FileCommand { client_id, .. }
@@ -858,11 +865,11 @@ fn execute(
             empty(&body)?;
             json!({"identity":vault.identity().map_err(native_fault)?})
         }
-        Command::CaptureSavedSource { client_id, entry_id, revision, path } => {
+        Command::CaptureSavedSource { client_id, capture_id, entry_id, revision, path } => {
             empty(&body)?;
             let lease = leases.active.values().find(|lease| lease.reference().client_id == client_id)
                 .ok_or_else(|| fault("client_not_admitted"))?;
-            let capture = vault.capture_conditional_saved_source(lease, &zorid_native::ConditionalSavedSourceWitness { entry_id, revision, path })
+            let capture = vault.capture_conditional_saved_source(lease, &zorid_native::ConditionalSavedSourceRequest { capture_id, logical_witness:zorid_native::ConditionalSavedSourceWitness { entry_id, revision, path } })
                 .map_err(native_fault)?;
             let result = json!({"capture":{"capture_id":capture.capture_id,"logical_witness":capture.logical_witness,"byte_length":capture.source.len()}});
             return Ok((result, capture.source));
@@ -873,6 +880,11 @@ fn execute(
                 .ok_or_else(|| fault("client_not_admitted"))?;
             vault.release_conditional_saved_source(lease, &capture_id).map_err(native_fault)?;
             json!({"released":true})
+        }
+        Command::ListSavedSourceRequests { client_id } => {
+            empty(&body)?;
+            let lease=leases.active.values().find(|lease|lease.reference().client_id==client_id).ok_or_else(||fault("client_not_admitted"))?;
+            json!({"requests":vault.list_conditional_saved_source_requests(lease).map_err(native_fault)?})
         }
         Command::PrepareIntent {
             client_id,
@@ -1505,7 +1517,7 @@ pub fn run_stdio() -> io::Result<()> {
     let mut leases = ClientLeases { recovery_maintenance_enabled, ..ClientLeases::default() };
     write_frame(
         &mut output,
-        &json!({"version":1,"request_id":"0","ok":true,"result":{"transport":"zorid-native-stdio","max_header":MAX_HEADER,"max_body":MAX_BODY,"max_checkpoint_body":MAX_CHECKPOINT_BODY,"max_database_body":zorid_native::MAX_DATABASE_REQUEST_BYTES,"max_binary_frame":binary::MAX_FRAME,"binary_limits":{"maxFileBytes":"67108864","maxChunkBytes":binary::MAX_CHUNK,"smallReadBytes":binary::SMALL_READ.to_string()},"reconciliation":reconciliation,"capabilities":["local_recovery_maintenance","databases","conditional_saved_source","workblocks","documents","document_base_preview","document_metadata_rows","document_property_targets","document_runtime","document_drafts","binary_streams","reconciliation_status","local_family_status","file_command","file_command_compact","file_command_status","create_text","claim_client","release_client","checkpoint_load","checkpoint_cas","checkpoint_list","checkpoint_changes","identity","list","read","apply","reconcile","recover","status","list_snapshot","stat_path","read_path","read_presented","changes_after","rescan","prepare_intent","commit_intent","query_intent","list_intents","acknowledge_intent","fixture_family_enroll","fixture_family_status","fixture_family_once","fixture_family_apply"]}}),
+        &json!({"version":1,"request_id":"0","ok":true,"result":{"transport":"zorid-native-stdio","max_header":MAX_HEADER,"max_body":MAX_BODY,"max_checkpoint_body":MAX_CHECKPOINT_BODY,"max_database_body":zorid_native::MAX_DATABASE_REQUEST_BYTES,"max_binary_frame":binary::MAX_FRAME,"binary_limits":{"maxFileBytes":"67108864","maxChunkBytes":binary::MAX_CHUNK,"smallReadBytes":binary::SMALL_READ.to_string()},"reconciliation":reconciliation,"capabilities":["local_recovery_maintenance","databases","conditional_saved_source_requests","workblocks","documents","document_base_preview","document_metadata_rows","document_property_targets","document_runtime","document_drafts","binary_streams","reconciliation_status","local_family_status","file_command","file_command_compact","file_command_status","create_text","claim_client","release_client","checkpoint_load","checkpoint_cas","checkpoint_list","checkpoint_changes","identity","list","read","apply","reconcile","recover","status","list_snapshot","stat_path","read_path","read_presented","changes_after","rescan","prepare_intent","commit_intent","query_intent","list_intents","acknowledge_intent","fixture_family_enroll","fixture_family_status","fixture_family_once","fixture_family_apply"]}}),
         &[],
     )?;
     let mut input = io::stdin().lock();
