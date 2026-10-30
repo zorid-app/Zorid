@@ -5,6 +5,8 @@ import {delay,until} from '../tasks-electron-integration/cdp.mjs';
 import {digest} from './protocol.mjs';
 import {terminalLockCheckpointFailure} from './terminal-checkpoint-failure.mjs';
 import {captureFocusedSummaryInput,continueFocusedSummaryInput,disposeFocusedSummaryInput,summaryEditor} from './focused-summary-input.mjs';
+import {assertAutomaticLostCreateReplay} from './lost-create-auto.mjs';
+import {captureLostCreateUi,lostCreateUiFrame,disposeLostCreateUi} from './lost-create-ui.mjs';
 export {createNativeRelay} from './control.mjs';
 
 export const vaultName='bases-native-recovery';
@@ -217,34 +219,50 @@ async function heldWriteAndClose(c){
 
 async function droppedCreateAndRestart(c){
   await c.launch('native-lost-create-reply');await c.ui.openFile('Create.base');await c.ui.idle();
+  assert.equal(typeof c.observeNativeGenerations,'function','Automatic creation requires every real native generation to be authenticated');
   const namesBefore=(await fs.readdir(path.join(c.vault,'Created'))).sort();assert.deepEqual(namesBefore,['.keep']);
-  const token=await c.relay.arm({mode:'drop',path:'Created/Untitled.md',bodySha256:digest(Buffer.from(template))});
-  await c.ui.button('New',active);const dropped=await event(c,'dropped',token);
-  await until(async()=>{assert.ok((await c.relay.events()).some(value=>value.kind==='drop-child-closed'));},5000);
-  assert.equal(await c.read('Created/Untitled.md'),template,'The real core created the complete literal template before transport loss');
-  await c.ui.wait(`return [...document.querySelectorAll('[role="status"],[role="alert"]')].some(e=>e.getClientRects().length&&/failed|unavailable|uncertain|recovery/i.test(e.textContent));`,'Mounted New reports the actual lost acknowledgement');
-  await c.ui.button('New',active);await delay(150);
-  await c.ui.click(close);await delay(150);
-  await c.ui.wait(`return !!document.querySelector(${JSON.stringify(active)})&&[...document.querySelectorAll('[role="status"],[role="alert"]')].some(e=>e.getClientRects().length&&/uncertain|unconfirmed|reconcile|failed/i.test(e.textContent));`,'Uncertain New retains the Base when close is requested');
+  const sources=new Map();for(const file of fixtureFiles(c.fixtureScene).keys())sources.set(file,await c.read(file));
+  const expectedCreate=fixtureFiles(c.fixtureScene).get('Create.base');assert.equal(sources.get('Create.base'),expectedCreate);
+  await c.saved('Create.base',source=>assert.equal(source,expectedCreate),'lost-create-original-base-source-before-fault');
+  const sourceIdentity=await stat(c,'Create.base'),originalCdp=c.cdp,observation=await captureLostCreateUi(c);let accepted;
+  const documentIdentity=async()=>{assert.equal(c.cdp,originalCdp,'The same mounted CDP target owns recovery');const {frameTree}=await c.cdp.call('Page.getFrameTree');return{frameId:frameTree.frame.id,loaderId:frameTree.frame.loaderId,url:frameTree.frame.url};};
+  const binding=async(current,frame)=>{const identity=await stat(c,'Create.base');return{appPid:current.appPid,...await documentIdentity(),paneBackendNodeId:observation.paneBackendNodeId,tabId:frame.tabId,basePath:'Create.base',viewLabel:frame.viewLabel,viewIndex:frame.viewIndex,sourceEntryId:identity.entryId,sourceRevision:identity.revision,sourceSha256:digest(Buffer.from(await c.read('Create.base')))};};
+  try{
+    const initial=await c.observeNativeGenerations();assert.ok(initial.current?.authenticatedAtLaunch);
+    const firstFrame=await lostCreateUiFrame(c,observation);assert.equal(firstFrame.settled,true);assert.deepEqual(firstFrame.failures,[]);
+    const before=await binding(initial.current,firstFrame);assert.equal(before.sourceEntryId,sourceIdentity.entryId);assert.equal(before.sourceRevision,sourceIdentity.revision);
+    const actionOffset=c.evidence.actions.length,bodySha256=digest(Buffer.from(template)),token=await c.relay.arm({mode:'drop',path:'Created/Untitled.md',bodySha256});
+    const actionStartedAt=Date.now();await c.ui.button('New',active);
+    const dropped=await event(c,'dropped',token);
+    accepted=await until(async()=>{
+      const registry=await c.observeNativeGenerations();assert.ok(registry.current?.authenticatedAtLaunch,'A fresh positively authenticated native generation must be live');
+      const frame=await lostCreateUiFrame(c,observation);assert.equal(frame.settled,true,'Original Base is ready without manual recovery');assert.deepEqual(frame.failures,[]);
+      const after=await binding(registry.current,frame),events=await noFaults(c),current=await stat(c,'Created/Untitled.md'),names=(await fs.readdir(path.join(c.vault,'Created'))).sort();
+      const receipt=assertAutomaticLostCreateReplay({events,dropped,before,after,generations:registry.generations,current,names,bodySha256,actions:c.evidence.actions.slice(actionOffset),actionStartedAt,ui:frame});
+      assert.deepEqual(await fs.readFile(path.join(c.vault,'Created','Untitled.md')),Buffer.from(template),'Physical original file contains every independently authored template byte');
+      return{receipt,before,after,ui:frame};
+    },15000);
+    await c.saved('Created/Untitled.md',source=>assert.equal(source,template),'lost-create-automatic-same-mounted-original-template');
+    for(const[file,source]of sources)await c.saved(file,actual=>assert.equal(actual,source),'lost-create-unchanged-whole-fixture-'+file);
+    // A read barrier and a further quiet interval may expose delayed duplicate
+    // authoring; neither may be used to request a retry or a second creation.
+    await delay(350);
+    await c.screenshot('r02-native-create-automatically-recovered-same-mounted-document');
+    const registry=await c.observeNativeGenerations(),frame=await lostCreateUiFrame(c,observation);assert.ok(registry.current?.authenticatedAtLaunch);assert.equal(frame.settled,true);
+    accepted.receipt=assertAutomaticLostCreateReplay({events:await noFaults(c),dropped,before,after:await binding(registry.current,frame),generations:registry.generations,current:await stat(c,'Created/Untitled.md'),names:(await fs.readdir(path.join(c.vault,'Created'))).sort(),bodySha256,actions:c.evidence.actions.slice(actionOffset),actionStartedAt,ui:frame});accepted.ui=frame;
+    c.evidence.checks.push({name:'genuine-lost-create-reply-automatic-same-mounted-original-receipt',...accepted,userNewClicks:1,manualRecoveryActions:0,scope:'Actual EOF and automatic host replacement; one original operation and byte-exact receipt replay before any normal quit/restart. Visible DOM mutation and animation frames observed, not an OS screen-recording or power-loss claim.'});
+  }finally{await disposeLostCreateUi(c,observation);}
+  await c.quit('lost-create-automatic-recovery-normal-quit');
+  await c.launch('lost-create-normal-restart-readback');await c.ui.openFile('Create.base');await c.ui.idle();
   assert.deepEqual((await fs.readdir(path.join(c.vault,'Created'))).sort(),['.keep','Untitled.md']);
-  await c.screenshot('r02-real-lost-create-ack-uncertain-mounted-base');
-  const beforeRestart=await noFaults(c),original=beforeRestart.filter(value=>value.kind==='native-mutation-response'&&value.operationId===dropped.operationId);
-  assert.equal(original.length,1,'Repeated mounted New cannot send a new or replayed create through the fenced transport');
-  await c.forceShutdown('explicit-lost-transport-app-interruption');
-  await c.launch('lost-create-startup-receipt-recovery');await c.ui.openFile('Create.base');await c.ui.idle();
-  const events=await noFaults(c),replies=events.filter(value=>value.kind==='native-mutation-response'&&value.operationId===dropped.operationId);
-  assert.equal(replies.length,2,'Startup replays precisely the retained unacknowledged create step');
-  assert.equal(replies[0].commandSha256,replies[1].commandSha256,'Same original mutation and operation identity across restart');
-  assert.equal(replies[0].bodySha256,replies[1].bodySha256);assert.equal(replies[0].sequence,replies[1].sequence,'Native receipt replay cannot create another mutation');
-  const current=await stat(c,'Created/Untitled.md');assert.equal(current.entryId,dropped.entryId);assert.equal(current.revision,dropped.revision);
-  assert.deepEqual((await fs.readdir(path.join(c.vault,'Created'))).sort(),['.keep','Untitled.md']);
-  await c.saved('Created/Untitled.md',source=>assert.equal(source,template),'lost-create-restart-retains-one-original-file-exact-template');
-  c.evidence.checks.push({name:'genuine-lost-create-reply-startup-original-receipt-replay',dropped:plain(dropped),replies,current,scope:'No same-mounted transport reconnect or power-loss guarantee'});
-  await c.screenshot('r03-native-create-receipt-recovered-after-restart');await c.quit('lost-create-recovery-normal-quit');
+  const current=await stat(c,'Created/Untitled.md');assert.equal(current.entryId,accepted.receipt.entryId);assert.equal(current.revision,accepted.receipt.revision);
+  await c.saved('Created/Untitled.md',source=>assert.equal(source,template),'lost-create-normal-restart-retains-original-template');
+  for(const[file,source]of sources)await c.saved(file,actual=>assert.equal(actual,source),'lost-create-normal-restart-unchanged-whole-fixture-'+file);
+  await c.screenshot('r03-native-create-normal-restart-readback');await c.quit('lost-create-readback-normal-quit');
 }
 
 export async function journey(c){
-  assert.ok(c.relay&&c.forceShutdown,'Common runner must provide its reviewed test-only relay/process ownership seam');
+  assert.ok(c.relay&&c.observeNativeGenerations,'Common runner must provide its reviewed relay and every-generation process ownership seam');
   c.evidence.limitations.push('The failed-summary phase denies only the owned vault.lock open before the prepared-ref checkpoint and requires genuine uncertain filesystem_failed. The access denial is terminal under the strict retry policy: read-only Review/Copy and ordinary Save resolve accepted A, and raw B requires explicit commit. This is not routine host/admission recovery, postcommit publication, SQLite/device failure or power-loss coverage.', 'Other held/dropped responses follow real core success; those transport cases are not failed saves. A newer draft blocked behind a native call is not claimed crash-durable before its checkpoint can run.');
   await failedLiveWriteWithNewerDraft(c);await heldWriteAndClose(c);await droppedCreateAndRestart(c);await noFaults(c);
 }

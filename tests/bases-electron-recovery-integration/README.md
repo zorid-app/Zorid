@@ -46,7 +46,7 @@ Before arming either summary interruption, a passive GUI oracle requires the
 exact A/B numeric cells 2/3 and the visible Total 5 footer on a settled, error-free
 collection view. The old Name-only vault scene cannot pass this precondition.
 The ordinary New/lost-create scenario keeps its separate supported untyped view;
-its complete template-byte and original-operation oracles are unchanged. The
+its complete template-byte and original-operation oracles remain required. The
 broader safety campaign still needs its own collection-scene port and is not
 made valid by this recovery-only setup.
 
@@ -54,7 +54,7 @@ made valid by this recovery-only setup.
 | --- | --- |
 | Terminal checkpoint ACK, Review/Copy, ordinary Save, explicit raw B | Hold only the real inert `prepare_intent` reply for exact A bytes. Type B in the same mounted editor and let its 250ms debounce elapse while A is pending. Set only the owned disposable `.zorid/vault.lock` to mode0000 and release the unchanged prepared reply. Require a genuine `filesystem_failed`/`commit_uncertain:true` checkpoint CAS response correlated to one original dispatched `checkpoint_cas` method/key/command/body digest and Native process, retained disabled B and read-only Review/Copy. Restore the exact inode's original mode in `finally`; whole physical/bridge source must still be S0. Review must expose exact S0/A/B, Copy must acknowledge its clipboard write, and neither action may dispatch a native mutation/checkpoint request or replacement intent, with a normal-bridge read barrier before the final event comparison. Use the ordinary Save current changes command-palette action to settle only A; the identical checkpoint CAS command/body must succeed before the original native A token commits. B must remain raw/unsubmitted for a bounded interval, then a normal explicit Tab commit saves B without retyping or replacing the editor. Check whole B, every unrelated fixture, visible value12, normal close/quit and fresh-launch readback. This access-denial case is terminal under the strict retry policy; it does not establish automatic host/admission recovery. |
 | Accepted A, newer B, close | Arm exact saved Base entry/path and exact A bytes. Observe its real prepared token and committed native receipt, hold only that successful reply, type B through the mounted summary editor and request tab close. The panel retains B while disk contains A. Release the same encoded reply; exactly one A and one B write finish. Close safely, quit normally and verify exact B after restart. |
-| Lost New reply, restart | Arm the exact destination and complete template digest. Suppress the first genuine successful create reply, gracefully stop that real host before presenting EOF, and observe mounted New uncertainty/close refusal. Repeated New cannot create a second note through the fenced transport. A separately labeled forced app shutdown and restart recovers the durable requested checkpoint. The native replay must have the same command/body, operation ID, entry ID, revision and receipt sequence; only one file with exact template bytes exists. |
+| Lost New reply, automatic same-mounted recovery | Arm the exact destination and complete template digest, then click New **once**. Suppress its first genuine successful create reply and gracefully stop that real host before presenting actual EOF. Main must automatically replace the host while the original application, CDP target/document, pane, tab and saved Base source/view remain bound. Every host generation must be independently authenticated by the runner. The replayed file command must have the original operation, command/body digests and receipt sequence; its real frame lease must match a fresh positive same-client/store claim. Normal Native stat and bridge readback must retain the dropped entry ID/revision and independently authored complete template bytes; exactly one file exists. A passive observer installed before New records visible alert/failure/manual-recovery flashes through settlement. No second New, Save, reopen, reload or forced restart may complete recovery. Only after these checks and a350ms quiet duplicate-authoring barrier does the campaign quit normally and perform a separate ordinary-restart persistence readback. |
 
 `hold` defaults to the existing committed-receipt phase. Only the explicit
 `phase: "prepared"` variant selects a successful inert preparation, bound to the
@@ -106,10 +106,21 @@ fail acceptance. Request/response hashes, native operation/receipt identities,
 relay and native artifact hashes and exact process-tree cleanup are retained.
 
 These scenarios do **not** establish SQLite/device-write failure, arbitrary disk
-failure, power-loss safety or successful same-mounted retry after native host death. `RustVaultService` fences
-the failed transport until app restart. Holding an accepted write is distinct
-from a failed-save retry. A newer draft blocked behind a native call is not
-claimed crash-durable before its checkpoint can run.
+failure, power-loss safety or a forcibly killed Native process's recovery.
+The lost-New phase requires same-mounted replacement after genuine EOF from a
+cleanly stopped original host. Its later ordinary restart is a persistence check,
+never the action that authorizes or causes recovery. Holding an accepted write is
+distinct from a failed-save retry. A newer draft blocked behind a native call is
+not claimed crash-durable before its checkpoint can run.
+
+The lost-New observer reads only DOM state and retains references in its own CDP
+object group. It never changes the DOM, calls product methods, shifts focus or
+dispatches synthetic input. Mutation callbacks and animation-frame samples keep
+a bounded failure history even when an error later disappears; hidden controls
+do not count as visible. The observer permits honest pending status, rejects
+visible error/Retry/reopen controls and original pane/tab/source changes, and
+disconnects/cancels observation before releasing its object group on all paths.
+This is observed DOM-frame coverage, not an OS screen recording.
 
 Pure protocol checks require no application or native executable:
 
@@ -118,7 +129,9 @@ node --test --test-concurrency=1 tests/bases-electron-recovery-integration/proto
   tests/bases-electron-recovery-integration/relay-process.test.mjs \
   tests/bases-electron-recovery-integration/configuration-review.test.mjs \
   tests/bases-electron-recovery-integration/collection-scene.test.mjs \
-  tests/bases-electron-recovery-integration/terminal-checkpoint-failure.test.mjs
+  tests/bases-electron-recovery-integration/terminal-checkpoint-failure.test.mjs \
+  tests/bases-electron-recovery-integration/lost-create-auto.test.mjs \
+  tests/bases-electron-recovery-integration/lost-create-ui.test.mjs
 ```
 
 Those checks verify framing, arming, committed/prepared success selection, request-digest
@@ -132,9 +145,13 @@ prepared-hold subprocess case uses an explicitly simulated peer's negative check
 frame and successful identical CAS replay; its purpose is exact forwarding and
 request-hash correlation, never a claimed native checkpoint failure.
 
-The failed-live-save extension is **authored only**. Earlier recovery runs do not
-cover it; a new frozen actual campaign with matching
-native products is required.
+The replacement one-click automatic-recovery oracle is **authored only** until
+the coordinator runs the frozen campaign with the reviewed generation registry
+and matching relay/frontend/native products. Actual007 completed the earlier two
+journeys but did not accept its third journey: its old test clicked New a second
+time after the original operation had already replayed automatically, producing
+a legitimate second operation/file. That result explains the obsolete fenced-
+transport assumption; it is not retroactive acceptance of this new oracle.
 
 The lock-open denial is a terminal filesystem permission error: Native preserves
 the typed IO cause, maps it to `filesystem_failed`, and keeps commit uncertainty
