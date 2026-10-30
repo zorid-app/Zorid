@@ -708,6 +708,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         await Promise.all(rawDrafts.map(draft=>draft.raw.ready));alive();await Promise.allSettled([...pending]);
         if(configuration?.error)throw configuration.error;
         if(configuration){
+          if(acceptedToolbar&&controller.state.result)toolbarUI.confirmAcceptedAdmission(filterToolbarState(controller.state.result,BaseDocument.parse(controller.state.source),controller.selectedViewIndex));
           if(origin)acceptedOrigin={...origin,source:controller.state.source,viewId:controller.selectedViewIdentity,viewIndex:controller.selectedViewIndex};
           const raw=acceptedToolbar?undefined:toolbarUI.captureFreeze();
           if(raw){const current=rawDraftOrigin(false);if(!current)throw new Error('The accepted Base configuration lost its original draft target.');rawDrafts.push({kind:'toolbar',origin:{...current,source:controller.state.source,viewId:controller.selectedViewIdentity,viewIndex:controller.selectedViewIndex},raw});await raw.ready;}

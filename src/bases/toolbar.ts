@@ -142,6 +142,8 @@ export interface BaseToolbar {
   captureFreeze():BaseToolbarAdmissionDraft|undefined;
   /** Fence UI submissions while its original accepted save settles. */
   suspendAdmission():BaseToolbarAdmissionDraft|undefined;
+  /** Confirm presentation baseline from the original exactly settled command. */
+  confirmAcceptedAdmission(state:BaseToolbarState):void;
   restoreAdmissionDraft(draft:BaseToolbarAdmissionDraft):'restored'|'pending'|'conflict';
   /** Only this live toolbar's current connected portal, including its child controls. */
   owns(node: Node): boolean;
@@ -152,7 +154,7 @@ export interface BaseToolbar {
 }
 type FilterNode = BaseFilterNode;
 type PanelName = BaseToolbarPanelName;
-interface Panel { acknowledgeAcceptedSave?():void;suspendAdmission?():BaseToolbarAdmissionDraft|undefined; hasUnfinishedInput?():boolean;canCaptureAdmissionDraft?():boolean;captureFreeze?():BaseToolbarAdmissionDraft|undefined;restoreRaw?(draft:BaseToolbarAdmissionDraft):boolean;rebase?(state: BaseToolbarState, expectedName?: string): boolean; refreshFilterAdvice?(state:BaseToolbarState):void; flush?(): void; name: PanelName; node: HTMLElement; trigger: HTMLElement; dirty: boolean; innerDraft?: boolean; saving: boolean; failure?: object; acceptsSaveAcknowledgement?: () => boolean; close(restore?: boolean): void }
+interface Panel { confirmAcceptedAdmission?(state:BaseToolbarState):void;acknowledgeAcceptedSave?():void;suspendAdmission?():BaseToolbarAdmissionDraft|undefined; hasUnfinishedInput?():boolean;canCaptureAdmissionDraft?():boolean;captureFreeze?():BaseToolbarAdmissionDraft|undefined;restoreRaw?(draft:BaseToolbarAdmissionDraft):boolean;rebase?(state: BaseToolbarState, expectedName?: string): boolean; refreshFilterAdvice?(state:BaseToolbarState):void; flush?(): void; name: PanelName; node: HTMLElement; trigger: HTMLElement; dirty: boolean; innerDraft?: boolean; saving: boolean; failure?: object; acceptsSaveAcknowledgement?: () => boolean; close(restore?: boolean): void }
 /** Only a retained, exact accepted configuration may offer a persistence retry. */
 export class BaseToolbarSaveError extends Error {
   readonly retry: () => Promise<void>;
@@ -1114,6 +1116,14 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       else own.close(false);
     };
     let capturingAccepted=false;
+    own.confirmAcceptedAdmission=next=>{
+      if(!capturingAccepted||!activeAttempt)return;
+      const target=next.views[selectedIndex];
+      if(!target||next.selectedIndex!==selectedIndex)throw new Error('The original accepted Base view no longer owns its newer input.');
+      // The original controller confirmed these exact source bytes. Generated
+      // stable IDs/defaults are part of that accepted presentation baseline.
+      activeAttempt.configuration=configurationSnapshot(next);configuration=activeAttempt.configuration;configuredView=target;opening=next;
+    };
     own.suspendAdmission=()=>{
       const newer=!!activeAttempt&&(generation!==activeAttempt.generation||unfinishedInput());
       capturingAccepted=newer;
@@ -1182,7 +1192,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     }
     if (focusedLabel) Array.from(actions.querySelectorAll<HTMLButtonElement>('button')).find(node => node.getAttribute('aria-label') === focusedLabel)?.focus({ preventScroll: true });
   }
-  return { update,suspendAdmission(){const raw=panel?.suspendAdmission?.();container.inert=true;return raw;},canCaptureAdmissionDraft:()=>panel?.canCaptureAdmissionDraft?.()===true,captureFreeze:()=>panel?.captureFreeze?.(),restoreAdmissionDraft(draft){
+  return { update,confirmAcceptedAdmission(next){panel?.confirmAcceptedAdmission?.(next);},suspendAdmission(){const raw=panel?.suspendAdmission?.();container.inert=true;return raw;},canCaptureAdmissionDraft:()=>panel?.canCaptureAdmissionDraft?.()===true,captureFreeze:()=>panel?.captureFreeze?.(),restoreAdmissionDraft(draft){
       if(destroyed||!state||panel||!completedToolbarDrafts.has(draft))return'pending';
       const current=configurationSnapshot(state),target=state.views[draft.target.selectedIndex];
       if(state.readOnly!==draft.access.readOnly||(state.browseOnly===true)!==draft.access.browseOnly||state.allowRename!==draft.access.allowRename||JSON.stringify(current)!==JSON.stringify(draft.configuration)||!target||draft.target.viewId!==undefined&&target.id!==draft.target.viewId)return'conflict';
