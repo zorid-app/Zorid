@@ -4,6 +4,10 @@ use super::*;
 use std::collections::BTreeSet;
 use zorid_store::{ExternalNamespaceAction, ExternalNamespaceMember};
 
+#[cfg(test)]
+#[path = "external_namespace_candidate_tests.rs"]
+mod candidate_tests;
+
 /// Membership admission for one exclusive reconciliation pass. The borrowed
 /// lock prevents this witness outliving the lock; scalar identity checks prevent
 /// borrowing it for another vault. Validated Store writers may advance graph
@@ -681,6 +685,7 @@ impl NativeVault {
         // missing path. Positive enrollment below has its own local proofs.
         if scan.run.complete {
             let mut bindings = self.store.physical_bindings()?;
+            self.point("external_namespace_candidates_loaded");
             bindings.sort_by(|a, b| {
                 a.state
                     .path
