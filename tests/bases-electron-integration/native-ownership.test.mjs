@@ -217,7 +217,7 @@ test('close metadata is primitive typed and digest validated before entering gen
 test('command mismatch preserves the exact process row without inferring exit from its name',()=>{
   const args=input.events[0].args,relay=[input.identity.executable,...input.identity.args,...args].join(' '),native=[input.native,...args].join(' ');
   const launched=relayProcessOwnership({...input,rows:[{pid:11,parent:10,state:'S',command:relay},{pid:12,parent:11,state:'S',command:native}],requireLineage:true});
-  for(const state of ['S','SE','?',undefined]){
+  for(const state of ['S','?','E','?E','SunknownE',undefined]){
     const row={pid:12,parent:11,state,command:'(zorid-desktop-ho)'};
     assert.throws(()=>relayProcessOwnership({...input,rows:[row],previouslyOwned:launched}),error=>{
       assert.equal(error.code,'ERR_ASSERTION');
@@ -225,4 +225,54 @@ test('command mismatch preserves the exact process row without inferring exit fr
       return true;
     });
   }
+});
+
+
+test('macOS exiting rows require exact prior authentication and never become signal targets',()=>{
+  const args=input.events[0].args,relay=[input.identity.executable,...input.identity.args,...args].join(' '),native=[input.native,...args].join(' ');
+  const live=[{pid:11,parent:10,state:'S',command:relay},{pid:12,parent:11,state:'S',command:native}];
+  const launched=relayProcessOwnership({...input,rows:live,requireLineage:true});
+  for(const state of ['SE','UE+','RNE']){
+    const rows=[{pid:12,parent:11,state,command:'(host)'}];
+    assert.throws(()=>relayProcessOwnership({...input,rows}),/exact prior launch authentication/);
+    assert.throws(()=>relayProcessOwnership({...input,rows,previouslyOwned:launched.map(row=>({...row,authenticatedAtLaunch:false}))}),/exact prior launch authentication/);
+    assert.throws(()=>relayProcessOwnership({...input,rows,previouslyOwned:launched,requireLineage:true}),/live at launch/);
+    const exiting=relayProcessOwnership({...input,rows,previouslyOwned:launched});
+    assert.deepEqual(exiting[1].exiting,{state,parent:11,command:'(host)'});
+    assert.deepEqual(livingOwnedProcesses(exiting,rows),[]);
+    assert.deepEqual(discoverUnannouncedRelayProcesses({...input,rows:live.map(row=>({...row,state}))}),[]);
+    assert.deepEqual(livingOwnedProcesses(launched,live.map(row=>({...row,state}))),[]);
+    assert.throws(()=>relayProcessOwnership({...input,rows:live,previouslyOwned:exiting}),/cannot regain live authority/);
+  }
+});
+
+test('exiting app, relay and Native revoke current authority and cannot satisfy shutdown until gone',()=>{
+  const first=startGeneration(firstGeneration,11,12),events=[first],rows=generationRows(11,12);
+  for(const pid of [10,11,12]){
+    const registry=ownership.createNativeGenerationRegistry({...input,appCommand});
+    assert.throws(()=>registry.observe({events,rows:rows.map(row=>row.pid===pid?{...row,state:'SE',command:'(exiting)'}:row),appPid:10}),/live/);
+    registry.observe({events,rows,appPid:10});
+    const exiting=rows.map(row=>row.pid===pid?{...row,state:'SE',command:'(exiting)'}:row);
+    const observed=registry.observe({events,rows:exiting,appPid:10});
+    assert.equal(observed.current,null);
+    const signals=[];
+    assert.throws(()=>registry.killCurrent(firstGeneration,{events,rows:exiting,appPid:10,kill:(...args)=>signals.push(args)}),/current generation/);
+    assert.deepEqual(signals,[]);
+    const closed=[first,{...first,kind:'closed',exitCode:0,signal:null}];
+    // Keep only the exiting row: all other processes are already absent.
+    const pending=[exiting.find(row=>row.pid===pid)];
+    assert.throws(()=>registry.assertShutdown({events:closed,rows:pending,appPid:10}),/exiting processes are still pending|app must be absent/);
+    const completed=registry.assertShutdown({events:closed,rows:pending.map(row=>({...row,state:'Z'})),appPid:10});
+    assert.equal(completed[0].kind,'normal-native-close');
+    assert.equal(registry.assertShutdown({events:closed,rows:[],appPid:10})[0].kind,'normal-native-close');
+  }
+});
+
+test('live app command mismatches retain the exact row and never infer exiting by its name',()=>{
+  const registry=ownership.createNativeGenerationRegistry({...input,appCommand}),first=startGeneration(firstGeneration,11,12),rows=generationRows(11,12);
+  registry.observe({events:[first],rows,appPid:10});
+  const app={...rows[0],command:'(Electron)'};
+  assert.throws(()=>registry.observe({events:[first],rows:[app,...rows.slice(1)],appPid:10}),error=>{
+    assert.ok(error.message.includes('Exact live owned app command; observed row '+JSON.stringify(app)));return true;
+  });
 });

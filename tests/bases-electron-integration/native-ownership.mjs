@@ -3,6 +3,11 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 
 const isZombie=row=>typeof row.state==='string'&&row.state.startsWith('Z');
+// macOS ps(1): E is a modifier after a run state, meaning trying to exit.
+// It grants neither live authority nor proof that the process has exited.
+const isExiting=row=>typeof row.state==='string'&&/^[IRSTU][+<>AELNSsVWX]*$/.test(row.state)&&row.state.slice(1).includes('E');
+const isLive=row=>!isZombie(row)&&!isExiting(row);
+const observedRow=row=>JSON.stringify({pid:row.pid,parent:row.parent,state:row.state??null,command:row.command});
 export function parseProcessRows(output){
   return output.split('\n').filter(line=>line.trim()).map(line=>{
     const match=line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)(?:\s+(.*))?$/);
@@ -30,22 +35,26 @@ export function relayProcessOwnership({events,rows,native,vault,identity,appPid,
   const previous=[...previouslyOwned];
   for(const owned of expected){
     const prior=previous.find(row=>row.pid===owned.pid&&row.command===owned.command&&row.kind===owned.kind&&row.parent===owned.parent&&row.authenticatedAtLaunch===true);
-    if(prior){owned.authenticatedAtLaunch=true;if(prior.exitedNotReaped)owned.exitedNotReaped={...prior.exitedNotReaped};}
+    if(prior){owned.authenticatedAtLaunch=true;if(prior.exitedNotReaped)owned.exitedNotReaped={...prior.exitedNotReaped};if(prior.exiting)owned.exiting={...prior.exiting};}
     const live=rows.find(row=>row.pid===owned.pid);
-    if(requireLineage)assert.ok(live&&!isZombie(live),'Owned process is live at launch');
+    if(requireLineage)assert.ok(live&&isLive(live),'Owned process is live at launch');
     if(!live)continue;
     if(isZombie(live)){
       assert.ok(prior,'Exited-not-reaped process requires exact prior launch authentication');
       owned.exitedNotReaped={state:live.state,parent:live.parent,command:live.command};
+    }else if(isExiting(live)){
+      assert.ok(prior,'Exiting process requires exact prior launch authentication');
+      owned.exiting={state:live.state,parent:live.parent,command:live.command};
     }else{
-      assert.equal(live.command,owned.command,`Exact owned process command; observed row ${JSON.stringify({pid:live.pid,parent:live.parent,state:live.state??null,command:live.command})}`);
+      assert.ok(!prior?.exiting,'An exiting process cannot regain live authority');
+      assert.equal(live.command,owned.command,`Exact owned process command; observed row ${observedRow(live)}`);
       if(requireLineage){assert.equal(live.parent,owned.parent,'Actual app → relay → genuine-native lineage');owned.authenticatedAtLaunch=true;}
     }
     owned.observedParent=live.parent;owned.observedState=live.state;
   }
   return expected;
 }
-export function livingOwnedProcesses(owned,rows){return [...owned].filter(value=>rows.some(row=>row.pid===value.pid&&row.command===value.command&&!isZombie(row)));}
+export function livingOwnedProcesses(owned,rows){return [...owned].filter(value=>rows.some(row=>row.pid===value.pid&&row.command===value.command&&isLive(row)));}
 
 /** Startup can die before its first event append. The fresh private relay
  * control path and fresh private vault identify these exact two allowed argv
@@ -54,7 +63,7 @@ export function discoverUnannouncedRelayProcesses({rows,native,vault,identity}){
   assert.ok(path.isAbsolute(identity?.executable)&&Array.isArray(identity.args),'Exact relay prefix');
   const nativeArgs=[['--vault',vault],['--vault',vault,'--initialize-local']];
   const commands=new Map(nativeArgs.flatMap(args=>[[[identity.executable,...identity.args,...args].join(' '),'relay'],[[native,...args].join(' '),'genuine-native']]));
-  return rows.flatMap(row=>{const kind=commands.get(row.command);return kind&&!isZombie(row)?[{...row,kind,discoveredBeforeEvent:true}]:[];});
+  return rows.flatMap(row=>{const kind=commands.get(row.command);return kind&&isLive(row)?[{...row,kind,discoveredBeforeEvent:true}]:[];});
 }
 
 const generationPattern=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -82,8 +91,8 @@ export function createNativeGenerationRegistry({native,vault,identity,appCommand
       }else{
         for(const previous of next.values())assert.ok(![previous.relayPid,previous.nativePid].some(pid=>pid===event.relayPid||pid===event.nativePid),'No process ID reuse across generations');
         const app=rows.find(row=>row.pid===appPid);
-        assert.ok(app&&!isZombie(app),'Original owned app is live for first generation authentication');
-        assert.equal(app.command,appCommand,'Exact owned app command');
+        assert.ok(app&&isLive(app),'Original owned app is live for first generation authentication');
+        assert.equal(app.command,appCommand,`Exact owned app command; observed row ${observedRow(app)}`);
         assert.ok(appPid!==event.relayPid&&appPid!==event.nativePid,'Distinct owned app, relay and Native PIDs');
         const processes=relayProcessOwnership({events:[event],rows,native,vault,identity,appPid,requireLineage:true});
         record={generation:event.generation,appPid,relayPid:event.relayPid,nativePid:event.nativePid,authenticatedAtLaunch:true,
@@ -102,10 +111,16 @@ export function createNativeGenerationRegistry({native,vault,identity,appCommand
     const liveGenerations=[];
     for(const record of next.values()){
       const app=rows.find(row=>row.pid===record.appPid);
-      if(app&&!isZombie(app))assert.equal(app.command,appCommand,'Exact live owned app command');
+      if(app&&isExiting(app)){
+        assert.ok(record.authenticatedAtLaunch,'Exiting app requires exact prior launch authentication');
+        record.appExiting={state:app.state,parent:app.parent,command:app.command};
+      }else if(app&&isLive(app)){
+        assert.ok(!record.appExiting,'An exiting app cannot regain live authority');
+        assert.equal(app.command,appCommand,`Exact live owned app command; observed row ${observedRow(app)}`);
+      }
       for(const pid of record.terminalProcessIds){const row=rows.find(value=>value.pid===pid);assert.ok(!row||isZombie(row),'No live terminal process ID may reappear');}
       record.processes=relayProcessOwnership({events:starts,rows,native,vault,identity,appPid:record.appPid,generation:record.generation,previouslyOwned:record.processes});
-      record.presence=Object.fromEntries(record.processes.map(process=>{const row=rows.find(row=>row.pid===process.pid);return[process.kind,row?(isZombie(row)?'exited-not-reaped':'live'):'absent'];}));
+      record.presence=Object.fromEntries(record.processes.map(process=>{const row=rows.find(row=>row.pid===process.pid);return[process.kind,row?(isZombie(row)?'exited-not-reaped':isExiting(row)?'exiting':'live'):'absent'];}));
       const closes=events.filter(event=>event.generation===record.generation&&closeKinds.has(event.kind));
       assert.equal(new Set(closes.map(event=>event.kind)).size,closes.length,'One close observation of each kind per generation');
       record.closeObservations=closes.map(event=>{
@@ -116,9 +131,9 @@ export function createNativeGenerationRegistry({native,vault,identity,appCommand
         return{kind:event.kind,exitCode:event.exitCode,signal:event.signal,...(event.at!==undefined?{at:event.at}:{}),...(event.nativeTerminatedDuringHold!==undefined?{nativeTerminatedDuringHold:event.nativeTerminatedDuringHold}:{}),...(event.withheldResponseSha256!==undefined?{withheldResponseSha256:event.withheldResponseSha256}:{})};
       });
       const terminal=new Set(record.terminalProcessIds);
-      for(const process of record.processes)if(record.presence[process.kind]!=='live')terminal.add(process.pid);
+      for(const process of record.processes)if(['absent','exited-not-reaped'].includes(record.presence[process.kind]))terminal.add(process.pid);
       if(record.closeObservations.length){
-        terminal.add(record.nativePid);
+        if(record.presence['genuine-native']!=='exiting')terminal.add(record.nativePid);
         assert.ok(record.presence['genuine-native']!=='live','No live terminal process ID after real Native close');
       }
       record.terminalProcessIds=[...terminal];
@@ -126,7 +141,7 @@ export function createNativeGenerationRegistry({native,vault,identity,appCommand
     }
     assert.ok(liveGenerations.length<=1,'Unambiguous current genuine Native generation');
     const candidate=liveGenerations[0],liveApp=rows.find(row=>row.pid===candidate?.appPid),liveRelay=rows.find(row=>row.pid===candidate?.relayPid),liveNative=rows.find(row=>row.pid===candidate?.nativePid);
-    const current=candidate?.appPid===appPid&&liveApp&&!isZombie(liveApp)&&liveRelay&&!isZombie(liveRelay)&&liveNative&&!isZombie(liveNative)&&liveRelay.parent===candidate.appPid&&liveNative.parent===candidate.relayPid;
+    const current=candidate?.appPid===appPid&&liveApp&&isLive(liveApp)&&liveRelay&&isLive(liveRelay)&&liveNative&&isLive(liveNative)&&liveRelay.parent===candidate.appPid&&liveNative.parent===candidate.relayPid;
     records=next;eventFingerprints=fingerprints;currentGeneration=current?candidate.generation:null;
     return snapshot();
   }
@@ -134,8 +149,8 @@ export function createNativeGenerationRegistry({native,vault,identity,appCommand
     const observed=observe({events,rows,appPid});
     assert.equal(observed.current?.generation,generation,'Only the current generation may receive an intentional Native fault');
     const record=records.get(generation);assert.ok(!record.intentionalFault,'Generation already has an intentional fault');
-    const app=rows.find(row=>row.pid===appPid);assert.ok(app&&!isZombie(app),'Owned app remains live immediately before fault');
-    assert.equal(app.command,appCommand,'Exact owned app command immediately before fault');
+    const app=rows.find(row=>row.pid===appPid);assert.ok(app&&isLive(app),'Owned app remains live immediately before fault');
+    assert.equal(app.command,appCommand,`Exact owned app command immediately before fault; observed row ${observedRow(app)}`);
     relayProcessOwnership({events,rows,native,vault,identity,appPid,generation,requireLineage:true,previouslyOwned:record.processes});
     assert.equal(typeof kill,'function','Exact Native signal capability');
     assert.ok(Number.isSafeInteger(at)&&at>=0,'Exact intentional fault timestamp');
@@ -147,7 +162,9 @@ export function createNativeGenerationRegistry({native,vault,identity,appCommand
     const observed=observe({events,rows,appPid}),generations=observed.generations.filter(record=>record.appPid===appPid);
     assert.ok(generations.length,'An authenticated generation belongs to the quitting app');
     return generations.map(record=>{
-      assert.ok(record.presence.relay!=='live'&&record.presence['genuine-native']!=='live','No living owned generation after quit');
+      assert.ok(['absent','exited-not-reaped'].includes(record.presence.relay)&&['absent','exited-not-reaped'].includes(record.presence['genuine-native']),'No living owned generation after quit; exiting processes are still pending');
+      const app=rows.find(row=>row.pid===record.appPid);
+      assert.ok(!app||isZombie(app),'Owned app must be absent or exited-not-reaped after quit');
       if(record.intentionalFault){
         const held=record.closeObservations.find(close=>close.kind==='held-child-closed'),closed=record.closeObservations.find(close=>close.kind==='closed');
         assert.ok(held,'Real held Native close required after intentional fault');
