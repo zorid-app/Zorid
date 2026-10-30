@@ -104,6 +104,8 @@ pub struct NativeVault {
     recovery_queue: Option<local_recovery::MaintenanceCursor>,
     external_publication: Option<external_scan_quantum::PublicationCursor>,
     external_rebaseline: Option<external_namespace::RebaselineCursor>,
+    external_positive_names: Option<std::sync::Arc<external_positive_continuation::PositiveNames>>,
+    external_positive_disabled_scan: Option<OperationId>,
     external_positive_seed: Option<external_positive_continuation::PositiveSeed>,
     external_positive_armed: Option<external_positive_continuation::PositiveSeed>,
     external_positive_hints: Option<external_positive_continuation::PositiveHints>,
@@ -164,6 +166,8 @@ impl NativeVault {
             recovery_queue: None,
             external_publication: None,
             external_rebaseline: None,
+            external_positive_names: None,
+            external_positive_disabled_scan: None,
             external_positive_seed: None,
             external_positive_armed: None,
             external_positive_hints: None,
@@ -424,6 +428,8 @@ impl NativeVault {
     pub fn recover(&mut self) -> Result<ReconcileReport> {
         self.external_publication = None;
         self.external_rebaseline = None;
+        self.external_positive_names = None;
+        self.external_positive_disabled_scan = None;
         self.external_positive_seed = None;
         self.external_positive_armed = None;
         self.external_positive_hints = None;

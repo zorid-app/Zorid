@@ -2,10 +2,14 @@
 //! names grant no namespace authority and never modify immutable scan proofs.
 use super::*;
 use crate::fs_stream::{stream_snapshot, MAX_STREAM_BYTES};
-use std::collections::BTreeSet;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
+use zorid_store::ExternalScanProof;
 
 pub(super) const MAX_POSITIVE_HINTS: usize = 4096;
-const MAX_HINT_PATH_BYTES: usize = 1024 * 1024;
+pub(super) const MAX_HINT_METADATA_BYTES: usize = 1024 * 1024;
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -26,58 +30,76 @@ pub(super) fn record_seed_build(paths: usize) {
         work.set(next);
     });
 }
-#[cfg(test)]
-pub(super) fn record_seed_refresh(processed: usize, retained: usize) {
-    SEED_WORK.with(|work| {
-        let mut next = work.get();
-        next.processed_visits += processed;
-        next.retain_visits += retained;
-        work.set(next);
-    });
-}
 
 pub(super) struct HintDirectory {
     pub path: Option<VaultPath>,
     pub identity: String,
     pub marker: external_scan_progress::Marker,
 }
-pub(super) struct PositiveSeed {
+/// Cached names select work only; normal enumeration and proofs stay fresh.
+pub(super) struct PositiveNames {
     pub scan_id: OperationId,
-    pub revision: Option<String>,
     pub directories: Vec<HintDirectory>,
     pub paths: Vec<VaultPath>,
-    pub processed: BTreeSet<VaultPath>,
-    pub mode: ExternalFileMode,
-    pub authority: Option<AuthorityIdentity>,
-    pub options: Option<ScanOptions>,
+    pub metadata_bytes: usize,
 }
-impl PositiveSeed {
+impl PositiveNames {
     pub(super) fn new(
         scan_id: OperationId,
         directories: Vec<HintDirectory>,
         paths: Vec<VaultPath>,
     ) -> Option<Self> {
-        if paths.len() > MAX_POSITIVE_HINTS
+        let mut metadata_bytes = std::mem::size_of::<Self>()
+            .saturating_add(2 * std::mem::size_of::<usize>()) // Shared Arc counts.
+            .saturating_add(scan_id.as_str().len());
+        for directory in &directories {
+            metadata_bytes = metadata_bytes
+                .saturating_add(std::mem::size_of::<HintDirectory>())
+                .saturating_add(directory.identity.len())
+                .saturating_add(
+                    directory
+                        .path
+                        .as_ref()
+                        .map_or(0, |path| path.as_str().len()),
+                );
+        }
+        for path in &paths {
+            metadata_bytes = metadata_bytes
+                .saturating_add(std::mem::size_of::<VaultPath>())
+                .saturating_add(path.as_str().len());
+        }
+        if paths.len().saturating_add(directories.len()) > MAX_POSITIVE_HINTS
             || directories.is_empty()
-            || paths.iter().map(|path| path.as_str().len()).sum::<usize>() > MAX_HINT_PATH_BYTES
+            || metadata_bytes > MAX_HINT_METADATA_BYTES
         {
             return None;
         }
         Some(Self {
             scan_id,
-            revision: None,
             directories,
             paths,
-            processed: BTreeSet::new(),
-            mode: ExternalFileMode::Auto,
-            authority: None,
-            options: None,
+            metadata_bytes,
         })
     }
-    pub(super) fn scope(&self) -> Option<VaultPath> {
+    pub(super) fn scope(&self) -> Option<&VaultPath> {
         self.directories
             .last()
-            .and_then(|directory| directory.path.clone())
+            .and_then(|directory| directory.path.as_ref())
+    }
+}
+pub(super) struct PositiveSeed {
+    pub scan_id: OperationId,
+    pub revision: Option<String>,
+    pub names: Arc<PositiveNames>,
+    pub processed: BTreeSet<VaultPath>,
+    pub proofs: BTreeMap<VaultPath, ExternalScanProof>,
+    pub mode: ExternalFileMode,
+    pub authority: Option<AuthorityIdentity>,
+    pub options: Option<ScanOptions>,
+}
+impl PositiveSeed {
+    pub(super) fn scope(&self) -> Option<&VaultPath> {
+        self.names.scope()
     }
     fn same_options(&self, options: &ScanOptions) -> bool {
         self.options.as_ref().is_some_and(|original| {
@@ -93,7 +115,7 @@ impl PositiveSeed {
             return Err(Error::Busy("positive hint authority changed"));
         }
         let mut parent = vault.paths.root.try_clone()?;
-        for directory in &self.directories {
+        for directory in &self.names.directories {
             parent = match directory.path.as_ref() {
                 None => vault.paths.root.try_clone()?,
                 Some(path) => fs::optional_directory(&parent, path.file_name())?
@@ -130,8 +152,15 @@ impl NativeVault {
         };
         let path = &attempt.target.state.path;
         if seed.revision.is_none()
-            || path.parent() != seed.scope()
+            || path.parent().as_ref() != seed.scope()
             || !seed.processed.contains(path)
+            || !matches!(
+                seed.proofs.get(path),
+                Some(ExternalScanProof::Present {
+                    entry_kind: EntryKind::File,
+                    ..
+                })
+            )
             || attempt
                 .baseline
                 .as_ref()
@@ -195,7 +224,7 @@ impl NativeVault {
         };
         // Drain exactly once. Later writes do not reset or append names. The
         // following turn must start an entirely fresh normal inventory.
-        if hints.next == hints.seed.paths.len()
+        if hints.next == hints.seed.names.paths.len()
             || hints.seed.mode != mode
             || !hints.seed.same_options(&options.scan)
             || hints.seed.authority.as_ref() != Some(&authority)
@@ -205,12 +234,18 @@ impl NativeVault {
         let mut imported = Vec::new();
         let mut bytes = 0u64;
         let result = (|| -> Result<()> {
-            while hints.next < hints.seed.paths.len() {
-                let path = &hints.seed.paths[hints.next];
+            while hints.next < hints.seed.names.paths.len() {
+                let path = &hints.seed.names.paths[hints.next];
                 if budget.used() as u32 >= options.scan.max_entries
                     || !budget.capture_positive(path)
                 {
                     break;
+                }
+                // Even an already-processed or non-file name consumes this
+                // examined-item unit. No hidden 4096-name skip loop per turn.
+                if hints.seed.processed.contains(path) {
+                    hints.next += 1;
+                    continue;
                 }
                 let attempt = (|| -> Result<Option<CommitResult>> {
                     enrolled.check(self)?;
@@ -294,10 +329,9 @@ mod perf_tests {
     use super::*;
     use std::{num::NonZeroU16, time::Duration};
 
-    #[test]
-    fn positive_seed_work_reuses_one_directory_without_rewalking_candidates() {
+    const COUNT: usize = 32;
+    fn fixture() -> (tempfile::TempDir, NativeVault, ExternalReconcileOptions) {
         let root = tempfile::tempdir().unwrap();
-        const COUNT: usize = 32;
         for index in 0..COUNT {
             std::fs::write(
                 root.path().join(format!("note-{index:03}.md")),
@@ -320,6 +354,12 @@ mod perf_tests {
             },
             max_work_units: NonZeroU16::new(1).unwrap(),
         };
+        (root, vault, options)
+    }
+
+    #[test]
+    fn positive_seed_work_reuses_one_directory_without_rewalking_candidates() {
+        let (_root, mut vault, options) = fixture();
         let mut scan = None;
         for _ in 0..8 {
             let turn = vault
@@ -349,5 +389,87 @@ mod perf_tests {
             work.retain_visits, 0,
             "normal turns must not repeatedly filter the candidate vector: {work:?}"
         );
+    }
+
+    #[test]
+    fn positive_seed_over_budget_disables_rebuilds_for_that_scan() {
+        let (_root, mut vault, options) = fixture();
+        let first = vault
+            .reconcile_external_quantum(options.clone(), ExternalFileMode::Auto)
+            .unwrap();
+        // Exercise the aggregate-budget boundary without constructing a giant
+        // vault or weakening any source proof/checkpoint used by the scan.
+        vault.external_positive_seed = None;
+        Arc::get_mut(vault.external_positive_names.as_mut().unwrap())
+            .unwrap()
+            .metadata_bytes = MAX_HINT_METADATA_BYTES;
+        for _ in 0..7 {
+            let turn = vault
+                .reconcile_external_quantum(options.clone(), ExternalFileMode::Auto)
+                .unwrap();
+            assert_eq!(
+                turn.reconciliation.run.scan_id,
+                first.reconciliation.run.scan_id
+            );
+            assert!(turn.pending);
+            assert!(vault.external_positive_seed.is_none());
+        }
+        assert_eq!(
+            vault.external_positive_disabled_scan.as_ref(),
+            Some(&first.reconciliation.run.scan_id)
+        );
+        assert_eq!(
+            SEED_WORK.with(std::cell::Cell::get).builds,
+            1,
+            "ordinary fallback must not rebuild rejected candidates every turn"
+        );
+    }
+
+    #[test]
+    fn positive_seed_processed_skips_consume_the_examined_item_budget() {
+        let (_root, mut vault, options) = fixture();
+        let mut scan = None;
+        for _ in 0..8 {
+            scan = Some(
+                vault
+                    .reconcile_external_quantum(options.clone(), ExternalFileMode::Auto)
+                    .unwrap()
+                    .reconciliation
+                    .run
+                    .scan_id,
+            );
+        }
+        let entry = vault
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.path.as_str() == "note-000.md")
+            .unwrap();
+        vault
+            .family_apply(
+                &MutationRequest {
+                    operation_id: new_op(),
+                    mutation: Mutation::Write {
+                        id: entry.id,
+                        expected: entry.revision,
+                        content: b"ordinary owned publication\n".to_vec(),
+                    },
+                },
+                None,
+            )
+            .unwrap();
+        for examined in 1..=3 {
+            let turn = vault
+                .reconcile_external_quantum(options.clone(), ExternalFileMode::Auto)
+                .unwrap();
+            assert_eq!(Some(&turn.reconciliation.run.scan_id), scan.as_ref());
+            assert_eq!(turn.work_units, 1);
+            assert!(turn.pending && turn.reconciliation.imported.is_empty());
+            assert_eq!(
+                vault.external_positive_hints.as_ref().unwrap().next,
+                examined,
+                "already processed names cannot be skipped in an uncharged full walk"
+            );
+        }
     }
 }

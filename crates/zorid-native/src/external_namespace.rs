@@ -498,6 +498,8 @@ impl NativeVault {
         options: ScanOptions,
         mode: ExternalFileMode,
     ) -> Result<ExternalReconcileReport> {
+        self.external_positive_names = None;
+        self.external_positive_disabled_scan = None;
         self.external_positive_seed = None;
         self.external_positive_armed = None;
         self.external_positive_hints = None;
@@ -525,9 +527,17 @@ impl NativeVault {
         {
             return Ok(continuation);
         }
-        let (mut reconciliation, mut scan) =
-            self.reconcile_external_locked(options.scan, mode, &enrolled, Some(&mut budget))?;
+        // A prior normal turn's eligibility maps are no longer needed. Names
+        // are separately cached; fresh normal proofs are still decoded below.
+        self.external_positive_seed = None;
+        let (mut reconciliation, mut scan) = self.reconcile_external_locked(
+            options.scan.clone(),
+            mode,
+            &enrolled,
+            Some(&mut budget),
+        )?;
         if !scan.active() {
+            self.external_positive_names = None;
             return Ok(ExternalReconcileQuantum {
                 reconciliation,
                 publication: ReconcileReport::default(),
@@ -543,18 +553,24 @@ impl NativeVault {
                 .iter()
                 .any(|issue| issue.reason.contains("duration budget exhausted"));
         if source_pending {
+            let phase = if scan.run.complete {
+                ExternalWorkPhase::Import
+            } else {
+                ExternalWorkPhase::Discovery
+            };
+            // LAST normal use: completed checkpoint/family admission and the
+            // pending decision above still own all original proofs. The dying
+            // scan now transfers bounded metadata instead of cloning it.
+            scan.install_positive_seed(self, mode, &options.scan)?;
             return Ok(ExternalReconcileQuantum {
-                phase: if scan.run.complete {
-                    ExternalWorkPhase::Import
-                } else {
-                    ExternalWorkPhase::Discovery
-                },
+                phase,
                 pending: true,
                 work_units: budget.used(),
                 reconciliation,
                 publication: ReconcileReport::default(),
             });
         }
+        self.external_positive_names = None;
         if !scan.publication_started() {
             // Complete discovery must precede publication, but a source conflict
             // must not suppress independent pending recovery. Each publication
@@ -700,7 +716,6 @@ impl NativeVault {
         external_scan_progress::ProgressScan,
     )> {
         let namespace_origin = OperationId::new("native_external_namespace")?;
-        let seed_options = options.clone();
         let started = budget
             .as_ref()
             .map_or_else(std::time::Instant::now, |b| b.started());
@@ -1234,7 +1249,6 @@ impl NativeVault {
             &processed.into_iter().collect::<Vec<_>>(),
             budget.is_some(),
         )?;
-        scan.refresh_positive_seed(self, mode, &seed_options)?;
         self.paths.verify()?;
         enrolled.finish(self)?;
         report.complete =

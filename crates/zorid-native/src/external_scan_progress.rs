@@ -17,6 +17,107 @@ use zorid_store::{
 
 pub(super) const MAX_INVENTORY: u32 = 100_000;
 pub(super) type Marker = (u64, u64, i64, i64, i64, i64);
+// Account fixed map bookkeeping in addition to retained typed facts/strings.
+const SEED_MAP_ENTRY_OVERHEAD_BYTES: usize = 64;
+fn processed_seed_bytes(path: &VaultPath) -> usize {
+    path.as_str()
+        .len()
+        .saturating_add(std::mem::size_of::<VaultPath>() + SEED_MAP_ENTRY_OVERHEAD_BYTES)
+}
+
+fn seed_header_bytes(
+    scan: &OperationId,
+    revision: Option<&str>,
+    authority: &AuthorityIdentity,
+) -> usize {
+    std::mem::size_of::<external_positive_continuation::PositiveSeed>()
+        .saturating_add(scan.as_str().len())
+        .saturating_add(revision.map_or(0, str::len))
+        .saturating_add(authority.local_store_id.as_str().len())
+        .saturating_add(
+            authority
+                .realm_id
+                .as_ref()
+                .map_or(0, |id| id.as_str().len()),
+        )
+        .saturating_add(
+            authority
+                .vault_id
+                .as_ref()
+                .map_or(0, |id| id.as_str().len()),
+        )
+}
+
+#[cfg(test)]
+mod seed_byte_tests {
+    use super::*;
+
+    #[test]
+    fn positive_seed_byte_limit_includes_current_turn_processed_insertions() {
+        let root = tempfile::tempdir().unwrap();
+        for name in ["a.md", "b.md", "c.md"] {
+            std::fs::write(root.path().join(name), b"body\n").unwrap();
+        }
+        let mut vault = NativeVault::open(root.path()).unwrap();
+        vault
+            .family_enroll(&FamilyScope {
+                realm_id: zorid_sync_protocol::RealmId::new("seed-byte-realm").unwrap(),
+                vault_id: zorid_sync_protocol::VaultId::new("seed-byte-vault").unwrap(),
+            })
+            .unwrap();
+        let options = ExternalReconcileOptions {
+            scan: ScanOptions {
+                max_duration: std::time::Duration::from_secs(5),
+                ..Default::default()
+            },
+            max_work_units: std::num::NonZeroU16::new(1).unwrap(),
+        };
+        let _lock = vault.paths.lock(vault.options.lock_timeout).unwrap();
+        let mut budget = external_scan_quantum::ExternalWorkBudget::new(&options).unwrap();
+        let mut scan = vault
+            .external_progress_scan_with_budget(options.scan.clone(), Some(&mut budget))
+            .unwrap();
+        let path = VaultPath::new("a.md").unwrap();
+        let initial = scan.seed_metadata_bytes;
+        let added = processed_seed_bytes(&path);
+        let header = seed_header_bytes(
+            &scan.run.scan_id,
+            scan.checkpoint_revision.as_deref(),
+            &vault.store.identity().unwrap(),
+        );
+        // Exactly at the cap before this turn acknowledges its captured file.
+        std::sync::Arc::get_mut(vault.external_positive_names.as_mut().unwrap())
+            .unwrap()
+            .metadata_bytes =
+            external_positive_continuation::MAX_HINT_METADATA_BYTES - initial - header;
+        scan.record_processed_retaining(&mut vault, &[path.clone()], true)
+            .unwrap();
+        assert_eq!(scan.seed_metadata_bytes, initial + added);
+        assert_eq!(
+            header,
+            seed_header_bytes(
+                &scan.run.scan_id,
+                scan.checkpoint_revision.as_deref(),
+                &vault.store.identity().unwrap()
+            )
+        );
+        scan.record_processed_retaining(&mut vault, &[path], true)
+            .unwrap();
+        assert_eq!(
+            scan.seed_metadata_bytes,
+            initial + added,
+            "repeated ACK cannot double-charge metadata"
+        );
+        let id = scan.run.scan_id.clone();
+        scan.install_positive_seed(&mut vault, ExternalFileMode::Auto, &options.scan)
+            .unwrap();
+        assert!(
+            vault.external_positive_seed.is_none(),
+            "newly acknowledged metadata crosses aggregate cap"
+        );
+        assert_eq!(vault.external_positive_disabled_scan.as_ref(), Some(&id));
+    }
+}
 pub(super) fn marker(file: &File) -> Result<Marker> {
     let m = file.metadata()?;
     Ok((
@@ -273,57 +374,77 @@ pub(super) struct ProgressScan {
     proofs: BTreeMap<VaultPath, ExternalScanProof>,
     checkpoint_revision: Option<String>,
     active: bool,
+    seed_metadata_bytes: usize,
 }
 impl ProgressScan {
-    pub(super) fn refresh_positive_seed(
-        &self,
+    /// Consume only at the outer unfinished-source return, after the final
+    /// checkpoint ACK, admission checks and pending decision. No future normal
+    /// caller can accidentally use maps after their transfer.
+    pub(super) fn install_positive_seed(
+        self,
         vault: &mut NativeVault,
         mode: ExternalFileMode,
         options: &ScanOptions,
     ) -> Result<()> {
-        let Some(seed) = vault.external_positive_seed.as_mut() else {
+        let Some(names) = vault.external_positive_names.as_ref() else {
             return Ok(());
         };
-        if !self.active
-            || self.run.finished
-            || self.inventory.ready
-            || self.inventory.publication_started
-            || self.inventory.absence_bindings.is_some()
-            || seed.scan_id != self.run.scan_id
-        {
-            vault.external_positive_seed = None;
+        let current = self
+            .inventory
+            .directories
+            .get(self.inventory.next_directory);
+        let eligible = self.active
+            && !self.run.finished
+            && !self.inventory.ready
+            && !self.inventory.publication_started
+            && self.inventory.absence_bindings.is_none()
+            && names.scan_id == self.run.scan_id
+            && current.is_some_and(|directory| {
+                !directory.complete && directory.path.as_ref() == names.scope()
+            });
+        let count = names
+            .paths
+            .len()
+            .saturating_add(names.directories.len())
+            .saturating_add(self.proofs.len())
+            .saturating_add(self.inventory.processed.len());
+        let bytes = names
+            .metadata_bytes
+            .saturating_add(self.seed_metadata_bytes);
+        if !eligible {
+            vault.external_positive_names = None;
             return Ok(());
         }
-        seed.revision = self.checkpoint_revision.clone();
-        seed.mode = mode;
-        seed.options = Some(options.clone());
-        seed.authority = Some(vault.store.identity()?);
-        #[cfg(test)]
-        external_positive_continuation::record_seed_refresh(
-            self.inventory.processed.len(),
-            seed.paths.len(),
-        );
-        seed.processed = self
-            .inventory
-            .processed
-            .iter()
-            .filter(|path| {
-                path.parent() == seed.scope()
-                    && matches!(
-                        self.proofs.get(*path),
-                        Some(ExternalScanProof::Present {
-                            entry_kind: EntryKind::File,
-                            ..
-                        })
-                    )
-            })
-            .cloned()
-            .collect();
-        seed.paths
-            .retain(|path| !self.inventory.processed.contains(path));
-        if seed.paths.is_empty() {
-            vault.external_positive_seed = None;
+        if count > external_positive_continuation::MAX_POSITIVE_HINTS
+            || bytes > external_positive_continuation::MAX_HINT_METADATA_BYTES
+        {
+            // Global facts only grow in this scan. Do not rebuild the same
+            // unusable candidate cache on every later normal quantum.
+            vault.external_positive_disabled_scan = Some(self.run.scan_id.clone());
+            vault.external_positive_names = None;
+            return Ok(());
         }
+        let authority = vault.store.identity()?;
+        let bytes = bytes.saturating_add(seed_header_bytes(
+            &self.run.scan_id,
+            self.checkpoint_revision.as_deref(),
+            &authority,
+        ));
+        if bytes > external_positive_continuation::MAX_HINT_METADATA_BYTES {
+            vault.external_positive_disabled_scan = Some(self.run.scan_id.clone());
+            vault.external_positive_names = None;
+            return Ok(());
+        }
+        vault.external_positive_seed = Some(external_positive_continuation::PositiveSeed {
+            scan_id: self.run.scan_id,
+            revision: self.checkpoint_revision,
+            names: std::sync::Arc::clone(names),
+            processed: self.inventory.processed,
+            proofs: self.proofs,
+            mode,
+            authority: Some(authority),
+            options: Some(options.clone()),
+        });
         Ok(())
     }
     /// A no-op must retain the old CAS's scope/revision/corruption fence without
@@ -399,7 +520,12 @@ impl ProgressScan {
             ) {
                 return Err(corrupt("processed external path has no present proof"));
             }
-            changed |= self.inventory.processed.insert(path.clone());
+            if self.inventory.processed.insert(path.clone()) {
+                self.seed_metadata_bytes = self
+                    .seed_metadata_bytes
+                    .saturating_add(processed_seed_bytes(path));
+                changed = true;
+            }
         }
         if !retain && self.inventory.ready && self.pending_paths().is_empty() {
             vault.save_inventory(&mut self.checkpoint_revision, None)?;
@@ -648,7 +774,28 @@ impl NativeVault {
             .collect();
         // Observation persistence precedes immutable proof persistence. A proof
         // without its exact positive row cannot be an interrupted valid capture.
+        let mut seed_metadata_bytes = 0usize;
         for (path, proof) in &proofs {
+            let payload = match proof {
+                ExternalScanProof::Present {
+                    path: fact_path,
+                    physical,
+                    ..
+                } => fact_path
+                    .as_str()
+                    .len()
+                    .saturating_add(physical.inode.len())
+                    .saturating_add(physical.parent_inode.len()),
+                _ => usize::MAX,
+            };
+            seed_metadata_bytes = seed_metadata_bytes
+                .saturating_add(payload)
+                .saturating_add(path.as_str().len())
+                .saturating_add(
+                    std::mem::size_of::<VaultPath>()
+                        + std::mem::size_of::<ExternalScanProof>()
+                        + SEED_MAP_ENTRY_OVERHEAD_BYTES,
+                );
             if let ExternalScanProof::Present {
                 entry_kind,
                 physical,
@@ -716,11 +863,10 @@ impl NativeVault {
             );
         }
         let directories = inventory.directory_map();
-        if inventory
-            .processed
-            .iter()
-            .any(|path| !matches!(proofs.get(path), Some(ExternalScanProof::Present { .. })))
-        {
+        if inventory.processed.iter().any(|path| {
+            seed_metadata_bytes = seed_metadata_bytes.saturating_add(processed_seed_bytes(path));
+            !matches!(proofs.get(path), Some(ExternalScanProof::Present { .. }))
+        }) {
             return Err(corrupt(
                 "external processed cursor has no immutable present proof",
             ));
@@ -734,6 +880,7 @@ impl NativeVault {
             proofs,
             checkpoint_revision,
             active,
+            seed_metadata_bytes,
         })
     }
     fn invalidate_inventory(
@@ -976,43 +1123,74 @@ impl NativeVault {
                     }
                 };
             let mut directory_complete = true;
-            if budget.is_some() && names.len() <= external_positive_continuation::MAX_POSITIVE_HINTS
+            if self
+                .external_positive_disabled_scan
+                .as_ref()
+                .is_some_and(|scan| scan != &inventory.scan_id)
             {
-                let ancestors = inventory
-                    .directories
-                    .iter()
-                    .filter(|directory| {
-                        directory.path.is_none()
-                            || saved.path.as_ref().is_some_and(|scope| {
-                                directory.path.as_ref().is_some_and(|parent| {
-                                    scope == parent
-                                        || scope
-                                            .as_str()
-                                            .starts_with(&format!("{}/", parent.as_str()))
-                                })
+                self.external_positive_disabled_scan = None;
+            }
+            if budget.is_some()
+                && self.external_positive_disabled_scan.as_ref() != Some(&inventory.scan_id)
+                && names.len() <= external_positive_continuation::MAX_POSITIVE_HINTS
+            {
+                let reuse = self.external_positive_names.as_ref().is_some_and(|cached| {
+                    cached.scan_id == inventory.scan_id
+                        && cached.scope() == saved.path.as_ref()
+                        && cached.paths.len() == names.len()
+                        && cached.directories.len() == usize::from(saved.depth) + 1
+                        && cached.directories.iter().all(|ancestor| {
+                            directories.get(&ancestor.path).is_some_and(|current| {
+                                current.identity == ancestor.identity
+                                    && current.marker == ancestor.marker
                             })
-                    })
-                    .map(|directory| external_positive_continuation::HintDirectory {
-                        path: directory.path.clone(),
-                        identity: directory.identity.clone(),
-                        marker: directory.marker,
-                    })
-                    .collect();
-                #[cfg(test)]
-                external_positive_continuation::record_seed_build(names.len());
-                let paths = names
-                    .iter()
-                    .map(|name| child_path(saved.path.as_ref(), name))
-                    .collect::<Result<Vec<_>>>();
-                self.external_positive_seed = paths.ok().and_then(|paths| {
-                    external_positive_continuation::PositiveSeed::new(
-                        inventory.scan_id.clone(),
-                        ancestors,
-                        paths,
-                    )
+                        })
                 });
+                if !reuse {
+                    // Point-read only this original chain; do not walk all
+                    // unrelated directory cursors to find its ancestors.
+                    let mut chain = Vec::new();
+                    let mut scope = saved.path.clone();
+                    loop {
+                        let original = directories.get(&scope).ok_or_else(|| {
+                            corrupt("positive names lack their original ancestor")
+                        })?;
+                        chain.push(external_positive_continuation::HintDirectory {
+                            path: scope.clone(),
+                            identity: original.identity.clone(),
+                            marker: original.marker,
+                        });
+                        let Some(path) = scope else {
+                            break;
+                        };
+                        scope = path.parent();
+                    }
+                    chain.reverse();
+                    #[cfg(test)]
+                    external_positive_continuation::record_seed_build(names.len());
+                    let paths = names
+                        .iter()
+                        .map(|name| child_path(saved.path.as_ref(), name))
+                        .collect::<Result<Vec<_>>>();
+                    self.external_positive_names = paths
+                        .ok()
+                        .and_then(|paths| {
+                            external_positive_continuation::PositiveNames::new(
+                                inventory.scan_id.clone(),
+                                chain,
+                                paths,
+                            )
+                        })
+                        .map(std::sync::Arc::new);
+                    if self.external_positive_names.is_none() {
+                        self.external_positive_disabled_scan = Some(inventory.scan_id.clone());
+                    }
+                }
             } else {
-                self.external_positive_seed = None;
+                if names.len() > external_positive_continuation::MAX_POSITIVE_HINTS {
+                    self.external_positive_disabled_scan = Some(inventory.scan_id.clone());
+                }
+                self.external_positive_names = None;
             }
             for name in names
                 .into_iter()
