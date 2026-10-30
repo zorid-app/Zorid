@@ -354,9 +354,11 @@ export async function main(args=process.argv.slice(2)){
   finally{
     if(active){const launch=active.launch;try{await stop(launch);}catch(error){report.errors.push('Final cleanup: '+error.message);}}
     try{report.remainingOwnedProcesses=ownedProcesses(clones);}catch(error){report.errors.push('Owned PID proof unavailable: '+error.message);report.remainingOwnedProcesses=[{unverifiable:true}];}
-    if(launchMode.preRegister&&!report.remainingOwnedProcesses.length&&clones.length===2)try{registerOwnedClones(out,clones,true,{record:report.cloneRegistration.cleanup});}catch(error){report.errors.push('Exact clone unregistration: '+error.message);}
-    if(!report.remainingOwnedProcesses.length&&!args.includes('--keep-clones'))for(const app of clones)await fs.rm(app,{recursive:true});
-    report.clonesRetained=args.includes('--keep-clones')||report.remainingOwnedProcesses.length>0;
+    let registrationCleanupProven=!launchMode.preRegister||report.cloneRegistration.actions.length===0;
+    if(launchMode.preRegister&&!report.remainingOwnedProcesses.length&&clones.length===2)try{registerOwnedClones(out,clones,true,{record:report.cloneRegistration.cleanup});registrationCleanupProven=true;}catch(error){report.errors.push('Exact clone unregistration: '+error.message);}
+    report.cloneRegistration.cleanupProven=registrationCleanupProven;
+    if(!report.remainingOwnedProcesses.length&&!args.includes('--keep-clones')&&registrationCleanupProven)for(const app of clones)await fs.rm(app,{recursive:true});
+    report.clonesRetained=args.includes('--keep-clones')||report.remainingOwnedProcesses.length>0||!registrationCleanupProven;
     const runtimeVersions=label=>[...new Set(report.launches.filter(launch=>launch.label===label&&launch.mainScope?.electron).map(launch=>launch.mainScope.electron))];
     report.runtimeComparison={baseline:runtimeVersions('baseline'),candidate:runtimeVersions('candidate')};
     report.runtimeComparison.sameElectronVersion=report.runtimeComparison.baseline.length===1&&report.runtimeComparison.candidate.length===1&&report.runtimeComparison.baseline[0]===report.runtimeComparison.candidate[0];

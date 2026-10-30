@@ -35,7 +35,8 @@ export async function createLaunchServices({pinned,pair,launch,profile,beforeSpa
   wrapper.once('error',error=>{launch.launchError=String(error);receipt.error=String(error);});
   state.refreshLogs=async()=>{const read=io.readFile??(file=>fs.readFile(file,'utf8'));[launch.stdout,launch.stderr]=await Promise.all([read(stdout),read(stderr)]);launch.stdout=launch.stdout.slice(-1000000);launch.stderr=launch.stderr.slice(-1000000);};
   state.adopt=identity=>{state.owner=authenticate(identity,{executable:pinned.executable,appPath:pinned.archive,profile:pair.profile,data:pair.data},readProcesses(),wrapper.pid);launch.pid=state.owner.pid;receipt.appIdentity=state.owner;return state.owner;};
-  state.assertAlive=()=>{assert.ok(!launch.launchError,'LaunchServices wrapper failed');assert.ok(state.owner,'Actual main PID not yet authenticated');assertLifetime(state.owner,readProcesses());};
+  state.assertOwner=()=>{assert.ok(state.owner,'Actual main PID not yet authenticated');assertLifetime(state.owner,readProcesses());};
+  state.assertAlive=()=>{assert.ok(!launch.launchError,'LaunchServices wrapper failed');state.assertOwner();};
   return state;
 }
 /** Mode-specific observed normal lifecycle, not a fabricated direct ChildProcess
@@ -52,13 +53,13 @@ export async function stopLaunchServices(owned,launch,{apps,shutdownMs,io={}}){
     launch.ownedProcessesBeforeQuit=await attempt('owned-PID-prequit-proof',rows);
     launch.rendererEvents=owned.renderer?.events??[];launch.mainInspectorEvents=owned.main?.events??[];
     try{
-      if(owned.main&&state.owner)await attempt('actual-app-quit',()=>{state.assertAlive();return owned.main.evaluate('globalThis.__zoridPackagedQuit();true');});
+      if(owned.main&&state.owner)await attempt('actual-app-quit',()=>{state.assertOwner();return owned.main.evaluate('globalThis.__zoridPackagedQuit();true');});
     }finally{
       for(const [name,client]of [['renderer',owned.renderer],['browser',owned.browser],['main',owned.main]])if(client)await attempt(name+'-inspector-close',()=>client.close());
       const end=now()+shutdownMs;
       while(now()<end){const remaining=await attempt('owned-PID-exit-proof',rows);if(remaining?.length===0&&state.receipt.wrapperExitCode!==null)break;await pause(25);}
       const alive=await attempt('owned-PID-timeout-proof',rows);
-      if(state.owner&&alive?.some(row=>row.pid===state.owner.pid))await attempt('authenticated-app-TERM',()=>{state.assertAlive();signal(state.owner.pid,'SIGTERM');forced=true;});
+      if(state.owner&&alive?.some(row=>row.pid===state.owner.pid))await attempt('authenticated-app-TERM',()=>{state.assertOwner();signal(state.owner.pid,'SIGTERM');forced=true;});
       const forcedEnd=now()+2000;
       while(forced&&now()<forcedEnd){const remaining=await attempt('owned-PID-TERM-proof',rows);if(remaining?.length===0)break;await pause(25);}
     }
@@ -80,6 +81,12 @@ export function registerOwnedClones(out,apps,unregister=false,{execute=(cmd,args
   assert.equal(apps.length,2,'Registration must apply equally to both clones');
   for(const app of apps){assert.equal(path.dirname(app),path.join(out,'clones'));assert.ok(['baseline.app','candidate.app'].includes(path.basename(app)));}
   assert.equal(new Set(apps).size,2);
-  for(const app of apps){const row={app,operation:unregister?'unregister-owned-clone':'register-owned-clone',startedAt:now()};record.push(row);const result=execute(REGISTER,[unregister?'-u':'-f',app]);Object.assign(row,{completedAt:now(),exitCode:result.status,signal:result.signal??null,stdoutSha256:hash(result.stdout??''),stderrSha256:hash(result.stderr??'')});assert.equal(result.status,0,'Exact clone LaunchServices registration failed');assert.ok(!result.error&&!result.signal);}
+  const errors=[];
+  for(const app of apps){
+    const row={app,operation:unregister?'unregister-owned-clone':'register-owned-clone',startedAt:now()};record.push(row);
+    try{const result=execute(REGISTER,[unregister?'-u':'-f',app]);Object.assign(row,{completedAt:now(),exitCode:result.status,signal:result.signal??null,stdoutSha256:hash(result.stdout??''),stderrSha256:hash(result.stderr??'')});assert.equal(result.status,0,'Exact clone LaunchServices registration failed');assert.ok(!result.error&&!result.signal);}
+    catch(error){row.error=String(error);row.completedAt=now();errors.push(error);if(!unregister)throw error;}
+  }
+  if(errors.length)throw new AggregateError(errors,'Exact clone unregistration remains unproven; retained paths require cleanup');
   return record;
 }
