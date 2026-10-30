@@ -60,7 +60,7 @@ function relevantCollection(command:DatabaseRequest,receipt:DatabaseResponse):Da
   if(command.op==='create_entry'||command.op==='set_entry'||command.op==='duplicate_entry'){
     const entryId=command.op==='duplicate_entry'?command.newEntryId:command.entryId;
     const entries=receipt.entries.filter(entry=>entry.entryId===entryId),entry=entries[0];
-    if(entries.length!==1||entry.deleted||entry.pendingProjection||Object.keys(entry.problems??{}).length
+    if(entries.length!==1||entry.deleted
       ||entry.collectionId!==collection.id||('path'in command&&entry.path!==command.path)
       ||('values'in command&&command.values&&Object.entries(command.values).some(([field,value])=>!same(value,entry.values[field]))))return fail();
   }
@@ -89,15 +89,21 @@ export function captureCollectionSourceCompletion(options:CaptureCollectionSourc
       ||originalView.order!==undefined&&!same(originalView.order,kind.originalOrder))return fail();
   }else if(kind.type!=='none')return fail();
   const preparedSource=document.toString();
-  let commandFingerprint:string|undefined,receiptFingerprint:string|undefined,result:CompletedCollectionSource|undefined;
+  let commandFingerprint:string|undefined,acceptedIdentity:string|undefined,receiptFingerprint:string|undefined,result:CompletedCollectionSource|undefined;
   return Object.freeze({complete(rawReceipt:DatabaseResponse,rawCommand:DatabaseRequest):CompletedCollectionSource {
     const request=captureDatabaseRequest({schemaVersion:1,command:rawCommand}),fingerprint=JSON.stringify(request);
     if(commandFingerprint!==undefined&&commandFingerprint!==fingerprint)return fail();
     commandFingerprint=fingerprint;
     const receipt=validateDatabaseValue(request,rawReceipt),receiptKey=JSON.stringify(receipt);
     if(result){if(receiptFingerprint!==receiptKey)return fail();return result;}
-    if(receipt.projection.pending||receipt.projection.issues.length)throw new Error('The collection completion is waiting for verified file publication.');
     const command=request.command as DatabaseRequest,collection=relevantCollection(command,receipt);
+    const relevantEntry='entryId'in command?receipt.entries.find(entry=>entry.entryId===(command.op==='duplicate_entry'?command.newEntryId:command.entryId)):undefined;
+    // Publication may update fileRevision, pendingProjection and problems. It
+    // cannot replace the accepted logical collection/field/option/entry IDs.
+    const identity=JSON.stringify({collection,entry:relevantEntry?{entryId:relevantEntry.entryId,collectionId:relevantEntry.collectionId,revision:relevantEntry.revision,path:relevantEntry.path,values:relevantEntry.values,deleted:relevantEntry.deleted}:undefined});
+    if(acceptedIdentity!==undefined&&acceptedIdentity!==identity)return fail();
+    acceptedIdentity=identity;
+    if(receipt.projection.pending||receipt.projection.issues.length||relevantEntry?.pendingProjection||Object.keys(relevantEntry?.problems??{}).length)throw new Error('The collection completion is waiting for verified file publication.');
     const next=BaseDocument.parse(preparedSource);
     if(kind.type==='change-source'||kind.type==='add-view'){
       if(command.op!=='create')return fail();

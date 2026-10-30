@@ -121,3 +121,33 @@ test('explicit create schema must match returned generated fields rather than a 
   assert.throws(()=>make().complete(receipt(),command));
   assert.doesNotThrow(()=>make().complete(receipt({...created,properties:[appended]}),command));
 });
+
+test('pending receipt fixes generated collection identity before clean publication',()=>{
+  const plan=captureCollectionSourceCompletion({...base(),kind:{type:'change-source'}}),pending=receipt({...created,id:'generated001'});
+  pending.projection.pending=1;assert.throws(()=>plan.complete(pending,create),/waiting for verified file publication/);
+  assert.throws(()=>plan.complete(receipt({...created,id:'generated002'}),create),/no longer matches/);
+  const result=plan.complete(receipt({...created,id:'generated001'}),create);
+  assert.deepEqual(BaseDocument.parse(result.desiredSource).views[0].source,{kind:'collection',id:'generated001'});
+});
+
+test('pending receipt fixes generated property and option IDs before clean publication',()=>{
+  const command:DatabaseRequest={...update,properties:[field,{name:'Stage',datatype:'select',options:[{name:'Open'}]}]};
+  const generated={id:'field0000002',name:'Stage',datatype:'select' as const,options:[{id:'option000001',name:'Open'}]};
+  for(const changed of [{...generated,id:'field0000003'},{...generated,options:[{id:'option000002',name:'Open'}]}]){
+    const plan=captureCollectionSourceCompletion({...base(),kind:{type:'append-properties',collection,originalOrder:['file.name','note.field0000001']}});
+    const pending=receipt({...created,properties:[field,generated]});pending.projection.pending=1;
+    assert.throws(()=>plan.complete(pending,command),/waiting for verified file publication/);
+    assert.throws(()=>plan.complete(receipt({...created,properties:[field,changed]}),command),/no longer matches/);
+    const clean=plan.complete(receipt({...created,properties:[field,generated]}),command);
+    assert.deepEqual(BaseDocument.parse(clean.desiredSource).views[0].order,['file.name','note.field0000001','note.field0000002']);
+  }
+});
+
+test('pending entry receipt permits publication fields to settle while retaining its logical entry and values',()=>{
+  const command:DatabaseRequest={op:'create_entry',operationId:uuid(30),collectionId:created.id,expectedCollectionRevision:created.revision,entryId:uuid(31),path:'New.md',values:{field0000001:'Exact'}};
+  const entry={entryId:uuid(31),collectionId:created.id,revision:uuid(32),fileRevision:null,path:'New.md',values:{field0000001:'Exact'},deleted:false,pendingProjection:true};
+  const plan=captureCollectionSourceCompletion({...base(),kind:{type:'none'}});
+  assert.throws(()=>plan.complete({...receipt(),entries:[entry],projection:{pending:1,issues:[]}},command),/waiting for verified file publication/);
+  const clean={...receipt(),entries:[{...entry,fileRevision:uuid(33),pendingProjection:false}]};
+  assert.equal(plan.complete(clean,command).desiredSource,source);
+});
