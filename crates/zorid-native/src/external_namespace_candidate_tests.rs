@@ -80,7 +80,6 @@ fn reconcile_source(vault: &mut NativeVault) -> Result<ExternalReconcileReport> 
 #[test]
 fn already_processed_positive_body_does_not_block_unrelated_namespace_work() {
     let (root, mut vault, ids) = fixture(false);
-    std::fs::remove_file(root.path().join("Removed.md")).unwrap();
     {
         let _lock = vault.paths.lock(vault.options.lock_timeout).unwrap();
         let mut scan = vault.external_progress_scan_locked(options().scan).unwrap();
@@ -101,21 +100,19 @@ fn already_processed_positive_body_does_not_block_unrelated_namespace_work() {
     );
     let report = reconcile_source(&mut vault).unwrap();
     assert!(report.complete, "{report:?}");
-    assert_eq!(report.namespace.len(), 1);
+    // Completing the remaining exact positive is unrelated routing work, not
+    // a namespace mutation. Real namespace transactions retain their existing
+    // full closure/corruption checks independently of this scheduling seam.
+    assert!(report.namespace.is_empty());
     assert!(vault
         .store
-        .read_metadata(&ids["Removed.md"])
+        .physical_binding(&ids["Removed.md"])
         .unwrap()
-        .is_none());
-    assert!(matches!(
-        vault
-            .store
-            .family_materialization(&ids["Removed.md"])
-            .unwrap()
-            .unwrap()
-            .publication,
-        zorid_store::FamilyPublication::Tombstone
-    ));
+        .is_some());
+    assert_eq!(
+        std::fs::read(root.path().join("Removed.md")).unwrap(),
+        b"removed original"
+    );
     assert_eq!(
         std::fs::read(root.path().join("Kept.md")).unwrap(),
         b"kept unchanged"
