@@ -64,3 +64,20 @@ test('background metadata failure remains owned without idle retries and the req
   await assert.rejects(f.runner.flush(),error=>error===failure);assert.equal(f.runner.error,failure);
   f.checkpoints.list=list;await f.runner.flush();assert.equal(f.runner.error,undefined);assert.deepEqual(f.recovered,['one']);f.runner.stop();
 });
+
+
+test('background classification yields after each head and admits only retained work',async()=>{
+  const f=fixture([head('clean',false),head('dirty'),head('another')]);let firstTurnLoads=-1;
+  const load=f.checkpoints.load;f.checkpoints.load=async key=>{const value=await load(key);if(key==='note/v1/clean')setTimeout(()=>{firstTurnLoads=f.loads.length;},0);return value;};
+  f.runner.start();for(let n=0;n<400&&f.recovered.length<2;n++)await new Promise(resolve=>setTimeout(resolve,5));
+  assert.equal(firstTurnLoads,1,'classification must yield between checkpoint bodies');assert.deepEqual(f.recovered,['dirty','another']);assert.deepEqual(f.loads,['note/v1/clean','note/v1/dirty','note/v1/another']);
+  await f.runner.flush();assert.equal(f.loads.length,3,'successful heads are not reclassified by the required flush');f.runner.stop();
+});
+
+test('a failed background head does not hide later recovery and remains required for a safe flush',async()=>{
+  const f=fixture([head('broken'),head('retained')]),failure=Error('one unavailable checkpoint');let failed=true;const load=f.checkpoints.load;
+  f.checkpoints.load=async key=>{if(key==='note/v1/broken'&&failed)throw failure;return load(key);};f.runner.start();
+  for(let n=0;n<400&&!f.recovered.includes('retained');n++)await new Promise(resolve=>setTimeout(resolve,5));
+  assert.deepEqual(f.recovered,['retained']);assert.equal(f.runner.error,failure);await assert.rejects(f.runner.flush(),error=>error===failure);
+  failed=false;await f.runner.flush();assert.deepEqual(f.recovered,['retained','broken']);assert.equal(f.runner.error,undefined);f.runner.stop();
+});

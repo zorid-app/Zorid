@@ -12,7 +12,7 @@ import type {IndependentDraftProvider,IndependentDraftCandidate} from '../src/co
 function gate(){let resolve!:()=>void;const promise=new Promise<void>(done=>{resolve=done;});return{promise,resolve};}
 const turn=()=>new Promise<void>(resolve=>setImmediate(resolve));
 async function until(check:()=>boolean,message='expected owned continuation'){for(let i=0;i<100&&!check();i++)await turn();assert.ok(check(),message);}
-async function fixture(t:TestContext,other:'clean'|'dirty'|'operation'|'malformed'|'conflict'='clean',selectedRecovery:'canonical'|'independent'|'held'='canonical',pendingConditional=0){
+async function fixture(t:TestContext,other:'clean'|'dirty'|'operation'|'malformed'|'conflict'|'unavailable'='clean',selectedRecovery:'canonical'|'independent'|'held'='canonical',pendingConditional=0,otherNamespace:'known'|'unknown'|'foreign'='known'){
   const dom=new JSDOM('<main></main>',{url:'https://zorid.test/',pretendToBeVisual:true}),saved=new Map<string,PropertyDescriptor|undefined>();
   const matchMedia=(media:string)=>({matches:false,media,addListener(){},removeListener(){},addEventListener(){},removeEventListener(){}});
   for(const[key,value]of Object.entries({window:dom.window,document:dom.window.document,localStorage:dom.window.localStorage,navigator:dom.window.navigator,
@@ -24,17 +24,18 @@ async function fixture(t:TestContext,other:'clean'|'dirty'|'operation'|'malforme
   const scope={vaultId:'deferred-vault',clientId:'deferred-client'},records=new Map<string,DurableWriteRead>(),heads=new Map<string,Checkpoint>();
   for(const path of ['Selected.md','Other.md',...Array.from({length:pendingConditional},(_,i)=>`Pending${i+1}.md`)]){const entryId=path.split('.')[0].toLowerCase();records.set(entryId,{entryId,path,revision:'file-1',content:`Saved ${entryId}`,stat:{ctime:1,mtime:1,size:14}});}
   class Adapter extends MemoryAdapter{durableWrites!:DurableWrites;independentDrafts!:IndependentDraftProvider;
-    override async list(){return(await super.list()).map(row=>{const current=[...records.values()].find(record=>record.path===row.path);return current?{...row,entryId:current.entryId,revision:current.revision}:row;});}}
+    override async list(){return(await super.list()).map(row=>{const current=[...records.values()].find(record=>record.path===row.path);return current?{...row,entryId:current.entryId==='other'&&otherNamespace!=='known'?(otherNamespace==='unknown'?undefined:'foreign-other'):current.entryId,revision:current.revision}:row;});}}
   const adapter=new Adapter(Object.fromEntries([...records.values()].map(row=>[row.path,row.content])));
-  const plans=new Map<string,DurableWriteInput>(),intents=new Map<string,DurableWriteIntent>(),journal=new Map<string,IndependentDraftCandidate>(),loaded:string[]=[],queries:string[]=[],committed:string[]=[],planned:string[]=[];
+  const sourceReads:string[]=[],plans=new Map<string,DurableWriteInput>(),intents=new Map<string,DurableWriteIntent>(),journal=new Map<string,IndependentDraftCandidate>(),loaded:string[]=[],queries:string[]=[],committed:string[]=[],planned:string[]=[];
   const captures=new Map<string,{captureId:string;logicalWitness:{entryId:string;path:string;revision:string};source:string}>();let captureAttempts=0;
-  let beforeCommit:((ref:DurableWriteRef)=>void|Promise<void>)|undefined;
+  let beforeCommit:((ref:DurableWriteRef)=>void|Promise<void>)|undefined,beforeRead:((entryId:string)=>void|Promise<void>)|undefined;
+  let otherUnavailable=other==='unavailable';
   let serial=0,releases=0;const held=gate(),entered=gate();
-  const writes:DurableWrites={checkpoints:{scope,load:async key=>{loaded.push(key);if(key==='note/v1/other'||selectedRecovery==='held'&&key==='note/v1/selected'){entered.resolve();await held.promise;}return structuredClone(heads.get(key)??null);},
+  const writes:DurableWrites={checkpoints:{scope,load:async key=>{loaded.push(key);if(key==='note/v1/other'||selectedRecovery==='held'&&key==='note/v1/selected'){entered.resolve();if(key==='note/v1/other'&&otherUnavailable)throw Error('Other checkpoint unavailable');await held.promise;}return structuredClone(heads.get(key)??null);},
     list:async()=>({items:[...heads.values()].map(({encodedState,...metadata})=>metadata),cursor:null,highWater:String(heads.size)}),changes:async()=>({items:[],cursor:null,highWater:String(heads.size)}),
     compareAndSwap:async change=>{const old=heads.get(change.key);if(old?.revision===change.nextRevision){assert.equal(old.encodedState,change.encodedState);return structuredClone(old);}assert.equal(change.expectedRevision,old?.revision??null);
       const row:Checkpoint={version:1,...scope,key:change.key,revision:change.nextRevision,sequence:String(++serial),deleted:change.encodedState===null,byteLength:Buffer.byteLength(change.encodedState??''),encodedState:change.encodedState};heads.set(change.key,row);return structuredClone(row);}},
-    readText:async path=>structuredClone([...records.values()].find(row=>row.path===path)!),readTextById:async id=>structuredClone(records.get(id)??null),
+    readText:async path=>{const row=[...records.values()].find(row=>row.path===path)!;sourceReads.push(row.entryId);return structuredClone(row);},readTextById:async id=>{sourceReads.push(id);const value=structuredClone(records.get(id)??null);await beforeRead?.(id);return value;},
     planWrite:async input=>{planned.push(input.operationId);plans.set(input.operationId,structuredClone(input));return{version:1,...scope,entryId:input.expectedEntryId,operationId:input.operationId,encodedPlan:JSON.stringify(input)};},
     prepare:async plan=>{const input=plans.get(plan.operationId);if(input?.conditionalSavedSource)captures.delete(input.conditionalSavedSource.captureId);const intent:DurableWriteIntent={ref:{...scope,entryId:plan.entryId,operationId:plan.operationId,token:plan.operationId},state:'prepared',acknowledged:false};intents.set(plan.operationId,intent);return structuredClone(intent);},
     query:async ref=>{queries.push(ref.operationId);return structuredClone(intents.get(ref.operationId)??null);},
@@ -75,19 +76,21 @@ async function fixture(t:TestContext,other:'clean'|'dirty'|'operation'|'malforme
       baseline:{...records.get('selected')!},draft:'Recovered independent selected draft',checkpointRevision:null,pendingOperation:null});
   }
   const platformId='test:deferred-startup';dom.window.localStorage.setItem(`zorid:workspace:${platformId}`,JSON.stringify({activePaneId:'pane',panes:[{id:'pane',active:0,tabs:[{id:'selected-tab',path:'Selected.md',kind:'note',mode:'live'}]}]}));
-  const root=dom.window.document.querySelector<HTMLElement>('main')!,factory=(parent:HTMLElement,options:EditorOptions):EditorHandle=>{const input=dom.window.document.createElement('textarea');input.value=options.value;parent.append(input);input.oninput=()=>{options.validateChange?.(input.value);options.onChange(input.value);};return{getValue:()=>input.value,setValue:value=>{input.value=value;},focus:()=>input.focus(),destroy:()=>input.remove(),insert:value=>{input.value+=value;options.onChange(input.value);}};};
+  let editorFrame=false;
+  const root=dom.window.document.querySelector<HTMLElement>('main')!,factory=(parent:HTMLElement,options:EditorOptions):EditorHandle=>{dom.window.requestAnimationFrame(()=>{editorFrame=true;});const input=dom.window.document.createElement('textarea');input.value=options.value;parent.append(input);input.oninput=()=>{options.validateChange?.(input.value);options.onChange(input.value);};return{getValue:()=>input.value,setValue:value=>{input.value=value;},focus:()=>input.focus(),destroy:()=>input.remove(),insert:value=>{input.value+=value;options.onChange(input.value);}};};
   const workspace=new Workspace(root,factory);let started=false;
   const opening=workspace.start({adapter,id:platformId,label:'Deferred test',release:async()=>{releases++;}}).then(()=>{started=true;});void opening.catch(()=>{});
-  t.after(async()=>{held.resolve();try{await opening;for(const[path,buffer]of workspace.buffers){if(buffer.hasRecoveryConflict){await buffer.closeMetadataProjection();workspace.buffers.delete(path);}}if(other==='malformed')heads.delete('note/v1/other');await workspace.destroy();}finally{dom.window.close();for(const[key,descriptor]of saved){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else Reflect.deleteProperty(globalThis,key);}}});
-  return{dom,workspace,root,adapter,heads,journal,held,entered,opening,loaded,queries,committed,planned,plans,records,captures,setCommitHook(hook:(ref:DurableWriteRef)=>void|Promise<void>){beforeCommit=hook;},get captureAttempts(){return captureAttempts;},get started(){return started;},get releases(){return releases;}};
+  t.after(async()=>{otherUnavailable=false;held.resolve();try{await opening;for(const[path,buffer]of workspace.buffers){if(buffer.hasRecoveryConflict){await buffer.closeMetadataProjection();workspace.buffers.delete(path);}}if(other==='malformed')heads.delete('note/v1/other');await workspace.destroy();}finally{dom.window.close();for(const[key,descriptor]of saved){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else Reflect.deleteProperty(globalThis,key);}}});
+  return{dom,workspace,root,adapter,heads,journal,held,entered,opening,loaded,queries,committed,planned,plans,records,captures,sourceReads,setReadHook(hook:(entryId:string)=>void|Promise<void>){beforeRead=hook;},restoreOtherCheckpoint(){otherUnavailable=false;},setCommitHook(hook:(ref:DurableWriteRef)=>void|Promise<void>){beforeCommit=hook;},get captureAttempts(){return captureAttempts;},get editorFrame(){return editorFrame;},get started(){return started;},get releases(){return releases;}};
 }
 
 test('selected recovered editor and independent protection do not wait for an unrelated checkpoint body',async t=>{
   const ui=await fixture(t);await until(()=>ui.started,'the selected editor must open while the unrelated checkpoint remains held');
   assert.equal(ui.root.querySelector<HTMLTextAreaElement>('textarea')!.value,'Recovered selected draft');assert.equal(ui.workspace.activePane.viewReady,true);
-  assert.deepEqual(ui.loaded,['note/v1/selected'],'metadata discovery must not hydrate unrelated clean checkpoint bodies');
+  assert.equal(ui.loaded[0],'note/v1/selected','the selected checkpoint is admitted before unrelated background classification');assert.equal(ui.workspace.buffers.has('Other.md'),false,'a held unrelated checkpoint cannot block or replace the selected actor');
   const input=ui.root.querySelector<HTMLTextAreaElement>('textarea')!;input.value='New protected selected draft';input.dispatchEvent(new ui.dom.window.Event('input',{bubbles:true}));
   await ui.workspace.buffers.get('Selected.md')!.flushDraftProtection();assert.ok([...ui.journal.values()].some(row=>row.entryId==='selected'&&row.draft===input.value));
+  await ui.entered.promise;assert.equal(ui.editorFrame,true,'unrelated checkpoint classification must allow the selected editor its first animation frame');
 });
 
 test('global flush recovers an unopened original pending operation before releasing the lease',async t=>{
@@ -107,7 +110,7 @@ test('independent selected recovery is adopted before authoring without unrelate
   const ui=await fixture(t,'clean','independent');await until(()=>ui.started);
   assert.equal(ui.root.querySelector<HTMLTextAreaElement>('textarea')!.value,'Recovered independent selected draft');
   assert.equal(ui.workspace.buffers.get('Selected.md')!.text,'Recovered independent selected draft');
-  assert.equal(ui.loaded.includes('note/v1/other'),false);
+  assert.equal(ui.workspace.buffers.has('Other.md'),false);
 });
 
 test('a later open joins the registry while an unopened dirty checkpoint remains held',async t=>{
@@ -138,13 +141,13 @@ test('later opening a conflicted checkpoint retains its draft and rejects a glob
 
 test('eight unopened conditional checkpoints do not strand a selected capture behind Native capacity',async t=>{
   const ui=await fixture(t,'clean','canonical',8);await until(()=>ui.started);const buffer=ui.workspace.buffers.get('Selected.md')!,witness=buffer.savedDurableWitness!;
-  assert.equal(ui.captures.size,8);assert.equal(ui.loaded.some(key=>key.startsWith('note/v1/pending')),false);
+  assert.equal(ui.captures.size,8);assert.equal(ui.committed.length,0);
   let capture:Awaited<ReturnType<typeof buffer.captureConditionalSavedSource>>;
   const saving=buffer.captureConditionalSavedSource(witness).then(value=>{capture=value;});void saving.catch(()=>{});
   try{
     for(let i=0;i<250&&!capture;i++)await new Promise(resolve=>setTimeout(resolve,10));
     assert.ok(capture,'selected capture must resume retained unopened operations automatically, without opening those notes or closing the vault');
-    await saving;assert.ok(capture);assert.equal(ui.loaded.includes('note/v1/other'),false,'capacity recovery must not read unrelated clean history');
+    await saving;assert.ok(capture);assert.equal(ui.sourceReads.includes('other'),false,'clean background history must not read unrelated source bodies');
     assert.ok(ui.committed.some(id=>id.startsWith('original-pending-')));assert.ok([...ui.plans.values()].every(input=>input.operationId.startsWith('original-pending-')));
     await buffer.releaseConditionalSavedSource(capture);
   }finally{await buffer.dispose().catch(()=>{});await saving.catch(()=>{});}
@@ -167,7 +170,7 @@ test('capacity recovery settles only the original accepted operation while newer
 for(const source of ['renderer','transport'])test(`untrusted ${source} capacity codes cannot trigger unopened-note recovery`,async t=>{
   const ui=await fixture(t,'clean','canonical',8);await until(()=>ui.started);ui.adapter.durableWrites.captureSavedSource=async()=>{throw Object.assign(Error('untrusted capacity'),{code:'source_capture_capacity',source});};
   const selected=ui.workspace.buffers.get('Selected.md')!;await assert.rejects(selected.captureConditionalSavedSource(selected.savedDurableWitness!),/untrusted capacity/);
-  assert.equal([...ui.workspace.buffers.values()].some(buffer=>buffer.savedDurableWitness?.entryId.startsWith('pending')),false);assert.deepEqual(ui.committed,[]);assert.equal(ui.captures.size,8);
+  assert.deepEqual(ui.planned,[]);assert.deepEqual(ui.committed,[]);assert.equal(ui.captures.size,8);
 });
 
 test('capacity-owned actors retry their original operation after a temporary planning failure',async t=>{
@@ -187,5 +190,57 @@ test('a host capacity code with a terminal cause cannot resume another accepted 
   const ui=await fixture(t,'clean','canonical',8);await until(()=>ui.started);const terminal=Object.assign(Error('invalid protocol'),{source:'host',code:'invalid_response'});
   ui.adapter.durableWrites.captureSavedSource=async()=>{throw Object.assign(Error('ambiguous capacity wrapper'),{code:'source_capture_capacity',source:'host',cause:terminal});};
   const selected=ui.workspace.buffers.get('Selected.md')!;await assert.rejects(selected.captureConditionalSavedSource(selected.savedDurableWitness!),/ambiguous capacity wrapper/);
-  assert.equal([...ui.workspace.buffers.values()].some(buffer=>buffer.savedDurableWitness?.entryId.startsWith('pending')),false);assert.deepEqual(ui.committed,[]);assert.equal(ui.captures.size,8);
+  assert.deepEqual(ui.planned,[]);assert.deepEqual(ui.committed,[]);assert.equal(ui.captures.size,8);
+});
+
+
+test('background recovery automatically resumes a retained ref after the protected selected editor is usable',async t=>{
+  const ui=await fixture(t,'operation');await until(()=>ui.started);assert.equal(ui.committed.length,0);
+  const selected=ui.workspace.buffers.get('Selected.md')!;selected.update('Protected while background ref waits');await selected.flushDraftProtection();
+  assert.ok([...ui.journal.values()].some(row=>row.entryId==='selected'&&row.draft===selected.text));assert.equal(ui.committed.length,0);
+  ui.held.resolve();for(let n=0;n<400&&!ui.committed.includes('original-operation');n++)await new Promise(resolve=>setTimeout(resolve,5));
+  assert.equal(ui.committed.filter(id=>id==='original-operation').length,1);assert.equal(ui.records.get('other')!.content,'Original pending source');assert.equal(ui.planned.includes('original-operation'),false);
+  assert.equal(ui.root.querySelector<HTMLTextAreaElement>('textarea')!.value,'Recovered selected draft','background recovery does not remount the active editor');
+});
+
+test('an unrelated background checkpoint read failure cannot fail or unprotect the selected editor',async t=>{
+  const ui=await fixture(t,'unavailable');await until(()=>ui.started);await ui.entered.promise;
+  const selected=ui.workspace.buffers.get('Selected.md')!;selected.update('Protected despite unrelated head error');await selected.flushDraftProtection();
+  assert.equal(ui.workspace.activePane.viewReady,true);assert.ok([...ui.journal.values()].some(row=>row.entryId==='selected'&&row.draft===selected.text));assert.equal(selected.error,null);
+  await assert.rejects(ui.workspace.flush(),/Other checkpoint unavailable/);assert.equal(ui.releases,0);ui.restoreOtherCheckpoint();ui.held.resolve();
+});
+
+test('a background dirty raw draft is admitted for recovery without automatically authoring it',async t=>{
+  const ui=await fixture(t,'dirty');await until(()=>ui.started);ui.held.resolve();for(let n=0;n<400&&!ui.workspace.buffers.get('Other.md')?.hasAdmittedContent;n++)await new Promise(resolve=>setTimeout(resolve,5));
+  const other=ui.workspace.buffers.get('Other.md')!;assert.ok(other);assert.equal(other.text,'Recovered other draft');assert.equal(other.dirty,true);
+  await new Promise(resolve=>setTimeout(resolve,450));assert.equal(ui.records.get('other')!.content,'Saved other');assert.equal([...ui.plans.values()].some(plan=>plan.expectedEntryId==='other'),false);
+});
+
+
+test('dirty recovery can identify a missing namespace ID only through the exact coherent actor',async t=>{
+  const ui=await fixture(t,'dirty','canonical',0,'unknown');await until(()=>ui.started);ui.held.resolve();
+  for(let n=0;n<400&&!ui.workspace.buffers.get('Other.md')?.hasAdmittedContent;n++)await new Promise(resolve=>setTimeout(resolve,5));
+  const other=ui.workspace.buffers.get('Other.md')!;assert.ok(other);assert.equal(other.savedDurableWitness?.entryId,'other');assert.equal(other.text,'Recovered other draft');assert.deepEqual(ui.planned,[]);
+});
+
+test('an unknown namespace path replacement during the coherent recovery read fences the late actor',async t=>{
+  const ui=await fixture(t,'dirty','canonical',0,'unknown');await until(()=>ui.started);const entered=gate(),held=gate(),original=ui.records.get('other')!,slot=ui.workspace.vault.entries.get('Other.md')!;
+  ui.setReadHook(async id=>{if(id==='other'){entered.resolve();await held.promise;}});ui.held.resolve();
+  try{
+    await entered.promise;ui.records.delete('other');ui.records.set('replacement-other',{...original,entryId:'replacement-other',content:'Replacement source'});ui.workspace.vault.entries.set('Other.md',{...slot});held.resolve();
+    for(let n=0;n<10;n++)await turn();assert.equal(ui.workspace.buffers.has('Other.md'),false);assert.equal(ui.workspace.activePane.viewReady,true);assert.deepEqual(ui.planned,[]);
+    await assert.rejects(ui.workspace.flush(),/missing or replaced|changed/);assert.equal(ui.releases,0);
+  }finally{held.resolve();ui.setReadHook(()=>{});ui.records.delete('replacement-other');ui.records.set('other',original);ui.workspace.vault.entries.set('Other.md',slot);}
+});
+
+test('a known foreign namespace ID refuses dirty recovery without reading or binding that actor',async t=>{
+  const ui=await fixture(t,'dirty','canonical',0,'foreign');await until(()=>ui.started);ui.held.resolve();
+  try{
+    await assert.rejects(ui.workspace.flush(),/missing or replaced/);assert.equal(ui.sourceReads.includes('other'),false);assert.equal(ui.workspace.buffers.has('Other.md'),false);assert.deepEqual(ui.planned,[]);assert.equal(ui.releases,0);
+  }finally{const slot=ui.workspace.vault.entries.get('Other.md')!;ui.workspace.vault.entries.set('Other.md',{...slot,entryId:'other'});}
+});
+
+test('clean recovery history with an unknown namespace ID never reads a source body or creates an actor',async t=>{
+  const ui=await fixture(t,'clean','canonical',0,'unknown');await until(()=>ui.started);ui.held.resolve();await ui.workspace.flush();
+  assert.equal(ui.sourceReads.includes('other'),false);assert.equal(ui.workspace.buffers.has('Other.md'),false);
 });

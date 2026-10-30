@@ -173,6 +173,7 @@ test('retained conflict outside the selected native document has a visible recov
   const recovered=await durableRecoveryFixture();
   const f=await setup(t,{editorOnly:true},false,{},undefined,recovered.adapter);
   await f.workspace.openNote('Other.md');
+  for(let n=0;n<400&&!f.workspace.buffers.get('One.md')?.hasAdmittedContent;n++)await new Promise(done=>setTimeout(done,5));
   const status=document.querySelector<HTMLElement>('.native-document-status')!;
   assert.ok(status.nextElementSibling?.matches('.panes'),'the native document keeps its existing notice-before-editor layout');
   assert.equal(status.hidden,false);assert.match(status.textContent??'',/Retained draft for “One” needs attention/);
@@ -189,6 +190,7 @@ test('full workspace exposes background recovery while a real Base owns the acti
   await recovered.adapter.write('Work.base','views: [{type: table, name: Table, order: [file.name]}]\n');
   const f=await setup(t,{},false,{},undefined,recovered.adapter);
   await f.workspace.openNote('Work.base');
+  for(let n=0;n<400&&!f.workspace.buffers.get('One.md')?.hasAdmittedContent;n++)await new Promise(done=>setTimeout(done,5));
   assert.ok(document.querySelector('[role="grid"][aria-label="Table"]'),'real Base rendered');
   const status=document.querySelector<HTMLElement>('.native-document-status');
   assert.ok(status,'the full workspace mounts shared save and recovery notices');
@@ -698,7 +700,9 @@ test('ambiguous protected versions stay accessible as exact read-only copies wit
     retire:async(change:any)=>{mutations.push(change);const value={...scope,...change,revision:change.nextRevision,deleted:true};branches.set(change.incarnationId+':'+change.writer,value);return receipt(value);},
   };
   Object.assign(recovered.adapter,{independentDrafts:provider});
-  const f=await setup(t,{editorOnly:true},false,{},undefined,recovered.adapter),buffer=f.workspace.buffers.get('One.md')!;assert.ok(buffer);
+  const f=await setup(t,{editorOnly:true},false,{},undefined,recovered.adapter);
+  for(let n=0;n<400&&!f.workspace.buffers.get('One.md')?.hasAdmittedContent;n++)await new Promise(done=>setTimeout(done,5));
+  const buffer=f.workspace.buffers.get('One.md')!;assert.ok(buffer);
   await buffer.flushDraftProtection();const mutationsBefore=mutations.length,readsBefore=reads.length;
   for(const flag of ['closing','platformDraining']){
     const internal=f.workspace as any,opening=internal.showProtectedDrafts('One.md',buffer);internal[flag]=true;

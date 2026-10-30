@@ -990,26 +990,36 @@ export class Workspace {
     const checkpoints=vault.adapter.durableWrites?.checkpoints;if(!checkpoints)return;
     const generation=this.vaultGeneration,registry=this.buffers,adapter=vault.adapter;
     const validate=()=>{if(this.vault!==vault||this.vaultGeneration!==generation||this.buffers!==registry||vault.adapter!==adapter||adapter.durableWrites?.checkpoints!==checkpoints||this.platformReleased||this.platformDrained||this.recoveringAdmissionVaults.has(vault))throw new Error('The note recovery owner changed; checkpoints are retained.');};
+    const recoveryActors=new Map<string,NoteBuffer>();
+    const writes=adapter.durableWrites!,viewed=(entryId:string)=>[...this.panes,...this.cachedViews.values()].some(pane=>pane.tabs.some(tab=>tab.path&&vault.entries.get(tab.path)?.entryId===entryId));
     const recovery=new DeferredNoteRecovery({checkpoints,validate,
       admitted:entryId=>[...registry.values()].some(buffer=>buffer.hasAdmittedContent&&buffer.savedDurableWitness?.entryId===entryId),
-      recover:async entryId=>{
-        validate();const entry=[...vault.entries.values()].find(entry=>entry.type==='file'&&entry.entryId===entryId);
-        if(!entry)throw new Error('Recovered note entry is missing; draft retained');
-        await this.bufferFor(entry.path,entryId,validate);validate();
+      recover:async(entryId,savedPath)=>{
+        validate();let entry=[...vault.entries.values()].find(entry=>entry.type==='file'&&entry.entryId===entryId),namespaceWitness:{entry:VaultEntry;token:symbol}|undefined,check=validate;
+        if(!entry){
+          // A legacy/partial namespace may omit IDs. Only an exact coherent
+          // lookup admits that saved actor, fenced by the original path slot.
+          const slot=savedPath===undefined?undefined:vault.entries.get(savedPath),token=slot?this.treeEntryToken(slot.path):undefined;
+          if(!slot||slot.type!=='file'||slot.entryId!==undefined||!token)throw new Error('Recovered note entry is missing or replaced; draft retained');
+          check=()=>{validate();if(vault.entries.get(slot.path)!==slot||this.treeEntryToken(slot.path)!==token)throw new Error('Recovered note entry changed; draft retained');};
+          const observed=await vault.readDurableTextById(entryId);check();
+          if(!observed||observed.entryId!==entryId||observed.path!==slot.path)throw new Error('Recovered note entry is missing or replaced; draft retained');
+          entry=slot;namespaceWitness={entry:slot,token};
+        }
+        const existing=registry.get(entry.path),buffer=await this.bufferFor(entry.path,entryId,check,undefined,namespaceWitness);check();
+        if(!existing&&!viewed(entryId))recoveryActors.set(entryId,buffer);
       }});
-    const capacityActors=new Map<string,NoteBuffer>();
-    const writes=adapter.durableWrites!,viewed=(entryId:string)=>[...this.panes,...this.cachedViews.values()].some(pane=>pane.tabs.some(tab=>tab.path&&vault.entries.get(tab.path)?.entryId===entryId));
     const unopened=(entryId:string)=>{
-      if(viewed(entryId)){capacityActors.delete(entryId);return false;}
-      const owned=capacityActors.get(entryId);
+      if(viewed(entryId)){recoveryActors.delete(entryId);return false;}
+      const owned=recoveryActors.get(entryId);
       return![...registry.values()].some(buffer=>buffer!==owned&&buffer.savedDurableWitness?.entryId===entryId)&&![...vault.entries.values()].some(entry=>entry.entryId===entryId&&registry.has(entry.path)&&registry.get(entry.path)!==owned);
     };
     const unregisterCapacity=registerNoteCaptureCapacityRecovery(writes,{validate,unopened,resume:async(request,operationId,check)=>{
       check();if(!unopened(request.logicalWitness.entryId))return false;
       const entry=[...vault.entries.values()].find(entry=>entry.type==='file'&&entry.entryId===request.logicalWitness.entryId);
       if(!entry||entry.path!==request.logicalWitness.path)return false;
-      const current=()=>{check();if(viewed(entry.entryId!)){capacityActors.delete(entry.entryId!);throw Error('The note was opened while its retained operation was being recovered.');}};
-      const buffer=await this.bufferFor(entry.path,entry.entryId,current);current();capacityActors.set(entry.entryId!,buffer);
+      const current=()=>{check();if(viewed(entry.entryId!)){recoveryActors.delete(entry.entryId!);throw Error('The note was opened while its retained operation was being recovered.');}};
+      const buffer=await this.bufferFor(entry.path,entry.entryId,current);current();recoveryActors.set(entry.entryId!,buffer);
       return buffer.resumeConditionalSavedSourceOperation(request,operationId,current);
     }});
     this.deferredNoteRecovery=recovery;this.disposers.push(()=>{recovery.stop();unregisterCapacity();});
@@ -1189,7 +1199,13 @@ export class Workspace {
         if(await platform.recoverCommands?.())await next.initialize({metadata:'background'});
         await this.replaceVault(platform,next);
         if(request===this.vaultRequest&&this.platform===platform)await this.openNativeInitialNote(platform);
-        if(request===this.vaultRequest&&this.platform===platform)this.deferredNoteRecovery?.start();
+        if(request===this.vaultRequest&&this.platform===platform){
+          const recovery=this.deferredNoteRecovery,generation=this.vaultGeneration;
+          // Let the admitted selected editor reach its first frame before
+          // unrelated retained checkpoints begin parsing in bounded turns.
+          const frame=requestAnimationFrame(()=>{if(request===this.vaultRequest&&this.platform===platform&&this.vaultGeneration===generation&&this.deferredNoteRecovery===recovery&&!this.platformReleased&&!this.platformDrained)recovery?.start();});
+          this.disposers.push(()=>cancelAnimationFrame(frame));
+        }
       }finally{if(this.nativeOpening===platform){this.nativeOpening=undefined;if(request===this.vaultRequest&&this.platform===platform)this.flushNativePresentation(this.activePane);}}
       if(request===this.vaultRequest&&this.platform===platform)this.notifyNativeNoteOpened(this.activePane);
     }});
@@ -1686,14 +1702,15 @@ export class Workspace {
     this.recoveredBufferBindings.delete(buffer);
   }
 
-  private async bufferFor(path:string,expectedEntryId?:string,validate:()=>void=()=>{},signal?:AbortSignal):Promise<NoteBuffer>{
+  private async bufferFor(path:string,expectedEntryId?:string,validate:()=>void=()=>{},signal?:AbortSignal,unidentifiedRecovery?:{entry:VaultEntry;token:symbol}):Promise<NoteBuffer>{
     const vault=this.vault,generation=this.vaultGeneration;
     // Freeze the selected actor before any initial read or shared-load wait.
     expectedEntryId??=vault.adapter.durableWrites?vault.entries.get(path)?.entryId:undefined;
-    const check=()=>{if(signal?.aborted)throw this.noteLoadCancelled();validate();if(this.vault!==vault||this.vaultGeneration!==generation)throw new Error('The selected vault changed before this note finished opening.');if(expectedEntryId!==undefined&&vault.entries.get(path)?.entryId!==expectedEntryId)throw new Error('The selected note identity changed');};
+    const identityCurrent=()=>{const entry=vault.entries.get(path);return entry?.entryId===expectedEntryId||!!unidentifiedRecovery&&!!entry&&entry===unidentifiedRecovery.entry&&entry.type==='file'&&entry.entryId===undefined&&this.treeEntryToken(path)===unidentifiedRecovery.token;};
+    const check=()=>{if(signal?.aborted)throw this.noteLoadCancelled();validate();if(this.vault!==vault||this.vaultGeneration!==generation)throw new Error('The selected vault changed before this note finished opening.');if(expectedEntryId!==undefined&&!identityCurrent())throw new Error('The selected note identity changed');};
     check();
     if(expectedEntryId!==undefined){
-      if(this.vault.entries.get(path)?.entryId!==expectedEntryId)throw new Error('The selected note identity changed');
+      if(!identityCurrent())throw new Error('The selected note identity changed');
       for(const [key,other] of this.buffers)if(key!==path&&other.savedDurableWitness?.entryId===expectedEntryId)throw new Error('The selected note moved; its existing draft is retained');
     }
     let buffer=this.buffers.get(path); if(buffer){
@@ -1706,7 +1723,7 @@ export class Workspace {
         // Join the creator's complete admission/cleanup before inspecting the
         // registry again. A superseded creator may have retired its empty buffer.
         await this.awaitNoteLoad(loading.catch(()=>{}),signal);check();
-        return this.bufferFor(path,expectedEntryId,validate,signal);
+        return this.bufferFor(path,expectedEntryId,validate,signal,unidentifiedRecovery);
       }
       await buffer.load(expectedEntryId,check,{signal});check();await this.bindRecoveredBuffer(path,buffer,check);check();return buffer;
     }
