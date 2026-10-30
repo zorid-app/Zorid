@@ -38,14 +38,16 @@ const input = (async()=>{
     if(dropped)break;
     selection.request(frame, await readControl('arm.json'));
     const command=frame.header.command;
-    const operationId=command.operation_id??command.reference?.operation_id??command.family?.request?.operation_id,requestOp=command.request?.op??command.request?.command?.op;
+    const operationId=command.operation_id??command.reference?.operation_id??command.family?.request?.operation_id,requestOp=command.request?.op??command.request?.command?.op,clientIdSha256=textSha256(command.client_id??command.reference?.client_id);
     await event({kind:'native-request',method:command.method,requestId:frame.header.request_id,
       ...(operationId?{operationId}:{}),entryId:command.entry_id??command.id??command.mutation?.id,key:command.key,
+      clientIdSha256,leaseClientIdSha256:textSha256(frame.header.lease?.client_id),leaseLocalStoreIdSha256:textSha256(frame.header.lease?.local_store_id),leaseTokenSha256:textSha256(frame.header.lease?.token),
       ...(typeof requestOp==='string'?{requestOp}:{}),commandSha256:digest(Buffer.from(JSON.stringify(command))),bodySha256:digest(frame.body)});
     if(['prepare_intent','commit_intent','file_command','checkpoint_cas'].includes(command.method))await event({kind:'native-write-request',method:command.method,requestId:frame.header.request_id,
+      clientIdSha256,
       ...(command.operation_id??command.reference?.operation_id??command.family?.request?.operation_id?{operationId:command.operation_id??command.reference?.operation_id??command.family?.request?.operation_id}:{}),
       ...(command.method==='checkpoint_cas'?{key:command.key,expectedRevision:command.expected_revision,nextRevision:command.next_revision}:{}),
-      ...(command.method==='prepare_intent'?{entryId:command.mutation?.id,expectedRevision:command.mutation?.expected,clientIdSha256:textSha256(command.client_id),sourceCaptureSha256:textSha256(command.source_capture),mutationSha256:digest(Buffer.from(JSON.stringify(command.mutation)))}:{}),
+      ...(command.method==='prepare_intent'?{entryId:command.mutation?.id,expectedRevision:command.mutation?.expected,sourceCaptureSha256:textSha256(command.source_capture),mutationSha256:digest(Buffer.from(JSON.stringify(command.mutation)))}:{}),
       commandSha256:digest(Buffer.from(JSON.stringify(command))),bodySha256:digest(frame.body)});
     requestCount++; requestChain=digest(Buffer.from(requestChain+digest(frame.raw)));
     await write(child.stdin,frame.raw);

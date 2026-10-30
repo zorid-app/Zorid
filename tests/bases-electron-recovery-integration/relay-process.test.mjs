@@ -45,6 +45,7 @@ const parser=new Frames();for await(const chunk of process.stdin)for(const frame
   assert.deepEqual(Buffer.concat(chunks),Buffer.concat([initial,echo]),'The selected simulated success frame never reached main');
   const events=await relay.events();assert.equal(events.filter(value=>value.kind==='dropped'&&value.token===token).length,1);
   const dispatched=events.filter(value=>value.kind==='native-write-request');assert.equal(dispatched.length,1);assert.equal(dispatched[0].method,'file_command');assert.equal(dispatched[0].operationId,'mock-operation');assert.equal(dispatched[0].bodySha256,digest(payload));assert.match(dispatched[0].commandSha256,/^[a-f0-9]{64}$/);assert.equal(JSON.stringify(dispatched[0]).includes(payload.toString()),false,'Request evidence logs a digest, never source bytes');assert.ok(events.indexOf(dispatched[0])<events.findIndex(value=>value.kind==='dropped'));
+  assert.equal(dispatched[0].clientIdSha256,digest(Buffer.from('mock-client')),'Create evidence must bind the command client to its real admission');
   assert.ok(events.some(value=>value.kind==='drop-child-closed'&&value.exitCode===0&&value.signal===null));
   assert.ok(events.some(value=>value.kind==='closed'&&value.dropped===true&&value.failed===false));
   assert.deepEqual(events.filter(value=>value.kind==='relay-failed'),[]);
@@ -184,13 +185,15 @@ const parser=new Frames();for await(const chunk of process.stdin)for(const frame
   const claim=encode({version:1,request_id:'1',command:{method:'claim_client',client_id:lease.client_id}}),claimed=encode({version:1,request_id:'1',ok:true,result:{lease}});
   child.stdin.write(claim);await wait(()=>Buffer.concat(chunks).length===initial.length+claimed.length);
   const command={method:'capture_saved_source',client_id:lease.client_id,capture_id:capture.capture_id,...capture.logical_witness},captured=encode({version:1,request_id:'2',ok:true,result:{capture}},source);
-  child.stdin.write(encode({version:1,request_id:'2',command}));await wait(()=>Buffer.concat(chunks).length===initial.length+claimed.length+captured.length);
-  const query=encode({version:1,request_id:'3',command:{method:'query_intent',reference:{token:intent.token,client_id:lease.client_id}}}),queried=encode({version:1,request_id:'3',ok:true,result:{intent}});
+  child.stdin.write(encode({version:1,request_id:'2',command,lease}));await wait(()=>Buffer.concat(chunks).length===initial.length+claimed.length+captured.length);
+  const query=encode({version:1,request_id:'3',command:{method:'query_intent',reference:{token:intent.token,client_id:lease.client_id}},lease}),queried=encode({version:1,request_id:'3',ok:true,result:{intent}});
   child.stdin.write(query);await wait(()=>Buffer.concat(chunks).length===initial.length+claimed.length+captured.length+queried.length);
   assert.deepEqual(Buffer.concat(chunks),Buffer.concat([initial,claimed,captured,queried]));child.stdin.end();assert.deepEqual(await closed,[0,null],Buffer.concat(errors).toString());
   const events=await relay.events();assert.ok(events.every(row=>row.generation===events[0].generation));assert.match(events[0].generation,/^[a-f0-9-]{36}$/);
   const requests=events.filter(row=>row.kind==='native-request');assert.deepEqual(requests.map(row=>row.method),['claim_client','capture_saved_source','query_intent']);assert.deepEqual(requests.map(row=>row.requestId),['1','2','3']);
   assert.equal(requests[1].entryId,capture.logical_witness.entry_id);assert.equal(requests[1].commandSha256,digest(Buffer.from(JSON.stringify(command))));assert.equal(requests[1].bodySha256,digest(Buffer.alloc(0)));
+  for(const row of requests.slice(1)){assert.equal(row.clientIdSha256,digest(Buffer.from(lease.client_id)));assert.equal(row.leaseClientIdSha256,digest(Buffer.from(lease.client_id)));assert.equal(row.leaseLocalStoreIdSha256,digest(Buffer.from(lease.local_store_id)));assert.equal(row.leaseTokenSha256,digest(Buffer.from(lease.token)));}
+  assert.equal(requests[0].leaseTokenSha256,undefined,'An unleased claim cannot fabricate a lease observation');
   const admission=events.find(row=>row.kind==='native-admission-response');assert.ok(admission,'A real successful peer claim must be passively observable');
   assert.equal(admission.method,'claim_client');assert.equal(admission.ok,true);assert.equal(admission.clientIdSha256,digest(Buffer.from(lease.client_id)));assert.equal(admission.localStoreIdSha256,digest(Buffer.from(lease.local_store_id)));assert.equal(admission.leaseTokenSha256,digest(Buffer.from(lease.token)));assert.equal(admission.requestSha256,digest(claim));assert.equal(admission.responseSha256,digest(claimed));
   const saved=events.find(row=>row.kind==='native-source-capture-response');assert.ok(saved);assert.equal(saved.captureIdSha256,digest(Buffer.from(capture.capture_id)));assert.equal(saved.clientIdSha256,admission.clientIdSha256);assert.equal(saved.logicalWitnessSha256,digest(Buffer.from(JSON.stringify({entryId:capture.logical_witness.entry_id,revision:capture.logical_witness.revision,path:capture.logical_witness.path}))));assert.equal(saved.bodySha256,digest(source));assert.equal(saved.responseSha256,digest(captured));
