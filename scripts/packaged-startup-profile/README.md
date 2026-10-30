@@ -1,6 +1,6 @@
 # Real packaged Zorid startup benchmark
 
-This harness launches the supplied **actual `.app` executable**. It does not load
+By default this harness launches the supplied **actual `.app` executable**. It does not load
 a development launcher, build a replacement app, or set `isPackaged` manually.
 It requires an exclusive app profiling slot. Preparing or testing this harness
 does not establish any native startup result.
@@ -12,6 +12,46 @@ node scripts/packaged-startup-profile/run.mjs \
   --candidate-source-manifest /absolute/path/to/matching/.release/inputs.json \
   --notes 1000 --repetitions 1 --seed 42
 ```
+
+`--launch-services` opts into normal macOS `/usr/bin/open -n -W -a` launch of the
+same two unchanged clones. Fresh exclusive stdout/stderr files authenticate this
+launch's debugger endpoints. The wrapper PID is recorded separately; the actual
+Main PID/executable/ASAR/profile/LocalData and process birth/arguments are then
+authenticated before any UI click or input. No wrapper exit is an app exit code.
+The passive renderer observer attaches first. Main attaches only after the actual
+packaged document navigates, which in the packaged source follows return from the
+BrowserWindow constructor. This avoids attaching Main during construction; it
+does not establish that any prior constructor duration was caused by attachment.
+Normal LaunchServices foreground is observed with the strict existing native
+window/document guards. This mode sends no activation requests or focus retries.
+Loss of already established foreground remains measurement interference.
+
+The original800ms clock is armed immediately before spawning `open`, after fresh
+log preparation, and includes LaunchServices/startup/attachment/navigation/input
+costs. Main authentication, Native request observation, vault/native scope and
+all original exact selected-body/viewport/two-frame guards still precede input.
+An attachment or input barrier completing after800ms remains indeterminate.
+
+LaunchServices cleanup uses an explicitly distinct **normal-lifecycle** proof:
+actual authenticated Electron quit-event0, observed real Native child exit0/null
+for every known Native PID, all exact owned app/Native PIDs absent, no forced
+termination and `open` wrapper exit0. The app's kernel exit status is **unknown**.
+The default direct ChildProcess exit-code oracle is unchanged. Missing lifecycle,
+Native exit or PID proof is negative; a vanished PID or wrapper0 is insufficient.
+
+`--pre-register-clones` requires LaunchServices mode and registers both exact
+clone paths outside the measured clocks, without launching them. It changes the
+explicit condition to process-cold, previously registered clones, with OS/disk
+caches uncontrolled. Registration may warm metadata/security caches; no six-second
+delay is attributed to registration without measurement. This touches only the
+clones' catalog registration; it calls no default-handler preference setter and
+performs no broad scan. Catalog registration can affect candidate app bindings
+while the same-bundle-ID clones are registered, so exact clone cleanup is recorded.
+Both clone registrations are removed after all owned processes are gone; failures
+remain invalid. No bundle ID, signing state, quarantine flag or artifact is edited.
+`--startup-profile` explicitly requests the supported opt-in buffered Main
+chronology and copies its bounded schema read-only after authentication/before
+Quit. Unsupported baseline profiles remain absent, with no invented phases.
 
 `--baseline-source-manifest` is also supported. Both manifests are optional; each
 provided file is retained and its file/native hashes checked against the actual

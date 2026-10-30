@@ -20,6 +20,7 @@ import {boundedMeasurement,documentVisibilitySource,isMeasurementInterference,Me
 import {sampleObserverSource} from './observer.mjs';
 import {installMainLifecycle,installMainObserver} from './main-observer.mjs';
 import {stopOwned} from './cleanup.mjs';
+import {launchServicesOptions,createLaunchServices,stopLaunchServices,observeLaunchServices,discoverIdentity,startupProfile,registerOwnedClones} from './launch-services.mjs';
 import {appPins,currentBrowserEndpoint,hash,hashFile,journalHeads,launchEnvironment,ownedOutput,ownedProcesses} from './support.mjs';
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -32,6 +33,7 @@ export async function main(args=process.argv.slice(2)){
   const out=ownedOutput(getOption(args,'--out',`/private/tmp/zorid-packaged-startup-${Date.now()}-${randomUUID().slice(0,8)}`));
   const notes=Number(getOption(args,'--notes','1000')),repetitions=Number(getOption(args,'--repetitions','1')),seed=Number(getOption(args,'--seed','42'));
   const prewarmEmptyProfile=args.includes('--prewarm-empty-profile'),fixturePolicy=fixtureOptions(args);
+  const launchMode=launchServicesOptions(args);
   const timeoutMs=Number(getOption(args,'--timeout-ms','30000')),shutdownMs=Number(getOption(args,'--shutdown-timeout-ms','60000'));
   assert.ok(Number.isSafeInteger(notes)&&notes>=2&&notes<=10000);assert.ok(Number.isSafeInteger(timeoutMs)&&timeoutMs>=4000&&timeoutMs<=120000&&Number.isSafeInteger(shutdownMs)&&shutdownMs>=10000&&shutdownMs<=120000);
   const schedule=planCampaign(repetitions,seed),asar=await import(pathToFileURL(require.resolve('@electron/asar')).href);
@@ -45,6 +47,10 @@ export async function main(args=process.argv.slice(2)){
       'Independent journal disk heads are read-only evidence, not a journal fsync/ACK or recovery proof. Core ACKs are reported only when actually observed.',
       'An unobservable fixed800ms attempt is indeterminate, not a fabricated valid target miss. Base readiness is a separate view metric without protected edit acceptance.',
     ]};
+  report.launchMode=launchMode.enabled?'launch-services':'direct-executable';
+  report.cleanupEvidence=launchMode.enabled?'Actual app quit0 + real Native exit0/null + exact owned PIDs absent + no force + open wrapper0; app kernel status unknown':'Direct ChildProcess exit0/null plus actual app quit0 and Native exit receipts';
+  report.cloneRegistration={explicit:launchMode.preRegister,actions:[],cleanup:[]};
+  if(launchMode.preRegister)report.cacheCondition+='; both exact APFS clones registered with LaunchServices outside launch clocks';
   report.fixturePolicy={...fixturePolicy,returnPath:returnTarget(fixturePolicy)};
   report.harnessFiles={};
   for(const name of await fs.readdir(fileURLToPath(new URL('.',import.meta.url))))if(/\.(mjs|md)$/.test(name))report.harnessFiles[name]=await hashFile(fileURLToPath(new URL(name,import.meta.url)));
@@ -54,6 +60,7 @@ export async function main(args=process.argv.slice(2)){
   const clones=[],pairs=new Map();let active;
   async function bounded(action,record,ms=timeoutMs,{activation=false}={}){
     return boundedMeasurement(action,{timeoutMs:ms,pause:sleep,guard:async()=>{
+      if(active?.launcher&&active.launch===record){await active.launcher.refreshLogs();if(active.launcher.owner)active.launcher.assertAlive();}
       if(record?.exitCode!==undefined||record?.launchError)throw Error('Owned app exited before evidence: '+record.stderr);
       if(!activation&&active?.foregroundEstablished)await checkForeground(record);
     }});
@@ -66,6 +73,14 @@ export async function main(args=process.argv.slice(2)){
     requireForeground(window,document);
   }
   async function foreground(launch,record){
+    if(active.launcher){
+      // A normal LaunchServices handoff is observed, never replaced by another
+      // activation attempt. Once established, lost focus remains interference.
+      const established=active.foregroundEstablished;if(established)await checkForeground(launch);
+      const receipt={calledAtMs:launch.elapsed(),mode:'launch-services-passive',activationRequested:false};(record.foregroundActivations??=[]).push(receipt);
+      await bounded(async()=>{receipt.window=await active.main.evaluate(foregroundSource(foregroundConfig(launch,false)));receipt.document=await active.renderer.evaluate(documentVisibilitySource);if(established)requireForeground(receipt.window,receipt.document);else assert.ok(receipt.window.focused&&receipt.window.visible&&!receipt.window.minimized&&receipt.document.hasFocus===true&&!receipt.document.hidden&&receipt.document.visibilityState==='visible','Normal LaunchServices foreground not yet observed');assert.equal(receipt.document.url,foregroundConfig(launch,false).url);},launch,remaining(launch,record),{activation:!established});
+      receipt.confirmedAtMs=launch.elapsed();active.foregroundEstablished=true;return receipt;
+    }
     const receipt={calledAtMs:launch.elapsed()};(record.foregroundActivations??=[]).push(receipt);active.foregroundEstablished=false;
     try{
       const config=foregroundConfig(launch,false);
@@ -89,8 +104,9 @@ export async function main(args=process.argv.slice(2)){
   async function coreRead(renderer,vault,name){return renderer.evaluate(`(async()=>{const context=await window.zorid.getDurableContext(${JSON.stringify(vault)});const value=await window.zorid.durableInvoke(${JSON.stringify(vault)},context.admissionId,'readText',[${JSON.stringify(name)}]);return{entryId:value.entryId,revision:value.revision,content:value.content};})()`);}
   async function stop(launch){
     if(!active)return;
-    const owned=active;await stopOwned(owned,launch,{apps:clones,shutdownMs});
-    if(owned.child.exitCode!==null||owned.child.signalCode!==null)active=null;
+    const owned=active;
+    if(owned.launcher){await stopLaunchServices(owned,launch,{apps:clones,shutdownMs});if(launch.cleanup?.gone)active=null;}
+    else{await stopOwned(owned,launch,{apps:clones,shutdownMs});if(owned.child.exitCode!==null||owned.child.signalCode!==null)active=null;}
   }
   async function configure(launch,record,newDocument=false){
     const config={identity:record.identity,path:record.path,characters:record.expectedCharacters,prefix:record.original.slice(0,160),visibleText:record.original.split('\n')[0].replace(/^#+\s*/,''),markers:{ready:'x',deadline:'y'}};
@@ -189,16 +205,18 @@ export async function main(args=process.argv.slice(2)){
 
   async function attachLaunch(launch,pair,pinned,startup){
     const expectedURL=pathToFileURL(path.join(pinned.archive,'dist/index.html')).href;
-    await observeEarly({
+    const hooks={
       measured:launch.measured,
       connectMain:async()=>{
         const mainURL=await bounded(()=>{const url=/Debugger listening on (ws:\/\/127\.0\.0\.1:\d+\/[^\s]+)/.exec(launch.stderr)?.[1];assert.ok(url,'Packaged main inspector not observable');return url;},launch);
         active.main=new CDP(mainURL);await active.main.call('Runtime.enable');launch.mainAttachedMs=launch.elapsed();launch.mainClockSamples=[await clock(active.main,launch)];
+        if(active.launcher){const identity=await active.main.evaluate(`(${discoverIdentity.toString()})()`);active.launcher.adopt(identity);active.orderEntry.pid=launch.pid;}
         launch.mainScope=await active.main.evaluate(`(${authenticateMain.toString()})(${JSON.stringify(foregroundConfig(launch,false))})`);return active.main;
       },
       installLifecycle:async main=>{
         launch.lifecycleScope=await main.evaluate(`(${installMainLifecycle.toString()})(${JSON.stringify({pid:launch.pid,executable:pinned.executable,expectedAppPath:pinned.archive,profile:pair.profile,localDataDirectory:pair.data,outputFile:launch.mainFinalFile})})`);
         launch.lifecycleAttachedMs=launch.elapsed();launch.mainClockSamples.push(await clock(main,launch));
+        if(launchMode.profile){try{launch.bufferedStartupProfile=startupProfile(await main.evaluate('globalThis.__zoridStartupProfile??null'));}catch(error){launch.startupProfileError=String(error);}}
       },
       connectRenderer:async()=>{
         const endpoint=await bounded(()=>currentBrowserEndpoint(launch.stderr),launch);launch.browserEndpoint=endpoint;
@@ -217,12 +235,18 @@ export async function main(args=process.argv.slice(2)){
         await configure(launch,startup,true);startup.configured=true;launch.rendererObserverInstalledMs=launch.elapsed();
         await active.renderer.call('Runtime.enable');await active.renderer.call('Page.enable');
       },
+      waitForPackagedNavigation:async()=>{
+        // loadFile/loadURL starts after new BrowserWindow has returned in the
+        // actual packaged Main. Do not connect the Main inspector before this.
+        await bounded(async()=>assert.equal(await active.renderer.evaluate('location.href.split("#")[0]'),expectedURL),launch,remaining(launch,startup));launch.packagedNavigationObservedMs=launch.elapsed();
+      },
       foreground:()=>foreground(launch,startup),
       installNativeObserver:async main=>{
         launch.nativeObserverScope=await main.evaluate(`(${installMainObserver.toString()})(${JSON.stringify({expectedAppPath:pinned.archive,profile:pair.profile,localDataDirectory:pair.data,outputFile:launch.mainFinalFile})})`);
         launch.nativeObserverAttachedMs=launch.elapsed();launch.nativeInstrumentationReady=true;launch.mainClockSamples.push(await clock(main,launch));
       },
-    });
+    };
+    if(active.launcher)await observeLaunchServices(hooks);else await observeEarly(hooks);
     await bounded(async()=>assert.equal(await active.renderer.evaluate('location.href.split("#")[0]'),expectedURL),launch);
     const loadedClock=await clock(active.renderer,launch);
     if(startup.clockSamples.some(sample=>sample.timeOrigin!==loadedClock.timeOrigin)){startup.preNavigationClockSamples=startup.clockSamples;startup.clockSamples=[];}
@@ -231,10 +255,15 @@ export async function main(args=process.argv.slice(2)){
     launch.nativeScope=await active.renderer.evaluate(`(async()=>{const context=await window.zorid.getDurableContext(${JSON.stringify(pair.vault)});if(!context?.scope)throw Error('Actual native scope unavailable');return context.scope;})()`);
     if(pair.preparation?.reset)assertFreshNativeScope(pair.preparation.evidence.scope,launch.nativeScope);launch.nativeScopeVerified=true;
   }
-  function beginLaunch(launch,pair,pinned,measured){
-    launch.measured=measured;launch.foregroundPolicy=measured?'required':'not-required-read-only-preparation';launch.inputAllowed=measured;const start=performance.now();Object.defineProperty(launch,'elapsed',{value:()=>performance.now()-start});launch.spawnWallClockDiagnostic=new Date().toISOString();
-    const startup=noteCase(launch,startupTarget(fixturePolicy,launch.mode),measured?(launch.mode==='reopen'?fixturePolicy.reopenKind:'startup-'+launch.mode):'prewarm-empty',0);if(!measured)Object.assign(startup,{path:'__empty_prewarm__.md',original:'',prefix:'',expectedCharacters:0});launch.cases.push(startup);if(measured)arm(launch,startup);
-    const child=spawn(pinned.executable,['--inspect=127.0.0.1:0','--user-data-dir='+pair.profile,'--remote-debugging-address=127.0.0.1','--remote-debugging-port=0','--no-first-run'],{env:launchEnvironment(pair.profile,pair.data),cwd:out,stdio:['ignore','pipe','pipe']});launch.pid=child.pid;
+  async function beginLaunch(launch,pair,pinned,measured){
+    launch.measured=measured;launch.foregroundPolicy=measured?'required':'not-required-read-only-preparation';launch.inputAllowed=measured;let start=launchMode.enabled?undefined:performance.now();Object.defineProperty(launch,'elapsed',{value:()=>performance.now()-start});if(!launchMode.enabled)launch.spawnWallClockDiagnostic=new Date().toISOString();
+    const startup=noteCase(launch,startupTarget(fixturePolicy,launch.mode),measured?(launch.mode==='reopen'?fixturePolicy.reopenKind:'startup-'+launch.mode):'prewarm-empty',0);if(!measured)Object.assign(startup,{path:'__empty_prewarm__.md',original:'',prefix:'',expectedCharacters:0});launch.cases.push(startup);if(measured&&!launchMode.enabled)arm(launch,startup);
+    if(launchMode.enabled){
+      const launcher=await createLaunchServices({pinned,pair,launch,profile:launchMode.profile,beforeSpawn:()=>{start=performance.now();launch.spawnWallClockDiagnostic=new Date().toISOString();if(measured)arm(launch,startup);}});const orderEntry={label:launch.label,pairId:launch.pairId,mode:launch.mode,wrapperPid:launcher.wrapper.pid};active={launcher,main:null,renderer:null,launch,orderEntry};(measured?report.actualOrder:report.preparationOrder).push(orderEntry);
+      process.stdout.write(JSON.stringify({event:'launch-start',label:launch.label,pairId:launch.pairId,mode:launch.mode,wrapperPid:launcher.wrapper.pid,appKernelExitStatus:'unknown',app:pinned.app,profile:pair.profile,directory:launch.directory})+'\n');return startup;
+    }
+    const environment=launchEnvironment(pair.profile,pair.data);if(launchMode.profile)environment.ZORID_PROFILE_STARTUP='1';
+    const child=spawn(pinned.executable,['--inspect=127.0.0.1:0','--user-data-dir='+pair.profile,'--remote-debugging-address=127.0.0.1','--remote-debugging-port=0','--no-first-run'],{env:environment,cwd:out,stdio:['ignore','pipe','pipe']});launch.pid=child.pid;
     const exit=new Promise(resolve=>{child.once('exit',(code,signal)=>{launch.exitCode=code;launch.signal=signal;resolve();});child.once('error',error=>{launch.launchError=String(error);resolve();});});active={child,exit,main:null,renderer:null,launch};(measured?report.actualOrder:report.preparationOrder).push({label:launch.label,pairId:launch.pairId,mode:launch.mode,pid:child.pid});
     process.stdout.write(JSON.stringify({event:'launch-start',label:launch.label,pairId:launch.pairId,mode:launch.mode,pid:child.pid,app:pinned.app,profile:pair.profile,directory:launch.directory})+'\n');
     child.stderr.on('data',chunk=>{launch.stderr=(launch.stderr+chunk).slice(-1000000);});child.stdout.on('data',chunk=>{launch.stdout=(launch.stdout+chunk).slice(-1000000);});
@@ -243,7 +272,7 @@ export async function main(args=process.argv.slice(2)){
   async function prewarmPair(pair,label){
     const directory=path.join(pair.directory,'prewarm-empty');await fs.mkdir(directory);
     const pinned=report.apps[label].pinned,launch={label,pairId:path.basename(pair.directory),mode:'prewarm-empty',directory,profile:pair.profile,vault:pair.vault,localDataDirectory:pair.data,mainFinalFile:path.join(directory,'main-final.json'),cases:[],stderr:'',stdout:'',errors:[]};
-    report.preparations.push(launch);pair.preparation=launch;const startup=beginLaunch(launch,pair,pinned,false);
+    report.preparations.push(launch);pair.preparation=launch;const startup=await beginLaunch(launch,pair,pinned,false);
     try{
       await attachLaunch(launch,pair,pinned,startup);
       try{launch.passiveWindow=await active.main.evaluate(foregroundSource(foregroundConfig(launch,false)));}catch(error){launch.passiveWindow={error:String(error)};}launch.passiveDocument=await active.renderer.evaluate(documentVisibilitySource);
@@ -264,6 +293,7 @@ export async function main(args=process.argv.slice(2)){
       const pinned=await appPins(clone,asar,manifest);for(const field of ['executableSha256','asarSha256','nativeSha256','frameworkSha256','infoSha256'])assert.equal(original[field],pinned[field]);
       report.apps[label]={original,pinned};
     }
+    if(launchMode.preRegister)registerOwnedClones(out,clones,false,{record:report.cloneRegistration.actions});
     await save();
     for(const scheduled of schedule){
       let pair=pairs.get(scheduled.pairId);
@@ -282,7 +312,7 @@ export async function main(args=process.argv.slice(2)){
       }
       const directory=path.join(pair.directory,scheduled.mode);await fs.mkdir(directory);
       const launch={...scheduled,directory,profile:pair.profile,vault:pair.vault,localDataDirectory:pair.data,fixtureHashesBefore:pair.fixtureHashes,mainFinalFile:path.join(directory,'main-final.json'),cases:[],stderr:'',stdout:'',errors:[]};report.launches.push(launch);
-      const pinned=report.apps[scheduled.label].pinned;const startup=beginLaunch(launch,pair,pinned,true);
+      const pinned=report.apps[scheduled.label].pinned;const startup=await beginLaunch(launch,pair,pinned,true);
       try{
         await attachLaunch(launch,pair,pinned,startup);
         if(scheduled.mode==='first-import')await selectFile(launch,startup,startup.path);
@@ -297,6 +327,7 @@ export async function main(args=process.argv.slice(2)){
         launch.mainClockSamples.push(await clock(active.main,launch));
       }catch(error){launch.errors.push(error.stack??String(error));if(isMeasurementInterference(error))launch.measurementInterference={code:'PACKAGED_MEASUREMENT_INTERFERENCE',error:String(error),atMs:launch.elapsed()};report.errors.push({pairId:scheduled.pairId,mode:scheduled.mode,error:String(error)});await captureSetupFailure({renderer:active.renderer,main:active.main,windowSource:foregroundSource(foregroundConfig(launch,false)),launch});try{if(active.renderer){const image=await active.renderer.call('Page.captureScreenshot',{format:'png'});await fs.writeFile(path.join(directory,'failure.png'),Buffer.from(image.data,'base64'));}}catch{}}
       finally{
+        if(launchMode.profile&&active?.main){try{launch.bufferedStartupProfileBeforeQuit=startupProfile(await active.main.evaluate('globalThis.__zoridStartupProfile??null'));}catch(error){launch.startupProfileBeforeQuitError=String(error);}}
         for(const record of launch.cases){
           record.cancelled=true;
           if(record.deadlineTimer)clearTimeout(record.deadlineTimer);
@@ -323,6 +354,7 @@ export async function main(args=process.argv.slice(2)){
   finally{
     if(active){const launch=active.launch;try{await stop(launch);}catch(error){report.errors.push('Final cleanup: '+error.message);}}
     try{report.remainingOwnedProcesses=ownedProcesses(clones);}catch(error){report.errors.push('Owned PID proof unavailable: '+error.message);report.remainingOwnedProcesses=[{unverifiable:true}];}
+    if(launchMode.preRegister&&!report.remainingOwnedProcesses.length&&clones.length===2)try{registerOwnedClones(out,clones,true,{record:report.cloneRegistration.cleanup});}catch(error){report.errors.push('Exact clone unregistration: '+error.message);}
     if(!report.remainingOwnedProcesses.length&&!args.includes('--keep-clones'))for(const app of clones)await fs.rm(app,{recursive:true});
     report.clonesRetained=args.includes('--keep-clones')||report.remainingOwnedProcesses.length>0;
     const runtimeVersions=label=>[...new Set(report.launches.filter(launch=>launch.label===label&&launch.mainScope?.electron).map(launch=>launch.mainScope.electron))];
@@ -336,6 +368,7 @@ export async function main(args=process.argv.slice(2)){
         diagnosticMedianUpperMs:observed.length?observed[Math.floor(observed.length/2)]:null,limit:'Observed input timings include diagnostic/indeterminate cases;800ms acceptance is only assessment.usableByDeadline'});
     }
     report.artifactsValid=(!prewarmEmptyProfile||report.preparations.length===repetitions*2&&report.preparations.every(p=>p.reset?.freshBeforeFixtures&&!p.errors.length&&!p.cleanupErrors?.length&&p.cleanup?.normal&&p.cleanup.gone&&p.artifactsUnchanged))&&report.launches.length===schedule.length&&report.launches.every(l=>!l.errors.length&&!l.cleanupErrors?.length&&l.cleanup?.normal&&l.cleanup.gone&&l.fixturesRestored&&l.sourcePathsExact&&l.artifactsUnchanged);
+    if(launchMode.preRegister)report.artifactsValid=report.artifactsValid&&[report.cloneRegistration.actions,report.cloneRegistration.cleanup].every(rows=>rows.length===2&&rows.every(row=>row.exitCode===0&&row.signal===null));
     report.candidateTargetMet=report.artifactsValid&&report.launches.filter(l=>l.label==='candidate').every(l=>l.cases.filter(c=>c.kind!=='base').every(c=>c.assessment?.usableByDeadline));
     report.complete=report.launches.length===schedule.length;report.allPlannedProcessed=report.launches.length+report.skipped.length===schedule.length;await save();
   }
