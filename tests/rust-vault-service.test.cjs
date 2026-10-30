@@ -21,12 +21,27 @@ function send(header, body = Buffer.alloc(0)) {
 }
 const reconciliation=mode.startsWith('reconciliation_')?{scanId:'scan',complete:false,scanComplete:false,finished:true,observed:12,imported:0,namespaceApplied:0,issueCount:1,issuesTruncated:false,issues:[{path:null,code:'scan_limit'}]}:null;
 if(mode==='reconciliation_bad_path')reconciliation.issues[0].path='/private/secret';
-send({version:1,request_id:'0',ok:true,result:{reconciliation,transport:'zorid-native-stdio',max_header:1048576,max_body:16777216,capabilities:reconciliation?['reconciliation_status']:mode.startsWith('history_')?['local_recovery_maintenance']:mode.startsWith('stat_')&&mode!=='stat_legacy'?['stat_path']:[]}});
+send({version:1,request_id:'0',ok:true,result:{reconciliation,transport:'zorid-native-stdio',max_header:1048576,max_body:16777216,capabilities:reconciliation?['reconciliation_status']:mode.startsWith('capture_request_')?['conditional_saved_source_requests']:mode.startsWith('history_')?['local_recovery_maintenance']:mode.startsWith('stat_')&&mode!=='stat_legacy'?['stat_path']:[]}});
 let buffer=Buffer.alloc(0),counts={};
 process.stdin.on('data', chunk => {buffer=Buffer.concat([buffer,chunk]); while(buffer.length>=8){
  const h=buffer.readUInt32BE(0),b=buffer.readUInt32BE(4); if(buffer.length<8+h+b)return;
  const req=JSON.parse(buffer.subarray(8,8+h)), body=Buffer.from(buffer.subarray(8+h,8+h+b)); buffer=buffer.subarray(8+h+b);
  counts[req.command.method]=(counts[req.command.method]||0)+1;if(req.lease&&req.command.method==='stat_path')counts.leasedStat=(counts.leasedStat||0)+1;
+ if(mode.startsWith('capture_request_')){
+  const id='10000000-0000-4000-8000-000000000003',witness={entry_id:'entry',revision:'revision',path:'Note.md'};
+  if(req.command.method==='capture_saved_source'){
+   if(req.command.capture_id!==id||req.command.entry_id!==witness.entry_id||req.command.revision!==witness.revision||req.command.path!==witness.path){send({version:1,request_id:req.request_id,ok:false,error:{code:'invalid_saved_source',commit_uncertain:false}});continue;}
+   const bytes=Buffer.from('physical'),capture={capture_id:id,logical_witness:witness,byte_length:bytes.length};
+   if(mode==='capture_request_wrong_id')capture.capture_id='10000000-0000-4000-8000-000000000004';
+   send({version:1,request_id:req.request_id,ok:true,result:{capture}},bytes);continue;
+  }
+  if(req.command.method==='list_saved_source_requests'){
+   const rows=[{capture_id:id,logical_witness:witness,legacy:false},{capture_id:'legacy-capture',logical_witness:witness,legacy:true}];
+   if(mode==='capture_request_ninth')for(let i=2;i<9;i++)rows.push({capture_id:'10000000-0000-4000-8000-'+String(i).padStart(12,'0'),logical_witness:witness,legacy:false});
+   if(mode==='capture_request_private')rows[0].source='private';
+   send({version:1,request_id:req.request_id,ok:true,result:{requests:rows}},mode==='capture_request_body'?Buffer.from('private'):Buffer.alloc(0));continue;
+  }
+ }
  if(mode.startsWith('history_')&&req.command.method==='local_recovery_maintenance'){
   if(mode==='history_reject'){send({version:1,request_id:req.request_id,ok:false,error:{code:'local_recovery_unavailable',commit_uncertain:false}});continue;}
   const result={available:true,ran:true,pending:false,failed_notes:0,retry_after_ms:300000};let bytes=Buffer.alloc(0);
@@ -552,3 +567,24 @@ test('a well-formed secondary history rejection keeps transport and ordinary rea
  await assert.rejects(host.localRecoveryMaintenance(()=>{},250),error=>error.code==='local_recovery_unavailable'&&error.commitUncertain===false);
  assert.equal(host.fatal,null);const ordinary=await host.status();assert.equal(ordinary.pending_outbox,'0');
 });
+
+test('saved-source transport sends the caller ID and returns only bounded pending metadata on the owned lease', async t => {
+  const host = await fixture(t, 'capture_request_normal');
+  const request = { captureId: '10000000-0000-4000-8000-000000000003', logicalWitness: { entryId: 'entry', revision: 'revision', path: 'Note.md' } };
+  let authorizations = 0;
+  const leased = host.withClientLease({ local_store_id: 'store', client_id: 'client', token: 'token' }, () => { authorizations++; });
+  const capture = await leased.captureSavedSource('client', request);
+  assert.deepEqual(capture, { ...request, source: 'physical' });
+  const rows = await leased.listSavedSourceRequests('client');
+  assert.deepEqual(rows, [{ ...request, legacy: false }, { captureId: 'legacy-capture', logicalWitness: request.logicalWitness, legacy: true }]);
+  assert.ok(Object.isFrozen(rows) && Object.isFrozen(rows[0]) && Object.isFrozen(rows[0].logicalWitness));
+  assert.ok(authorizations >= 4, 'both capture and list reauthorize at dispatch');
+});
+
+for (const mode of ['capture_request_wrong_id', 'capture_request_ninth', 'capture_request_private', 'capture_request_body']) {
+  test(`saved-source framed transport rejects malformed request evidence: ${mode}`, async t => {
+    const host = await fixture(t, mode);
+    const request = { captureId: '10000000-0000-4000-8000-000000000003', logicalWitness: { entryId: 'entry', revision: 'revision', path: 'Note.md' } };
+    await assert.rejects(mode === 'capture_request_wrong_id' ? host.captureSavedSource('client', request) : host.listSavedSourceRequests('client'), { code: 'invalid_response' });
+  });
+}

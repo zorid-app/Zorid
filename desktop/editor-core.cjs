@@ -8,7 +8,7 @@ const {MAX_BINARY_FRAME}=require('./rust-vault-service.cjs');
 const {VaultService}=require('./vault-service.cjs');
 const {admitDesktopFixtureClient}=require('./client-admission.cjs');
 const {captureDocumentRuntimeRequest,captureDocumentRuntimeReply}=require('./document-semantics.cjs');
-const {captureSavedSourceWitness,captureSavedSourceId,captureSavedSourceValue}=require('./conditional-saved-source.cjs');
+const {captureSavedSourceRequest,captureSavedSourceId,captureSavedSourceValue,captureSavedSourceRequests}=require('./conditional-saved-source.cjs');
 const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 const fail=code=>Object.assign(new Error('Rust vault operation failed.'),{code});
 const runtimeUnavailable=()=>Object.assign(new Error('The desktop core does not support document indexing. Update Zorid and restart the app.'),{code:'document_runtime_unavailable'});
@@ -181,12 +181,17 @@ function createEditorCoreManager(environment=process.env, options={}){
       };
       check();
       const pending=(async()=>{
-        const admission=await admitDesktopFixtureClient(service,{fixture:true,clientId:fixture&&record.id==='main'?config.clientId:record.clientSlot?.clientId,assertOwner:check,...(recoveryScope?{expectedScope:recoveryScope}:{})});
+        let saved;
+        const captureDispatchOwner=()=>{
+          const id=saved?.id;
+          return()=>{if(id===undefined)check();else if(checked(broker,record,expectedRoot,id)!==saved)throw fail('durable_scope_changed');};
+        };
+        const admission=await admitDesktopFixtureClient(service,{fixture:true,clientId:fixture&&record.id==='main'?config.clientId:record.clientSlot?.clientId,assertOwner:check,captureDispatchOwner,...(recoveryScope?{expectedScope:recoveryScope}:{})});
         try {check();if(recoveryScope&&(admission.scope.vaultId!==recoveryScope.vaultId||admission.scope.clientId!==recoveryScope.clientId))throw fail('durable_scope_changed');}
         catch(error){await admission.retire();throw error;}
-        const saved={id:randomUUID(),admission,service,entry,generation,check:(allowRetired=false)=>{check();if((saved.runtimeRetired||saved.draftsRetired)&&!allowRetired)throw fail('client_not_admitted');}};contexts.set(record,saved);
+        saved={id:randomUUID(),admission,service,entry,generation,check:(allowRetired=false)=>{check();if((saved.runtimeRetired||saved.draftsRetired)&&!allowRetired)throw fail('client_not_admitted');}};contexts.set(record,saved);
         try{
-          if(admission.conditionalSavedSourceAvailable===true&&!['captureSavedSource','releaseSavedSource'].every(name=>typeof admission.durableWrites?.[name]==='function'))throw fail('unsupported_host_capability');
+          if(admission.conditionalSavedSourceAvailable===true&&!['captureSavedSource','releaseSavedSource','listSavedSourceRequests'].every(name=>typeof admission.durableWrites?.[name]==='function'))throw fail('unsupported_host_capability');
           if(documentRuntime&&(!runtimeAvailable(admission)||typeof admission.documentCommand!=='function'))throw runtimeUnavailable();
           if(admission.metadataRowsAvailable===true&&typeof admission.documentCommand!=='function')throw fail('unsupported_host_capability');
           if(admission.basePreviewAvailable===true&&(!documentRuntime||!runtimeAvailable(admission)||typeof options.onDocumentRuntimeNudge!=='function'||typeof admission.documentCommand!=='function'))throw fail('unsupported_host_capability');
@@ -260,15 +265,22 @@ function createEditorCoreManager(environment=process.env, options={}){
         // Admission snapshots the one bounded protobuf frame synchronously.
         return saved.admission.binaryCommand(args[0]);
       }
-      if(method==='captureSavedSource'||method==='releaseSavedSource'){
-        if(args.length!==1||saved.admission.conditionalSavedSourceAvailable!==true||typeof saved.admission.durableWrites?.[method]!=='function')throw fail('invalid_durable_request');
+      if(method==='captureSavedSource'||method==='releaseSavedSource'||method==='listSavedSourceRequests'){
+        if(args.length!==(method==='listSavedSourceRequests'?0:1)||saved.admission.conditionalSavedSourceAvailable!==true||typeof saved.admission.durableWrites?.[method]!=='function')throw fail('invalid_durable_request');
         // Validate and snapshot this small control record before any clone or
         // await; physical source text is never a caller-authored capture input.
-        const input=method==='captureSavedSource'?captureSavedSourceWitness(args[0]):captureSavedSourceId(args[0]);
-        const value=await saved.admission.durableWrites[method](input);
+        const input=method==='captureSavedSource'?captureSavedSourceRequest(args[0]):method==='releaseSavedSource'?captureSavedSourceId(args[0]):undefined;
+        const journal=method==='captureSavedSource'?saved.independentJournal:null;
+        if(method==='captureSavedSource'){
+          if(!journal)throw fail('draft_admission_denied');
+          journal.assertCurrent();
+          if(saved.independentJournal!==journal)throw fail('draft_admission_denied');
+        }
+        const value=await saved.admission.durableWrites[method](...(method==='listSavedSourceRequests'?[]:[input]));
         checked(broker,record,expectedRoot,admissionId);
         if(contexts.get(record)!==saved)throw fail('durable_scope_changed');
-        return method==='captureSavedSource'?captureSavedSourceValue(value,input):undefined;
+        if(journal){journal.assertCurrent();if(saved.independentJournal!==journal)throw fail('draft_admission_denied');}
+        return method==='captureSavedSource'?captureSavedSourceValue(value,input):method==='listSavedSourceRequests'?captureSavedSourceRequests(value):undefined;
       }
       const captured=structuredClone(args);
       if(method==='createText'||method==='createTextReceipt'||method==='fileCommand'){
@@ -282,6 +294,35 @@ function createEditorCoreManager(environment=process.env, options={}){
       }
       if(!methods.has(method)||typeof saved.admission.durableWrites[method]!=='function')throw fail('invalid_durable_request');
       return saved.admission.durableWrites[method](...captured);
+    },
+    // Trusted main-process wiring only, after attaching the journal grant to
+    // this exact context. This method is never included in renderer dispatch.
+    bindIndependentJournal(broker,record,expectedRoot,admissionId,grant,assertCurrent){
+      const saved=checked(broker,record,expectedRoot,admissionId);
+      if(!grant||!uuid(grant.token)||!uuid(grant.scope?.incarnationId)
+        ||grant.scope.vaultId!==saved.admission.scope.vaultId||grant.scope.clientId!==saved.admission.scope.clientId
+        ||typeof assertCurrent!=='function')throw fail('draft_admission_denied');
+      assertCurrent();
+      const previous=saved.independentJournal;
+      if(previous?.token===grant.token&&previous.scope.incarnationId===grant.scope.incarnationId)return saved.id;
+      if(previous)saved.id=randomUUID();
+      saved.independentJournal=Object.freeze({token:grant.token,scope:Object.freeze({vaultId:grant.scope.vaultId,clientId:grant.scope.clientId,incarnationId:grant.scope.incarnationId}),assertCurrent});
+      return saved.id;
+    },
+    async quiesceJournalOwner(broker,record,expectedRoot,grant){
+      const saved=contexts.get(record);
+      if(!saved)throw fail('draft_admission_denied');
+      const id=saved.id,journal=saved.independentJournal;
+      const verify=()=>{
+        if(checked(broker,record,expectedRoot,id)!==saved||saved.independentJournal!==journal||!journal
+          ||grant?.token!==journal.token||grant.scope?.vaultId!==journal.scope.vaultId
+          ||grant.scope?.clientId!==journal.scope.clientId||grant.scope?.incarnationId!==journal.scope.incarnationId)throw fail('draft_admission_denied');
+        journal.assertCurrent();
+      };
+      verify();
+      if(typeof saved.admission.drainAccepted!=='function')throw fail('unsupported_host_capability');
+      await saved.admission.drainAccepted();
+      verify();
     },
     async release(broker,record,event,expectedRoot,admissionId){
       broker.authenticate(event);

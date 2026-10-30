@@ -163,26 +163,27 @@ test('ID read preserves current locator through rename and missing IDs return nu
   await assert.rejects(writes.readTextById('entry'), { code: 'corrupt_storage' });
 });
 
-test('native providers always expose a pair and unsupported hosts reject without inventing a capture', async () => {
+test('native providers always expose a triple and unsupported hosts reject without inventing a capture', async () => {
   const f = fixture(), writes = await desktopDurableWrites(f.service, { clientId: 'client' });
   assert.equal(typeof writes.captureSavedSource, 'function');
   assert.equal(typeof writes.releaseSavedSource, 'function');
   await assert.rejects(writes.captureSavedSource({ entryId: 'entry', revision: 'revision', path: 'note.md' }), { code: 'unsupported_host_capability' });
   await assert.rejects(writes.releaseSavedSource('capture'), { code: 'unsupported_host_capability' });
   assert.equal(f.row, undefined);
-  f.host.capabilities = ['conditional_saved_source'];
-  f.host.captureSavedSource = async () => assert.fail('incomplete pair must not dispatch');
+  f.host.capabilities = ['conditional_saved_source_requests'];
+  f.host.captureSavedSource = async () => assert.fail('incomplete triple must not dispatch');
   await assert.rejects(desktopDurableWrites(f.service, { clientId: 'client' }), { code: 'unsupported_host_capability' });
 });
 
 test('physical capture is separate from logical read and exact guarded plan survives uncertain prepare without recapture', async () => {
   const f = fixture(), captures = [], preparations = [], releases = [];
   let loseReply = true;
-  f.host.capabilities = ['conditional_saved_source'];
-  f.host.captureSavedSource = async (client, logicalWitness) => {
-    captures.push({ client, logicalWitness });
-    return { captureId: 'original-capture', logicalWitness, source: '\ufeffexternal score: 7\u0000' };
+  f.host.capabilities = ['conditional_saved_source_requests'];
+  f.host.captureSavedSource = async (client, request) => {
+    captures.push({ client, request });
+    return { ...request, source: '\ufeffexternal score: 7\u0000' };
   };
+  f.host.listSavedSourceRequests = async () => [];
   f.host.releaseSavedSource = async (client, captureId) => { releases.push({ client, captureId }); return { released: true }; };
   f.host.prepareIntent = async (client, request, bytes, sourceCapture) => {
     preparations.push({ client, request: structuredClone(request), body: Buffer.from(bytes).toString('base64'), sourceCapture });
@@ -192,13 +193,13 @@ test('physical capture is separate from logical read and exact guarded plan surv
     return f.row;
   };
   const writes = await desktopDurableWrites(f.service, { clientId: 'client' }), read = await writes.readText('note.md');
-  const capture = await writes.captureSavedSource({ entryId: read.entryId, revision: read.revision, path: read.path });
+  const capture = await writes.captureSavedSource({ captureId: '10000000-0000-4000-8000-000000000003', logicalWitness: { entryId: read.entryId, revision: read.revision, path: read.path } });
   assert.equal(capture.source, '\ufeffexternal score: 7\u0000'); assert.equal(read.content, '\ufeffsame 🚀');
   const guard = { captureId: capture.captureId, logicalWitness: { ...capture.logicalWitness } };
   const planning = writes.planWrite({ ...input(read), conditionalSavedSource: guard });
   guard.captureId = 'mutated'; guard.logicalWitness.path = 'Other.md';
   const plan = await planning, encoded = JSON.parse(plan.encodedPlan);
-  assert.equal(encoded.source_capture, 'original-capture');
+  assert.equal(encoded.source_capture, '10000000-0000-4000-8000-000000000003');
   assert.deepEqual(encoded.mutation, { type: 'write', id: 'entry', expected: 'revision' });
   assert.equal(Object.hasOwn(encoded, 'source'), false);
   await assert.rejects(writes.prepare(plan), { code: 'host_timeout', commitUncertain: true });
@@ -206,24 +207,25 @@ test('physical capture is separate from logical read and exact guarded plan surv
   const prepared = await writes.prepare(restored);
   assert.equal(prepared.ref.token, 'retained-token');
   assert.deepEqual(preparations[0], preparations[1]);
-  assert.equal(preparations[0].sourceCapture, 'original-capture');
+  assert.equal(preparations[0].sourceCapture, '10000000-0000-4000-8000-000000000003');
   assert.equal(captures.length, 1);
-  await writes.releaseSavedSource('original-capture');
-  await writes.releaseSavedSource('original-capture');
-  assert.deepEqual(releases, [{ client: 'client', captureId: 'original-capture' }, { client: 'client', captureId: 'original-capture' }]);
+  await writes.releaseSavedSource('10000000-0000-4000-8000-000000000003');
+  await writes.releaseSavedSource('10000000-0000-4000-8000-000000000003');
+  assert.deepEqual(releases, [{ client: 'client', captureId: '10000000-0000-4000-8000-000000000003' }, { client: 'client', captureId: '10000000-0000-4000-8000-000000000003' }]);
 });
 
 test('unattached expiry returns the native durable rejection through the ordinary intent/ref/query/ACK contract', async () => {
-  const f = fixture(); f.host.capabilities = ['conditional_saved_source'];
-  f.host.captureSavedSource = async (_client, logicalWitness) => ({ captureId: 'expired-capture', logicalWitness, source: 'saved' });
+  const f = fixture(); f.host.capabilities = ['conditional_saved_source_requests'];
+  f.host.captureSavedSource = async (_client, request) => ({ ...request, source: 'saved' });
+  f.host.listSavedSourceRequests = async () => [];
   f.host.releaseSavedSource = async () => ({ released: true });
   f.host.prepareIntent = async (client, request, _bytes, captureId) => {
-    assert.equal(captureId, 'expired-capture');
+    assert.equal(captureId, '10000000-0000-4000-8000-000000000003');
     return f.row ??= { client_id: client, token: 'rejected-token', operation_id: request.operation_id, entry_id: request.mutation.id,
       mutation_kind: 'write', state: 'rejected', acknowledged: false, receipt: null, error: { code: 'source_capture_expired' }, projection: null, order: '1' };
   };
   const writes = await desktopDurableWrites(f.service, { clientId: 'client' }), read = await writes.readText('note.md');
-  const capture = await writes.captureSavedSource({ entryId: read.entryId, revision: read.revision, path: read.path });
+  const capture = await writes.captureSavedSource({ captureId: '10000000-0000-4000-8000-000000000003', logicalWitness: { entryId: read.entryId, revision: read.revision, path: read.path } });
   const plan = await writes.planWrite({ ...input(read), conditionalSavedSource: { captureId: capture.captureId, logicalWitness: capture.logicalWitness } });
   const rejected = await writes.prepare(plan);
   assert.equal(rejected.state, 'rejected'); assert.equal(rejected.error.code, 'source_capture_expired');
@@ -234,8 +236,9 @@ test('unattached expiry returns the native durable rejection through the ordinar
 });
 
 test('mismatched or malformed source guards fail before planning or native preparation', async () => {
-  const f = fixture(); f.host.capabilities = ['conditional_saved_source'];
-  f.host.captureSavedSource = async () => assert.fail('no capture requested'); f.host.releaseSavedSource = async () => ({ released: true });
+  const f = fixture(); f.host.capabilities = ['conditional_saved_source_requests'];
+  f.host.captureSavedSource = async () => assert.fail('no capture requested'); f.host.listSavedSourceRequests = async () => [];
+  f.host.releaseSavedSource = async () => ({ released: true });
   const writes = await desktopDurableWrites(f.service, { clientId: 'client' }), read = await writes.readText('note.md');
   for (const logicalWitness of [{ entryId: 'other', revision: 'revision', path: 'note.md' }, { entryId: 'entry', revision: 'other', path: 'note.md' }, { entryId: 'entry', revision: 'revision', path: 'Other.md' }]) {
     await assert.rejects(writes.planWrite({ ...input(read), conditionalSavedSource: { captureId: 'capture', logicalWitness } }), { code: 'intent_identity_mismatch' });
@@ -249,4 +252,51 @@ test('mismatched or malformed source guards fail before planning or native prepa
     await assert.rejects(writes.prepare({ ...plain, encodedPlan }), { code: 'invalid_saved_source' });
   }
   assert.equal(f.row, undefined);
+});
+
+test('capture requests keep one caller identity across a lost reply and reject a substituted provider identity', async () => {
+  const f = fixture(), calls = [];
+  f.host.capabilities = ['conditional_saved_source_requests'];
+  f.host.releaseSavedSource = async () => ({ released: true });
+  f.host.listSavedSourceRequests = async () => [];
+  let loseReply = true, substitute = false;
+  f.host.captureSavedSource = async (client, request) => {
+    calls.push({ client, request });
+    if (loseReply) { loseReply = false; throw Object.assign(new Error('lost'), { code: 'host_timeout', commitUncertain: true }); }
+    return { ...request, ...(substitute ? { captureId: '10000000-0000-4000-8000-000000000004' } : {}), source: 'physical' };
+  };
+  const writes = await desktopDurableWrites(f.service, { clientId: 'client' });
+  const request = { captureId: '10000000-0000-4000-8000-000000000003', logicalWitness: { entryId: 'entry', revision: 'revision', path: 'note.md' } };
+  await assert.rejects(writes.captureSavedSource(request), { code: 'host_timeout', commitUncertain: true });
+  const capture = await writes.captureSavedSource(request);
+  assert.equal(capture.captureId, request.captureId);
+  assert.deepEqual(calls[0], calls[1]);
+  assert.ok(Object.isFrozen(calls[0].request) && Object.isFrozen(calls[0].request.logicalWitness));
+  substitute = true;
+  await assert.rejects(writes.captureSavedSource(request), { code: 'invalid_saved_source' });
+  await assert.rejects(writes.captureSavedSource(request.logicalWitness), { code: 'invalid_saved_source' });
+  assert.equal(calls.length, 3, 'the old witness-only request never reaches the host');
+});
+
+test('pending requests require the full new capability triple and remain bounded plain immutable metadata', async () => {
+  for (const missing of ['captureSavedSource', 'releaseSavedSource', 'listSavedSourceRequests']) {
+    const f = fixture(); f.host.capabilities = ['conditional_saved_source_requests'];
+    for (const name of ['captureSavedSource', 'releaseSavedSource', 'listSavedSourceRequests']) if (name !== missing) f.host[name] = async () => [];
+    await assert.rejects(desktopDurableWrites(f.service, { clientId: 'client' }), { code: 'unsupported_host_capability' });
+  }
+  const old = fixture(); old.host.capabilities = ['conditional_saved_source'];
+  await assert.rejects(desktopDurableWrites(old.service, { clientId: 'client' }), { code: 'unsupported_host_capability' });
+  const f = fixture(), row = { captureId: '10000000-0000-4000-8000-000000000003', logicalWitness: { entryId: 'entry', revision: 'revision', path: 'note.md' }, legacy: false };
+  f.host.capabilities = ['conditional_saved_source_requests'];
+  f.host.captureSavedSource = async () => assert.fail('inventory never captures');
+  f.host.releaseSavedSource = async () => assert.fail('inventory never releases');
+  let rows = [row];
+  f.host.listSavedSourceRequests = async client => { assert.equal(client, 'client'); return rows; };
+  const writes = await desktopDurableWrites(f.service, { clientId: 'client' });
+  const inventory = await writes.listSavedSourceRequests();
+  row.logicalWitness.path = 'Other.md';
+  assert.equal(inventory[0].logicalWitness.path, 'note.md');
+  assert.ok(Object.isFrozen(inventory) && Object.isFrozen(inventory[0]));
+  rows = Array(9).fill(row);
+  await assert.rejects(writes.listSavedSourceRequests(), { code: 'invalid_saved_source' });
 });

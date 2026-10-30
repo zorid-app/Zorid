@@ -1,6 +1,6 @@
 'use strict';
 const { desktopCheckpoints } = require('./durable-checkpoints.cjs');
-const { captureSavedSourceWitness, captureSavedSourceId, captureSavedSourceGuard, captureSavedSourceValue } = require('./conditional-saved-source.cjs');
+const { captureSavedSourceRequest, captureSavedSourceId, captureSavedSourceGuard, captureSavedSourceValue, captureSavedSourceRequests } = require('./conditional-saved-source.cjs');
 // Optional shared DurableWrites capability. No startup, renderer bridge or
 // checkpoint persistence is selected here; the trusted owner supplies a service.
 const LIMIT = 8 * 1024 * 1024;
@@ -34,10 +34,11 @@ function keys(value, expected) {
 async function desktopDurableWrites(service, { clientId } = {}) {
   if (!identity(clientId)) throw failure('invalid_client_id');
   const host = service.host;
-  const conditionalSources = host.capabilities?.includes('conditional_saved_source') === true;
+  const conditionalSources = host.capabilities?.includes('conditional_saved_source_requests') === true;
   const databases = host.capabilities?.includes('databases') === true;
   if (databases && typeof host.databaseCommand !== 'function') throw failure('unsupported_host_capability');
-  if (conditionalSources && !['captureSavedSource', 'releaseSavedSource'].every(name => typeof host[name] === 'function')) throw failure('unsupported_host_capability');
+  if (host.capabilities?.includes('conditional_saved_source') && !conditionalSources) throw failure('unsupported_host_capability');
+  if (conditionalSources && !['captureSavedSource', 'releaseSavedSource', 'listSavedSourceRequests'].every(name => typeof host[name] === 'function')) throw failure('unsupported_host_capability');
   const authority = await host.identity();
   const vaultId = authority.local_store_id;
   if (!identity(vaultId)) throw failure('invalid_authority');
@@ -142,16 +143,23 @@ async function desktopDurableWrites(service, { clientId } = {}) {
     async captureSavedSource(input) {
       active();
       if (!conditionalSources) throw failure('unsupported_host_capability');
-      const witness = captureSavedSourceWitness(input);
-      const value = await host.captureSavedSource(clientId, witness);
+      const request = captureSavedSourceRequest(input);
+      const value = await host.captureSavedSource(clientId, request);
       active();
-      return captureSavedSourceValue(value, witness);
+      return captureSavedSourceValue(value, request);
     },
     async releaseSavedSource(input) {
       active();
       if (!conditionalSources) throw failure('unsupported_host_capability');
       const captureId = captureSavedSourceId(input);
       await host.releaseSavedSource(clientId, captureId);
+    },
+    async listSavedSourceRequests() {
+      active();
+      if (!conditionalSources) throw failure('unsupported_host_capability');
+      const value = await host.listSavedSourceRequests(clientId);
+      active();
+      return captureSavedSourceRequests(value);
     },
     async readText(path) {
       active();

@@ -10,7 +10,7 @@ const {captureRuntimeRequest,decodeRuntimeReply,validRuntimeReply,isRuntimeOp,MA
 const {MAX_DRAFT_CONTROL,MAX_DRAFT_CHUNK,captureDraftRequest,decodeDraftReply,validDraftReply,captureWorkRequest,decodeWorkReply,validWorkReply}=require('./document-drafts.cjs');
 const { familyStatus, syncStatus, syncReport, familyCommand } = require('./family-sync-protocol.cjs');
 const {MAX_DATABASE_REQUEST,MAX_DATABASE_RESPONSE,captureDatabaseRequest,decodeDatabaseReply,validDatabaseReply}=require('./databases.cjs');
-const { SOURCE_LIMIT, captureSavedSourceWitness, captureSavedSourceId, validSavedSourceReply, decodeSavedSourceReply } = require('./conditional-saved-source.cjs');
+const { SOURCE_LIMIT, captureSavedSourceRequest, captureSavedSourceId, validSavedSourceReply, decodeSavedSourceReply, validSavedSourceRequestsReply, decodeSavedSourceRequestsReply } = require('./conditional-saved-source.cjs');
 
 const MAX_HEADER = 1024 * 1024;
 const MAX_BODY = 16 * 1024 * 1024;
@@ -157,6 +157,7 @@ function successful(command, result, bytes, expectedBytes) {
   switch (command.method) {
     case 'capture_saved_source': return validSavedSourceReply(command, result, bytes);
     case 'release_saved_source': return exactKeys(result, ['released']) && result.released === true;
+    case 'list_saved_source_requests': return validSavedSourceRequestsReply(result);
     case 'recovery_list': case 'recovery_read': return validRecoveryReply(command,result,bytes);
     case 'local_recovery_maintenance': return exactKeys(result,['available','ran','pending','failed_notes','retry_after_ms'])
       &&[result.available,result.ran,result.pending].every(value=>typeof value==='boolean')
@@ -357,7 +358,7 @@ class RustVaultService {
           this.headerLength = this.prefix.readUInt32BE(0);
           const bodyLength = this.prefix.readUInt32BE(4);
           const draft=this.pending?.command?.method==='document_drafts',work=this.pending?.command?.method==='document_work';
-          const bodyLimit = this.pending?.command?.method==='database_request' ? MAX_DATABASE_RESPONSE : draft ? (this.pending.command.request.op==='facts_read'?MAX_DRAFT_CHUNK:0) : work ? 0 : ['checkpoint_load', 'checkpoint_cas'].includes(this.pending?.command?.method) ? MAX_CHECKPOINT_BODY : this.pending?.command?.method === 'binary' ? MAX_BINARY_FRAME : this.pending?.command?.method === 'workblocks' ? MAX_WORKBLOCK_RESPONSE : this.pending?.command?.method==='documents'&&isRuntimeOp(this.pending.command.request?.command?.op) ? MAX_RUNTIME_BYTES : this.pending?.command?.method==='documents'&&this.pending.command.request?.command?.op==='rich_page' ? MAX_RICH_RESPONSE : this.pending?.command?.method === 'capture_saved_source' ? SOURCE_LIMIT : this.pending?.command?.method === 'release_saved_source' ? 0 : MAX_BODY;
+          const bodyLimit = this.pending?.command?.method==='database_request' ? MAX_DATABASE_RESPONSE : draft ? (this.pending.command.request.op==='facts_read'?MAX_DRAFT_CHUNK:0) : work ? 0 : ['checkpoint_load', 'checkpoint_cas'].includes(this.pending?.command?.method) ? MAX_CHECKPOINT_BODY : this.pending?.command?.method === 'binary' ? MAX_BINARY_FRAME : this.pending?.command?.method === 'workblocks' ? MAX_WORKBLOCK_RESPONSE : this.pending?.command?.method==='documents'&&isRuntimeOp(this.pending.command.request?.command?.op) ? MAX_RUNTIME_BYTES : this.pending?.command?.method==='documents'&&this.pending.command.request?.command?.op==='rich_page' ? MAX_RICH_RESPONSE : this.pending?.command?.method === 'capture_saved_source' ? SOURCE_LIMIT : ['release_saved_source', 'list_saved_source_requests'].includes(this.pending?.command?.method) ? 0 : MAX_BODY;
           if (!this.headerLength || this.headerLength > (draft||work?MAX_DRAFT_CONTROL:MAX_HEADER) || bodyLength > bodyLimit) throw failure('response_limit', true);
           this.frame = Buffer.allocUnsafe(this.headerLength + bodyLength);
           this.frameUsed = 0;
@@ -393,7 +394,7 @@ class RustVaultService {
       const draft=command?.method==='document_drafts',work=command?.method==='document_work';
       if (!(bytes instanceof Uint8Array) || bytes.byteLength > (command?.method==='database_request'?MAX_DATABASE_REQUEST:draft?(command.request?.op==='upload_chunk'?MAX_DRAFT_CHUNK:0):work?0:command?.method === 'checkpoint_cas' ? MAX_CHECKPOINT_BODY : command?.method === 'binary' ? MAX_BINARY_FRAME : MAX_BODY)) throw failure('request_limit');
       if(work&&lease)throw failure('draft_owner_mismatch');
-      if (['stat_path', 'capture_saved_source', 'release_saved_source'].includes(command?.method) && bytes.byteLength !== 0) throw failure('invalid_request');
+      if (['stat_path', 'capture_saved_source', 'release_saved_source', 'list_saved_source_requests'].includes(command?.method) && bytes.byteLength !== 0) throw failure('invalid_request');
       const requestId = (++this.sequence).toString();
       // Serialize/copy before enqueue: later caller changes cannot alter a retry.
       header = Buffer.from(JSON.stringify({ version: 1, request_id: requestId, command, ...(lease ? { lease } : {}) }));
@@ -477,7 +478,7 @@ class RustVaultService {
   withClientLease(reference, beforeRequest = () => {}) {
     const captured = Object.freeze({ local_store_id: reference.local_store_id, client_id: reference.client_id, token: reference.token });
     const context = { capabilities: this.capabilities?Object.freeze(this.capabilities.filter(value=>value!=='local_recovery_maintenance')):undefined, request: (command, bytes) => { beforeRequest(command); return this.request(command, bytes, captured, () => beforeRequest(command)); } };
-    const methods = ['documentDrafts', 'documentRuntime', 'changesAfter', 'rescan', 'reconcile', 'databaseCommand', 'workblockCommand', 'documentCommand', 'binaryCommand', 'fileCommand', 'createText', 'identity', 'readMetadata', 'readPath', 'readPresentedById', 'readEntryById', 'listSnapshot', 'listEntries', 'captureSavedSource', 'releaseSavedSource', 'prepareIntent', 'commitIntent', 'queryIntent', 'listIntents', 'acknowledgeIntent',
+    const methods = ['documentDrafts', 'documentRuntime', 'changesAfter', 'rescan', 'reconcile', 'databaseCommand', 'workblockCommand', 'documentCommand', 'binaryCommand', 'fileCommand', 'createText', 'identity', 'readMetadata', 'readPath', 'readPresentedById', 'readEntryById', 'listSnapshot', 'listEntries', 'captureSavedSource', 'releaseSavedSource', 'listSavedSourceRequests', 'prepareIntent', 'commitIntent', 'queryIntent', 'listIntents', 'acknowledgeIntent',
       'checkpointLoad', 'checkpointCompareAndSwap', 'checkpointList', 'checkpointChanges'];
     return Object.freeze({ capabilities: context.capabilities, ...Object.fromEntries(methods.map(name => [name, (...args) => RustVaultService.prototype[name].apply(context, args)])) });
   }
@@ -530,19 +531,23 @@ class RustVaultService {
     return this.request({ method: 'read', id }).then(({ result, bytes }) => ({ ...result, bytes }));
   }
   captureSavedSource(clientId, input) {
-    if (!this.capabilities?.includes('conditional_saved_source') || !identity(clientId)) return Promise.reject(failure('unsupported_host_capability'));
-    const witness = captureSavedSourceWitness(input);
-    const command = { method: 'capture_saved_source', client_id: clientId, entry_id: witness.entryId, revision: witness.revision, path: witness.path };
+    if (!this.capabilities?.includes('conditional_saved_source_requests') || !identity(clientId)) return Promise.reject(failure('unsupported_host_capability'));
+    const request = captureSavedSourceRequest(input), witness = request.logicalWitness;
+    const command = { method: 'capture_saved_source', client_id: clientId, capture_id: request.captureId, entry_id: witness.entryId, revision: witness.revision, path: witness.path };
     return this.request(command).then(({ result, bytes }) => decodeSavedSourceReply(command, result, bytes));
   }
   releaseSavedSource(clientId, input) {
-    if (!this.capabilities?.includes('conditional_saved_source') || !identity(clientId)) return Promise.reject(failure('unsupported_host_capability'));
+    if (!this.capabilities?.includes('conditional_saved_source_requests') || !identity(clientId)) return Promise.reject(failure('unsupported_host_capability'));
     const captureId = captureSavedSourceId(input);
     return this.request({ method: 'release_saved_source', client_id: clientId, capture_id: captureId }).then(reply => reply.result);
   }
+  listSavedSourceRequests(clientId) {
+    if (!this.capabilities?.includes('conditional_saved_source_requests') || !identity(clientId)) return Promise.reject(failure('unsupported_host_capability'));
+    return this.request({ method: 'list_saved_source_requests', client_id: clientId }).then(reply => decodeSavedSourceRequestsReply(reply.result));
+  }
   prepareIntent(clientId, request, bytes = new Uint8Array(), sourceCapture) {
     if (sourceCapture !== undefined) {
-      if (!this.capabilities?.includes('conditional_saved_source')) return Promise.reject(failure('unsupported_host_capability'));
+      if (!this.capabilities?.includes('conditional_saved_source_requests')) return Promise.reject(failure('unsupported_host_capability'));
       sourceCapture = captureSavedSourceId(sourceCapture);
     }
     return this.request({ method: 'prepare_intent', client_id: clientId, operation_id: request.operation_id, mutation: request.mutation,

@@ -30,6 +30,11 @@ function fixture({admission,admissionFactory,options={}}={}){
   const window=()=>broker.register({webContents:{id:++id,mainFrame:{url:'https://zorid.test/'},isDestroyed:()=>false},isDestroyed:()=>false});
   return {manager,broker,window,opened,closed};
 }
+function bindJournal(f,record,context,assertCurrent=()=>{}){
+  const grant={token:'10000000-0000-4000-8000-000000000007',scope:{...context.scope,incarnationId:'10000000-0000-4000-8000-000000000008'}};
+  f.manager.bindIndependentJournal(f.broker,record,'/vault',context.admissionId,grant,assertCurrent);
+  return grant;
+}
 test('creation receipts are advertised only by admitted consumers and use the scoped existing IPC route',async()=>{
   const calls=[],receipt={operation_id:'operation',sequence:'1',changes:[]};
   const admission={scope:{vaultId:'store',clientId:'client'},async createTextReceipt(input){calls.push(input);return receipt;},async retire(){}};
@@ -248,15 +253,16 @@ test('requested runtime requires document commands and every runtime method befo
 });
 
 
-test('physical-source IPC uses a positively admitted complete pair and snapshots only bounded witness control',async()=>{
-  const calls=[],witness={entryId:'entry',revision:'rev',path:'Books/Note.md'};
+test('physical-source IPC uses a positively admitted complete triple and snapshots bounded request control',async()=>{
+  const calls=[],witness={captureId:'10000000-0000-4000-8000-000000000003',logicalWitness:{entryId:'entry',revision:'rev',path:'Books/Note.md'}};
   const admission={scope:{vaultId:'store',clientId:'client'},conditionalSavedSourceAvailable:true,durableWrites:{
-    async captureSavedSource(input){calls.push(input);return{captureId:'capture',logicalWitness:input,source:'score: 7'};},
-    async releaseSavedSource(input){calls.push(input);},
+    async captureSavedSource(input){calls.push(input);return{...input,source:'score: 7'};},
+    async releaseSavedSource(input){calls.push(input);},async listSavedSourceRequests(){return [];},
   },async retire(){}};
   const f=fixture({admission}),a=f.window();await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
   try{
     const context=await f.manager.context(f.broker,a,'/vault'),event={sender:a.window.webContents,senderFrame:a.window.webContents.mainFrame};
+    bindJournal(f,a,context);
     assert.equal(context.conditionalSavedSourceAvailable,true);
     const value=await f.manager.invoke(f.broker,a,event,'/vault',context.admissionId,'captureSavedSource',[witness]);
     assert.equal(value.source,'score: 7');assert.notEqual(calls[0],witness);assert.ok(Object.isFrozen(calls[0]));
@@ -275,16 +281,174 @@ test('positive physical-source admission rejects an incomplete pair instead of a
 });
 
 test('a late physical-source response is rejected after its broker generation changes',async()=>{
-  const gate=deferred(),witness={entryId:'entry',revision:'rev',path:'Note.md'};
+  const gate=deferred(),witness={captureId:'10000000-0000-4000-8000-000000000003',logicalWitness:{entryId:'entry',revision:'rev',path:'Note.md'}};
   const admission={scope:{vaultId:'store',clientId:'client'},conditionalSavedSourceAvailable:true,durableWrites:{
-    async captureSavedSource(input){await gate.promise;return{captureId:'capture',logicalWitness:input,source:'private old vault'};},async releaseSavedSource(){},
+    async captureSavedSource(input){await gate.promise;return{...input,source:'private old vault'};},async releaseSavedSource(){},async listSavedSourceRequests(){return [];},
   },async retire(){}};
   const f=fixture({admission}),a=f.window();await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
   try{
     const context=await f.manager.context(f.broker,a,'/vault'),event={sender:a.window.webContents,senderFrame:a.window.webContents.mainFrame};
+    bindJournal(f,a,context);
     const pending=f.manager.invoke(f.broker,a,event,'/vault',context.admissionId,'captureSavedSource',[witness]);
     a.generation++;gate.resolve();
     await assert.rejects(pending,{code:'durable_scope_changed'});
+  }finally{f.closed.resolve();await f.manager.close();}
+});
+
+test('pending source inventory is scoped, argument-free and strictly decoded before publication',async()=>{
+  const row={captureId:'10000000-0000-4000-8000-000000000003',logicalWitness:{entryId:'entry',revision:'rev',path:'Note.md'},legacy:false};
+  let rows=[row],calls=0;
+  const admission={scope:{vaultId:'store',clientId:'client'},conditionalSavedSourceAvailable:true,durableWrites:{
+    async captureSavedSource(){assert.fail('inventory cannot capture');},async releaseSavedSource(){assert.fail('inventory cannot release');},
+    async listSavedSourceRequests(){calls++;return rows;},
+  },async retire(){}};
+  const f=fixture({admission}),a=f.window();await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
+  try{
+    const context=await f.manager.context(f.broker,a,'/vault'),event={sender:a.window.webContents,senderFrame:a.window.webContents.mainFrame};
+    const result=await f.manager.invoke(f.broker,a,event,'/vault',context.admissionId,'listSavedSourceRequests',[]);
+    assert.deepEqual(result,[row]);assert.notEqual(result[0],row);assert.ok(Object.isFrozen(result));
+    await assert.rejects(f.manager.invoke(f.broker,a,event,'/vault',context.admissionId,'listSavedSourceRequests',[{}]),{code:'invalid_durable_request'});
+    await assert.rejects(f.manager.invoke(f.broker,a,event,'/vault','foreign','listSavedSourceRequests',[]),{code:'durable_scope_changed'});
+    assert.equal(calls,1);
+    rows=[{...row,source:'private'}];
+    await assert.rejects(f.manager.invoke(f.broker,a,event,'/vault',context.admissionId,'listSavedSourceRequests',[]),{code:'invalid_saved_source'});
+    rows=Array(9).fill(row);
+    await assert.rejects(f.manager.invoke(f.broker,a,event,'/vault',context.admissionId,'listSavedSourceRequests',[]),{code:'invalid_saved_source'});
+  }finally{f.closed.resolve();await f.manager.close();}
+});
+
+test('late pending source inventory cannot cross a changed broker generation',async()=>{
+  const gate=deferred();
+  const admission={scope:{vaultId:'store',clientId:'client'},conditionalSavedSourceAvailable:true,durableWrites:{
+    async captureSavedSource(){},async releaseSavedSource(){},async listSavedSourceRequests(){await gate.promise;return [];},
+  },async retire(){}};
+  const f=fixture({admission}),a=f.window();await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
+  try{
+    const context=await f.manager.context(f.broker,a,'/vault'),event={sender:a.window.webContents,senderFrame:a.window.webContents.mainFrame};
+    const pending=f.manager.invoke(f.broker,a,event,'/vault',context.admissionId,'listSavedSourceRequests',[]);
+    a.generation++;gate.resolve();
+    await assert.rejects(pending,{code:'durable_scope_changed'});
+  }finally{f.closed.resolve();await f.manager.close();}
+});
+
+test('source capture cannot dispatch before the current independent journal grant is bound',async()=>{
+  let captures=0;
+  const request={captureId:'10000000-0000-4000-8000-000000000003',logicalWitness:{entryId:'entry',revision:'rev',path:'Note.md'}};
+  const admission={scope:{vaultId:'store',clientId:'client'},conditionalSavedSourceAvailable:true,durableWrites:{
+    async captureSavedSource(input){captures++;return{...input,source:'physical'};},async releaseSavedSource(){},async listSavedSourceRequests(){return [];},
+  },async retire(){}};
+  const f=fixture({admission}),a=f.window();await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
+  try{
+    const context=await f.manager.context(f.broker,a,'/vault'),event={sender:a.window.webContents,senderFrame:a.window.webContents.mainFrame};
+    await assert.rejects(f.manager.invoke(f.broker,a,event,'/vault',context.admissionId,'captureSavedSource',[request]),{code:'draft_admission_denied'});
+    assert.equal(captures,0);
+  }finally{f.closed.resolve();await f.manager.close();}
+});
+
+test('journal binding requires the exact core scope and rechecks its live owner before capture',async()=>{
+  let captures=0,live=true;
+  const request={captureId:'10000000-0000-4000-8000-000000000003',logicalWitness:{entryId:'entry',revision:'rev',path:'Note.md'}};
+  const admission={scope:{vaultId:'store',clientId:'client'},conditionalSavedSourceAvailable:true,durableWrites:{
+    async captureSavedSource(input){captures++;return{...input,source:'physical'};},async releaseSavedSource(){},async listSavedSourceRequests(){return [];},
+  },async retire(){}};
+  const f=fixture({admission}),a=f.window();await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
+  try{
+    const context=await f.manager.context(f.broker,a,'/vault'),event={sender:a.window.webContents,senderFrame:a.window.webContents.mainFrame};
+    const grant={token:'10000000-0000-4000-8000-000000000007',scope:{...context.scope,incarnationId:'10000000-0000-4000-8000-000000000008'}};
+    for(const scope of [{...grant.scope,vaultId:'foreign'},{...grant.scope,clientId:'foreign'}]){
+      assert.throws(()=>f.manager.bindIndependentJournal(f.broker,a,'/vault',context.admissionId,{...grant,scope},()=>{}),{code:'draft_admission_denied'});
+    }
+    bindJournal(f,a,context,()=>{if(!live)throw Object.assign(new Error('revoked'),{code:'draft_lease_revoked'});});
+    assert.equal((await f.manager.invoke(f.broker,a,event,'/vault',context.admissionId,'captureSavedSource',[request])).captureId,request.captureId);
+    live=false;
+    await assert.rejects(f.manager.invoke(f.broker,a,event,'/vault',context.admissionId,'captureSavedSource',[request]),{code:'draft_lease_revoked'});
+    assert.equal(captures,1);
+    assert.deepEqual(await f.manager.invoke(f.broker,a,event,'/vault',context.admissionId,'listSavedSourceRequests',[]),[]);
+    await f.manager.invoke(f.broker,a,event,'/vault',context.admissionId,'releaseSavedSource',[request.captureId]);
+  }finally{f.closed.resolve();await f.manager.close();}
+});
+
+test('a capture reply cannot cross replacement of its bound independent journal grant',async()=>{
+  const gate=deferred(),request={captureId:'10000000-0000-4000-8000-000000000003',logicalWitness:{entryId:'entry',revision:'rev',path:'Note.md'}};
+  const admission={scope:{vaultId:'store',clientId:'client'},conditionalSavedSourceAvailable:true,durableWrites:{
+    async captureSavedSource(input){await gate.promise;return{...input,source:'physical'};},async releaseSavedSource(){},async listSavedSourceRequests(){return [];},
+  },async retire(){}};
+  const f=fixture({admission}),a=f.window();await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
+  try{
+    const context=await f.manager.context(f.broker,a,'/vault'),event={sender:a.window.webContents,senderFrame:a.window.webContents.mainFrame};
+    bindJournal(f,a,context);
+    const pending=f.manager.invoke(f.broker,a,event,'/vault',context.admissionId,'captureSavedSource',[request]);
+    const grant=bindJournal(f,a,context);
+    f.manager.bindIndependentJournal(f.broker,a,'/vault',context.admissionId,{...grant,token:'10000000-0000-4000-8000-000000000009'},()=>{});
+    gate.resolve();
+    await assert.rejects(pending,{code:'durable_scope_changed'});
+  }finally{f.closed.resolve();await f.manager.close();}
+});
+
+test('rebinding the same live journal grant does not invalidate an in-flight capture',async()=>{
+  const gate=deferred(),request={captureId:'10000000-0000-4000-8000-000000000003',logicalWitness:{entryId:'entry',revision:'rev',path:'Note.md'}};
+  const admission={scope:{vaultId:'store',clientId:'client'},conditionalSavedSourceAvailable:true,durableWrites:{
+    async captureSavedSource(input){await gate.promise;return{...input,source:'physical'};},async releaseSavedSource(){},async listSavedSourceRequests(){return [];},
+  },async retire(){}};
+  const f=fixture({admission}),a=f.window();await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
+  try{
+    const context=await f.manager.context(f.broker,a,'/vault'),event={sender:a.window.webContents,senderFrame:a.window.webContents.mainFrame};
+    bindJournal(f,a,context);
+    const pending=f.manager.invoke(f.broker,a,event,'/vault',context.admissionId,'captureSavedSource',[request]);
+    bindJournal(f,a,context);gate.resolve();
+    assert.equal((await pending).captureId,request.captureId);
+  }finally{f.closed.resolve();await f.manager.close();}
+});
+
+test('a different journal document rotates only the admission identity and fences the old renderer',async()=>{
+  let retired=0,queries=0,captureOwner;
+  const admission={scope:{vaultId:'store',clientId:'client'},durableWrites:{async query(){queries++;return null;}},async retire(){retired++;}};
+  const f=fixture({admissionFactory:async(_service,options)=>{captureOwner=options.captureDispatchOwner;return admission;}}),a=f.window();await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
+  try{
+    const context=await f.manager.context(f.broker,a,'/vault'),event={sender:a.window.webContents,senderFrame:a.window.webContents.mainFrame};
+    const grant=bindJournal(f,a,context);
+    const oldDispatchCheck=captureOwner();
+    const effective=f.manager.bindIndependentJournal(f.broker,a,'/vault',context.admissionId,{...grant,token:'10000000-0000-4000-8000-000000000009'},()=>{});
+    assert.equal(typeof effective,'string');assert.notEqual(effective,context.admissionId);
+    await assert.rejects(f.manager.invoke(f.broker,a,event,'/vault',context.admissionId,'query',[{}]),{code:'durable_scope_changed'});
+    assert.throws(oldDispatchCheck,{code:'durable_scope_changed'});
+    assert.doesNotThrow(captureOwner());
+    await f.manager.invoke(f.broker,a,event,'/vault',effective,'query',[{}]);
+    assert.equal(queries,1);assert.equal(retired,0);
+  }finally{f.closed.resolve();await f.manager.close();}
+});
+
+test('journal quiescence drains accepted Core work only for the exact live bound owner',async()=>{
+  const gate=deferred();let drains=0;
+  const admission={scope:{vaultId:'store',clientId:'client'},durableWrites:{},async drainAccepted(){drains++;await gate.promise;},async retire(){}};
+  const f=fixture({admission}),a=f.window();await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
+  try{
+    const context=await f.manager.context(f.broker,a,'/vault'),event={sender:a.window.webContents,senderFrame:a.window.webContents.mainFrame},grant=bindJournal(f,a,context);
+    for(const wrong of [{...grant,token:'10000000-0000-4000-8000-000000000009'},{...grant,scope:{...grant.scope,clientId:'foreign'}}]){
+      await assert.rejects(f.manager.quiesceJournalOwner(f.broker,a,'/vault',wrong),{code:'draft_admission_denied'});
+    }
+    assert.equal(drains,0);
+    let settled=false;
+    const pending=f.manager.quiesceJournalOwner(f.broker,a,'/vault',grant).then(()=>{settled=true;});
+    await tick();assert.equal(settled,false);assert.equal(drains,1);
+    await assert.rejects(f.manager.invoke(f.broker,a,event,'/vault',context.admissionId,'drainAccepted',[]),{code:'invalid_durable_request'});
+    gate.resolve();await pending;assert.equal(settled,true);
+  }finally{f.closed.resolve();await f.manager.close();}
+});
+
+for(const change of ['grant','generation','revoked','root'])test(`journal quiescence cannot certify a changed owner after draining: ${change}`,async()=>{
+  const gate=deferred();let live=true;
+  const admission={scope:{vaultId:'store',clientId:'client'},durableWrites:{},async drainAccepted(){await gate.promise;},async retire(){}};
+  const f=fixture({admission}),a=f.window();await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
+  try{
+    const context=await f.manager.context(f.broker,a,'/vault'),grant=bindJournal(f,a,context,()=>{if(!live)throw Object.assign(new Error('revoked'),{code:'draft_lease_revoked'});});
+    const pending=f.manager.quiesceJournalOwner(f.broker,a,'/vault',grant);
+    if(change==='grant')f.manager.bindIndependentJournal(f.broker,a,'/vault',context.admissionId,{...grant,token:'10000000-0000-4000-8000-000000000009'},()=>{});
+    if(change==='generation')a.generation++;
+    if(change==='revoked')live=false;
+    if(change==='root')a.vault.service.root='/other';
+    gate.resolve();
+    await assert.rejects(pending,{code:change==='revoked'?'draft_lease_revoked':'durable_scope_changed'});
   }finally{f.closed.resolve();await f.manager.close();}
 });
 

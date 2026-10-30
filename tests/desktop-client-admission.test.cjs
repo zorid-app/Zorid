@@ -23,8 +23,9 @@ function fixture() {
     switch (command.method) {
       case 'capture_saved_source':
         if (readGate) await readGate.promise;
-        return {result:{capture:{capture_id:'physical-capture',logical_witness:{entry_id:command.entry_id,revision:command.revision,path:command.path},byte_length:8}},bytes:Buffer.from('score: 7')};
+        return {result:{capture:{capture_id:command.capture_id,logical_witness:{entry_id:command.entry_id,revision:command.revision,path:command.path},byte_length:8}},bytes:Buffer.from('score: 7')};
       case 'release_saved_source':result={released:true};break;
+      case 'list_saved_source_requests':if(readGate)await readGate.promise;result={requests:[]};break;
       case 'document_drafts':if(readGate)await readGate.promise;return {result:{state:null,transfer:null,transfer_scratch_bytes:0},bytes:new Uint8Array()};
       case 'binary':if(readGate)await readGate.promise;return {result:{binary:true},bytes:new Uint8Array(bytes)};
       case 'identity': result = { identity: { local_store_id: 'authority', realm_id: null, vault_id: null } }; break;
@@ -259,13 +260,14 @@ test('ordinary property target capability is frozen from native handshake before
 
 
 test('physical-source capability is positive only from the host handshake and remains on its exact lease', async () => {
-  const f=fixture(); f.host.capabilities=Object.freeze(['conditional_saved_source']);
+  const f=fixture(); f.host.capabilities=Object.freeze(['conditional_saved_source_requests']);
   const context=await admitDesktopFixtureClient(f.service,f.options);
   assert.equal(context.conditionalSavedSourceAvailable,true);
-  const capture=await context.durableWrites.captureSavedSource({entryId:'entry',revision:'rev',path:'note.md'});
+  const capture=await context.durableWrites.captureSavedSource({captureId:'10000000-0000-4000-8000-000000000003',logicalWitness:{entryId:'entry',revision:'rev',path:'note.md'}});
   assert.equal(capture.source,'score: 7'); assert.equal(capture.logicalWitness.revision,'rev');
   await context.durableWrites.releaseSavedSource(capture.captureId);
-  assert.ok(f.calls.includes('capture_saved_source')&&f.calls.includes('release_saved_source'));
+  assert.deepEqual(await context.durableWrites.listSavedSourceRequests(), []);
+  assert.ok(f.calls.includes('capture_saved_source')&&f.calls.includes('release_saved_source')&&f.calls.includes('list_saved_source_requests'));
   await context.retire();
   const count=f.calls.length;
   await assert.rejects(context.durableWrites.captureSavedSource(capture.logicalWitness),{code:'client_not_admitted'});
@@ -278,17 +280,68 @@ test('older native clients retain paired rejecting methods without claiming host
   assert.equal(typeof context.durableWrites.captureSavedSource,'function');
   assert.equal(typeof context.durableWrites.releaseSavedSource,'function');
   const count=f.calls.length;
-  await assert.rejects(context.durableWrites.captureSavedSource({entryId:'entry',revision:'rev',path:'note.md'}),{code:'unsupported_host_capability'});
+  await assert.rejects(context.durableWrites.captureSavedSource({captureId:'10000000-0000-4000-8000-000000000003',logicalWitness:{entryId:'entry',revision:'rev',path:'note.md'}}),{code:'unsupported_host_capability'});
   assert.equal(f.calls.length,count);
   await context.retire();
 });
 
 test('revocation during an accepted capture cannot return physical source into a different owner', async () => {
-  const f=fixture();f.host.capabilities=['conditional_saved_source'];
+  const f=fixture();f.host.capabilities=['conditional_saved_source_requests'];
   const context=await admitDesktopFixtureClient(f.service,f.options),gate=deferred();f.readGate=gate;
-  const pending=context.durableWrites.captureSavedSource({entryId:'entry',revision:'rev',path:'note.md'});
+  const pending=context.durableWrites.captureSavedSource({captureId:'10000000-0000-4000-8000-000000000003',logicalWitness:{entryId:'entry',revision:'rev',path:'note.md'}});
   f.owner=false;gate.resolve();
   await assert.rejects(pending,{code:'grant_retired'});
+  await context.retire();
+});
+
+test('pending source inventory cannot return after its admitted owner is revoked', async () => {
+  const f=fixture();f.host.capabilities=['conditional_saved_source_requests'];
+  const context=await admitDesktopFixtureClient(f.service,f.options),gate=deferred();f.readGate=gate;
+  const pending=context.durableWrites.listSavedSourceRequests();
+  f.owner=false;gate.resolve();
+  await assert.rejects(pending,{code:'grant_retired'});
+  await context.retire();
+});
+
+test('obsolete source capability fails client admission and releases its claimed lease', async () => {
+  const f=fixture();f.host.capabilities=['conditional_saved_source'];
+  await assert.rejects(admitDesktopFixtureClient(f.service,f.options),{code:'unsupported_host_capability'});
+  assert.equal(f.active,null);
+  assert.equal(f.calls.filter(method=>method==='release_client').length,1);
+});
+
+test('an accepted checkpoint queued for a former document is fenced at actual dispatch', async () => {
+  const f=fixture();let generation=1;
+  f.options.captureDispatchOwner=()=>{const captured=generation;return()=>{if(captured!==generation)throw Object.assign(new Error('old document'),{code:'durable_scope_changed'});};};
+  const context=await admitDesktopFixtureClient(f.service,f.options),gate=deferred(),original=f.host.request;
+  f.host.request=async(command,bytes,reference,beforeDispatch)=>{if(command.method==='checkpoint_cas'){await gate.promise;beforeDispatch?.();}return original(command,bytes,reference);};
+  const pending=context.durableWrites.checkpoints.compareAndSwap({key:'note',expectedRevision:null,nextRevision:'10000000-0000-4000-8000-000000000003',encodedState:'old document'});
+  generation++;gate.resolve();
+  await assert.rejects(pending,{code:'durable_scope_changed'});
+  await context.retire();
+});
+
+test('main-only drain waits for an accepted checkpoint without releasing the client lease',async()=>{
+  const f=fixture(),context=await admitDesktopFixtureClient(f.service,f.options),gate=deferred(),original=f.host.request;
+  f.host.request=async(command,...args)=>{if(command.method==='checkpoint_cas')await gate.promise;return original(command,...args);};
+  const pending=context.durableWrites.checkpoints.compareAndSwap({key:'note',expectedRevision:null,nextRevision:'10000000-0000-4000-8000-000000000003',encodedState:'protected'});
+  let settled=false;
+  const draining=context.drainAccepted().then(()=>{settled=true;});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(settled,false);assert.ok(f.active);
+  gate.resolve();await pending;await draining;
+  assert.ok(f.active);assert.equal(f.calls.includes('release_client'),false);
+  await context.retire();
+});
+
+test('main-only drain rechecks ownership after accepted checkpoint work settles',async()=>{
+  const f=fixture(),context=await admitDesktopFixtureClient(f.service,f.options),gate=deferred(),original=f.host.request;
+  f.host.request=async(command,...args)=>{if(command.method==='checkpoint_cas')await gate.promise;return original(command,...args);};
+  const pending=context.durableWrites.checkpoints.compareAndSwap({key:'note',expectedRevision:null,nextRevision:'10000000-0000-4000-8000-000000000003',encodedState:'protected'});
+  const draining=context.drainAccepted();
+  f.owner=false;gate.resolve();await pending;
+  await assert.rejects(draining,{code:'grant_retired'});
+  await assert.rejects(context.drainAccepted(),{code:'grant_retired'});
   await context.retire();
 });
 

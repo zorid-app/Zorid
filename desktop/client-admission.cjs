@@ -6,6 +6,7 @@ const {captureDatabaseRequest,isDatabaseMutation}=require('./databases.cjs');
 const {captureWorkBlockRequest}=require('./workblocks.cjs');
 const { MAX_BINARY_FRAME } = require('./rust-vault-service.cjs');
 const {captureDraftRequest,captureDraftBody,MAX_DRAFT_CHUNK}=require('./document-drafts.cjs');
+const {AsyncLocalStorage}=require('node:async_hooks');
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 function fail(code, uncertain = false) { return Object.assign(new Error('Desktop fixture consumer is not admitted.'), { code, commitUncertain: uncertain }); }
 
@@ -14,11 +15,12 @@ function fail(code, uncertain = false) { return Object.assign(new Error('Desktop
  * assertOwner must verify the selected WindowBroker record/grant generation.
  * Returns an injected editor context: {scope,durableWrites,assertActive,release}.
  */
-async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwner, expectedScope } = {}) {
-  if (fixture !== true || !uuid(clientId) || typeof assertOwner !== 'function') throw fail('invalid_admission');
+async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwner, expectedScope, captureDispatchOwner } = {}) {
+  if (fixture !== true || !uuid(clientId) || typeof assertOwner !== 'function'||captureDispatchOwner!==undefined&&typeof captureDispatchOwner!=='function') throw fail('invalid_admission');
   const host = service.host;
   let phase = 'admitting', closing = null, flushed = false, releasePrepared = false, activeFlush = null, runtime = null, drafts = null,draftRetired=false;
   const pending = new Set();
+  const dispatchOwners=new AsyncLocalStorage();
   function live() {
     if (service.closed || host.fatal || host.exited) throw fail('client_ownership_lost', true);
     assertOwner();
@@ -36,6 +38,7 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
       if (!['admitting', 'active', 'flushing'].includes(phase)) throw fail('client_not_admitted');
       // This runs again at each actual RPC, including commit after query/prepare.
       live();
+      dispatchOwners.getStore()?.();
     });
     Object.defineProperty(shadow, 'host', { value: guarded });
     const capability = await desktopDurableWrites(shadow, { clientId });
@@ -55,7 +58,11 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
     function invoke(action, flushToken) {
       try {
         allowed(flushToken);
-        const result = action(); // Snapshot provider args synchronously, before any await.
+        const owner=captureDispatchOwner?.();
+        if(captureDispatchOwner&&typeof owner!=='function')throw fail('invalid_admission');
+        // Carry the accepted document identity through provider awaits and
+        // every queued Native dispatch, without replacing the client lease.
+        const result = owner?dispatchOwners.run(owner,action):action();
         const tracked = Promise.resolve(result).finally(() => pending.delete(tracked));
         pending.add(tracked);
         return tracked;
@@ -64,9 +71,9 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
     function wrap(flushToken) {
       const methods = ['readText', 'readTextById', 'planWrite', 'prepare', 'commit', 'query', 'listUnacknowledged', 'acknowledge',
         ...(typeof capability.composeNote==='function'?['composeNote']:[]),
-        ...(typeof capability.captureSavedSource === 'function' && typeof capability.releaseSavedSource === 'function' ? ['captureSavedSource', 'releaseSavedSource'] : [])];
+        ...(['captureSavedSource', 'releaseSavedSource', 'listSavedSourceRequests'].every(name=>typeof capability[name]==='function') ? ['captureSavedSource', 'releaseSavedSource', 'listSavedSourceRequests'] : [])];
       return Object.freeze({
-        ...Object.fromEntries(methods.map(name => [name, (...args) => invoke(async() => {const value=await capability[name](...args);if(name==='commit')service.documentRuntimeSourceHint?.();if(name==='captureSavedSource')live();return value;}, flushToken)])),
+        ...Object.fromEntries(methods.map(name => [name, (...args) => invoke(async() => {const value=await capability[name](...args);if(name==='commit')service.documentRuntimeSourceHint?.();if(name==='captureSavedSource'||name==='listSavedSourceRequests')live();return value;}, flushToken)])),
         checkpoints: Object.freeze({ scope,
           ...Object.fromEntries(['load', 'compareAndSwap', 'list', 'changes'].map(name => [name, (...args) => invoke(() => capability.checkpoints[name](...args), flushToken)])),
         }),
@@ -156,7 +163,8 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
     async function drain() { while (pending.size) await Promise.allSettled([...pending]); }
     const context = Object.freeze({
       scope, durableWrites: writes, assertActive: () => allowed(),
-      ...(host.capabilities?.includes('conditional_saved_source') === true ? {conditionalSavedSourceAvailable:true} : {}),
+      async drainAccepted(){allowed();await drain();allowed();},
+      ...(host.capabilities?.includes('conditional_saved_source_requests') === true ? {conditionalSavedSourceAvailable:true} : {}),
       ...(documents?{documentCommand}:{}),
       ...(metadataRowsAvailable?{metadataRowsAvailable:true}:{}),
       ...(propertyTargetsAvailable?{propertyTargetsAvailable:true}:{}),

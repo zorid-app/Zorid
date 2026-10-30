@@ -3,14 +3,23 @@
 // filesystem commit is fabricated as acceptance evidence by these helpers.
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { SOURCE_LIMIT, PATH_LIMIT, captureSavedSourceWitness, captureSavedSourceGuard, captureSavedSourceValue, validSavedSourceReply, decodeSavedSourceReply } = require('../desktop/conditional-saved-source.cjs');
+const { SOURCE_LIMIT, PATH_LIMIT, captureSavedSourceWitness, captureSavedSourceGuard, captureSavedSourceRequest, captureSavedSourceValue, captureSavedSourceRequests, validSavedSourceReply, decodeSavedSourceReply, decodeSavedSourceRequestsReply } = require('../desktop/conditional-saved-source.cjs');
 const { RustVaultService } = require('../desktop/rust-vault-service.cjs');
 const witness = { entryId: 'entry', revision: 'revision', path: 'Books/Note.md' };
-const command = { method: 'capture_saved_source', client_id: 'client', entry_id: witness.entryId, revision: witness.revision, path: witness.path };
+const captureId = '10000000-0000-4000-8000-000000000003';
+const request = { captureId, logicalWitness: witness };
+const command = { method: 'capture_saved_source', client_id: 'client', capture_id: captureId, entry_id: witness.entryId, revision: witness.revision, path: witness.path };
 function response(source = '\ufeffscore: 7\u0000\n🚀') {
   const bytes = Buffer.from(source, 'utf8');
-  return { result: { capture: { capture_id: 'capture-opaque', logical_witness: { entry_id: witness.entryId, revision: witness.revision, path: witness.path }, byte_length: bytes.length } }, bytes };
+  return { result: { capture: { capture_id: captureId, logical_witness: { entry_id: witness.entryId, revision: witness.revision, path: witness.path }, byte_length: bytes.length } }, bytes };
 }
+
+test('capture replies cannot substitute another request ID for the caller-owned identity', () => {
+  const request = { ...command, capture_id: '10000000-0000-4000-8000-000000000003' };
+  const { result, bytes } = response();
+  result.capture.capture_id = '10000000-0000-4000-8000-000000000004';
+  assert.equal(validSavedSourceReply(request, result, bytes), false);
+});
 
 test('physical source preserves BOM, valid NUL and Unicode without replacing its logical witness', () => {
   const { result, bytes } = response();
@@ -20,7 +29,7 @@ test('physical source preserves BOM, valid NUL and Unicode without replacing its
   assert.deepEqual(capture.logicalWitness, witness);
   assert.notEqual(capture.source, 'logical score: 1');
   assert.ok(Object.isFrozen(capture) && Object.isFrozen(capture.logicalWitness));
-  assert.deepEqual(captureSavedSourceGuard({ captureId: capture.captureId, logicalWitness: capture.logicalWitness }), { captureId: 'capture-opaque', logicalWitness: witness });
+  assert.deepEqual(captureSavedSourceGuard({ captureId: capture.captureId, logicalWitness: capture.logicalWitness }), request);
 });
 
 test('wire captures reject byte mismatch, foreign logical witnesses, extra fields and invalid UTF8', () => {
@@ -55,7 +64,7 @@ test('capture control is exact bounded data and never a caller supplied physical
 });
 
 test('transport bounds capture/release bodies before allocating an oversized response frame', async () => {
-  for (const [method, length] of [['capture_saved_source', SOURCE_LIMIT + 1], ['release_saved_source', 1]]) {
+  for (const [method, length] of [['capture_saved_source', SOURCE_LIMIT + 1], ['release_saved_source', 1], ['list_saved_source_requests', 1]]) {
     const host = Object.create(RustVaultService.prototype);
     Object.assign(host, { prefix: Buffer.alloc(8), prefixUsed: 0, frame: null, pending: { command: { method } } });
     let rejected;
@@ -70,7 +79,7 @@ test('transport bounds capture/release bodies before allocating an oversized res
 
 test('native methods snapshot witness, carry the actual lease and reauthorize queued dispatch', async () => {
   const host = Object.create(RustVaultService.prototype), requests = [];
-  host.capabilities = Object.freeze(['conditional_saved_source']);
+  host.capabilities = Object.freeze(['conditional_saved_source_requests']);
   const lease = { local_store_id: 'store', client_id: 'client', token: 'lease' };
   let active = true, release;
   const gate = new Promise(resolve => { release = resolve; });
@@ -80,10 +89,11 @@ test('native methods snapshot witness, carry the actual lease and reauthorize qu
     return response();
   };
   const guarded = host.withClientLease(lease, () => { if (!active) throw Object.assign(new Error('retired'), { code: 'grant_retired' }); });
-  const input = { ...witness };
+  const input = { captureId, logicalWitness: { ...witness } };
   const pending = guarded.captureSavedSource('client', input);
-  input.path = 'Other.md';
+  input.logicalWitness.path = 'Other.md'; input.captureId = '10000000-0000-4000-8000-000000000004';
   assert.equal(requests[0].request.path, witness.path);
+  assert.equal(requests[0].request.capture_id, captureId);
   assert.deepEqual(requests[0].reference, lease);
   active = false; release();
   await assert.rejects(pending, { code: 'grant_retired' });
@@ -91,7 +101,7 @@ test('native methods snapshot witness, carry the actual lease and reauthorize qu
 
 test('prepare attaches only the exact opaque capture header, never source text or new mutation fields', async () => {
   const host = Object.create(RustVaultService.prototype), calls = [];
-  host.capabilities = ['conditional_saved_source'];
+  host.capabilities = ['conditional_saved_source_requests'];
   host.request = async (request, bytes) => { calls.push({ request, bytes: new Uint8Array(bytes) }); return { result: { intent: { token: 'intent' } } }; };
   const request = { operation_id: 'op', mutation: { type: 'write', id: 'entry', expected: 'revision' } }, bytes = Buffer.from('next');
   await host.prepareIntent('client', request, bytes, 'capture-original');
@@ -104,4 +114,49 @@ test('prepare attaches only the exact opaque capture header, never source text o
   assert.throws(() => host.prepareIntent('client', request, bytes, null), { code: 'invalid_saved_source' });
   const oldHost = Object.create(RustVaultService.prototype); oldHost.capabilities = [];
   await assert.rejects(oldHost.captureSavedSource('client', witness), { code: 'unsupported_host_capability' });
+});
+
+test('request snapshots require a canonical caller UUID and strictly plain exact witness data', () => {
+  const input = { captureId, logicalWitness: { ...witness } };
+  const captured = captureSavedSourceRequest(input);
+  input.captureId = 'changed'; input.logicalWitness.path = 'Other.md';
+  assert.deepEqual(captured, request);
+  assert.ok(Object.isFrozen(captured) && Object.isFrozen(captured.logicalWitness));
+  for (const value of [witness, { ...request, extra: true }, { ...request, captureId: 'server-generated' },
+    { ...request, captureId: 'ABCDEF00-0000-4000-8000-000000000003' },
+    Object.assign(Object.create({ inherited: true }), request), { ...request, logicalWitness: Object.assign(Object.create({}), witness) }]) {
+    assert.throws(() => captureSavedSourceRequest(value), { code: 'invalid_saved_source' });
+  }
+  let invoked = false;
+  const accessor = { logicalWitness: witness };
+  Object.defineProperty(accessor, 'captureId', { enumerable: true, get() { invoked = true; return captureId; } });
+  assert.throws(() => captureSavedSourceRequest(accessor), { code: 'invalid_saved_source' });
+  assert.equal(invoked, false);
+  const capture = { ...request, source: 'physical' };
+  assert.equal(captureSavedSourceValue(capture, request).source, 'physical');
+  assert.throws(() => captureSavedSourceValue({ ...capture, captureId: '10000000-0000-4000-8000-000000000004' }, request), { code: 'invalid_saved_source' });
+  assert.throws(() => captureSavedSourceValue({ ...capture, logicalWitness: { ...witness, revision: 'other' } }, request), { code: 'invalid_saved_source' });
+});
+
+test('pending inventory is a bounded immutable exact list and legacy IDs require an explicit tag', () => {
+  const rows = Array.from({ length: 8 }, (_, index) => ({ captureId: `10000000-0000-4000-8000-${String(index).padStart(12, '0')}`, logicalWitness: { ...witness }, legacy: false }));
+  const captured = captureSavedSourceRequests(rows);
+  rows[0].logicalWitness.path = 'Other.md';
+  assert.equal(captured[0].logicalWitness.path, witness.path);
+  assert.ok(Object.isFrozen(captured) && Object.isFrozen(captured[0]) && Object.isFrozen(captured[0].logicalWitness));
+  assert.deepEqual(captureSavedSourceRequests([{ captureId: 'legacy-id', logicalWitness: witness, legacy: true }]), [{ captureId: 'legacy-id', logicalWitness: witness, legacy: true }]);
+  const row = { ...request, legacy: false };
+  const accessor = []; let invoked = false;
+  Object.defineProperty(accessor, '0', { enumerable: true, get() { invoked = true; return row; } });
+  for (const value of [Array(1), accessor, Object.assign([row], { extra: true }), [row, row], Array(9).fill(row),
+    [{ ...row, captureId: 'legacy-id' }], [{ ...row, legacy: 1 }], [{ ...row, source: 'private' }],
+    [{ ...row, lease: 'secret' }], [Object.assign(Object.create({}), row)], [{ ...row, logicalWitness: null }]]) {
+    assert.throws(() => captureSavedSourceRequests(value), { code: 'invalid_saved_source' });
+  }
+  assert.equal(invoked, false);
+  const wire = { requests: [{ capture_id: captureId, logical_witness: { entry_id: witness.entryId, revision: witness.revision, path: witness.path }, legacy: false }] };
+  assert.deepEqual(decodeSavedSourceRequestsReply(wire), [row]);
+  for (const value of [{ ...wire, lease: 'private' }, { requests: [{ ...wire.requests[0], source: 'private' }] }, { requests: Array(9).fill(wire.requests[0]) }]) {
+    assert.throws(() => decodeSavedSourceRequestsReply(value), { code: 'invalid_saved_source' });
+  }
 });
