@@ -8,6 +8,10 @@ use zorid_store::{ExternalNamespaceAction, ExternalNamespaceMember, PhysicalBind
 #[path = "external_namespace_candidate_tests.rs"]
 mod candidate_tests;
 
+#[cfg(test)]
+#[path = "external_positive_snapshot_tests.rs"]
+mod positive_snapshot_tests;
+
 /// Membership admission for one exclusive reconciliation pass. The borrowed
 /// lock prevents this witness outliving the lock; scalar identity checks prevent
 /// borrowing it for another vault. Validated Store writers may advance graph
@@ -1005,9 +1009,11 @@ impl NativeVault {
             }
             let snapshot = &scan.entries[&path];
             let attempt = (|| -> Result<Option<CommitResult>> {
+                if snapshot.kind == EntryKind::File { self.point("external_positive_file_proof"); }
                 if !scan.confirm_snapshot(self, &path)? {
                     return Err(Error::Busy("external capture changed before enrollment"));
                 }
+                if snapshot.kind == EntryKind::File { self.point("external_positive_snapshot_captured"); }
                 let owner = self.store.physical_owner_by_inode(&snapshot.identity)?;
                 if owner.as_ref().is_some_and(|b| b.state.path != path) {
                     return Err(Error::Busy("external inode retains another physical path"));
@@ -1023,6 +1029,7 @@ impl NativeVault {
                         ));
                     }
                     return if snapshot.kind == EntryKind::File {
+                        self.point("external_positive_file_proof");
                         let expected = scan
                             .file_snapshot(self, &path)?
                             .ok_or(Error::Busy("file snapshot missing"))?;
@@ -1068,6 +1075,7 @@ impl NativeVault {
                     )
                     .map(Some)
                 } else {
+                    self.point("external_positive_file_proof");
                     let expected = scan
                         .file_snapshot(self, &path)?
                         .ok_or(Error::Busy("file snapshot missing"))?;
