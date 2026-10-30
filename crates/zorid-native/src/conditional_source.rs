@@ -6,6 +6,10 @@ use super::*;
 use crate::fs_stream;
 use zorid_store::HostSourceGuard;
 
+#[cfg(test)]
+#[path = "conditional_source_request_tests.rs"]
+mod request_tests;
+
 fn changed() -> Error {
     Error::ConditionalSource(ConditionalSourceError::Changed)
 }

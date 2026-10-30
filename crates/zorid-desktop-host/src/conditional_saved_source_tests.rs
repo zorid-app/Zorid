@@ -12,6 +12,15 @@ const BEFORE: &str = "---\nscore: 9\nuntouched: keep\n---\nBody 😀\n";
 const AFTER: &str = "---\nscore: 1\nuntouched: keep\n---\nBody 😀\n";
 const EXTERNAL: &str = "---\r\nscore: 7\r\nuntouched: external\r\n---\r\nSaved 😀\r\n";
 
+#[test]
+fn capture_request_wire_requires_caller_identity_and_pending_list_command() {
+    let value=json!({"method":"capture_saved_source","client_id":CLIENT,"capture_id":"30000000-0000-4000-8000-000000000001","entry_id":"entry","revision":"revision","path":"A.md"});
+    assert!(serde_json::from_value::<Command>(value.clone()).is_ok(),"new request identity must be accepted");
+    let mut missing=value.clone();missing.as_object_mut().unwrap().remove("capture_id");assert!(serde_json::from_value::<Command>(missing).is_err(),"old ID-less path must be rejected");
+    let mut extra=value;extra["source"] = json!("untrusted");assert!(serde_json::from_value::<Command>(extra).is_err());
+    assert!(serde_json::from_value::<Command>(json!({"method":"list_saved_source_requests","client_id":CLIENT})).is_ok());
+}
+
 fn fixture(
     root: &Path,
 ) -> (

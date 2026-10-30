@@ -9,7 +9,7 @@ const TOUCHED: &[u8] = b"---\nscore: 7\nuntouched: keep\n---\nBody\n";
 const UNRELATED: &[u8] = b"---\nscore: 9\nuntouched: external\n---\nBody\nExternal body\n";
 const MERGED: &[u8] = b"---\nscore: 1\nuntouched: external\n---\nBody\nExternal body\n";
 
-fn fixture(root: &Path) -> (NativeVault, ClientLease, ConditionalSavedSourceWitness) {
+pub(super) fn fixture(root: &Path) -> (NativeVault, ClientLease, ConditionalSavedSourceWitness) {
     let mut vault = NativeVault::open(root).unwrap();
     vault
         .family_enroll(&FamilyScope {
