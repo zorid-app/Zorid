@@ -1883,6 +1883,12 @@ export class Workspace {
             chooseFile:(kind?:'note'|'media')=>this.canvasDocumentInput?.chooseFile(()=>generation===this.vaultGeneration&&pane.runtime===runtime&&runtime.phase==='active'&&pane.content?.isConnected===true,kind)??Promise.resolve(null),
             textEditorOptions:services.options,
             textEmbedLifecycle:services.baseSessions,
+            saveState:{
+              isSaved:(source:string)=>generation===this.vaultGeneration&&vault===this.vault&&version===pane.renderVersion&&pane.runtime===runtime&&runtime.phase!=='disposed'
+                &&!!fileToken&&this.treeEntryToken(path)===fileToken&&this.buffers.get(path)===buffer&&buffer.path===path&&pane.canvasSource===source
+                &&!buffer.dirty&&!buffer.error&&!buffer.hasRecoveryConflict&&buffer.text===source&&buffer.savedText===source,
+              subscribe:(listener:()=>void)=>this.bufferSubscriptions.subscribe(buffer,listener),
+            },
             renderFile:(target:string,subpath?:string)=>{
               const parent=el('div'),token=this.treeEntryToken(target),available=()=>generation===this.vaultGeneration&&pane.runtime===runtime&&runtime.phase!=='disposed'&&token!==undefined&&this.treeEntryToken(target)===token&&this.vault.entries.get(target)?.type==='file';
               if(!available()){const element=el('p','error-message',`File not found: ${target}`);return{element,destroy(){element.remove();}};}

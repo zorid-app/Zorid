@@ -16,6 +16,9 @@ import { canScrollCanvasContent, createCanvasFrameQueue } from './input.ts';
 export interface CanvasViewOptions {
   document: CanvasDocument;
   onChange(source: string, document: CanvasDocument): void | Promise<void>;
+  /** Bound host acknowledgement for this exact current Canvas source. A draft
+   * journal receipt or an older clean buffer does not establish this proof. */
+  saveState?: { isSaved(source: string): boolean; subscribe(listener: () => void): () => void };
   openFile?(path: string, subpath?: string): void | Promise<void>;
   openLink?(url: string): void | Promise<void>;
   /** Resolve Markdown targets relative to the containing Canvas file. */
@@ -112,13 +115,17 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   let editorFailure: unknown;
   let finishEditing: ((save: boolean) => void) | undefined;
   let saveVersion = 0, completedSaveVersion = 0;
-  let failedSave: { error: unknown; version: number } | undefined;
+  type SaveFailure = { error: unknown; version: number; reportVersion: number };
+  let failedSave: SaveFailure | undefined, saveFailureNotice: SaveFailure | undefined;
+  let reportVersion = 0;
   let pendingTextSave: { source: string; version: number } | undefined;
   let menuVersion = 0, announcedSelection = '';
   const box = dom.createElement('div'); box.className = 'zorid-canvas-selection-box';
   const report = (error: unknown) => {
+    const version = ++reportVersion;
     if (!closed) status.textContent = `Unable to save Canvas: ${error instanceof Error ? error.message : String(error)}`;
     try { options.onError?.(error); } catch { /* Error observers must not interrupt the persistence queue. */ }
+    return version;
   };
   const invoke = (action: (() => void | Promise<void>) | undefined) => { if (!closed && action) try { Promise.resolve(action()).catch(report); } catch (error) { report(error); } };
   const button = (host: HTMLElement, name: string, glyph: string, action: () => void, size = 16) => {
@@ -422,6 +429,15 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     undoButton.disabled = !undoStack.length; redoButton.disabled = !redoStack.length; transform(); paintSelection();
     if (focused?.isConnected) focused.focus({ preventScroll: true });
   }
+  function reconcileSaveState(): void {
+    const failure = saveFailureNotice;
+    if (closed || !failure || completedSaveVersion !== saveVersion) return;
+    try { if (options.saveState?.isSaved(document.toString()) !== true) return; } catch { return; }
+    // Only an exact current source acknowledgement retires a save failure.
+    // Unaccepted editor drafts and unrelated later errors keep their own state.
+    failedSave = undefined; saveFailureNotice = undefined;
+    if (reportVersion === failure.reportVersion) status.textContent = projection.hidden ? `${projection.hidden} unrendered or duplicate records retained in the file` : '';
+  }
   function publish(coalesceText = false): void {
     if (closed) return;
     const source = document.toString(), version = ++saveVersion;
@@ -437,9 +453,8 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
         await options.onChange(save.source, CanvasDocument.parse(save.source));
         failedSave = undefined;
       } catch (error) {
-        failedSave = { error, version: save.version };
-        report(error);
-      } finally { completedSaveVersion = save.version; }
+        failedSave = { error, version: save.version, reportVersion: report(error) }; saveFailureNotice = failedSave;
+      } finally { completedSaveVersion = save.version; reconcileSaveState(); }
     });
   }
   async function flush(): Promise<void> {
@@ -906,6 +921,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   const windowBlur = () => { space = false; if (drag) finishDrag({ pointerId: drag.id } as PointerEvent, true); };
   win.addEventListener('blur', windowBlur);
   render();
+  const unsubscribeSaveState = options.saveState?.subscribe(reconcileSaveState);
   return {
     element, get document() { return document; }, undo, redo, flush,
     hasPendingChanges: () => !!editor && editor.value !== editorOriginal || saveVersion > completedSaveVersion || !!failedSave || !!options.textEmbedLifecycle?.hasPendingChanges() || [...fileCards.values(), ...textCards.values()].some(entry => entry.card.hasPendingChanges()),
@@ -921,6 +937,6 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
       assertCanReplaceCards(next);
       finishEditing?.(false); clearDrag(); document = next; undoStack.length = redoStack.length = 0; selectedNodes.clear(); selectedEdges.clear(); render(true);
     },
-    destroy() { if (closed) return; closed = true; finishEditing?.(false); clearDrag(); for (const entry of [...fileCards.values(), ...textCards.values()]) entry.card.destroy(); fileCards.clear(); textCards.clear(); for (const entry of attachments.values()) try { entry.owner.destroy(); } catch (error) { report(error); } attachments.clear(); win.removeEventListener('blur', windowBlur); element.remove(); },
+    destroy() { if (closed) return; closed = true; unsubscribeSaveState?.(); finishEditing?.(false); clearDrag(); for (const entry of [...fileCards.values(), ...textCards.values()]) entry.card.destroy(); fileCards.clear(); textCards.clear(); for (const entry of attachments.values()) try { entry.owner.destroy(); } catch (error) { report(error); } attachments.clear(); win.removeEventListener('blur', windowBlur); element.remove(); },
   };
 }
