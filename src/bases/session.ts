@@ -427,6 +427,14 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     const settled=()=>{if(definitionsLoad===load)definitionsLoad=undefined;};void promise.then(settled,settled);
     return promise;
   };
+  const ensureDefinitionsCurrent = () => {
+    const read=controller.configurationRead;
+    // Rendering the refreshed query already starts a schema read for this exact
+    // configuration proof. Join it, or reuse its successful completion. Explicit
+    // event-driven loads still reread unchanged sources for schema/member changes.
+    if(!read||definitionsLoading||definitionsError||loadedSourceContext!==sourceContext()||loadedConfigurationRead!==read)return loadDefinitions();
+    return Promise.resolve();
+  };
   let selectedIndex = options.query?.viewIndex ?? 0;
   let notice: string | undefined;
   let actionMessage:string|undefined;
@@ -691,7 +699,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       await options.vault.reload();if(admissionRecovery)return;
       await loadDefinitions();if(admissionRecovery)return;
       await controller.refresh();if(admissionRecovery)return;
-      await loadDefinitions();
+      await ensureDefinitionsCurrent();
     })().catch(error=>{if(!admissionRecovery)throw error;});
     await Promise.race([refresh,derivedRetirement]);
   }

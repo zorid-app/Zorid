@@ -56,11 +56,16 @@ async function fixture(base = summaryBase, browsingOnly = false, controlPaint = 
   ]};
   let member:DatabaseEntry={entryId:'One.md',collectionId,revision:'member-r1',fileRevision:'r1',path:'One.md',values,deleted:false,pendingProjection:false};
   const operations=new Map<string,{request:DatabaseRequest;response:DatabaseResponse}>(),requests:DatabaseRequest[]=[];
+  let getGate:{skip:number;entered:()=>void;release:Promise<void>}|undefined;
+  const holdGet=(skip:number)=>{
+    let entered!:()=>void,release!:()=>void;const started=new Promise<void>(resolve=>{entered=resolve;}),released=new Promise<void>(resolve=>{release=resolve;});
+    getGate={skip,entered,release:released};return{started,release};
+  };
   const response=():DatabaseResponse=>({collections:[structuredClone(collection)],entries:[structuredClone(member)],projection:{pending:0,issues:[]}});
   adapter.databases={async request(command){
     requests.push(structuredClone(command));
     if(command.op==='list')return response();
-    if(command.op==='get'){assert.equal(command.collectionId,collection.id);return response();}
+    if(command.op==='get'){assert.equal(command.collectionId,collection.id);if(getGate&&getGate.skip--===0){const gate=getGate;getGate=undefined;gate.entered();await gate.release;}return response();}
     if(command.op==='get_entry'){assert.equal(command.entryId,member.entryId);return response();}
     assert.equal(command.op,'set_entry','this fixture accepts only typed member value commands');if(command.op!=='set_entry')throw Error('Unexpected collection command');
     assert.match(command.operationId,/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
@@ -115,8 +120,36 @@ async function fixture(base = summaryBase, browsingOnly = false, controlPaint = 
   if(controlPaint){dom.window.requestAnimationFrame=callback=>{frames.set(++nextFrame,callback);return nextFrame;};dom.window.cancelAnimationFrame=handle=>{frames.delete(handle);};}
   const session=createBaseSession(host,{vault,basePath:'Work.base',validate(){},openFile(path,_event,witness){opened.push({path,witness});},onError(error){errors.push(error);},buffers:{validate(){},async getBuffer(path){let buffer=buffers.get(path);if(!buffer){buffer=new NoteBuffer(vault,path);Object.defineProperty(buffer,'savedDurableWitness',{get:()=>({path,entryId:path,revision:`r${adapter.revisions.get(path)??1}`})});buffers.set(path,buffer);}await buffer.load();return buffer;}}});await session.ready;assert.ifError(session.state.error);
   const key=(element:Element,key:string,extra={})=>element.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key,bubbles:true,cancelable:true,...extra}));
-  return{adapter,vault,dom,host,session,errors,opened,key,requests,operations,initialNote,projected,get member(){return structuredClone(member);},pendingPaint:()=>frames.size,async paint(){const callbacks=[...frames.values()];frames.clear();for(const callback of callbacks)callback(0);await tick();},async dropGroups(){const document=BaseDocument.parse(await adapter.read('Work.base'));document.updateView(0,{groupBy:undefined,groupOrder:undefined});await vault.modify('Work.base',document.toString());},async cleanup(){adapter.fail=false;for(const input of dom.window.document.querySelectorAll('.bases-property-popover input,[data-base-editing] input'))key(input,'Escape');dom.window.document.querySelector<HTMLButtonElement>('[aria-label="Back to summaries"]')?.click();await until(()=>!session.hasPendingChanges());await session.close();for(const buffer of buffers.values())await buffer.dispose();dom.window.close();}};
+  return{adapter,vault,dom,host,session,errors,opened,key,requests,operations,initialNote,projected,holdGet,get member(){return structuredClone(member);},renameScore(name:string){collection.properties[0]={...collection.properties[0],name};collection.revision='schema-r2';},pendingPaint:()=>frames.size,async paint(){const callbacks=[...frames.values()];frames.clear();for(const callback of callbacks)callback(0);await tick();},async dropGroups(){const document=BaseDocument.parse(await adapter.read('Work.base'));document.updateView(0,{groupBy:undefined,groupOrder:undefined});await vault.modify('Work.base',document.toString());},async cleanup(){adapter.fail=false;for(const input of dom.window.document.querySelectorAll('.bases-property-popover input,[data-base-editing] input'))key(input,'Escape');dom.window.document.querySelector<HTMLButtonElement>('[aria-label="Back to summaries"]')?.click();await until(()=>!session.hasPendingChanges());await session.close();for(const buffer of buffers.values())await buffer.dispose();dom.window.close();}};
 }
+
+test('acknowledged collection cell edits reuse the schema read already loaded for the refreshed query',async()=>{
+  const f=await fixture();
+  try{
+    for(const value of [11,12]){
+      const before=f.requests.filter(request=>request.op==='get').length,gate=f.holdGet(1);
+      const cell=f.host.querySelector<HTMLElement>(`[data-property="${scoreKey}"][role="gridcell"]`)!;
+      f.key(cell,'Enter');const input=cell.querySelector<HTMLInputElement>('input')!;assert.ok(input);input.value=String(value);f.key(input,'Enter');
+      try{await gate.started;assert.equal(f.session.hasPendingChanges(),true,'the committed edit still awaits current-query schema');assert.equal(input.isConnected,true,'the mounted editor survives the schema read');}finally{gate.release();}
+      await f.session.flush();
+      assert.equal(f.member.values[scoreId],value);
+      assert.equal(f.requests.filter(request=>request.op==='get').length-before,2,'one pre-query schema read and one current-query schema read; no duplicate post-query get');
+      await tick();
+    }
+    const writes=f.requests.filter((request):request is Extract<DatabaseRequest,{op:'set_entry'}>=>request.op==='set_entry');
+    assert.deepEqual(writes.map(request=>request.expectedRevision),['member-r1','member-r2']);assert.deepEqual(f.errors,[]);
+  }finally{await f.cleanup();}
+});
+
+test('unchanged Base configuration still reloads externally changed collection schema',async()=>{
+  const f=await fixture();
+  try{
+    const saved=await f.vault.read('Work.base');f.renameScore('Updated score');
+    await f.vault.create('External.md','external event');
+    await until(()=>f.host.querySelector(`[data-property="${scoreKey}"][role="columnheader"]`)?.textContent?.includes('Updated score')===true);
+    assert.equal(await f.vault.read('Work.base'),saved);assert.deepEqual(f.errors,[]);
+  }finally{await f.cleanup();}
+});
 
 test('raw editing adapter accepts inert values and rejects rich values without saved source', () => {
   const link = { type: 'namespace', name: 'Rendered' } as BaseExpressionValue;
