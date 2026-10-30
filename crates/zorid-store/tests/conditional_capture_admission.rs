@@ -334,3 +334,31 @@ fn missing_malformed_or_foreign_capture_schema_fails_before_version_or_wal_chang
         assert_eq!(db.pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0)).unwrap(), "delete");
     }
 }
+
+#[test]
+fn capture_request_unknown_release_durably_fences_a_late_first_capture() {
+    let directory=tempfile::tempdir().unwrap();let path=directory.path().join("db");
+    let (mut store,_,guard)=fixture(&path);let client=uuid(1);
+    assert!(store.release_host_source_capture(&client,&guard.capture_id).unwrap());
+    drop(store);let mut store=Store::open(&path).unwrap();
+    assert!(store.register_host_source_capture(&client,&uuid(10),&guard).is_err());
+    assert_eq!(store.host_source_capture_usage().unwrap(),(0,0));
+}
+#[test]
+fn capture_request_release_and_exact_lease_retirement_never_resurrect_an_id() {
+    for retire in [false,true] {
+        let directory=tempfile::tempdir().unwrap();let (mut store,_,guard)=fixture(&directory.path().join("db"));
+        let (client,token)=(uuid(1),uuid(10));store.register_host_source_capture(&client,&token,&guard).unwrap();
+        if retire {store.retire_host_source_captures(&client,&token).unwrap();}else{store.release_host_source_capture(&client,&guard.capture_id).unwrap();}
+        assert!(store.register_host_source_capture(&client,&token,&guard).is_err());
+        assert_eq!(store.host_source_capture_usage().unwrap(),(0,0));
+    }
+}
+#[test]
+fn capture_request_release_does_not_disclose_or_mutate_foreign_ownership() {
+    let directory=tempfile::tempdir().unwrap();let (mut store,_,guard)=fixture(&directory.path().join("db"));
+    store.register_host_source_capture(&uuid(1),&uuid(10),&guard).unwrap();
+    assert!(store.release_host_source_capture(&uuid(2),&guard.capture_id).unwrap());
+    assert!(store.release_host_source_capture(&uuid(2),&uuid(999)).unwrap());
+    assert_eq!(store.host_source_capture_usage().unwrap(),(1,8));
+}
