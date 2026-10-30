@@ -439,6 +439,49 @@ fn admit_event<R: IndexedAuthorshipReader>(r: &mut R, bytes: usize) -> Result<()
         encoded_bytes: bytes,
     })
 }
+/// Reuse the exact portable physical-branch plan, including its historical
+/// namespace parents. Re-authoring an ordinary current-branch replacement here
+/// would change the meaning of an offline edit. This creates a candidate only;
+/// the host still rechecks the original observation and physical baseline.
+#[allow(clippy::too_many_arguments)]
+pub fn external_text_candidate<R: IndexedAuthorshipReader>(
+    command: &FamilyCommand,
+    scope: &Scope,
+    rows: &[EntryChange],
+    current: &TextState,
+    baseline: &zorid_client_sync::v2::TextPhysicalBaseline,
+    external: &zorid_client_sync::v2::ExternalTextPlan,
+    a: &Allocation,
+    r: &mut R,
+) -> Result<AuthorshipCandidate, R::Error> {
+    let need = requirements(command, rows, Some(current), r)?;
+    if need.text != TextRequirement::Write {
+        return Err(Error::InvalidMode.into());
+    }
+    allocation(r, a, &need, rows)?;
+    external.check_preconditions(current, baseline, true).map_err(Error::from)?;
+    let plan = external.authored().plan();
+    if current.identity.realm_id != scope.realm_id
+        || current.identity.vault_id != scope.vault_id
+        || plan.next_state.identity != current.identity
+        || plan.next_state.version != a.metadata_revision
+        || a.update_ids.as_slice() != [plan.authored.update_id.clone()]
+        || text_bytes(command)? != plan.materialized_utf8
+    {
+        return Err(Error::SnapshotMismatch.into());
+    }
+    let bytes = bound(plan.next_state.snapshot.len()
+        .saturating_add(plan.materialized_utf8.len())
+        .saturating_add(plan.authored.payload_bytes.len()))?;
+    admit_event(r, bytes)?;
+    let activity = v2::StoredActivity::from_activity(external.authored().activity())
+        .map_err(Error::from)?;
+    Ok(AuthorshipCandidate {
+        files: Vec::new(),
+        text: Some(TextChange::Write(plan.clone())),
+        activity: Some(activity),
+    })
+}
 /// Author exact existing inline Text/namespace effects. This returns data only;
 /// final reduction must still establish that graph namespace matches core rows.
 pub fn author<R: IndexedAuthorshipReader>(

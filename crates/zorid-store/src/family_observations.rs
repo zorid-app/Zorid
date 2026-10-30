@@ -86,15 +86,9 @@ impl Store {
                 .vault_id
                 .ok_or(zorid_client_sync::SyncError::IdentityMismatch)?,
         };
-        let graph = blob_index::load_metadata(&tx, &scope)?
-            .ok_or_else(|| invalid("family observation has no enrolled graph"))?;
-        let mut entries = read_states(&tx, true)?;
-        entries.sort_by(|a, b| a.id.cmp(&b.id));
-        let entry = entries
-            .iter()
-            .find(|entry| entry.id == physical.state.id)
+        let entry = entry_content::read_metadata_row(&tx, &physical.state.id)?
             .ok_or_else(|| invalid("family observation target is not visible"))?
-            .clone();
+            .state;
         if entry.kind != EntryKind::File
             || entry.path != physical.state.path
             || entry.path != observation.path
@@ -169,11 +163,6 @@ impl Store {
             &baseline,
             family_ledger::unused(&tx, &family_commands::key(&scope, &author.update_id))?,
         )?;
-        let candidate = zorid_file_sync::metadata_plan::prepare_authored_text_activity(
-            &graph,
-            external.authored().activity(),
-            allocation.graph_revision.clone(),
-        )?;
         if external.authored().plan().materialized_utf8.len() as u64 > FAMILY_MAX_INLINE_BYTES {
             return Err(zorid_client_sync::SyncError::TooLarge.into());
         }
@@ -188,20 +177,11 @@ impl Store {
         host_intents::check_execution(&tx, &request)?;
         let command =
             command::FamilyCommand::new(request.clone(), None).map_err(family_commands::mapped)?;
-        let changes = zorid_core::plan_mutation(&request, &entries, &allocation.metadata_revision)?;
-        let prepared = family_commands::prepare_parts(
-            &tx,
-            command,
-            allocation,
-            entries,
-            changes,
-            vec![author.update_id.clone()],
-            Vec::new(),
-            Some(command::TextChange::Write(
-                external.authored().plan().clone(),
-            )),
-            candidate,
-        )?;
+        let prepared = family_metadata_transactions::PreparedFamilyCommand::Indexed(
+            family_indexed::prepare_observed_text(
+                &tx, &command, &scope, &current, &baseline, &external, allocation,
+            )?,
+        );
         let observed = external.observed_baseline();
         if observed.text.materialized_utf8.as_slice() != observed_bytes {
             return Err(invalid(

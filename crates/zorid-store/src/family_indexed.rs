@@ -526,7 +526,7 @@ pub(super) fn prepare(
     command: &zorid_file_sync::mutation::FamilyCommand,
     scope: &Scope,
 ) -> Result<Ready> {
-    use zorid_file_sync::{graph_facts::SourceFacts, indexed_authorship, mutation as mapper};
+    use zorid_file_sync::{indexed_authorship, mutation as mapper};
     let mut reader = Reader::open(tx, scope)?;
     let metadata_revision = family_commands::fresh_revision()?;
     let changes =
@@ -567,6 +567,44 @@ pub(super) fn prepare(
         &allocation,
         &mut reader,
     )?;
+    finish_preparation(tx, command, scope, reader, allocation, changes, expected_text, candidate)
+}
+
+/// Only a portable physical-branch plan created in this read snapshot enters
+/// here. The observation owner retains its independent physical proof and final
+/// transaction checks; this path replaces unrelated whole-vault graph reads.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn prepare_observed_text(
+    tx: &Connection,
+    command: &zorid_file_sync::mutation::FamilyCommand,
+    scope: &Scope,
+    current: &zorid_client_sync::TextState,
+    baseline: &zorid_client_sync::v2::TextPhysicalBaseline,
+    external: &zorid_client_sync::v2::ExternalTextPlan,
+    allocation: zorid_file_sync::mutation::Allocation,
+) -> Result<Ready> {
+    let mut reader = Reader::open(tx, scope)?;
+    let changes = zorid_core::plan_indexed_mutation(
+        &command.request, &mut reader, &allocation.metadata_revision,
+    )?;
+    let candidate = zorid_file_sync::indexed_authorship::external_text_candidate(
+        command, scope, &changes, current, baseline, external, &allocation, &mut reader,
+    )?;
+    finish_preparation(tx, command, scope, reader, allocation, changes, Some(current.clone()), candidate)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_preparation(
+    tx: &Connection,
+    command: &zorid_file_sync::mutation::FamilyCommand,
+    scope: &Scope,
+    mut reader: Reader<'_>,
+    allocation: zorid_file_sync::mutation::Allocation,
+    changes: Vec<EntryChange>,
+    expected_text: Option<zorid_client_sync::TextState>,
+    candidate: zorid_file_sync::indexed_authorship::AuthorshipCandidate,
+) -> Result<Ready> {
+    use zorid_file_sync::graph_facts::SourceFacts;
     let (authored, text, activity) = candidate.into_parts();
     let mut facts = Vec::new();
     for file in &authored {
