@@ -8,7 +8,9 @@ import { createEditor } from '../src/ui/editor.ts';
 import { MemoryAdapter } from '../src/core/memory-adapter.ts';
 import { inlineBaseRequest } from '../src/bases/inline-base.ts';
 import type { InlineBaseRequest } from '../src/bases/inline-base.ts';
+import { createBaseSession } from '../src/bases/session.ts';
 import type { BaseSession, BaseSessionOptions } from '../src/bases/session.ts';
+import type { BaseEmbedSessions } from '../src/ui/base-embed-sessions.ts';
 import type { IndependentDraftProvider, IndependentDraftCandidate, IndependentDraftReceipt } from '../src/core/independent-drafts.ts';
 import type { Checkpoint } from '../src/core/durable-checkpoints.ts';
 import type {
@@ -152,8 +154,8 @@ function provider(initial: string) {
   };
 }
 
-type CapturedHost = { element: HTMLElement; options: BaseSessionOptions };
-async function fixture(t: TestContext, initial = source) {
+type CapturedHost = { element: HTMLElement; options: BaseSessionOptions;session?:BaseSession };
+async function fixture(t: TestContext, initial = source,realBase=false) {
   const authority = provider(initial);
   const dom = new JSDOM('<!doctype html><body><main></main></body>', { url: 'https://zorid.test/', pretendToBeVisual: true });
   const saved = new Map<string, PropertyDescriptor | undefined>();
@@ -170,7 +172,8 @@ async function fixture(t: TestContext, initial = source) {
   const hosts: CapturedHost[] = [], contractSessions: BaseSession[] = [];
   const workspace = new Workspace(document.querySelector('main')!, createEditor, {
     base: (element, options) => {
-      hosts.push({ element, options });
+      const host:CapturedHost={element,options};hosts.push(host);
+      if(realBase){host.session=createBaseSession(element,options);return host.session;}
       // This adapter captures the real Workspace host contract only. No query,
       // toolbar or user-interface acceptance is inferred from these host tests.
       return { ready: Promise.resolve(), state: { error: null } as BaseSession['state'], refresh: async () => {},
@@ -338,4 +341,20 @@ test('late owner acknowledgement failure cannot author another intent for alread
   assert.equal(f.planned.length, 1); assert.equal(f.authority.authorships, 1);
   assert.equal(f.authority.capturesTaken, 2); assert.deepEqual(f.released, f.authority.captureIds);
   assert.equal(f.editor().state.doc.toString(), source, 'the clean no-op does not replay a publication acknowledgement');
+});
+
+test('accepted inline configuration survives a late host interruption with one guarded intent and its original occurrence',{timeout:5000},async t=>{
+ const f=await fixture(t,source,true),host=f.liveHost(),session=host.session!;await session.ready;
+ let release!:()=>void;const held=new Promise<void>(resolve=>{release=resolve;});let first=true;
+ f.authority.setCommit(async()=>{if(first){first=false;await held;throw Object.assign(new Error('Original inline host exited'),{code:'host_exited',source:'host'});}});
+ t.after(()=>release());
+ host.element.querySelector<HTMLButtonElement>('[aria-label="Filter"]')!.click();
+ const control=<T extends HTMLElement>(label:string)=>{const node=document.querySelector<T>(`[aria-label=${JSON.stringify(label)}]`);assert.ok(node,label);return node;};
+ const edit=(label:string,value:string,event='input')=>{const input=control<HTMLInputElement>(label);input.value=value;input.dispatchEvent(new window.Event(event,{bubbles:true}));return input;};
+ control<HTMLButtonElement>('Add filter').click();edit('Filter property','file.size','change');edit('Condition','gt','change');edit('Filter value','1');await until(()=>f.committed.length===1,'the original inline guarded intent enters commit');edit('Filter value','1e');
+ const manager=(f.workspace.activePane as unknown as {baseEmbeds:BaseEmbedSessions}).baseEmbeds;assert.ok(manager);assert.equal(manager.canRecoverAdmission(),true);const capsule=manager.prepareAdmissionRecovery();
+ f.buffer.coreAdmissionAvailable(f.authority.writes.checkpoints.scope);const settling=capsule.settle();release();await settling;
+ assert.equal(f.authority.authorships,1);assert.equal(f.authority.capturesTaken,1);assert.equal(f.planned.length,1);assert.equal(new Set(f.committed.map(ref=>ref.operationId)).size,1,'the original host operation identity is retained');
+ assert.equal(f.authority.saved.slice(0,source.lastIndexOf('```base\n')),source.slice(0,source.lastIndexOf('```base\n')),'the first identical fence and intervening content remain exact');assert.equal(f.authority.saved.endsWith('Body sentinel\n'),true);
+ assert.equal(capsule.rawDrafts.length,1);const draft=capsule.rawDrafts[0];assert.equal(draft.binding.inline?.documentText,f.authority.saved);assert.equal(draft.binding.inline?.from,source.lastIndexOf('```base\n'));assert.equal(draft.draft.origin.source,draft.binding.inline?.source);assert.equal(draft.binding.identity?.sourceText,f.authority.saved);assert.equal(document.body.textContent!.includes('Retry save'),false);
 });

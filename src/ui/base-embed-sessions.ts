@@ -218,18 +218,29 @@ export class BaseEmbedSessions {
     if(this.admissionRecovery)return this.admissionRecovery;
     if(!this.canRecoverAdmission())throw new Error('Unfinished embedded Base drafts are retained while storage reconnects.');
     const prepared=[...this.entries].flatMap(entry=>{const recovery=entry.session?.prepareAdmissionRecovery?.();return recovery?[{entry,recovery}]:[];});
-    const rawDrafts=prepared.flatMap(({entry,recovery})=>{
-      if(!recovery.rawDrafts?.length)return [];
+    const bindings=new Map<Entry,BaseEmbedRawDraft['binding']>();
+    for(const {entry}of prepared){
       const target=entry.target,identity=this.options.recoveryIdentity?.(target);
       const ambiguous=!target.inline&&[...this.entries].filter(other=>this.sameDraftTarget(other,target)).length!==1;
-      const binding={sourcePath:target.sourcePath,targetPath:target.targetPath,viewName:target.viewName,
+      bindings.set(entry,{sourcePath:target.sourcePath,targetPath:target.targetPath,viewName:target.viewName,
         viewId:target.viewId??entry.session?.selectedViewIdentity,...(target.inline?{inline:{...target.inline}}:{}),
-        ...(identity?{identity:{...identity}}:{}),ambiguous};
-      return recovery.rawDrafts.map(draft=>({binding,draft}));
-    });
-    return this.admissionRecovery={rawDrafts,settle:async()=>{
+        ...(identity?{identity:{...identity}}:{}),ambiguous});
+    }
+    const envelopes=new WeakMap<BaseSessionRawDraft,BaseEmbedRawDraft>();
+    return this.admissionRecovery={get rawDrafts(){return prepared.flatMap(({entry,recovery})=>(recovery.rawDrafts??[]).map(draft=>{
+      let envelope=envelopes.get(draft);if(!envelope){envelope={get binding(){return bindings.get(entry)!;},draft};envelopes.set(draft,envelope);}return envelope;
+    }));},settle:async()=>{
       const results=await Promise.allSettled(prepared.map(({recovery})=>Promise.resolve().then(()=>recovery.settle())));
       for(const result of results)if(result.status==='rejected')throw result.reason;
+      for(const {entry}of prepared){
+        const original=bindings.get(entry)!,inline=entry.target.inline;
+        if(!original.inline||!inline||inline.documentText===original.inline.documentText)continue;
+        // Mounts are fenced during admission. Only this entry's verified
+        // inlineSourceSaved callback can advance its captured occurrence.
+        const identity=this.options.recoveryIdentity?.(entry.target),before=original.identity;
+        if(!before||!identity||before.sourceEntryId!==identity.sourceEntryId||before.targetEntryId!==identity.targetEntryId||identity.sourceText!==inline.documentText)continue;
+        bindings.set(entry,{...original,inline:{...inline},identity:{...identity}});
+      }
     }};
   }
 

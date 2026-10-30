@@ -285,6 +285,7 @@ export class BaseController {
   private lastInvalidation: { readonly kind: BaseEditInvalidationKind; readonly paths?: readonly string[] } = { kind: 'initial' };
   private version = 0;
   private disposed = false;
+  private derivedSuspended = false;
   private timer?: ReturnType<typeof setTimeout>;
   private pending: Promise<void> = Promise.resolve();
   private subscriptions: (() => void)[];
@@ -362,7 +363,7 @@ export class BaseController {
   /** Admission for a new property interaction only. Existing drafts/writes keep
    * their captured guards. A coherent publish precedes refresh's final flag reset. */
   get canBeginPropertyEdit(): boolean {
-    return !this.disposed && this.current === this.settled && !this.stale && !this.requested
+    return !this.disposed && !this.derivedSuspended && this.current === this.settled && !this.stale && !this.requested
       && !this.current.updating && !this.current.error && !!this.current.result && !sharedBasePreview(this.current.result);
   }
   /** Host-wide saved-name notification. Passive embeds retain their drafts and
@@ -377,7 +378,7 @@ export class BaseController {
   get canRedo(): boolean { return !this.disposed && !this.historyBusy && this.redoCommands.length > 0; }
 
   private schedule(): void {
-    if (this.disposed || !this.clock.isVisible() || this.timer !== undefined) return;
+    if (this.disposed || this.derivedSuspended || !this.clock.isVisible() || this.timer !== undefined) return;
     this.timer = setTimeout(() => { this.timer = undefined; void this.refresh(); }, Math.max(0, Math.min(1000, this.options.delayMs ?? 30)));
   }
 
@@ -386,7 +387,7 @@ export class BaseController {
   private armWake(result = this.current.result): void {
     this.clearWake();
     // An explicit fixed query clock cannot advance when a host wall timer fires.
-    if (this.disposed || this.stale || !this.clock.isVisible() || this.query.now) return;
+    if (this.disposed || this.derivedSuspended || this.stale || !this.clock.isVisible() || this.query.now) return;
     const hint = result?.shared?.refreshHint;
     if (!hint || hint.dependency === 'none' || hint.nextWakeMs === null) return;
     const serial = this.wakeSerial;
@@ -397,7 +398,7 @@ export class BaseController {
   }
 
   private onClockWake(): void {
-    if (this.disposed) return;
+    if (this.disposed || this.derivedSuspended) return;
     this.clearWake();
     if (!this.clock.isVisible()) {
       if (this.timer !== undefined) { clearTimeout(this.timer); this.timer = undefined; }
@@ -419,6 +420,7 @@ export class BaseController {
 
   /** Refresh failures are represented in state; mutation failures reject to the caller. */
   refresh(): Promise<void> {
+    if(this.derivedSuspended)return Promise.resolve();
     this.configurationReadProof = undefined;
     this.clearWake(); this.stale = true;
     if (this.timer !== undefined) { clearTimeout(this.timer); this.timer = undefined; }
@@ -437,13 +439,13 @@ export class BaseController {
         const source = inline ? inline.source : coherent ? coherent.content : await this.options.vault.read(this.path);
         if (coherent) definition = {path: coherent.path, entryId: coherent.entryId, revision: coherent.revision, type: 'file', ctime: coherent.stat.ctime, mtime: coherent.stat.mtime, size: coherent.stat.size};
         if (inline?.witness && definition && (inline.witness.entryId !== definition.entryId || inline.witness.revision !== definition.revision)) throw new Error('The containing note changed. Refresh before editing this Base.');
-        if (this.disposed || epoch !== this.epoch) { this.schedule(); return; }
+        if (this.disposed || this.derivedSuspended || epoch !== this.epoch) { this.schedule(); return; }
         let version = this.version + 1;
         const document = BaseDocument.parse(source);
         if (!document.views.length && !this.explicitlyBoundView) {
           this.selectedViewId = undefined;
           const latest = await observe(this.path);
-          if (this.disposed || epoch !== this.epoch) { this.schedule(); return; }
+          if (this.disposed || this.derivedSuspended || epoch !== this.epoch) { this.schedule(); return; }
           if (!latest || service && (!definition || latest.entryId !== definition.entryId || latest.revision !== definition.revision || latest.mtime !== definition.mtime || latest.size !== definition.size)) throw new Error('The Base configuration changed. Refresh before adding a view.');
           this.emptyConfigurationWitness = latest.entryId && latest.revision ? Object.freeze({ entryId: latest.entryId, revision: latest.revision }) : undefined;
           this.query = { ...this.query, viewIndex: 0 }; this.stale = false; this.clearWake();
@@ -464,7 +466,7 @@ export class BaseController {
         if (typeof selectedId === 'string') this.selectedViewId = selectedId;
         if (definition?.entryId && definition.revision && document.views[viewIndex]) {
           const read: BaseConfigurationRead = {source, path: this.path, entryId: definition.entryId, revision: definition.revision, version: this.current.version, viewIndex, ...(typeof selectedId === 'string' ? {viewId: selectedId} : {})};
-          await this.verifyConfigurationRead(read, () => { if (this.disposed || epoch !== this.epoch) throw new Error('The Base configuration read was retired.'); });
+          await this.verifyConfigurationRead(read, () => { if (this.disposed || this.derivedSuspended || epoch !== this.epoch) throw new Error('The Base configuration read was retired.'); });
           configurationRead = read;
         }
         let result: BaseQueryResult;
@@ -478,16 +480,16 @@ export class BaseController {
           const owner = this, allowPreview = !this.current.result || !!sharedBasePreview(this.current.result);
           const effectiveQuery: BaseQueryOptions & { inlineSource?: { source: string; startByte: number; endByte: number } } = inline ? { ...this.query, inlineSource: { source, startByte: inline.startByte, endByte: inline.endByte } } : this.query;
           const request = { service, definition, current, entries: [...this.options.vault.entries.values()], query: effectiveQuery,
-            viewIndex, viewName: this.selectedViewId === undefined ? this.viewName : undefined, get version() { return owner.version + 1; }, clock: this.clock, isCurrent: () => !this.disposed && epoch === this.epoch,
+            viewIndex, viewName: this.selectedViewId === undefined ? this.viewName : undefined, get version() { return owner.version + 1; }, clock: this.clock, isCurrent: () => !this.disposed && !this.derivedSuspended && epoch === this.epoch,
             readFile: (path: string) => this.options.vault.read(path),
             ...(allowPreview ? {
               onPreview: (result: BaseQueryResult) => {
-                if (this.disposed || epoch !== this.epoch || this.current.result && !sharedBasePreview(this.current.result)) return;
+                if (this.disposed || this.derivedSuspended || epoch !== this.epoch || this.current.result && !sharedBasePreview(this.current.result)) return;
                 this.version = Number(result.version);
                 this.publish({ version: this.version, source, result, error: null, updating: true });
               },
               onPreviewStatus: (message: string) => {
-                if (!this.disposed && epoch === this.epoch) this.publish({ ...this.current, previewStatus: message, error: null, updating: true });
+                if (!this.disposed && !this.derivedSuspended && epoch === this.epoch) this.publish({ ...this.current, previewStatus: message, error: null, updating: true });
               },
             } : {}),
           };
@@ -495,13 +497,13 @@ export class BaseController {
           result = await this.sharedQueries.query(request);
           querying = false;
           version = Number(result.version);
-          if (this.disposed || epoch !== this.epoch) { this.schedule(); return; }
+          if (this.disposed || this.derivedSuspended || epoch !== this.epoch) { this.schedule(); return; }
           const latest = await observe(this.path);
           if (!latest || latest.entryId !== definition.entryId || latest.revision !== definition.revision) throw new Error('The Base definition changed. Refresh before editing.');
-          if (this.disposed || epoch !== this.epoch) { this.schedule(); return; }
+          if (this.disposed || this.derivedSuspended || epoch !== this.epoch) { this.schedule(); return; }
           if (expectedCurrentEntryId !== undefined) {
             validateCurrentIdentity(currentPath === this.path ? latest : currentPath === null ? null : await observe(currentPath), expectedCurrentEntryId);
-            if (this.disposed || epoch !== this.epoch) { this.schedule(); return; }
+            if (this.disposed || this.derivedSuspended || epoch !== this.epoch) { this.schedule(); return; }
           }
           this.queryEntries.set(result, { definition: Object.freeze({ ...definition }), current: current === null ? null : Object.freeze({ ...current }) });
         } else {
@@ -527,11 +529,11 @@ export class BaseController {
       } catch (error) {
         if (querying && configurationRead && !(this.current.result && sharedBasePreview(this.current.result))) {
           try {
-            await this.verifyConfigurationRead(configurationRead, () => { if (this.disposed || epoch !== this.epoch) throw new Error('The Base configuration read was retired.'); });
+            await this.verifyConfigurationRead(configurationRead, () => { if (this.disposed || this.derivedSuspended || epoch !== this.epoch) throw new Error('The Base configuration read was retired.'); });
             this.retainConfigurationRead({...configurationRead,version:this.current.version},true);
           } catch { this.configurationReadProof = undefined; }
         } else this.configurationReadProof = undefined;
-        if (!this.disposed && epoch === this.epoch) this.publish({ ...this.current, updating: false, error: error instanceof Error ? error : new Error(String(error)) });
+        if (!this.disposed && !this.derivedSuspended && epoch === this.epoch) this.publish({ ...this.current, updating: false, error: error instanceof Error ? error : new Error(String(error)) });
       }
     };
     this.requested = true;
@@ -550,6 +552,7 @@ export class BaseController {
   }
 
   private publish(state: BaseControllerState): void {
+    if(this.derivedSuspended)return;
     this.current = Object.freeze(state);
     if (!state.updating) this.settled = this.current;
     try { this.options.onChange?.(this.current); } catch (error) { console.error('Bases observer failed', error); }
@@ -617,7 +620,7 @@ export class BaseController {
     const saved = sharedBaseWitness(this.current.result!, this.path);
     const validate = () => {
       validateResult();
-      if (vault.adapter !== adapter || adapter.documentSemantics !== service || this.current.source !== source) throw new Error('This Base changed before summary previews were ready');
+      if (this.derivedSuspended || vault.adapter !== adapter || adapter.documentSemantics !== service || this.current.source !== source) throw new Error('This Base changed before summary previews were ready');
     };
     const observe = async (path: string) => adapter.stat ? await adapter.stat(path) : vault.entries.get(path);
     validate();
@@ -641,7 +644,7 @@ export class BaseController {
     try {
       const request = { service, definition, current, entries: [...vault.entries.values()], query, version,
         viewIndex: this.selectedViewIndex, viewName: this.selectedViewId === undefined ? this.viewName : undefined, clock: this.clock,
-        isCurrent: () => !this.disposed && epoch === this.epoch && version === this.current.version && vault.adapter === adapter,
+        isCurrent: () => !this.disposed && !this.derivedSuspended && epoch === this.epoch && version === this.current.version && vault.adapter === adapter,
         readFile: async (path: string) => { validate(); const text = await vault.read(path); validate(); return text; },
       };
       const result = await runner.query(request); validate();
@@ -1052,6 +1055,7 @@ export class BaseController {
       this.stale = true; this.clearWake();
       this.epoch++; this.lastInvalidation = { kind: 'configuration-commit' }; this.sharedQueries.cancel();
     }
+    if(this.derivedSuspended)this.current=Object.freeze({...this.current,source:desired,updating:false});
     try { return await retry.committed?.(); } finally { await this.refresh(); }
   }
 
@@ -1082,6 +1086,7 @@ export class BaseController {
       this.stale = true; this.clearWake(); this.epoch++; this.lastInvalidation = { kind: 'configuration-retry-ack' }; this.sharedQueries.cancel();
     }
     this.pendingConfigurations.clear(); this.configurationViewIds = undefined;
+    if(this.derivedSuspended)this.current=Object.freeze({...this.current,source,updating:false});
     try { await retry.committed?.(); } finally { await this.refresh(); } return true;
   }
 
@@ -1253,6 +1258,22 @@ export class BaseController {
 
   async removeSummary(version: number, name: string): Promise<void> {
     await this.changeConfiguration(version, document => { document.removeViewSummary(this.selectedViewIndex, name); return this.selectedViewIndex; });
+  }
+
+  /** Read-only presentation of the exact accepted sources; never write authority. */
+  get retainedConfigurationSources():readonly {readonly saved:string;readonly desired:string}[] {
+    return Object.freeze([...this.pendingConfigurations].map(([desired,retry])=>Object.freeze({saved:retry.expected,desired})));
+  }
+
+  /** Retire derived queries without retiring accepted source/reference writers.
+   * The original mutation guards, immutable plans and completed-file set survive.
+   * This owner is disposed only after its admission capsule confirms settlement. */
+  suspendDerivedActivity():void {
+    if(this.disposed||this.derivedSuspended)return;
+    this.derivedSuspended=true;this.configurationReadProof=undefined;this.clearWake();
+    if(this.timer!==undefined){clearTimeout(this.timer);this.timer=undefined;}
+    this.requested=false;this.sharedQueries.cancel();
+    for(const runner of this.summaryQueries)runner.cancel();
   }
 
   dispose(): void {

@@ -874,6 +874,7 @@ export class Workspace {
     if(input.kind==='properties')return[...input.draft.rows.map(row=>row.widget?this.admissionRawPropertyText(row.widget):row.controls.map(control=>control.value).join('\n')),input.draft.addForm?.name.value].filter(value=>value!==undefined).join('\n');
     const draft=input.kind==='embeds'?input.draft.draft:input.draft;
     if(draft.kind==='toolbar')return baseToolbarAdmissionDraftText(draft.raw);
+    if(draft.kind==='summary')return `${draft.raw.name}\n${draft.raw.formula.state.text}`;
     return draft.kind==='table'?draft.raw.state.value:this.admissionRawPropertyText(draft.raw);
   }
   private admissionRawPropertyText(draft:import('../bases/property-widgets.ts').BasePropertyRawDraft):string {

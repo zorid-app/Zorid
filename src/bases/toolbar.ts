@@ -1,3 +1,5 @@
+import { reviewRetainedBaseConfiguration } from './configuration-review.ts';
+import type { BaseConfigurationReview } from './configuration-review.ts';
 import { BaseDocument } from './document.ts';
 import type { BaseValue, BaseViewConfig, BaseViewPatch } from './document.ts';
 import type { BaseQueryResult } from './query.ts';
@@ -138,6 +140,8 @@ export interface BaseToolbar {
   hasDraft(): boolean;
   canCaptureAdmissionDraft():boolean;
   captureFreeze():BaseToolbarAdmissionDraft|undefined;
+  /** Fence UI submissions while its original accepted save settles. */
+  suspendAdmission():BaseToolbarAdmissionDraft|undefined;
   restoreAdmissionDraft(draft:BaseToolbarAdmissionDraft):'restored'|'pending'|'conflict';
   /** Only this live toolbar's current connected portal, including its child controls. */
   owns(node: Node): boolean;
@@ -148,11 +152,12 @@ export interface BaseToolbar {
 }
 type FilterNode = BaseFilterNode;
 type PanelName = BaseToolbarPanelName;
-interface Panel { hasUnfinishedInput?():boolean;canCaptureAdmissionDraft?():boolean;captureFreeze?():BaseToolbarAdmissionDraft|undefined;restoreRaw?(draft:BaseToolbarAdmissionDraft):boolean;rebase?(state: BaseToolbarState, expectedName?: string): boolean; refreshFilterAdvice?(state:BaseToolbarState):void; flush?(): void; name: PanelName; node: HTMLElement; trigger: HTMLElement; dirty: boolean; innerDraft?: boolean; saving: boolean; failure?: object; acceptsSaveAcknowledgement?: () => boolean; close(restore?: boolean): void }
+interface Panel { acknowledgeAcceptedSave?():void;suspendAdmission?():BaseToolbarAdmissionDraft|undefined; hasUnfinishedInput?():boolean;canCaptureAdmissionDraft?():boolean;captureFreeze?():BaseToolbarAdmissionDraft|undefined;restoreRaw?(draft:BaseToolbarAdmissionDraft):boolean;rebase?(state: BaseToolbarState, expectedName?: string): boolean; refreshFilterAdvice?(state:BaseToolbarState):void; flush?(): void; name: PanelName; node: HTMLElement; trigger: HTMLElement; dirty: boolean; innerDraft?: boolean; saving: boolean; failure?: object; acceptsSaveAcknowledgement?: () => boolean; close(restore?: boolean): void }
 /** Only a retained, exact accepted configuration may offer a persistence retry. */
 export class BaseToolbarSaveError extends Error {
   readonly retry: () => Promise<void>;
-  constructor(message: string, retry: () => Promise<void>) { super(message); this.retry = retry; }
+  readonly review?:BaseConfigurationReview;
+  constructor(message: string, retry: () => Promise<void>,review?:BaseConfigurationReview) { super(message); this.retry = retry;this.review=review; }
 }
 const invoke = (operation:()=>Promise<void>):Promise<void> => { try { return Promise.resolve(operation()); } catch (failure) { return Promise.reject(failure); } };
 const mapping = (value: unknown): value is Record<string, BaseValue> => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -301,6 +306,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     const unfinishedInput=()=>[...activeCompositionTargets].some(target=>target instanceof doc.defaultView!.Node&&node.contains(target))||[...compositions.entries()].some(([input,cycle])=>node.contains(input)&&(cycle.active||cycle.settling));
     const unsubmittedInput=()=>unfinishedInput()||!!rawModel?.hasRawInput?.()||[...comboOwners.values()].some(control=>control.hasRawInput());
     const activateRaw=(event:Event)=>{if(rawFrozen){
+      if(event.target instanceof doc.defaultView!.Element&&event.target.closest('[data-base-review]'))return;
       if(event.type==='keydown'&&event.target&&activeCompositionTargets.has(event.target)){event.stopImmediatePropagation();return;}
       if(event.type==='input'||event.type==='change')return;
       if(event.cancelable)event.preventDefault();event.stopImmediatePropagation();return;
@@ -350,10 +356,11 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       configuration=snapshot;opening=next;result=next.result;version=result.version;configuredView=next.views[selectedIndex]??result.view;refreshPanel?.(result,own.dirty);return true;
     };
     panel = own; trigger.setAttribute('aria-expanded', 'true');
-    let retryPersistence: (() => Promise<void>) | undefined;
+    let retryPersistence: (() => Promise<void>) | undefined,reviewFailure:BaseToolbarSaveError|undefined;
+    const reviewRetained=()=>reviewRetainedBaseConfiguration(form,reviewFailure?.review,[...fields.querySelectorAll<HTMLInputElement|HTMLTextAreaElement|HTMLSelectElement>('input,textarea,select')].map(input=>`${input.getAttribute('aria-label')??input.name}: ${input.value}`).join('\n'));
     type Control = HTMLInputElement | HTMLButtonElement | HTMLSelectElement | HTMLTextAreaElement;
     type AcceptedAttempt = {generation:number;configuration?:ReturnType<typeof configurationSnapshot>;viewName:string;inputs:Map<Control,boolean>;acknowledge?:()=>void};
-    let retainedAttempt: AcceptedAttempt | undefined;
+    let retainedAttempt: AcceptedAttempt | undefined,activeAttempt:AcceptedAttempt|undefined;
     const inputStates = () => new Map(Array.from(node.querySelectorAll<Control>('input,button,select,textarea'),input=>[input,input.disabled] as const));
     const place = () => { if (!node.isConnected) return; const anchor = trigger.getBoundingClientRect(), bounds = node.getBoundingClientRect(); node.style.left = `${Math.max(8, Math.min(anchor.left, (win?.innerWidth ?? 800) - bounds.width - 8))}px`; node.style.top = `${Math.max(8, Math.min(anchor.bottom + 6, (win?.innerHeight ?? 600) - bounds.height - 8))}px`; };
     const outside = (event: Event) => { if(rawFrozen)return;if (!node.contains(event.target as Node) && !trigger.contains(event.target as Node)) {
@@ -400,9 +407,9 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
           own.saving = false; item.disabled = false; if(autoTimer){clearTimeout(autoTimer);autoTimer=undefined;}
           error.textContent = failure instanceof Error ? failure.message : String(failure);
           if (failure instanceof BaseToolbarSaveError) {
-            own.failure = {}; own.acceptsSaveAcknowledgement = () => generation === commandGeneration; own.dirty = true; retryPersistence = failure.retry;
+            own.failure = {}; own.acceptsSaveAcknowledgement = () => generation === commandGeneration; own.dirty = true; retryPersistence = failure.retry;reviewFailure=failure;
             retainedAttempt = {generation:commandGeneration,viewName:configuredView.name,inputs:commandInputs};
-            footer.hidden = false; apply.disabled = cancel.disabled = false; apply.textContent = 'Retry save';
+            footer.hidden = false; apply.disabled = cancel.disabled = false; apply.textContent = 'Review retained changes';apply.dataset.baseReview='true';node.inert=false;
           } else for(const [input,disabled] of commandInputs) input.disabled=disabled;
           report(failure); options.onDraftChange();
         });
@@ -559,7 +566,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       rawModel={canCapture:()=>!formulaOwners.has(expression)||formulaOwners.get(expression)?.canCaptureAdmissionDraft()===true,
         capture:()=>{const editor=formulaOwners.get(expression),draft=editor?.captureFreeze();if(editor&&!draft)throw new Error('The raw formula changed before it could be retained.');return{kind:'formula',name:input.value,expression:draft?{kind:'formula',draft}:{kind:'native',text:expression.value}};},
         ready:raw=>raw.kind==='formula'&&raw.expression.kind==='formula'?[raw.expression.draft.ready]:[],
-        restore:raw=>{if(raw.kind!=='formula')return false;input.value=raw.name;restoreExpression=raw.expression;if(raw.expression.kind==='native'){expression.value=raw.expression.text;deferredNativeExpressions.add(expression);}return true;},
+        restore:raw=>{if(raw.kind!=='formula')return false;input.value=raw.name;restoreExpression=raw.expression;if(raw.expression.kind==='native'){expression.value=raw.expression.text;deferredNativeExpressions.add(expression);}else expression.value=raw.expression.draft.initial;return true;},
         finishRestore:()=>{const captured=restoreExpression;restoreExpression=undefined;return!captured||captured.kind==='native'||formulaOwners.get(expression)?.restoreAdmissionDraft(captured.draft)===true;},
         controls:()=>[['name',input],...(!formulaOwners.has(expression)?[['expression',expression] as const]:[])]};
     } else if (name === 'New item settings') {
@@ -994,7 +1001,9 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       if(close)afterClean=undefined;
       closeWhenSettled ||= close;
       if (autoTimer) { clearTimeout(autoTimer); autoTimer = undefined; }
-      if (own.saving || destroyed || panel !== own || rawFrozen || rawPassive) return;
+      if (own.saving || destroyed || panel !== own) return;
+      if(reviewFailure){reviewRetained();return;}
+      if(rawFrozen || rawPassive)return;
       if (own.innerDraft) { error.textContent = 'Finish or cancel the unfinished value first.'; return; }
       if (!own.dirty && !own.failure) { if (close) own.close(); return; }
       if (!form.checkValidity()) { error.textContent = 'Check the invalid condition value before applying.'; return; }
@@ -1014,6 +1023,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         viewName:name==='View options'||name==='View settings'?form.querySelector<HTMLInputElement>('[aria-label="View name"]')?.value.trim()||configuredView.name:configuredView.name,
         inputs:inputStates(),acknowledge:afterSave,
       };
+      activeAttempt=attempt;
       const submittedGeneration = attempt.generation, expectedConfiguration = attempt.configuration, expectedViewName = attempt.viewName;
       own.saving = true; options.onDraftChange();
       const disabled = inputStates();
@@ -1032,6 +1042,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
           own.dirty = false; const refreshed = deferredState; deferredState = undefined; own.close(); if (refreshed) update(refreshed);
           return;
         }
+        if(expectedConfiguration)configuration = expectedConfiguration;
         if (deferredState) {
           const refreshed = deferredState; deferredState = undefined;
           if(expectedConfiguration)configuration = expectedConfiguration;
@@ -1049,11 +1060,11 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       }, failure => {
         if (destroyed || panel !== own) return; own.saving = false; own.dirty = true;
         if(autoTimer){clearTimeout(autoTimer);autoTimer=undefined;}
-        if (failure instanceof BaseToolbarSaveError) {retryPersistence = failure.retry;retainedAttempt??=attempt;}
+        if (failure instanceof BaseToolbarSaveError) {retryPersistence = failure.retry;reviewFailure=failure;retainedAttempt??=attempt;}
         if (retryPersistence) {
           own.failure ??= {}; own.acceptsSaveAcknowledgement = () => generation === submittedGeneration;
-          error.textContent = `Could not save: ${failure instanceof Error ? failure.message : String(failure)}. Retry the retained file draft, or cancel without discarding it.`;
-          footer.hidden = false; apply.disabled = false; apply.textContent = 'Retry save'; cancel.disabled = false;
+          error.textContent = `Could not save: ${failure instanceof Error ? failure.message : String(failure)}. The accepted configuration and your newer input are retained for review or copying.`;
+          footer.hidden = false; apply.disabled = false; apply.textContent = 'Review retained changes';apply.dataset.baseReview='true';node.inert=false; cancel.disabled = false;
           for (const input of node.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('input,select,textarea')) input.disabled = true;
         } else {
           own.failure = undefined; footer.hidden = false;
@@ -1088,8 +1099,31 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       const observer = new win.MutationObserver(enhance); observer.observe(node,{childList:true,subtree:true}); enhance();
       disposers.push(()=>{observer.disconnect();for(const control of enhanced.values())control.destroy();enhanced.clear();for(const editor of editors.values())editor.destroy();editors.clear();});
     }
+    own.acknowledgeAcceptedSave=()=>{
+      const attempt=retainedAttempt;if(!attempt||!own.failure||own.saving)return;
+      const newer=generation!==attempt.generation;
+      if(newer&&!attempt.configuration)return;
+      if(attempt.configuration)configuration=attempt.configuration;
+      if(deferredState&&!own.rebase?.(deferredState,attempt.viewName))return;
+      if(deferredState){state=deferredState;deferredState=undefined;}
+      own.failure=undefined;retryPersistence=undefined;reviewFailure=undefined;retainedAttempt=undefined;submitted=false;
+      for(const [input,disabled]of attempt.inputs)input.disabled=disabled;
+      attempt.acknowledge?.();own.dirty=newer;
+      node.querySelector('.bases-configuration-review')?.remove();
+      if(newer){rawPassive=true;footer.hidden=false;apply.textContent='Apply';delete apply.dataset.baseReview;error.textContent='The accepted configuration is saved. Your newer input is retained. Edit or cancel it to continue.';options.onDraftChange();}
+      else own.close(false);
+    };
+    let capturingAccepted=false;
+    own.suspendAdmission=()=>{
+      const newer=!!activeAttempt&&(generation!==activeAttempt.generation||unfinishedInput());
+      capturingAccepted=newer;
+      const raw=newer?own.captureFreeze?.():undefined;
+      rawFrozen=true;if(autoTimer){clearTimeout(autoTimer);autoTimer=undefined;}afterClean=undefined;
+      if(newer&&!raw)throw new Error('The newer Base settings are retained while their input finishes.');
+      if(raw)void raw.ready.then(()=>{if(!reviewFailure)node.inert=true;});else node.inert=true;return raw;
+    };
     let captured:BaseToolbarAdmissionDraft|undefined;
-    own.canCaptureAdmissionDraft=()=>!!captured||!!rawModel&&(rawModel.canCapture?.()??true)&&rawModel.controls().every(([,control])=>!(control instanceof doc.defaultView!.HTMLSelectElement)||!comboOwners.has(control)||comboOwners.get(control)?.canCaptureAdmissionDraft()===true)&&(own.dirty||!!own.innerDraft||unsubmittedInput())&&!own.saving&&!own.failure&&!submitted&&!retryPersistence&&!retainedAttempt;
+    own.canCaptureAdmissionDraft=()=>!!captured||!!rawModel&&(rawModel.canCapture?.()??true)&&rawModel.controls().every(([,control])=>!(control instanceof doc.defaultView!.HTMLSelectElement)||!comboOwners.has(control)||comboOwners.get(control)?.canCaptureAdmissionDraft()===true)&&(own.dirty||!!own.innerDraft||unsubmittedInput())&&(capturingAccepted||!own.saving&&!own.failure&&!submitted&&!retryPersistence&&!retainedAttempt);
     own.captureFreeze=()=>{
       if(captured)return captured;if(!own.canCaptureAdmissionDraft?.()||!rawModel)return;
       const controls=()=>rawModel!.controls().map(([key,control])=>({key,start:'selectionStart'in control?control.selectionStart:null,end:'selectionEnd'in control?control.selectionEnd:null,direction:'selectionDirection'in control?control.selectionDirection:null}));
@@ -1102,7 +1136,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       };
       const comboboxes=rawModel.controls().flatMap(([key,control])=>{if(!(control instanceof doc.defaultView!.HTMLSelectElement))return[];const owner=comboOwners.get(control);if(!owner)return[];const draft=owner.captureFreeze();if(!draft)throw new Error('The raw choice changed before it could be retained.');return[{key,draft}];});
       let raw=rawModel.capture(),positions=controls(),resolve!:()=>void,finished=false,childrenReady=false;const ready=new Promise<void>(yes=>{resolve=yes;});
-      captured={panel:name,target:{selectedIndex,viewId:typeof configuredView.id==='string'?configuredView.id:undefined,formulaName,returnTo},configuration:structuredClone(configuration),dirty:own.dirty||unfinishedInput(),innerDraft:!!own.innerDraft,access:{readOnly:opening.readOnly,browseOnly:opening.browseOnly===true,allowRename:opening.allowRename},comboboxes,get raw(){return raw;},get controls(){return positions;},focus,validation:error.textContent??'',ready};
+      captured={panel:name,get target(){return{selectedIndex,viewId:typeof configuredView.id==='string'?configuredView.id:undefined,formulaName,returnTo};},get configuration(){return structuredClone(capturingAccepted?activeAttempt?.configuration??configuration:configuration);},dirty:own.dirty||unfinishedInput(),innerDraft:!!own.innerDraft,access:{readOnly:opening.readOnly,browseOnly:opening.browseOnly===true,allowRename:opening.allowRename},comboboxes,get raw(){return raw;},get controls(){return positions;},focus,validation:error.textContent??'',ready};
       completeRawCapture=()=>{if(finished||!childrenReady||unfinishedInput())return;raw=rawModel!.capture();positions=controls();freezeNative();finished=true;completedToolbarDrafts.add(captured!);completeRawCapture=undefined;resolve();};
       freezeNative();void Promise.all([...(rawModel.ready?.(raw)??[]),...comboboxes.map(value=>value.draft.ready)]).then(()=>{childrenReady=true;completeRawCapture?.();});completeRawCapture();
       return captured;
@@ -1148,7 +1182,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     }
     if (focusedLabel) Array.from(actions.querySelectorAll<HTMLButtonElement>('button')).find(node => node.getAttribute('aria-label') === focusedLabel)?.focus({ preventScroll: true });
   }
-  return { update,canCaptureAdmissionDraft:()=>panel?.canCaptureAdmissionDraft?.()===true,captureFreeze:()=>panel?.captureFreeze?.(),restoreAdmissionDraft(draft){
+  return { update,suspendAdmission(){const raw=panel?.suspendAdmission?.();container.inert=true;return raw;},canCaptureAdmissionDraft:()=>panel?.canCaptureAdmissionDraft?.()===true,captureFreeze:()=>panel?.captureFreeze?.(),restoreAdmissionDraft(draft){
       if(destroyed||!state||panel||!completedToolbarDrafts.has(draft))return'pending';
       const current=configurationSnapshot(state),target=state.views[draft.target.selectedIndex];
       if(state.readOnly!==draft.access.readOnly||(state.browseOnly===true)!==draft.access.browseOnly||state.allowRename!==draft.access.allowRename||JSON.stringify(current)!==JSON.stringify(draft.configuration)||!target||draft.target.viewId!==undefined&&target.id!==draft.target.viewId)return'conflict';
@@ -1162,7 +1196,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         state={...state,filterProperty:next.filterProperty,propertyType:next.propertyType};
       }
       panel?.refreshFilterAdvice?.(next);
-    }, hasDraft, owns: node => !!(!destroyed && container.isConnected && panel?.node.isConnected && panel.trigger.isConnected && container.contains(panel.trigger) && panel.node.contains(node)), captureSaveAcknowledgement() { const token = panel?.failure, captured = panel; return () => { if (!destroyed && captured && captured === panel && token && captured.failure === token && !captured.saving && captured.acceptsSaveAcknowledgement?.()) { captured.failure = undefined; captured.dirty = false; captured.close(false); } }; },
+    }, hasDraft, owns: node => !!(!destroyed && container.isConnected && panel?.node.isConnected && panel.trigger.isConnected && container.contains(panel.trigger) && panel.node.contains(node)), captureSaveAcknowledgement() { const token=panel?.failure,captured=panel;return()=>{if(!destroyed&&captured&&captured===panel&&token&&captured.failure===token&&!captured.saving)captured.acknowledgeAcceptedSave?.();}; },
     dismissCleanPanel() { if (hasDraft()) throw new Error('Apply or cancel the toolbar changes before changing context.'); panel?.close(false); },
     destroy() { destroyed = true; if (panel) { panel.saving = false; panel.close(false); } container.replaceChildren(); },
   };

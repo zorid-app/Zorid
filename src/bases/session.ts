@@ -13,6 +13,9 @@ import { sharedBaseCoverage, sharedBasePreview, sharedBaseWitness } from './shar
 import { createBaseClockHost } from './clock.ts';
 import type { BaseClockHost } from './clock.ts';
 import { BaseToolbarSaveError, createBaseToolbar } from './toolbar.ts';
+import { NoteLoadSupervisor } from '../ui/note-load-supervisor.ts';
+import { reviewRetainedBaseConfiguration } from './configuration-review.ts';
+import { baseConfigurationRecoveryFailure } from './configuration-recovery.ts';
 import { mountBaseTooltips } from './tooltips.ts';
 import type { BaseFilterOperandsSnapshot, BaseFilterPropertyDescriptor, BaseToolbarState, BaseToolbarAdmissionDraft } from './toolbar.ts';
 import { createBaseViewActions } from './view-actions.ts';
@@ -40,7 +43,7 @@ import type { BasePropertyWidgetEdit, BasePropertyWidgetAcknowledgement, BasePro
 import { baseValuesEqual, baseExpressionValue } from './expression.ts';
 import { icon } from '../ui/icons.ts';
 import { enhanceBaseSummaryEditor } from './toolbar-formula-editor.ts';
-import type { BaseFormulaEditor } from './toolbar-formula-editor.ts';
+import type { BaseFormulaAdmissionDraft, BaseFormulaEditor } from './toolbar-formula-editor.ts';
 import type { BaseRelationTarget } from './property-widgets.ts';
 import { basePropertyName, parseBasePropertyInput, inferBasePropertyDefinition, basePropertyValueDiagnostic } from './property-definitions.ts';
 import type { BasePropertyDefinition, BasePropertyDefinitions } from './property-definitions.ts';
@@ -237,7 +240,9 @@ export interface BaseSessionDraftOrigin {
   readonly collectionId?:string;readonly schemaFingerprint?:string;
 }
 /** Raw controls are presentation custody, never authoring commands or old pin authority. */
-export type BaseSessionRawDraft={readonly origin:BaseSessionDraftOrigin;readonly kind:'property';readonly raw:BasePropertyRawDraft}|{readonly origin:BaseSessionDraftOrigin;readonly kind:'table';readonly raw:BaseTableRawDraft}|{readonly origin:BaseSessionDraftOrigin;readonly kind:'toolbar';readonly raw:BaseToolbarAdmissionDraft};
+export interface BaseSummaryAdmissionDraft {readonly property:string;readonly groupIndex:number|null;readonly groupKey?:string|null;readonly baselineName:string;readonly baselineExpression:string;readonly name:string;readonly nameSelection:{readonly start:number|null;readonly end:number|null;readonly direction:'forward'|'backward'|'none'|null;readonly focus:boolean};readonly formula:BaseFormulaAdmissionDraft;readonly ready:Promise<void>}
+const completedSummaryDrafts=new WeakSet<BaseSummaryAdmissionDraft>();
+export type BaseSessionRawDraft={readonly origin:BaseSessionDraftOrigin;readonly kind:'property';readonly raw:BasePropertyRawDraft}|{readonly origin:BaseSessionDraftOrigin;readonly kind:'table';readonly raw:BaseTableRawDraft}|{readonly origin:BaseSessionDraftOrigin;readonly kind:'toolbar';readonly raw:BaseToolbarAdmissionDraft}|{readonly origin:BaseSessionDraftOrigin;readonly kind:'summary';readonly raw:BaseSummaryAdmissionDraft};
 export interface BaseAdmissionDraftRestore {readonly restored:readonly BaseSessionRawDraft[];readonly pending:readonly BaseSessionRawDraft[];readonly conflicts:readonly {readonly draft:BaseSessionRawDraft;readonly reason:string}[]}
 export interface BaseAdmissionRecovery {readonly rawDrafts?:readonly BaseSessionRawDraft[];settle():Promise<void>}
 export interface BaseSession {
@@ -353,6 +358,8 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   let summaryPanel: HTMLElement | undefined;
   let summaryDraft = false, destroySummaryEditor: (() => void) | undefined;
   let summaryHasRawDraft: (() => boolean) | undefined;
+  let captureSummaryAdmission:(()=>BaseSummaryAdmissionDraft|undefined)|undefined;
+  let captureSummarySaveAcknowledgement:(()=>()=>void)|undefined;
   let definitionEpoch = 0, definitionsRevision = 0, mountedDefinitionsRevision = -1;
   let definitionsLoading = false;
   let definitionsError: string | undefined;
@@ -420,6 +427,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   let refreshIndicatorTimer:ReturnType<typeof setTimeout>|undefined,refreshIndicatorVisible=false;
   const pending = new Set<Promise<unknown>>(), changedBuffers = new Set<NoteBuffer>();
   let configurationLifecycle = 0;
+  let acceptedConfiguration:{supervisor:NoteLoadSupervisor;command?:Promise<void>;retry?:()=>Promise<void>;error?:unknown}|undefined;
   const propertyEditReady = () => !disposed && !closing && !definitionsLoading && !definitionsError && !configurationLifecycle && !pendingCollectionRestore && !pendingCollectionCreate && !unfinishedNoteCreation() && !pending.size && !mounted?.hasQueuedConfiguration?.() && controller.canBeginPropertyEdit;
   const canBeginPropertyEdit = () => propertyEditReady() && !mounted?.hasActiveEdits?.();
   const canRetryPropertyEdit = () => propertyEditReady()&&!toolbarUI.hasDraft()&&!settings.hasDraft()&&!summaryDraft&&!chooser?.hasPendingChanges()&&!collectionEditor?.hasPendingChanges();
@@ -648,11 +656,12 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   }
   function recoverableCollectionAttempts():{edits:CollectionAttempt[];rawElements:HTMLElement[];table:boolean;toolbar:boolean}|undefined {
     try{alive();}catch{return;}
-    if(disposed||closing&&!interruptFinish||pendingCollectionRestore||pendingCollectionCreate||optionCreations.size||configurationLifecycle||controller.hasPendingViewReferences
-      ||mounted?.hasQueuedConfiguration?.()||settings.hasDraft()||summaryDraft||summaryHasRawDraft?.()
+    if(acceptedConfiguration?.error)return;
+    if(disposed||closing&&!interruptFinish||pendingCollectionRestore||pendingCollectionCreate||optionCreations.size||controller.hasPendingViewReferences&&!acceptedConfiguration
+      ||mounted?.hasQueuedConfiguration?.()||settings.hasDraft()||(summaryDraft||summaryHasRawDraft?.())&&(!acceptedConfiguration||!captureSummaryAdmission)
       ||chooser?.hasPendingChanges()||collectionEditor?.hasPendingChanges()||unfinishedNoteCreation()
-      ||[...changedBuffers].some(buffer=>buffer.dirty||!!buffer.error))return;
-    const toolbarCapturable=toolbarUI.canCaptureAdmissionDraft(),toolbar=toolbarUI.hasDraft()||toolbarCapturable;if(toolbar&&!toolbarCapturable)return;
+      ||[...changedBuffers].some(buffer=>(buffer.dirty||!!buffer.error)&&!acceptedConfiguration))return;
+    const toolbarCapturable=toolbarUI.canCaptureAdmissionDraft(),toolbar=!acceptedConfiguration&&(toolbarUI.hasDraft()||toolbarCapturable);if(toolbar&&!toolbarCapturable)return;
     const elements=[...content.querySelectorAll<HTMLElement>('[data-base-editing]')],table=!!content.querySelector('.zorid-bases-table-input');
     if(table&&!mounted?.canCaptureRawDraft?.())return;
     if(!elements.length){
@@ -676,6 +685,13 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     if(admissionRecovery)return admissionRecovery.capsule;
     const selected=recoverableCollectionAttempts();if(!selected)throw new Error('Unsubmitted Base changes must be retained before reconnecting.');
     const {edits,rawElements,table,toolbar}=selected,origin=rawDraftOrigin(false),rawDrafts:BaseSessionRawDraft[]=[];
+    const configuration=acceptedConfiguration;
+    let acceptedOrigin:BaseSessionDraftOrigin|undefined;
+    const acceptedToolbar=configuration?toolbarUI.suspendAdmission():undefined;
+    const acceptedSummary=configuration?captureSummaryAdmission?.():undefined;
+    if(acceptedSummary){if(!origin)throw new Error('The accepted summary lost its original draft target.');rawDrafts.push({kind:'summary',get origin(){return acceptedOrigin??origin!;},raw:acceptedSummary});}
+    if(acceptedToolbar){if(!origin)throw new Error('The accepted Base configuration lost its original draft target.');rawDrafts.push({kind:'toolbar',get origin(){return acceptedOrigin??origin!;},raw:acceptedToolbar});}
+    if(configuration)controller.suspendDerivedActivity();
     const releases:(()=>void)[]=[];
     try{
       for(const edit of edits)releases.push(options.claimRecoverDatabaseEntry!(edit.request));
@@ -686,7 +702,18 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     const recovery:{capsule:BaseAdmissionRecovery;edits:CollectionAttempt[];settled:boolean;settling?:Promise<void>}={edits,settled:false,capsule:{rawDrafts,settle(){
       if(recovery.settled)return Promise.resolve();if(recovery.settling)return recovery.settling;
       const settling=(async()=>{
-        alive();await Promise.all(rawDrafts.map(draft=>draft.raw.ready));alive();await Promise.allSettled([...pending]);await Promise.resolve();alive();
+        alive();
+        // Workspace invokes settle only after a positive same-scope admission.
+        configuration?.supervisor.admissionAvailable();
+        await Promise.all(rawDrafts.map(draft=>draft.raw.ready));alive();await Promise.allSettled([...pending]);
+        if(configuration?.error)throw configuration.error;
+        if(configuration){
+          if(origin)acceptedOrigin={...origin,source:controller.state.source,viewId:controller.selectedViewIdentity,viewIndex:controller.selectedViewIndex};
+          const raw=acceptedToolbar?undefined:toolbarUI.captureFreeze();
+          if(raw){const current=rawDraftOrigin(false);if(!current)throw new Error('The accepted Base configuration lost its original draft target.');rawDrafts.push({kind:'toolbar',origin:{...current,source:controller.state.source,viewId:controller.selectedViewIdentity,viewIndex:controller.selectedViewIndex},raw});await raw.ready;}
+          if(acceptedSummary&&acceptedSummary.name===acceptedSummary.baselineName&&acceptedSummary.formula.state.text===acceptedSummary.baselineExpression){const index=rawDrafts.findIndex(draft=>draft.raw===acceptedSummary);if(index>=0)rawDrafts.splice(index,1);}
+          controller.dispose();
+        }await Promise.resolve();alive();
         for(const attempt of edits){
           const widget=attempt.widget!;
           if(widget.isCurrent()){
@@ -703,7 +730,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       })();recovery.settling=settling;void settling.finally(()=>{if(recovery.settling===settling)recovery.settling=undefined;}).catch(()=>{});return settling;
     }}};
     admissionRecovery=recovery;collectionLoad++;if(collectionRefreshTimer!==undefined){clearTimeout(collectionRefreshTimer);collectionRefreshTimer=undefined;}
-    controller.dispose();interruptFinish?.();retireDerived();return recovery.capsule;
+    if(!configuration)controller.dispose();interruptFinish?.();retireDerived();void Promise.all(rawDrafts.map(draft=>draft.raw.ready)).then(()=>{root.inert=true;});return recovery.capsule;
   }
   const restoredRawDrafts=new WeakSet<BaseSessionRawDraft>();
   async function restoreAdmissionDrafts(drafts:readonly BaseSessionRawDraft[]):Promise<BaseAdmissionDraftRestore> {
@@ -716,6 +743,16 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       const fresh=rawDraftOrigin(),state=controller.state;
       if(!fresh||!state.result||state.error||state.updating||definitionsLoading||definitionsError||mountedResult!==state.result){waiting.push(draft);continue;}
       if(origin.entryId!==fresh.entryId||origin.path!==fresh.path||origin.source!==fresh.source||origin.viewId!==fresh.viewId||origin.viewIndex!==fresh.viewIndex||origin.collectionId!==fresh.collectionId||origin.schemaFingerprint!==fresh.schemaFingerprint){conflicts.push({draft,reason:'The Base source, selected view, or collection schema changed. Your raw input is retained.'});continue;}
+      if(draft.kind==='summary'){
+        const raw=draft.raw;
+        if(!completedSummaryDrafts.has(raw)||summaryPanel||activeDraft()){waiting.push(draft);continue;}
+        const document=BaseDocument.parse(fresh.source),configured=baseViewSetting(document,fresh.viewIndex,document.views[fresh.viewIndex]?.source===undefined?'summaries':'summaryDefinitions');
+        if(!configured||typeof configured!=='object'||Array.isArray(configured)||(configured as Record<string,BaseValue>)[raw.baselineName]!==raw.baselineExpression){conflicts.push({draft,reason:'The original summary definition changed. Your raw input is retained.'});continue;}
+        const groupIndex=raw.groupKey===undefined?raw.groupIndex:state.result.groups.findIndex(group=>group.sharedKeyId===raw.groupKey);
+        const anchor=content.querySelector<HTMLElement>(`[data-summary-property=${JSON.stringify(raw.property)}]`);
+        if(!anchor||groupIndex!==null&&groupIndex<0){waiting.push(draft);continue;}
+        openSummaryEditor(raw.property,anchor,raw.baselineName,groupIndex,raw);restoredRawDrafts.add(draft);restored.push(draft);continue;
+      }
       if(draft.kind==='toolbar'){
         const result=toolbarUI.restoreAdmissionDraft(draft.raw);
         if(result==='restored'){restoredRawDrafts.add(draft);restored.push(draft);}else if(result==='pending')waiting.push(draft);else conflicts.push({draft,reason:'The Base settings target or configuration changed. Your raw input is retained.'});
@@ -752,29 +789,46 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   const editProperty=(edit:Parameters<typeof actions.editProperty>[0])=>collectionMode()?editCollectionProperty(edit):Promise.reject(new Error('Vault note views are browsing only. Open the note to edit its properties.'));
   function saveConfigurationCommand(operation: () => Promise<void>): Promise<void> {
     action();if(pendingCollectionRestore)throw new Error('Retry the unfinished Restore before changing this view.');if(pendingCollectionCreate||unfinishedNoteCreation())throw new Error('Use New again to finish the original entry creation before changing this view.'); if (options.readOnly) return Promise.reject(new Error('This base is read-only'));
+    const originalSource=configurationSource();
     const attempt: { buffer?: NoteBuffer; text?: string } = {}; configurationAttempt = attempt;
+    const accepted={supervisor:new NoteLoadSupervisor(),command:undefined as Promise<void>|undefined,retry:undefined as (()=>Promise<void>)|undefined,error:undefined as unknown};acceptedConfiguration=accepted;
     configurationLifecycle++; renderStatus(controller.state);
     let saving: Promise<void>;
-    try { saving = track(operation); }
-    catch (error) { if (configurationAttempt === attempt) configurationAttempt = undefined; configurationLifecycle--; renderStatus(controller.state); throw error; }
-    const command = saving.catch(error => {
-      const buffer = attempt.buffer, text = attempt.text;
-      const retryInline = options.inlineSource?.captureSaveRetry?.();
-      if (retryInline) throw new BaseToolbarSaveError(error instanceof Error ? error.message : String(error), () => track(async () => {
-        await retryInline();
-        if (!await controller.acknowledgeConfigurationRetry()) throw new Error('The retained inline configuration is no longer pending.');
-      }));
-      if (controller.hasPendingViewReferences) throw new BaseToolbarSaveError(error instanceof Error ? error.message : String(error), () => track(async () => { await controller.retryViewRenameReferences(); }));
-      if (buffer && (buffer.dirty || buffer.error)) throw new BaseToolbarSaveError(error instanceof Error ? error.message : String(error), () => track(async () => {
-        if (controller.hasPendingViewReferences) { await controller.retryViewRenameReferences(); return; }
-        if (buffer.path !== options.basePath || buffer.text !== text) throw new Error('The retained configuration changed. Save or resolve that draft before retrying.');
-        await buffer.flush(); if (!await controller.acknowledgeConfigurationRetry()) await controller.refresh();
-      }));
-      throw error;
-    }).finally(() => { if (configurationAttempt === attempt) configurationAttempt = undefined; configurationLifecycle--; renderStatus(controller.state); schedule(); });
-    // Retain the complete configuration continuation without reporting its UI
-    // recovery wrapper twice. The original operation/error stays owned by track.
-    pending.add(command);
+    try { saving = operation(); }
+    catch (error) { if (configurationAttempt === attempt) configurationAttempt = undefined;acceptedConfiguration=undefined;configurationLifecycle--; renderStatus(controller.state); throw error; }
+    let first=true,lastFailure:unknown;
+    // Start the admission witness before awaiting the original dispatch. A late
+    // old-host rejection after fresh admission must consume that fresh witness.
+    const command = accepted.supervisor.run(async()=>{
+      if(first){
+        first=false;
+        try{await saving;return;}catch(error){
+          lastFailure=error;
+          const buffer=attempt.buffer,text=attempt.text,retryInline=options.inlineSource?.captureSaveRetry?.();
+          const retry=retryInline?async()=>{
+            await retryInline();
+            if(!await controller.acknowledgeConfigurationRetry())throw new Error('The retained inline configuration is no longer pending.');
+          }:controller.hasPendingViewReferences?async()=>{await controller.retryViewRenameReferences();}:buffer&&(buffer.dirty||buffer.error)?async()=>{
+            if(controller.hasPendingViewReferences){await controller.retryViewRenameReferences();return;}
+            if(buffer.path!==options.basePath||buffer.text!==text)throw new Error('The retained configuration changed. Save or resolve that draft before retrying.');
+            await buffer.flush();if(!await controller.acknowledgeConfigurationRetry())await controller.refresh();
+          }:undefined;
+          if(!retry)throw error;
+          accepted.retry=retry;throw baseConfigurationRecoveryFailure(error);
+        }
+      }
+      try{await accepted.retry!();}catch(error){lastFailure=error;throw baseConfigurationRecoveryFailure(error);}
+    },alive).catch(failure=>{
+      const original=lastFailure!==undefined&&failure===baseConfigurationRecoveryFailure(lastFailure)?lastFailure:failure;report(original);
+      if(!accepted.retry)throw original;
+      const wrapped=new BaseToolbarSaveError(original instanceof Error?original.message:String(original),()=>track(accepted.retry!),{saved:originalSource,desired:attempt.text??controller.retainedConfigurationSources[0]?.desired??controller.state.source});
+      accepted.error=wrapped;throw wrapped;
+    }).then(()=>{if(acceptedConfiguration===accepted)acceptedConfiguration=undefined;},error=>{accepted.error=error;throw error;}).finally(()=>{
+      if(configurationAttempt===attempt)configurationAttempt=undefined;
+      configurationLifecycle--;renderStatus(controller.state);schedule();
+    });
+    accepted.command=command;
+    pending.add(command);editsWerePending=true;
     const settled = () => { pending.delete(command); releaseCleanBuffers(); renderStatus(controller.state); schedule(); };
     void command.then(settled, settled);
     return command;
@@ -822,7 +876,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     summaries[id] = expression;
     void saveConfigurationCommand(() => controller.updateRoot(controller.state.version, { summaries })).then(() => openSummaryEditor(property, anchor, id, scope)).catch(report);
   }
-  function openSummaryEditor(property: string, anchor: HTMLElement, initialName: string, groupIndex: number | null = null): void {
+  function openSummaryEditor(property: string, anchor: HTMLElement, initialName: string, groupIndex: number | null = null,restoring?:BaseSummaryAdmissionDraft): void {
     action(); if (options.readOnly || pending.size || activeDraft()) throw new Error('Finish or cancel the current edit first.');
     destroySummaryEditor?.();
     let expectedSource = controller.state.source, acceptedName = initialName;
@@ -842,14 +896,32 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     const menu = doc.createElement('div'); menu.className = 'bases-summary-actions'; menu.hidden = true; menu.setAttribute('role', 'menu');
     const remove = doc.createElement('button'); remove.type = 'button'; remove.className = 'bases-toolbar-menu-item mod-warning'; remove.textContent = 'Delete summary'; remove.setAttribute('role', 'menuitem'); menu.append(remove);
     const error = doc.createElement('div'); error.className = 'bases-toolbar-error'; error.setAttribute('role', 'alert');
-    const retry = doc.createElement('button'); retry.type = 'button'; retry.textContent = 'Retry save'; retry.hidden = true;
+    const retry = doc.createElement('button'); retry.type = 'button'; retry.textContent = 'Review retained changes'; retry.hidden = true;
     const cancelChanges = doc.createElement('button'); cancelChanges.type = 'button'; cancelChanges.textContent = 'Cancel changes'; cancelChanges.hidden = true;
     panel.append(heading, fields, menu, error, retry, cancelChanges); doc.body.append(panel); summaryPanel = panel;
+    let summaryFrozen=false,summaryPassive=!!restoring;
     let dirty = false, saving = false, destroyed = false, generation = 0, closeRequest: boolean | undefined, retryPersistence: (() => Promise<void>) | undefined;
     type SummaryAttempt = { name: string; expression: string; source: string; deleted?: boolean };
+    let reviewFailure:BaseToolbarSaveError|undefined;
     let retryAccepted: SummaryAttempt | undefined, timer: ReturnType<typeof setTimeout> | undefined;
     let formulaEditor: BaseFormulaEditor | undefined;
     summaryHasRawDraft = () => name.value !== acceptedName || expression.value !== acceptedExpression;
+    let nameComposing=false,nameSettling=false,nameStart='',nameUpdate:string|undefined,nameInput:{value:string;data:string|null;update?:string}|undefined,finishSummaryCapture:(()=>void)|undefined;
+    name.addEventListener('compositionstart',()=>{if(summaryFrozen)return;nameComposing=true;nameSettling=false;nameStart=name.value;nameInput=undefined;});
+    name.addEventListener('compositionupdate',event=>{if(nameComposing)nameUpdate=event.data;});
+    name.addEventListener('input',event=>{if(nameComposing)nameInput={value:name.value,data:(event as InputEvent).data??null,update:nameUpdate};else nameSettling=false;queueMicrotask(()=>finishSummaryCapture?.());},true);
+    name.addEventListener('compositionend',event=>{nameComposing=false;nameSettling=!(event.data===''&&name.value===nameStart||nameInput?.value===name.value&&(nameInput.data===event.data||nameInput.update===event.data));queueMicrotask(()=>finishSummaryCapture?.());});
+    captureSummaryAdmission=()=>{
+      if(destroyed||!formulaEditor?.canCaptureAdmissionDraft())return;
+      const formula=formulaEditor.captureFreeze();if(!formula)return;
+      summaryFrozen=true;if(timer){clearTimeout(timer);timer=undefined;}
+      for(const button of panel.querySelectorAll<HTMLButtonElement>('button'))button.disabled=true;
+      let capturedName=name.value,selection={start:name.selectionStart,end:name.selectionEnd,direction:name.selectionDirection,focus:doc.activeElement===name},resolve!:()=>void;
+      const nameReady=new Promise<void>(yes=>{resolve=yes;});
+      finishSummaryCapture=()=>{if(nameComposing||nameSettling)return;capturedName=name.value;selection={...selection,start:name.selectionStart,end:name.selectionEnd,direction:name.selectionDirection};name.readOnly=true;finishSummaryCapture=undefined;resolve();};finishSummaryCapture();
+      const ready=Promise.all([nameReady,formula.ready]).then(()=>{completedSummaryDrafts.add(raw);});
+      const raw:BaseSummaryAdmissionDraft={property,groupIndex,groupKey,get baselineName(){return acceptedName;},get baselineExpression(){return acceptedExpression;},get name(){return capturedName;},get nameSelection(){return selection;},formula,ready};return raw;
+    };
     const mark = () => { summaryDraft = dirty || saving || !!retryPersistence; panel.setAttribute('aria-busy', String(saving)); schedule(); };
     const updateDirty = () => { dirty = name.value.trim() !== acceptedName || expression.value !== acceptedExpression; mark(); };
     let anchorBounds = anchor.getBoundingClientRect();
@@ -862,9 +934,9 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     };
     const scroll = (event: Event) => { const target = event.target; if (target && 'nodeType' in target && panel.contains(target as Node)) return; place(); };
     const resize = win?.ResizeObserver ? new win.ResizeObserver(place) : undefined;
-    const cleanup = () => { if (destroyed) return; destroyed = true; if (timer) clearTimeout(timer); doc.removeEventListener('pointerdown', outside, true); win?.removeEventListener('resize', place); win?.removeEventListener('scroll', scroll, true); resize?.disconnect(); formulaEditor?.destroy(); panel.remove(); if (summaryPanel === panel) { summaryPanel = undefined; summaryDraft = false; summaryHasRawDraft = undefined; destroySummaryEditor = undefined; } };
+    const cleanup = () => { if (destroyed) return; destroyed = true; if (timer) clearTimeout(timer); doc.removeEventListener('pointerdown', outside, true); win?.removeEventListener('resize', place); win?.removeEventListener('scroll', scroll, true); resize?.disconnect(); formulaEditor?.destroy(); panel.remove(); if (summaryPanel === panel) { summaryPanel = undefined; summaryDraft = false; summaryHasRawDraft = undefined;captureSummaryAdmission=undefined;captureSummarySaveAcknowledgement=undefined; destroySummaryEditor = undefined; } };
     const close = (chooser: boolean) => {
-      if (destroyed) return;
+      if (destroyed||summaryFrozen||summaryPassive&&dirty) return;
       if (saving) { closeRequest = closeRequest === true || chooser; return; }
       if (dirty || retryPersistence) { closeRequest = closeRequest === true || chooser; void save(); return; }
       cleanup(); render(controller.state);
@@ -880,16 +952,20 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       if (controller.state.source !== next.source) { fail(new Error('This Base changed before the summary save was acknowledged. Reopen its editor before saving.'), next); return false; }
       acceptedName = next.name; acceptedExpression = next.expression; expectedSource = next.source;
       title.textContent = `Edit property ${acceptedName}`; retryPersistence = undefined; retryAccepted = undefined; retry.hidden = true; cancelChanges.hidden = true; fields.disabled = false; expression.disabled = false; formulaEditor?.sync(); error.textContent = '';
-      updateDirty(); if (next.deleted) { dirty = false; mark(); close(true); } else if (closeRequest !== undefined && !dirty) close(closeRequest);
+      updateDirty();if(dirty)cancelChanges.hidden=false; if (next.deleted) { dirty = false; mark(); close(true); } else if (closeRequest !== undefined && !dirty) close(closeRequest);
       return true;
+    };
+    captureSummarySaveAcknowledgement=()=>{
+      const next=retryAccepted;
+      return()=>{if(!destroyed&&next&&retryAccepted===next)accept(next);};
     };
     const fail = (failure: unknown, next: SummaryAttempt) => {
       error.textContent = failure instanceof Error ? failure.message : String(failure); dirty = true;
-      if (failure instanceof BaseToolbarSaveError) { retryPersistence = failure.retry; retryAccepted = next; retry.hidden = false; fields.disabled = true; expression.disabled = true; formulaEditor?.sync(); } else { retryPersistence = undefined; retryAccepted = undefined; retry.hidden = true; fields.disabled = false; expression.disabled = false; formulaEditor?.sync(); cancelChanges.hidden = false; }
+      if (failure instanceof BaseToolbarSaveError) { retryPersistence = failure.retry;reviewFailure=failure; retryAccepted = next; retry.hidden = false;retry.disabled=false; fields.disabled = true; expression.disabled = true; formulaEditor?.sync(); } else { retryPersistence = undefined; retryAccepted = undefined; retry.hidden = true; fields.disabled = false; expression.disabled = false; formulaEditor?.sync(); cancelChanges.hidden = false; }
       mark();
     };
     async function save(): Promise<void> {
-      if (destroyed || retryPersistence) return; if (saving) return; if (!dirty) { if (closeRequest !== undefined) close(closeRequest); return; }
+      if (destroyed || summaryFrozen || summaryPassive || retryPersistence) return; if (saving) return; if (!dirty) { if (closeRequest !== undefined) close(closeRequest); return; }
       if (timer) { clearTimeout(timer); timer = undefined; }
       const next: SummaryAttempt = { name: name.value.trim(), expression: expression.value, source: expectedSource }, submitted = generation;
       if (!next.name) { error.textContent = 'Summary name must not be empty.'; return; }
@@ -900,10 +976,10 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       catch (failure) { if (!destroyed) { saving = false; fail(failure, next); } }
       finally { saving = false; if (!destroyed) mark(); }
     }
-    name.addEventListener('input', () => { generation++; updateDirty(); });
+    name.addEventListener('input', () => { if(!summaryFrozen)summaryPassive=false;generation++; updateDirty(); });
     name.addEventListener('blur', () => { void save(); });
     name.addEventListener('keydown', event => { if (event.isComposing) return; if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); name.value = acceptedName; updateDirty(); name.blur(); } else if (event.key === 'Enter') { event.preventDefault(); name.blur(); } });
-    expression.addEventListener('input', () => { generation++; updateDirty(); if (timer) clearTimeout(timer); timer = setTimeout(() => { timer = undefined; void save(); }, 250); });
+    expression.addEventListener('input', () => { if(!summaryFrozen)summaryPassive=false;generation++; updateDirty(); if(summaryFrozen)return;if (timer) clearTimeout(timer); timer = setTimeout(() => { timer = undefined; void save(); }, 250); });
     cancelChanges.addEventListener('click', () => { if (saving || retryPersistence) return; name.value = acceptedName; expression.value = acceptedExpression; dirty = false; mark(); close(true); });
     back.addEventListener('click', () => close(true));
     panel.addEventListener('keydown', event => { if (!event.defaultPrevented && event.key === 'Escape' && !event.isComposing) { event.preventDefault(); event.stopPropagation(); close(true); } });
@@ -920,13 +996,19 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       const next: SummaryAttempt = { name: acceptedName, expression: acceptedExpression, deleted: true, source: projected.toString() }; saving = true; fields.disabled = true; expression.disabled = true; formulaEditor?.sync(); mark();
       void saveConfigurationCommand(() => { if (controller.state.source !== expectedSource) throw new Error('This Base changed while the summary was open.'); return controller.removeSummary(controller.state.version, acceptedName); }).then(() => { saving = false; accept(next); }, failure => { saving = false; fields.disabled = false; expression.disabled = false; formulaEditor?.sync(); fail(failure, next); });
     });
-    retry.addEventListener('click', () => { if (!retryPersistence || !retryAccepted || saving) return; saving = true; mark(); const operation = retryPersistence, next = retryAccepted;
-      void track(operation).then(() => { saving = false; if (accept(next) && dirty && doc.activeElement !== name) void save(); }, failure => { saving = false; fail(failure, next); });
+    retry.addEventListener('click', () => {
+      if(!reviewFailure||saving)return;
+      reviewRetainedBaseConfiguration(panel,reviewFailure.review,`Summary name: ${name.value}\nSummary expression: ${expression.value}`);
     });
     const outside = (event: Event) => { if (!panel.contains(event.target as Node)) close(false); };
     doc.addEventListener('pointerdown', outside, true); win?.addEventListener('resize', place); win?.addEventListener('scroll', scroll, true); resize?.observe(panel); destroySummaryEditor = cleanup;
+    if(restoring)expression.value=restoring.formula.initial;
     try { formulaEditor = enhanceBaseSummaryEditor(expression, { onEscape: () => close(true), onCommit: () => { void save(); } }); } catch (failure) { cleanup(); throw failure; }
-    place(); name.focus(); name.select(); mark();
+    if(restoring){
+      if(!formulaEditor.restoreAdmissionDraft(restoring.formula)){cleanup();throw new Error('The retained summary presentation could not be restored.');}
+      name.value=restoring.name;const selection=restoring.nameSelection;if(selection.start!==null&&selection.end!==null)name.setSelectionRange(selection.start,selection.end,selection.direction??undefined);if(selection.focus)name.focus({preventScroll:true});summaryPassive=true;updateDirty();cancelChanges.hidden=!dirty;
+    }
+    place();if(!restoring){name.focus();name.select();}mark();
   }
   function createItem(group?: { property: string; value: BaseValue }, anchor?: HTMLElement): Promise<void>;
   function createItem(group: { property: string; value: BaseValue } | undefined, anchor: HTMLElement | undefined, inline: true): Promise<{path:string;entryId?:string}|void>;
@@ -1381,7 +1463,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     await Promise.resolve();
     validateRecovery();
     const acknowledgesSavedDraft = controller.hasPendingViewReferences || [...changedBuffers].some(buffer => buffer.path === options.basePath && (buffer.dirty || buffer.error));
-    const acknowledgement = toolbarUI.captureSaveAcknowledgement();
+    const acknowledgement = toolbarUI.captureSaveAcknowledgement(),summaryAcknowledgement=captureSummarySaveAcknowledgement?.();
     // Reference operations own their exact failed note drafts and original
     // witnesses; flushing those buffers independently would invalidate retry.
     if (controller.hasPendingViewReferences) {await controller.retryViewRenameReferences();validateRecovery();}
@@ -1389,6 +1471,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     const configurationAcknowledged = await controller.acknowledgeConfigurationRetry();
     validateRecovery();
     if (acknowledgesSavedDraft || configurationAcknowledged) acknowledgement();
+    if(acknowledgesSavedDraft||configurationAcknowledged){if(acceptedConfiguration)acceptedConfiguration.error=undefined;acceptedConfiguration=undefined;summaryAcknowledgement?.();}
     releaseCleanBuffers();
     if(pendingCollectionRestore)throw new Error('The collection Restore is unfinished. Retry Restore before leaving this Base.');
     if(pendingCollectionCreate)throw new Error('The new entry is unfinished. Use New again to finish it before leaving this Base.');
