@@ -12,7 +12,7 @@ import type {IndependentDraftProvider,IndependentDraftCandidate} from '../src/co
 function gate(){let resolve!:()=>void;const promise=new Promise<void>(done=>{resolve=done;});return{promise,resolve};}
 const turn=()=>new Promise<void>(resolve=>setImmediate(resolve));
 async function until(check:()=>boolean,message='expected owned continuation'){for(let i=0;i<100&&!check();i++)await turn();assert.ok(check(),message);}
-async function fixture(t:TestContext,other:'clean'|'dirty'|'operation'|'malformed'|'conflict'='clean',selectedRecovery:'canonical'|'independent'|'held'='canonical'){
+async function fixture(t:TestContext,other:'clean'|'dirty'|'operation'|'malformed'|'conflict'='clean',selectedRecovery:'canonical'|'independent'|'held'='canonical',pendingConditional=0){
   const dom=new JSDOM('<main></main>',{url:'https://zorid.test/',pretendToBeVisual:true}),saved=new Map<string,PropertyDescriptor|undefined>();
   const matchMedia=(media:string)=>({matches:false,media,addListener(){},removeListener(){},addEventListener(){},removeEventListener(){}});
   for(const[key,value]of Object.entries({window:dom.window,document:dom.window.document,localStorage:dom.window.localStorage,navigator:dom.window.navigator,
@@ -22,11 +22,12 @@ async function fixture(t:TestContext,other:'clean'|'dirty'|'operation'|'malforme
   }
   dom.window.matchMedia=matchMedia as typeof window.matchMedia;dom.window.HTMLElement.prototype.scrollIntoView=()=>{};
   const scope={vaultId:'deferred-vault',clientId:'deferred-client'},records=new Map<string,DurableWriteRead>(),heads=new Map<string,Checkpoint>();
-  for(const path of ['Selected.md','Other.md']){const entryId=path.split('.')[0].toLowerCase();records.set(entryId,{entryId,path,revision:'file-1',content:`Saved ${entryId}`,stat:{ctime:1,mtime:1,size:14}});}
+  for(const path of ['Selected.md','Other.md',...Array.from({length:pendingConditional},(_,i)=>`Pending${i+1}.md`)]){const entryId=path.split('.')[0].toLowerCase();records.set(entryId,{entryId,path,revision:'file-1',content:`Saved ${entryId}`,stat:{ctime:1,mtime:1,size:14}});}
   class Adapter extends MemoryAdapter{durableWrites!:DurableWrites;independentDrafts!:IndependentDraftProvider;
     override async list(){return(await super.list()).map(row=>{const current=[...records.values()].find(record=>record.path===row.path);return current?{...row,entryId:current.entryId,revision:current.revision}:row;});}}
   const adapter=new Adapter(Object.fromEntries([...records.values()].map(row=>[row.path,row.content])));
   const plans=new Map<string,DurableWriteInput>(),intents=new Map<string,DurableWriteIntent>(),journal=new Map<string,IndependentDraftCandidate>(),loaded:string[]=[],queries:string[]=[],committed:string[]=[],planned:string[]=[];
+  const captures=new Map<string,{captureId:string;logicalWitness:{entryId:string;path:string;revision:string};source:string}>();let captureAttempts=0;
   let serial=0,releases=0;const held=gate(),entered=gate();
   const writes:DurableWrites={checkpoints:{scope,load:async key=>{loaded.push(key);if(key==='note/v1/other'||selectedRecovery==='held'&&key==='note/v1/selected'){entered.resolve();await held.promise;}return structuredClone(heads.get(key)??null);},
     list:async()=>({items:[...heads.values()].map(({encodedState,...metadata})=>metadata),cursor:null,highWater:String(heads.size)}),changes:async()=>({items:[],cursor:null,highWater:String(heads.size)}),
@@ -34,15 +35,30 @@ async function fixture(t:TestContext,other:'clean'|'dirty'|'operation'|'malforme
       const row:Checkpoint={version:1,...scope,key:change.key,revision:change.nextRevision,sequence:String(++serial),deleted:change.encodedState===null,byteLength:Buffer.byteLength(change.encodedState??''),encodedState:change.encodedState};heads.set(change.key,row);return structuredClone(row);}},
     readText:async path=>structuredClone([...records.values()].find(row=>row.path===path)!),readTextById:async id=>structuredClone(records.get(id)??null),
     planWrite:async input=>{planned.push(input.operationId);plans.set(input.operationId,structuredClone(input));return{version:1,...scope,entryId:input.expectedEntryId,operationId:input.operationId,encodedPlan:JSON.stringify(input)};},
-    prepare:async plan=>{const intent:DurableWriteIntent={ref:{...scope,entryId:plan.entryId,operationId:plan.operationId,token:plan.operationId},state:'prepared',acknowledged:false};intents.set(plan.operationId,intent);return structuredClone(intent);},
+    prepare:async plan=>{const input=plans.get(plan.operationId);if(input?.conditionalSavedSource)captures.delete(input.conditionalSavedSource.captureId);const intent:DurableWriteIntent={ref:{...scope,entryId:plan.entryId,operationId:plan.operationId,token:plan.operationId},state:'prepared',acknowledged:false};intents.set(plan.operationId,intent);return structuredClone(intent);},
     query:async ref=>{queries.push(ref.operationId);return structuredClone(intents.get(ref.operationId)??null);},
     commit:async ref=>{committed.push(ref.operationId);const input=plans.get(ref.operationId)!,old=records.get(ref.entryId)!;assert.equal(input.expectedRevision,old.revision);assert.equal(input.expectedContent,old.content);
       const current={...old,content:input.content,revision:`file-${committed.length+1}`,stat:{...old.stat,size:input.content.length}};records.set(ref.entryId,current);await adapter.write(current.path,current.content);
       const intent:DurableWriteIntent={ref,state:'committed',acknowledged:false,receipt:{operationId:ref.operationId,entryId:ref.entryId,revision:current.revision,sequence:String(committed.length)}};intents.set(ref.operationId,intent);return structuredClone(intent);},
     acknowledge:async ref=>{const value=intents.get(ref.operationId)!;if(value.state==='committed'||value.state==='rejected')intents.set(ref.operationId,{...value,acknowledged:true});},listUnacknowledged:async()=>[],};
+  if(pendingConditional){
+    writes.listSavedSourceRequests=async()=>[...captures.values()].map(({source,...request})=>({...request,legacy:false}));
+    writes.releaseSavedSource=async id=>{captures.delete(id);};
+    writes.captureSavedSource=async request=>{captureAttempts++;if(captures.size>=8&&!captures.has(request.captureId))throw Object.assign(Error('Conditional capture quota is occupied'),{source:'host',code:'source_capture_capacity'});
+      const prior=captures.get(request.captureId);if(prior)return structuredClone(prior);const row={...structuredClone(request),source:records.get(request.logicalWitness.entryId)!.content};captures.set(row.captureId,row);return row;};
+  }
   adapter.durableWrites=writes;
+  for(let i=1;i<=pendingConditional;i++){
+    const entryId=`pending${i}`,base=records.get(entryId)!,captureId=`00000000-0000-4000-8000-${String(i).padStart(12,'0')}`,logicalWitness={entryId,path:base.path,revision:base.revision};
+    captures.set(captureId,{captureId,logicalWitness,source:base.content});
+    const input:DurableWriteInput={operationId:`original-pending-${i}`,path:base.path,expectedEntryId:entryId,expectedRevision:base.revision,expectedContent:base.content,content:`Original conditional ${i}`,conditionalSavedSource:{captureId,logicalWitness}};
+    const operation={input,content:input.content},encodedState=JSON.stringify({version:1,writer:`saved-${entryId}`,generation:1,base,draft:input.content,conflict:false,operation});
+    heads.set(`note/v1/${entryId}`,{version:1,...scope,key:`note/v1/${entryId}`,revision:`10000000-0000-4000-8000-${String(i).padStart(12,'0')}`,sequence:String(++serial),deleted:false,byteLength:Buffer.byteLength(encodedState),encodedState});
+    journal.set(`previous-document:${entryId}:old-${entryId}`,{...scope,incarnationId:'previous-document',entryId,writer:`old-${entryId}`,revision:'1',generation:1,deleted:false,baseline:base,draft:input.content,checkpointRevision:null,
+      pendingOperation:JSON.stringify({schemaVersion:2,conflict:false,operation,checkpoint:null,captureRequests:[{captureId,logicalWitness,scope:{...scope,incarnationId:'previous-document'}}]})});
+  }
   const journalScope={...scope,incarnationId:'current-document'};
-  adapter.independentDrafts={scope:journalScope,list:async options=>[...journal.values()].filter(row=>!options||row.entryId===options.entryId).map(({baseline,draft,pendingOperation,checkpointRevision,...receipt})=>receipt),
+  adapter.independentDrafts={scope:journalScope,isRetiredIncarnation:async()=>true,list:async options=>[...journal.values()].filter(row=>!options||row.entryId===options.entryId).map(({baseline,draft,pendingOperation,checkpointRevision,...receipt})=>receipt),
     read:async address=>structuredClone(journal.get(`${address.incarnationId??journalScope.incarnationId}:${address.entryId}:${address.writer}`)??null),
     compareAndSwap:async change=>{const receipt={...journalScope,entryId:change.entryId,writer:change.writer,revision:change.nextRevision,generation:change.generation,deleted:false as const};journal.set(`${journalScope.incarnationId}:${change.entryId}:${change.writer}`,{...receipt,baseline:structuredClone(change.baseline),draft:change.draft,pendingOperation:change.pendingOperation,checkpointRevision:change.checkpointRevision});return receipt;},
     retire:async change=>{journal.delete(`${change.incarnationId??journalScope.incarnationId}:${change.entryId}:${change.writer}`);return{...journalScope,incarnationId:change.incarnationId??journalScope.incarnationId,entryId:change.entryId,writer:change.writer,revision:change.nextRevision,generation:change.generation,deleted:true};}};
@@ -62,7 +78,7 @@ async function fixture(t:TestContext,other:'clean'|'dirty'|'operation'|'malforme
   const workspace=new Workspace(root,factory);let started=false;
   const opening=workspace.start({adapter,id:platformId,label:'Deferred test',release:async()=>{releases++;}}).then(()=>{started=true;});void opening.catch(()=>{});
   t.after(async()=>{held.resolve();try{await opening;for(const[path,buffer]of workspace.buffers){if(buffer.hasRecoveryConflict){await buffer.closeMetadataProjection();workspace.buffers.delete(path);}}if(other==='malformed')heads.delete('note/v1/other');await workspace.destroy();}finally{dom.window.close();for(const[key,descriptor]of saved){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else Reflect.deleteProperty(globalThis,key);}}});
-  return{dom,workspace,root,adapter,heads,journal,held,entered,opening,loaded,queries,committed,planned,plans,records,get started(){return started;},get releases(){return releases;}};
+  return{dom,workspace,root,adapter,heads,journal,held,entered,opening,loaded,queries,committed,planned,plans,records,captures,get captureAttempts(){return captureAttempts;},get started(){return started;},get releases(){return releases;}};
 }
 
 test('selected recovered editor and independent protection do not wait for an unrelated checkpoint body',async t=>{
@@ -116,4 +132,19 @@ test('later opening a conflicted checkpoint retains its draft and rejects a glob
   assert.equal(other.hasRecoveryConflict,true);assert.equal(other.text,'Recovered other draft');
   await assert.rejects(ui.workspace.flush(),/file advanced|conflict|draft preserved/);assert.equal(ui.heads.get('note/v1/other')!.encodedState,before);
   assert.equal(ui.records.get('other')!.content,'Saved other');assert.equal([...ui.plans.values()].filter(plan=>plan.expectedEntryId==='other').length,0);assert.equal(ui.releases,0);
+});
+
+
+test('eight unopened conditional checkpoints do not strand a selected capture behind Native capacity',async t=>{
+  const ui=await fixture(t,'clean','canonical',8);await until(()=>ui.started);const buffer=ui.workspace.buffers.get('Selected.md')!,witness=buffer.savedDurableWitness!;
+  assert.equal(ui.captures.size,8);assert.equal(ui.loaded.some(key=>key.startsWith('note/v1/pending')),false);
+  let capture:Awaited<ReturnType<typeof buffer.captureConditionalSavedSource>>;
+  const saving=buffer.captureConditionalSavedSource(witness).then(value=>{capture=value;});void saving.catch(()=>{});
+  try{
+    for(let i=0;i<250&&!capture;i++)await new Promise(resolve=>setTimeout(resolve,10));
+    assert.ok(capture,'selected capture must resume retained unopened operations automatically, without opening those notes or closing the vault');
+    await saving;assert.ok(capture);assert.equal(ui.loaded.includes('note/v1/other'),false,'capacity recovery must not read unrelated clean history');
+    assert.ok(ui.committed.some(id=>id.startsWith('original-pending-')));assert.ok([...ui.plans.values()].every(input=>input.operationId.startsWith('original-pending-')));
+    await buffer.releaseConditionalSavedSource(capture);
+  }finally{await buffer.dispose().catch(()=>{});await saving.catch(()=>{});}
 });
