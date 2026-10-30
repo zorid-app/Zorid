@@ -5,6 +5,7 @@ import {delay, until} from '../tasks-electron-integration/cdp.mjs';
 import {MOD} from '../bases-electron-integration/ui.mjs';
 import {restartWithFreshSource, safetyAReady} from './freshness.mjs';
 import {saveRecoveryCopyFor} from './recovery-notice.mjs';
+import {reviewRetainedConfiguration} from '../bases-electron-recovery-integration/campaign.mjs';
 import {selectionSplitReady, waitSelectionNoteLive} from '../bases-electron-selection-integration/setup-readiness.mjs';
 import {sourceDigest,assertPreparedInlineWrite,assertInlineCheckpointFailure,assertOriginalInlineCheckpointRetry,withDeniedOwnedVaultLock} from './inline-checkpoint-fault.mjs';
 import {fixtureFiles as originalFixtureFiles, template, vaultName, openBoundaries} from './fixtures.mjs';
@@ -256,10 +257,11 @@ async function pathReuseAndClose(c) {
 
 async function namedReferenceRetry(c) {
   const conflict = await conflictNote(c, 'Named host.md', 'Retained named-host draft 😀');
-  await open(c, 'Named.base'); await config(c, 'Old view');
+  const originalBase=fixtureFiles().get('Named.base'),renamedBase=originalBase.replace('name: Old view','name: Renamed view');assert.notEqual(renamedBase,originalBase);
+  await open(c, 'Named.base');await c.saved('Named.base',source=>assert.equal(source,originalBase),'named-rename-original-whole-configuration'); await config(c, 'Old view');
   await c.ui.type(field('View name', dialog('View options')), 'Renamed view'); await c.ui.key('Enter');
   await c.saved('Named.base', source => assert.equal(c.yaml.parse(source).views[0].name, 'Renamed view'), 'named-rename-base-acknowledged-before-reference-retry');
-  await c.ui.wait(`const e=document.querySelector(${JSON.stringify(dialog('View options'))});return e&&[...e.querySelectorAll('button')].some(b=>!b.hidden&&b.textContent==='Retry save');`, 'Dirty reference exposes an exact retained retry');
+  await reviewRetainedConfiguration(c,dialog('View options'),{saved:originalBase,accepted:renamedBase,currentIncludes:'Renamed view',file:'Named.base',physical:renamedBase});
   await c.saved('Named clean.md', source => assert.equal(source, '# Clean reference\n![[Named.base#Renamed view]]\n'), 'named-rename-independent-clean-reference-completed');
   assert.equal(await c.read('Named host.md'), conflict.external, 'Dirty reference failure preserves external original');
   await c.screenshot('s07-named-reference-partial-retry');
@@ -268,7 +270,7 @@ async function namedReferenceRetry(c) {
   const copy = await until(async () => { const names = (await fs.readdir(c.vault)).filter(name => !beforeCopies.has(name) && name.endsWith('.md')); assert.equal(names.length, 1); return names[0]; }, 30000);
   await c.saved(copy, source => assert.equal(source, conflict.draft), 'named-reference-recovery-copy-exact-user-draft');
   assert.equal(await c.read('Named host.md'), conflict.external);
-  await c.ui.button('Retry save', dialog('View options'));
+  await c.ui.command('Save current changes');
   const renamedHost = conflict.external.replace('#Old view|', '#Renamed view|').replace('#Old%20view)', '#Renamed%20view)');
   await c.saved('Named host.md', source => assert.equal(source, renamedHost), 'named-reference-retry-preserves-alias-other-view-and-external-body');
   assert.equal(await c.read(copy), conflict.draft, 'The separately created recovery copy is never rewritten by the older captured plan');
@@ -329,7 +331,7 @@ async function nestedMountedRename(c) {
   await config(c,nestedRename.from,old);await c.ui.type(field('View name',dialog('View options')),nestedRename.to);await c.ui.key('Enter');
   await c.saved(nestedRename.base,source=>assert.equal(source,nestedRename.afterBase),'c2-nested-base-name-ack-before-dirty-host-retry');
   await c.saved(nestedRename.clean,source=>assert.equal(source,nestedRename.cleanAfter),'c2-nested-independent-clean-reference');
-  await c.ui.wait(`return [...document.querySelectorAll(${JSON.stringify(dialog('View options')+' button')})].some(e=>e.textContent==='Retry save'&&e.getClientRects().length);`,'Nested dirty host retains rename retry');
+  await reviewRetainedConfiguration(c,dialog('View options'),{saved:nestedRename.beforeBase,accepted:nestedRename.afterBase,currentIncludes:nestedRename.to,file:nestedRename.base,physical:nestedRename.afterBase});
   assert.equal(await c.read(nestedRename.child),conflict.external);assert.equal(await c.read(nestedRename.outer),nestedRename.outerSource);
   // Before the dirty child can be rewritten, its original wrapper still names
   // the old fragment while its already-mounted session follows the saved name.
@@ -337,7 +339,7 @@ async function nestedMountedRename(c) {
   const names=new Set(await fs.readdir(c.vault));await saveRecoveryCopyFor(c,nestedRename.child);
   const copy=await until(async()=>{const added=(await fs.readdir(c.vault)).filter(name=>!names.has(name)&&name.endsWith('.md'));assert.equal(added.length,1);return added[0];},30000);
   await c.saved(copy,source=>assert.equal(source,conflict.draft),'c2-nested-recovery-copy-exact-original-draft');
-  await c.ui.button('Retry save',dialog('View options'));
+  await c.ui.command('Save current changes');
   const renamed=nestedRenamedExternal(conflict.external);
   await c.saved(nestedRename.child,source=>assert.equal(source,renamed),'c2-nested-retry-only-child-fragments-and-external-body');
   await waitEmbedded(c,fresh,nestedRename.to);const after=await embedFrame(c,fresh);
@@ -398,7 +400,7 @@ async function retryInlinePublication(c,{surface,file,from,to,before:original,af
       await c.relay.release(token);released=true;
       await until(async()=>assert.ok((await c.relay.events()).some(event=>event.kind==='released'&&event.token===token)),3000);
       negative=await until(async()=>assertInlineCheckpointFailure((await c.relay.events()).slice(offset),held),10000);
-      await c.ui.wait(`const p=document.querySelector(${JSON.stringify(dialog('View options'))}),input=p?.querySelector('input[aria-label="View name"]'),retry=p?[...p.querySelectorAll('button')].find(b=>b.textContent==='Retry save'):null;return input?.value===${JSON.stringify(to)}&&input.disabled&&/could not|failed|recovery|retained|retry/i.test(p?.querySelector('[role="alert"]')?.textContent??'')&&retry&&!retry.disabled&&retry.getClientRects().length;`,'Real '+label+' checkpoint failure retains exact name and actionable original retry',10000);
+      await c.ui.wait(`const p=document.querySelector(${JSON.stringify(dialog('View options'))}),input=p?.querySelector('input[aria-label="View name"]'),review=p?[...p.querySelectorAll('button')].find(b=>b.textContent==='Review retained changes'):null;return input?.value===${JSON.stringify(to)}&&input.disabled&&/could not|failed|recovery|retained/i.test(p?.querySelector('[role="alert"]')?.textContent??'')&&review&&!review.disabled&&review.getClientRects().length;`,'A terminal '+label+' checkpoint failure retains the exact name for read-only review',10000);
       failed=await publicationFrame(c,scope,surface);assertInlinePublicationFrame(before,failed,{file,name:from,failed:true});
       await delay(250);assertInlinePublicationFrame(before,await publicationFrame(c,scope,surface),{file,name:from,failed:true});
       assert.equal(await c.read(file),original);assert.equal(await c.read('A.md'),aBefore);
@@ -412,15 +414,18 @@ async function retryInlinePublication(c,{surface,file,from,to,before:original,af
   await c.saved(file,source=>assert.equal(source,original),label+'-failed-inline-source-not-durable');
   const afterFault=await c.cdp.evaluate(`(async()=>{const v=await window.zorid.getVault();return {vault:v.path,entry:await window.zorid.stat(v.path,${JSON.stringify(file)})};})()`);
   assert.equal(afterFault.vault,c.vault);assert.equal(afterFault.entry.entryId,observed.entry.entryId);assert.equal(afterFault.entry.revision,observed.entry.revision);
-  // One normal request, one original retained retry. Never retype the name or
-  // reopen a replacement session to make a failed command look successful.
-  await c.ui.button('Retry save',dialog('View options'));
-  await c.saved(file,source=>assert.equal(source,desired),label+'-original-retry-exact-whole-note');
+  // The access denial is terminal, so inspect/copy the exact accepted source
+  // and resolve it through the normal shared Save command. Review never writes.
+  const inlineConfiguration=source=>{const matches=[...source.matchAll(/^```base\n([\s\S]*?)^```/gm)];assert.equal(matches.length,1,'The owned publication fixture has one exact fence');return matches[0][1];};
+  await reviewRetainedConfiguration(c,dialog('View options'),{saved:inlineConfiguration(original),accepted:inlineConfiguration(desired),currentIncludes:to,file,physical:original});
+  assert.equal(await c.read(file),original);assert.equal(await c.read('A.md'),aBefore);
+  await c.ui.key('s',{modifiers:MOD.meta});
+  await c.saved(file,source=>assert.equal(source,desired),label+'-ordinary-save-original-intent-exact-whole-note');
   const replay=assertOriginalInlineCheckpointRetry((await c.relay.events()).slice(offset),{held,negative});
   await dismiss(c,'View options');await waitEmbedded(c,scope,to);
   const after=await publicationFrame(c,scope,surface);assertInlinePublicationFrame(before,after,{file,name:to});
   assert.equal(await c.read('A.md'),aBefore);assert.deepEqual(await ownedVaultPaths(c),pathsBefore);
-  c.evidence.checks.push({name:label+'-one-ui-intent-original-continuation',file,requestedName:to,renameSubmissions:1,originalRetryClicks:1,before,failed,after,held,negative,replay,limitation:'A real failed post-prepare checkpoint acknowledgement and original retry; not projection failure, arbitrary disk failure or power-loss coverage.'});
+  c.evidence.checks.push({name:label+'-one-ui-intent-original-continuation',file,requestedName:to,renameSubmissions:1,manualRetryClicks:0,readOnlyReviewCopies:1,ordinarySaveCommands:1,before,failed,after,held,negative,replay,limitation:'A real terminal access-denied checkpoint acknowledgement resolved by read-only Review/Copy and ordinary Save of its original intent; not automatic host/admission recovery, projection failure, arbitrary disk failure or power-loss coverage.'});
 }
 async function showPublicationHover(c,name){
   await open(c,hoverPublication.launcher);

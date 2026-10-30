@@ -7,7 +7,9 @@ request and unselected reply byte unchanged. It never substitutes a result,
 acknowledgement, row set, capability or native error.
 
 The coordinator must freeze matching source/frontend/native artifacts and grant
-the runtime slot. The common runner's reviewed relay/process-tree seam is required.
+the runtime slot. Updated terminal-review paths additionally require the reviewed
+hidden-menu Save fix and explicit summary-commit passivity fix in product pins
+`3b49949f` → `2896086d`; those changes are separate from this test-only campaign. The common runner's reviewed relay/process-tree seam is required.
 The campaign never builds or runs independently selected artifacts.
 
 ```sh
@@ -22,7 +24,7 @@ node tests/bases-electron-recovery-integration/run.mjs \
 
 | Scenario | Interruption and independent oracle |
 | --- | --- |
-| Failed checkpoint ACK, newer B, original retry | Hold only the real inert `prepare_intent` reply for exact A bytes. Type B in the same mounted editor and let its 250ms debounce elapse while A is pending. Set only the owned disposable `.zorid/vault.lock` to mode0000 and release the unchanged prepared reply. Require a genuine `checkpoint_storage`/`commit_uncertain:true` checkpoint CAS response, visible Retry and exact disabled B draft. Restore the exact inode's original mode in `finally`, then verify whole physical/bridge source S0 before clicking Retry once. The identical checkpoint CAS command/body must succeed before the original native A token commits, followed by one automatic B continuation. Check whole B, every unrelated fixture, visible value12, normal close/quit and fresh-launch readback. No retyping, replacement editor or alternative retry path can satisfy this case. |
+| Terminal checkpoint ACK, Review/Copy, ordinary Save, explicit raw B | Hold only the real inert `prepare_intent` reply for exact A bytes. Type B in the same mounted editor and let its 250ms debounce elapse while A is pending. Set only the owned disposable `.zorid/vault.lock` to mode0000 and release the unchanged prepared reply. Require a genuine `checkpoint_storage`/`commit_uncertain:true` checkpoint CAS response, retained disabled B and read-only Review/Copy. Restore the exact inode's original mode in `finally`; whole physical/bridge source must still be S0. Review must expose exact S0/A/B, Copy must acknowledge its clipboard write, and neither action may dispatch a native mutation/checkpoint request or replacement intent, with a normal-bridge read barrier before the final event comparison. Use the ordinary Save current changes command-palette action to settle only A; the identical checkpoint CAS command/body must succeed before the original native A token commits. B must remain raw/unsubmitted for a bounded interval, then a normal explicit Tab commit saves B without retyping or replacing the editor. Check whole B, every unrelated fixture, visible value12, normal close/quit and fresh-launch readback. This access-denial case is terminal under the strict retry policy; it does not establish automatic host/admission recovery. |
 | Accepted A, newer B, close | Arm exact saved Base entry/path and exact A bytes. Observe its real prepared token and committed native receipt, hold only that successful reply, type B through the mounted summary editor and request tab close. The panel retains B while disk contains A. Release the same encoded reply; exactly one A and one B write finish. Close safely, quit normally and verify exact B after restart. |
 | Lost New reply, restart | Arm the exact destination and complete template digest. Suppress the first genuine successful create reply, gracefully stop that real host before presenting EOF, and observe mounted New uncertainty/close refusal. Repeated New cannot create a second note through the fenced transport. A separately labeled forced app shutdown and restart recovers the durable requested checkpoint. The native replay must have the same command/body, operation ID, entry ID, revision and receipt sequence; only one file with exact template bytes exists. |
 
@@ -43,24 +45,31 @@ After the prepared reply, `NoteDurableState.resume` must checkpoint `op.ref`
 before querying or committing it. Native checkpoint CAS freshly opens the vault
 lock read/write before Store CAS. Mode0000 denies that open and maps to genuine
 `checkpoint_storage` uncertainty. This is a failed checkpoint ACK, not a logical
-commit with pending public-file publication. Ordinary summary saves do not carry
-a conditional-source guard; denying public-folder access would not prove this
-boundary. The public sources, private directory, database and actor files remain
+commit with pending public-file publication. The accepted configuration already retains its original saved-source guard;
+denying public-folder access would not isolate this checkpoint boundary. The public sources, private directory, database and actor files remain
 accessible. No production guard or semantic fault API is added for the test.
 
 The expected S0/A/B are authored whole strings preserving the comment, unknown
 root sentinel and unrelated summary/view. The DOM backend node ID checks that the
 same summary panel retains B. After restoring lock permissions, whole physical
-and normal-bridge source must still equal S0 before Retry. A failed checkpoint
+and normal-bridge source must still equal S0 before Review/Copy and ordinary Save. A failed checkpoint
 frame and a successful retry must have identical command and opaque body hashes
 (same key, expected/next revision and saved state). That replay must precede A's
 successful commit with its original held token. A is prepared once, then exactly
-one B preparation and ordered A/B successful receipts are required. Additional
+one explicit B preparation and ordered A/B successful receipts are required. B
+must remain unsubmitted after the ordinary Save acknowledges A until the user
+explicitly commits its preserved raw input. Additional
 checkpoint transitions are expected; a new checkpoint request cannot substitute
 for replay of the failed request. This records exact native continuation rather
-than treating one UI click as a physical-write counter.
-A's intermediate physical bytes need not be sampled between its receipt and B;
-no unobserved intermediate physical readback is claimed.
+than treating a Review, Copy or Save command as a physical-write counter. The
+Copy check records the clipboard API acknowledgement, not independent OS
+clipboard readback.
+A's intermediate whole physical and normal-bridge source is read back before B;
+it remains exact A throughout a further350ms raw-input hold before B's explicit
+commit. Review/Copy additionally requires unchanged native write-request and response
+frames after a normal-bridge read barrier. The relay records only write method,
+operation/checkpoint identities and command/body digests before forwarding; it
+never logs source bodies or changes a forwarded request.
 
 The relay consumes the fault before restart. A 15 second hold watchdog records
 failure and releases the **same genuine frame**, below the production 30 second
@@ -77,11 +86,13 @@ claimed crash-durable before its checkpoint can run.
 Pure protocol checks require no application or native executable:
 
 ```sh
-node --test tests/bases-electron-recovery-integration/protocol.test.mjs \
-  tests/bases-electron-recovery-integration/relay-process.test.mjs
+node --test --test-concurrency=1 tests/bases-electron-recovery-integration/protocol.test.mjs \
+  tests/bases-electron-recovery-integration/relay-process.test.mjs \
+  tests/bases-electron-recovery-integration/configuration-review.test.mjs
 ```
 
-Those checks verify framing, arming, committed/prepared success selection and the watchdog. The
+Those checks verify framing, arming, committed/prepared success selection, request-digest
+evidence without source bodies, and the watchdog. The
 subprocess check uses an explicitly simulated Node peer to verify pipe forwarding
 and EOF cleanup; its invented unit receipt is not a Rust/native result. Authoring
 or passing helper checks does not complete any runtime acceptance gate. The

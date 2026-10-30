@@ -44,6 +44,7 @@ const parser=new Frames();for await(const chunk of process.stdin)for(const frame
   const [code,signal]=await closed;assert.equal(code,0,Buffer.concat(errors).toString());assert.equal(signal,null);
   assert.deepEqual(Buffer.concat(chunks),Buffer.concat([initial,echo]),'The selected simulated success frame never reached main');
   const events=await relay.events();assert.equal(events.filter(value=>value.kind==='dropped'&&value.token===token).length,1);
+  const dispatched=events.filter(value=>value.kind==='native-write-request');assert.equal(dispatched.length,1);assert.equal(dispatched[0].method,'file_command');assert.equal(dispatched[0].operationId,'mock-operation');assert.equal(dispatched[0].bodySha256,digest(payload));assert.match(dispatched[0].commandSha256,/^[a-f0-9]{64}$/);assert.equal(JSON.stringify(dispatched[0]).includes(payload.toString()),false,'Request evidence logs a digest, never source bytes');assert.ok(events.indexOf(dispatched[0])<events.findIndex(value=>value.kind==='dropped'));
   assert.ok(events.some(value=>value.kind==='drop-child-closed'&&value.exitCode===0&&value.signal===null));
   assert.ok(events.some(value=>value.kind==='closed'&&value.dropped===true&&value.failed===false));
   assert.deepEqual(events.filter(value=>value.kind==='relay-failed'),[]);
@@ -102,6 +103,9 @@ let attempts=0;const parser=new Frames();for await(const chunk of process.stdin)
   child.stdin.end();const [code,signal]=await closed;assert.equal(code,0,Buffer.concat(errors).toString());assert.equal(signal,null);
   const events=await relay.events(),checkpointEvents=events.filter(event=>event.kind==='native-checkpoint-response');
   assert.equal(checkpointEvents.length,2);const[failure,success]=checkpointEvents;
+  const dispatched=events.filter(value=>value.kind==='native-write-request');assert.deepEqual(dispatched.map(value=>value.method),['prepare_intent','checkpoint_cas','checkpoint_cas']);
+  for(const request of dispatched.slice(1)){assert.equal(request.key,command.key);assert.equal(request.expectedRevision,command.expected_revision);assert.equal(request.nextRevision,command.next_revision);assert.equal(request.commandSha256,digest(Buffer.from(JSON.stringify(command))));assert.equal(request.bodySha256,digest(checkpointBody));assert.equal(JSON.stringify(request).includes(checkpointBody.toString()),false);}
+  assert.ok(events.indexOf(dispatched[0])<events.findIndex(value=>value.kind==='native-prepared-write'));assert.ok(events.indexOf(dispatched[1])<events.indexOf(failure));assert.ok(events.indexOf(dispatched[2])<events.indexOf(success));
   assert.equal(failure.ok,false);assert.equal(failure.errorCode,'checkpoint_storage');assert.equal(failure.commitUncertain,true);assert.equal(success.ok,true);
   for(const row of checkpointEvents){assert.equal(row.key,command.key);assert.equal(row.commandSha256,digest(Buffer.from(JSON.stringify(command))));assert.equal(row.bodySha256,digest(checkpointBody));}
   assert.equal(failure.responseSha256,digest(rejected));assert.equal(success.responseSha256,digest(replayed));

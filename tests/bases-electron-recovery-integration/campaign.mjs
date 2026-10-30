@@ -31,8 +31,35 @@ async function event(c,kind,token,timeout=10000){return until(async()=>{const fo
 async function noFaults(c){const events=await c.relay.events();assert.deepEqual(events.filter(value=>['watchdog-released','relay-failed'].includes(value.kind)),[],'Relay failures cannot satisfy a product acceptance gate');return events;}
 async function stat(c,file){return c.cdp.evaluate(`(async()=>{const v=await window.zorid.getVault();return window.zorid.stat(v.path,${JSON.stringify(file)});})()`);}
 
+export function retainedConfigurationReviewFrame(document,scope){
+  const roots=[...document.querySelectorAll(scope)];if(roots.length!==1)return false;
+  const root=roots[0],review=root.querySelector('.bases-configuration-review');if(!review)return false;
+  const read=label=>{const fields=[...review.querySelectorAll('textarea')].filter(field=>field.getAttribute('aria-label')===label);return fields.length===1?{text:fields[0].value,readOnly:fields[0].readOnly}:null;};
+  const visible=node=>!!node.isConnected&&!!node.getClientRects().length&&!node.closest('[hidden],[inert]');
+  return{saved:read('Original saved configuration'),accepted:read('Accepted configuration'),current:read('Current retained input'),retryControls:[...root.querySelectorAll('button')].filter(node=>visible(node)&&node.textContent==='Retry save').length,copyControls:[...review.querySelectorAll('button')].filter(node=>visible(node)&&!node.matches(':disabled')&&!node.closest('[aria-disabled="true"]')).map(node=>node.textContent),status:review.querySelector('[role="status"]')?.textContent??''};
+}
+export function assertRetainedConfigurationReview(frame,{saved,accepted,current,currentIncludes}){
+  assert.ok(frame,'One retained configuration review exists');
+  assert.deepEqual(frame.saved,{text:saved,readOnly:true});assert.deepEqual(frame.accepted,{text:accepted,readOnly:true});assert.equal(frame.retryControls,0);
+  if(current!==undefined)assert.deepEqual(frame.current,{text:current,readOnly:true});
+  if(currentIncludes!==undefined){assert.equal(frame.current?.readOnly,true);assert.ok(frame.current.text.includes(currentIncludes));}
+  assert.ok(frame.copyControls.includes('Copy accepted configuration'));
+}
+export async function reviewRetainedConfiguration(c,scope,expected){
+  const mutationFrames=events=>events.filter(event=>['native-write-request','native-prepared-write','native-mutation-response','native-checkpoint-response'].includes(event.kind));
+  assert.ok(c.relay,'Read-only native review requires its request-observing relay');
+  const beforeEvents=await c.relay.events();assert.ok(beforeEvents.some(event=>event.kind==='native-write-request'),'The relay must already record the original accepted write request');
+  const before=mutationFrames(beforeEvents);
+  await c.ui.button('Review retained changes',scope);
+  const frame=await c.ui.wait(`return (${retainedConfigurationReviewFrame.toString()})(document,${JSON.stringify(scope)});`,'Read-only exact accepted configuration review');assertRetainedConfigurationReview(frame,expected);
+  await c.ui.button('Copy accepted configuration',scope);
+  await c.ui.wait(`const root=document.querySelector(${JSON.stringify(scope)}),review=root?.querySelector('.bases-configuration-review');return review?.querySelector('[role="status"]')?.textContent==='Copied.';`,'Copy accepts the exact retained configuration without a save');
+  if(expected.file)await c.saved(expected.file,source=>assert.equal(source,expected.physical),'read-only-review-copy-normal-bridge-source-barrier');
+  assert.deepEqual(mutationFrames(await c.relay.events()),before,'Review/Copy dispatches no native mutation/checkpoint request or replacement intent after its normal bridge read');
+  c.evidence.checks.push({name:'read-only-retained-configuration-review-copy',scope,frame,copyAction:'Clipboard writeText ACK; independent OS clipboard readback is not measured',sourceMutationDispatches:0,observedNativeWriteResponses:0});return frame;
+}
 async function summaryFrame(c){
-  return c.ui.dom(`const p=document.querySelector(${JSON.stringify(panel)}),input=p?.querySelector('textarea[aria-label="Summary expression"]'),visible=p?.querySelector('.cm-content[aria-label="Summary expression"]'),retry=p?[...p.querySelectorAll('button')].find(b=>b.textContent==='Retry save'):null;return p?{busy:p.getAttribute('aria-busy'),draft:input?.value,visibleDraft:visible?.textContent,disabled:input?.disabled,readonly:visible?.getAttribute('aria-readonly'),error:p.querySelector('[role="alert"]')?.textContent,retry:!!(retry&&!retry.hidden&&!retry.disabled&&retry.getClientRects().length)}:null;`);
+  return c.ui.dom(`const p=document.querySelector(${JSON.stringify(panel)}),input=p?.querySelector('textarea[aria-label="Summary expression"]'),visible=p?.querySelector('.cm-content[aria-label="Summary expression"]'),review=p?[...p.querySelectorAll('button')].find(b=>b.textContent==='Review retained changes'):null;return p?{busy:p.getAttribute('aria-busy'),draft:input?.value,visibleDraft:visible?.textContent,disabled:input?.disabled,readonly:visible?.getAttribute('aria-readonly'),error:p.querySelector('[role="alert"]')?.textContent,review:!!(review&&!review.hidden&&!review.disabled&&review.getClientRects().length),manualRetry:[...p.querySelectorAll('button')].some(b=>b.textContent==='Retry save'&&!b.hidden)}:null;`);
 }
 async function summaryPanelIdentity(c){
   // CDP DOM identity is passive: no property, focus, event or semantic API is injected.
@@ -69,34 +96,42 @@ async function failedLiveWriteWithNewerDraft(c){
     c.evidence.actions.push({action:'owned-negative-checkpoint-lock-access',lock,dev:identity.dev,ino:identity.ino,originalMode:mode,mode:'0000',phase:'after-inert-prepare-before-ref-checkpoint',at:Date.now()});
     await c.relay.release(token);await event(c,'released',token,3000);
     negative=await until(async()=>{const row=(await c.relay.events()).slice(offset).find(e=>e.kind==='native-checkpoint-response'&&e.key==='note/v1/'+before.entryId&&!e.ok);assert.ok(row);assert.equal(row.errorCode,'checkpoint_storage');assert.equal(row.commitUncertain,true);return row;},10000);
-    await c.ui.wait(`const p=document.querySelector(${JSON.stringify(panel)}),retry=p?[...p.querySelectorAll('button')].find(b=>b.textContent==='Retry save'):null;return p?.getAttribute('aria-busy')==='false'&&!!p.querySelector('[role="alert"]')?.textContent?.trim()&&retry&&!retry.hidden&&!retry.disabled;`,'Real uncertain checkpoint error exposes original summary retry',10000);
-    failed=await summaryFrame(c);assert.equal(failed.draft,'values.sum() + 7');assert.equal(failed.visibleDraft,failed.draft);assert.equal(failed.disabled,true);assert.equal(failed.readonly,'true');assert.equal(failed.retry,true);assert.equal(await summaryPanelIdentity(c),panelId);
+    await c.ui.wait(`const p=document.querySelector(${JSON.stringify(panel)}),review=p?[...p.querySelectorAll('button')].find(b=>b.textContent==='Review retained changes'):null;return p?.getAttribute('aria-busy')==='false'&&!!p.querySelector('[role="alert"]')?.textContent?.trim()&&review&&!review.hidden&&!review.disabled;`,'A terminal checkpoint fault exposes read-only retained summary review',10000);
+    failed=await summaryFrame(c);assert.equal(failed.draft,'values.sum() + 7');assert.equal(failed.visibleDraft,failed.draft);assert.equal(failed.disabled,true);assert.equal(failed.readonly,'true');assert.equal(failed.review,true);assert.equal(failed.manualRetry,false);assert.equal(await summaryPanelIdentity(c),panelId);
     const events=(await c.relay.events()).slice(offset);assert.equal(events.filter(e=>e.kind==='native-mutation-response'&&e.ok&&e.state==='committed'&&e.preparedBodySha256===digest(Buffer.from(failedA))).length,0,'Failed checkpoint acknowledgement must precede any successful A commit');
     await c.screenshot('r00-genuine-checkpoint-error-retains-newer-summary-draft');
   }finally{
     await sameLock();await fs.chmod(lock,mode);assert.equal((await sameLock()).mode&0o7777,mode);
     c.evidence.actions.push({action:'restore-owned-checkpoint-lock-access',lock,dev:identity.dev,ino:identity.ino,mode,at:Date.now()});
   }
-  // Restore the exact original inode and mode before normal bridge readback and retry.
+  // Access-denied checkpoint_storage is terminal under the strict retry policy.
+  // Review/Copy never retries it. After restoring access, ordinary Save settles
+  // accepted A; newer raw B requires its own explicit commit in the same editor.
   await c.saved(failedPath,source=>assert.equal(source,failedBase),'failed-summary-restored-original-physical-and-logical-source');
-  await c.ui.button('Retry save',panel);
-  await c.saved(failedPath,source=>assert.equal(source,failedB),'failed-summary-original-retry-automatically-continues-exact-newer-B');
-  await c.ui.wait(`const p=document.querySelector(${JSON.stringify(panel)}),input=p?.querySelector('textarea[aria-label="Summary expression"]');return p?.getAttribute('aria-busy')==='false'&&input?.value==='values.sum() + 7'&&!input.disabled&&p.querySelector('[role="alert"]')?.textContent==='';`,'Exact newer B acknowledged without retyping/reopening/retrying again');
-  assert.equal(await summaryPanelIdentity(c),panelId);
+  await reviewRetainedConfiguration(c,panel,{saved:failedBase,accepted:failedA,current:'Summary name: Total\nSummary expression: values.sum() + 7',file:failedPath,physical:failedBase});
+  assert.equal(await c.read(failedPath),failedBase,'Review/Copy does not publish A or newer B');
+  await c.ui.command('Save current changes');
+  await c.saved(failedPath,source=>assert.equal(source,failedA),'failed-summary-ordinary-save-settles-only-original-A');
+  await c.ui.wait(`const p=document.querySelector(${JSON.stringify(panel)}),input=p?.querySelector('textarea[aria-label="Summary expression"]');return p?.getAttribute('aria-busy')==='false'&&input?.value==='values.sum() + 7'&&!input.disabled;`,'Original A ACK retains editable raw B without authoring it');
+  await delay(350);assert.equal(await c.read(failedPath),failedA,'A shared Save acknowledgement cannot automatically submit newer raw B');assert.equal(await summaryPanelIdentity(c),panelId,'The original panel retains B through ordinary A resolution');
+  await c.ui.click(`${panel} .cm-content[aria-label="Summary expression"]`);await c.ui.key('Tab');
+  await c.saved(failedPath,source=>assert.equal(source,failedB),'failed-summary-explicit-raw-B-commit-after-original-A-resolution');
+  // Opening the normal palette requested an outside close. Once explicit B
+  // is acknowledged, honor that request without manufacturing a replacement.
+  await c.ui.wait(`return !document.querySelector(${JSON.stringify(panel)});`,'Explicit B acknowledgement finishes the previously requested normal close');
   const events=(await noFaults(c)).slice(offset),commits=events.filter(e=>e.kind==='native-mutation-response'&&e.method==='commit_intent'&&e.ok&&e.state==='committed'&&[digest(Buffer.from(failedA)),digest(Buffer.from(failedB))].includes(e.preparedBodySha256));
-  assert.deepEqual(commits.map(e=>e.preparedBodySha256),[digest(Buffer.from(failedA)),digest(Buffer.from(failedB))],'Original A retry commits before the one automatic newer B continuation');
+  assert.deepEqual(commits.map(e=>e.preparedBodySha256),[digest(Buffer.from(failedA)),digest(Buffer.from(failedB))],'Ordinary Save commits original A before the explicit newer raw B commit');
   const checkpointReplay=events.find(e=>e.kind==='native-checkpoint-response'&&e.ok&&e.key===negative.key&&e.commandSha256===negative.commandSha256&&e.bodySha256===negative.bodySha256);
-  assert.ok(checkpointReplay,'Retry first replays the identical failed checkpoint CAS command and opaque body');
+  assert.ok(checkpointReplay,'Ordinary Save first replays the identical failed checkpoint CAS command and opaque body');
   assert.ok(events.indexOf(checkpointReplay)>events.findIndex(e=>e.responseSha256===negative.responseSha256)&&events.indexOf(checkpointReplay)<events.indexOf(commits[0]),'Exact checkpoint replay succeeds before the original A commit');
   assert.equal(commits[0].referenceToken,held.nativeIntentToken,'A commits with the original held preparation token instead of replanning');
   const prepared=events.filter(e=>e.kind==='native-prepared-write'&&e.entryId===before.entryId);
   assert.equal(prepared.filter(e=>e.bodySha256===digest(Buffer.from(failedA))).length,1,'A is prepared only once; the original reference is retried');
   assert.equal(prepared.filter(e=>e.bodySha256===digest(Buffer.from(failedB))).length,1);
   for(const[file,source]of sources)await c.saved(file,current=>assert.equal(current,file===failedPath?failedB:source),'failed-summary-whole-source-and-unrelated-fixture-'+file);
-  await c.ui.button('Back to summaries',panel);await c.ui.wait(`return !document.querySelector(${JSON.stringify(panel)})&&!!document.querySelector('.zorid-bases-summary-picker');`,'Failed-save continuation safely returns to chooser');await c.ui.key('Escape');
   await c.ui.wait(`const e=document.querySelector('${active} .zorid-bases-table-footer [data-summary-property="note.score"]');return e?.querySelector('.summary-function-name')?.textContent==='Total'&&e.querySelector('.summary-function-value')?.textContent==='12';`,'Saved B summary has independent two-note value12');
   await c.ui.click(close);await c.ui.wait(`return !document.querySelector(${JSON.stringify(active)});`,'Acknowledged failed-save continuation closes normally');
-  c.evidence.checks.push({name:'genuine-native-summary-checkpoint-failure-newer-debounce-original-token-retry',held:plain(held),failure:plain(negative),pending,failed,panelBackendNodeId:panelId,prepared,checkpointReplay:plain(checkpointReplay),commits,retryClicks:1,scope:'Real failed checkpoint ACK from owned lock access denial; not postcommit publication, SQLite/device failure, power loss or synthetic reply'});
+  c.evidence.checks.push({name:'genuine-native-summary-terminal-checkpoint-review-save-and-explicit-raw-B',held:plain(held),failure:plain(negative),pending,failed,panelBackendNodeId:panelId,prepared,checkpointReplay:plain(checkpointReplay),commits,manualRetryClicks:0,ordinarySaveCommands:1,explicitRawBCommits:1,scope:'Real failed checkpoint ACK from owned lock access denial; not postcommit publication, SQLite/device failure, power loss or synthetic reply'});
   await c.quit('failed-summary-normal-quit-after-B');
   await c.launch('failed-summary-restart-readback');await c.ui.openFile(failedPath);await c.ui.idle();
   for(const[file,source]of sources)await c.saved(file,current=>assert.equal(current,file===failedPath?failedB:source),'failed-summary-restart-exact-fixture-'+file);
@@ -183,6 +218,6 @@ async function droppedCreateAndRestart(c){
 
 export async function journey(c){
   assert.ok(c.relay&&c.forceShutdown,'Common runner must provide its reviewed test-only relay/process ownership seam');
-  c.evidence.limitations.push('The failed-summary phase denies only the owned vault.lock open before the prepared-ref checkpoint and requires genuine uncertain checkpoint_storage. This is a failed checkpoint ACK, not postcommit publication, SQLite/device failure or power-loss coverage.', 'Other held/dropped responses follow real core success; those transport cases are not failed saves. A newer draft blocked behind a native call is not claimed crash-durable before its checkpoint can run.');
+  c.evidence.limitations.push('The failed-summary phase denies only the owned vault.lock open before the prepared-ref checkpoint and requires genuine uncertain checkpoint_storage. The access denial is terminal under the strict retry policy: read-only Review/Copy and ordinary Save resolve accepted A, and raw B requires explicit commit. This is not routine host/admission recovery, postcommit publication, SQLite/device failure or power-loss coverage.', 'Other held/dropped responses follow real core success; those transport cases are not failed saves. A newer draft blocked behind a native call is not claimed crash-durable before its checkpoint can run.');
   await failedLiveWriteWithNewerDraft(c);await heldWriteAndClose(c);await droppedCreateAndRestart(c);await noFaults(c);
 }

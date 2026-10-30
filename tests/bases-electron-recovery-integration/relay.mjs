@@ -34,6 +34,11 @@ const input = (async()=>{
   for await (const chunk of process.stdin) for (const frame of requests.push(chunk)) {
     if(dropped)break;
     selection.request(frame, await readControl('arm.json'));
+    const command=frame.header.command;
+    if(['prepare_intent','commit_intent','file_command','checkpoint_cas'].includes(command.method))await event({kind:'native-write-request',method:command.method,requestId:frame.header.request_id,
+      ...(command.operation_id??command.reference?.operation_id??command.family?.request?.operation_id?{operationId:command.operation_id??command.reference?.operation_id??command.family?.request?.operation_id}:{}),
+      ...(command.method==='checkpoint_cas'?{key:command.key,expectedRevision:command.expected_revision,nextRevision:command.next_revision}:{}),
+      commandSha256:digest(Buffer.from(JSON.stringify(command))),bodySha256:digest(frame.body)});
     requestCount++; requestChain=digest(Buffer.from(requestChain+digest(frame.raw)));
     await write(child.stdin,frame.raw);
   }
