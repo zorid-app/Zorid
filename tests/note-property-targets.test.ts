@@ -159,7 +159,7 @@ test('destroyed and retired panels ignore queued same-frame stale invalidation',
 
 /** A cold filesystem inventory has paths/stats but no admitted core identity.
  * Only the separate durable provider may identify a note for collection reads. */
-async function collectionFixture(options:{listedIdentity?:boolean;ordinary?:boolean}={}){
+async function collectionFixture(options:{listedIdentity?:boolean;ordinary?:boolean;propertyTargetsAvailable?:boolean}={}){
   type Read=import('../src/core/durable-writes.ts').DurableWriteRead;
   const raw='---\n_id: untrusted-frontmatter-id\n_type: Misleading type label\nDeadline: null\n---\nBody';
   let selectedPath='Note.md',owner=true,changed=0,ordinary=options.ordinary??false;
@@ -192,8 +192,11 @@ async function collectionFixture(options:{listedIdentity?:boolean;ordinary?:bool
     if(ordinary)throw Object.assign(new Error('Ordinary note'),{source:'host',code:'collection_not_found',commitUncertain:false});
     mutateReply?.(reply);return reply;
   }};
+  if(options.propertyTargetsAvailable)Object.defineProperty(adapter,'documentSemantics',{value:{propertyTargetsAvailable:true} as DocumentService});
   const vault=new Vault(adapter);await vault.initialize();
-  const manager=createNotePropertyTargets({vault,getPath:()=>selectedPath,isCurrent:()=>owner,onChange:()=>changed++});
+  const manager=createNotePropertyTargets({vault,getPath:()=>selectedPath,isCurrent:()=>owner,onChange:()=>changed++,
+    // Hidden panes still refresh collection membership without opening relation queries.
+    ...(options.propertyTargetsAvailable?{clock:{capture:()=>({clockMs:10,timezone:'UTC'}),isVisible:()=>false,subscribeWake:()=>()=>{},scheduleAt:()=>()=>{}}}:{})});
   return{adapter,vault,manager,records,requests,reads,schema,get changed(){return changed;},select(path:string){selectedPath=path;},retire(){owner=false;},ordinary(){ordinary=true;},hold(fn:typeof onRequest){onRequest=fn;},fail(error:unknown){requestError=error;},reply(fn:typeof mutateReply){mutateReply=fn;}};
 }
 function gate(){let release!:()=>void,enter!:()=>void;const started=new Promise<void>(resolve=>{enter=resolve;}),pending=new Promise<void>(resolve=>{release=resolve;});return{started,pending,enter,release};}
@@ -306,3 +309,36 @@ test('Workspace managed setter completes its postcommit target refresh while inv
     assert.equal(f.requests.filter(command=>command.op==='set_entry').length,1);assert.equal(f.vault.entries.get(saved.path)!.revision,'r1');assert.equal(buffer.savedDurableWitness.revision,'r2');assert.equal(f.manager.getCollection()?.entry.fileRevision,'r2');assert.match(buffer.text,/Deadline: 2026-10-28/);assert.ok(buffer.text.endsWith('Body'));
   }finally{await f.manager.close();}
 });
+
+
+test('collection membership starts once when shared property targets are available',async()=>{
+  const f=await collectionFixture({listedIdentity:true,propertyTargetsAvailable:true});try{
+    await tick();assert.equal(f.requests.length,1,'initial shared invalidation owns the initial membership read');
+    assert.equal(f.manager.getCollection()?.entry.entryId,'trusted-note');
+  }finally{await f.manager.close();}
+});
+
+for(const propertyTargetsAvailable of [false,true]){
+  test(`one vault event starts one membership read (shared targets ${propertyTargetsAvailable})`,async()=>{
+    const f=await collectionFixture({listedIdentity:true,propertyTargetsAvailable});const held=gate();try{
+      await tick();const before=f.requests.length,reads=f.reads.length;
+      f.hold(async()=>{held.enter();await held.pending;});
+      await f.adapter.write('Other.md','first external edit');await f.vault.reload();await held.started;
+      assert.equal(f.requests.length,before+1);held.release();await tick();
+      assert.equal(f.requests.length,before+1,'the second subscription must not manufacture a newer invalidation');
+      assert.equal(f.reads.length,reads+1,'only one coherent by-ID read follows the membership response');
+      assert.equal(f.manager.getCollection()?.entry.entryId,'trusted-note');
+    }finally{held.release();await f.manager.close();}
+  });
+  test(`a later vault event still refreshes membership after the held read (shared targets ${propertyTargetsAvailable})`,async()=>{
+    const f=await collectionFixture({listedIdentity:true,propertyTargetsAvailable});const held=gate();try{
+      await tick();const before=f.requests.length;
+      f.hold(async()=>{held.enter();await held.pending;});
+      await f.adapter.write('Other.md','first external edit');await f.vault.reload();await held.started;
+      await f.adapter.write('Other.md','a newer external edit');await f.vault.reload();
+      assert.equal(f.requests.length,before+1,'newer event joins rather than overlapping the held request');
+      held.release();await tick();assert.equal(f.requests.length,before+2,'a genuine newer event must schedule a successor');
+      assert.equal(f.manager.getCollection()?.entry.entryId,'trusted-note');
+    }finally{held.release();await f.manager.close();}
+  });
+}

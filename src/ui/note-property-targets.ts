@@ -129,11 +129,13 @@ export function createNotePropertyTargets(options: {
       }
     });
   }
-  if(vault.adapter.databases){
+  // Shared target invalidation already requests membership. A second listener
+  // would mark that same event as newer work and force a duplicate read.
+  if(vault.adapter.databases&&!service?.propertyTargetsAvailable){
     for(const event of ['create','modify','delete','rename','ready']as const)stops.push(vault.on(event,requestCollection));
     // A later normal invalidation retries a failed initial identity/membership
     // read. No polling or automatic failure loop is introduced.
-    if(!service?.propertyTargetsAvailable)stops.push(vault.onMetadata(requestCollection));
+    stops.push(vault.onMetadata(requestCollection));
     requestCollection();
   }
   if (service?.propertyTargetsAvailable) {
