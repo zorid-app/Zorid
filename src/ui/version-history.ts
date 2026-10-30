@@ -1,11 +1,12 @@
 import type {RecoveryHistory,RecoveryVersion,RecoveryCursor} from '../platform/bridge';
 import {el,textButton} from './dom.ts';
+import {NoteLoadSupervisor} from './note-load-supervisor.ts';
 
 export interface VersionHistoryOptions {
   history:RecoveryHistory;
   entryId:string;
   isCurrent():boolean;
-  restore(content:string):Promise<'restored'|'save_changes'|'changed'>;
+  restore(content:string):Promise<'restored'|'saving'|'save_changes'|'changed'>;
 }
 
 /** Optional history browsing is separate from automatic interrupted-save recovery. */
@@ -19,11 +20,13 @@ export function openVersionHistory(options:VersionHistoryOptions):{close():void}
   const preview=el('textarea','version-history-preview');preview.readOnly=true;preview.setAttribute('aria-label','Version preview');
   const explanation=el('p','','Restoring replaces the current note with this version.');
   let closed=false,reading=false,listing=false,restoring=false,selected:RecoveryVersion|undefined,loaded:string|undefined,cursor:RecoveryCursor|undefined;
+  type ReadOwner={controller:AbortController;supervisor:NoteLoadSupervisor};
+  let readOwner:ReadOwner|undefined,listOwner:ReadOwner|undefined,stopAvailable=()=>{};
   let pages=0;
   const current=()=>!closed&&options.isCurrent();
   const close=()=>{
     if(closed||restoring)return;
-    closed=true;observer.disconnect();document.removeEventListener('keydown',keydown,true);overlay.remove();
+    closed=true;readOwner?.controller.abort();readOwner?.supervisor.stop();listOwner?.controller.abort();listOwner?.supervisor.stop();stopAvailable();observer.disconnect();document.removeEventListener('keydown',keydown,true);overlay.remove();
     if(previous?.isConnected)previous.focus();
   };
   const cancel=textButton('Close',close);
@@ -34,28 +37,32 @@ export function openVersionHistory(options:VersionHistoryOptions):{close():void}
   dialog.append(heading,message,sidebar,preview,explanation,actions);overlay.append(dialog);
   const buttons:HTMLButtonElement[]=[];
   const controls=()=>{
-    for(const button of buttons)button.disabled=reading||restoring;
+    for(const button of buttons)button.disabled=restoring;
     more.disabled=listing||restoring;cancel.disabled=restoring;restore.disabled=reading||restoring||loaded===undefined;
     dialog.setAttribute('aria-busy',String(listing||reading||restoring));
   };
   const check=()=>{if(!current()){close();return false;}return true;};
   async function select(version:RecoveryVersion):Promise<void>{
-    if(reading||restoring||!check())return;
-    selected=version;loaded=undefined;preview.value='';reading=true;message.textContent='';
+    if(restoring||!check())return;
+    readOwner?.controller.abort();readOwner?.supervisor.stop();
+    const owner:ReadOwner={controller:new AbortController(),supervisor:new NoteLoadSupervisor()};readOwner=owner;
+    version=Object.freeze({...version});selected=version;loaded=undefined;preview.value='';reading=true;message.textContent='';
     controls();
     try{
-      const result=await options.history.read(options.entryId,version.snapshotId);
+      const result=await owner.supervisor.run(()=>options.history.read(options.entryId,version.snapshotId),()=>{if(!current()||readOwner!==owner)throw new Error('History preview owner changed');},{signal:owner.controller.signal});
       if(!check())return;
       if(result.version.entryId!==options.entryId||result.version.snapshotId!==version.snapshotId||result.version.byteLength!==version.byteLength||result.version.capturedAtMs!==version.capturedAtMs||result.version.path!==version.path||typeof result.content!=='string')throw new Error('History selection changed');
       loaded=result.content;preview.value=loaded;
-    }catch(error){if(check()){console.error('Version preview unavailable',error);message.textContent='This version couldn’t be opened. Try selecting it again.';}}
-    finally{reading=false;if(current())controls();}
+    }catch(error){if(readOwner===owner&&!owner.controller.signal.aborted&&check()){console.error('Version preview unavailable',error);message.textContent='This saved version is unavailable.';}}
+    finally{owner.supervisor.stop();if(readOwner===owner){readOwner=undefined;reading=false;if(current())controls();}}
   }
   async function loadPage():Promise<void>{
     if(listing||restoring||!check())return;
+    const owner:ReadOwner={controller:new AbortController(),supervisor:new NoteLoadSupervisor()};listOwner=owner;
+    const request=Object.freeze({limit:20,...(cursor?{before:Object.freeze({...cursor})}:{})});
     listing=true;controls();message.textContent='';
     try{
-      const result=await options.history.list(options.entryId,{limit:20,...(cursor?{before:cursor}:{})});
+      const result=await owner.supervisor.run(()=>options.history.list(options.entryId,request),()=>{if(!current()||listOwner!==owner)throw new Error('History page owner changed');},{signal:owner.controller.signal});
       if(!check())return;
       cursor=result.nextCursor;pages++;
       for(const version of result.versions){
@@ -69,8 +76,8 @@ export function openVersionHistory(options:VersionHistoryOptions):{close():void}
       more.hidden=!cursor||pages>=50;
       if(!buttons.length)message.textContent='No saved versions are available for this note yet.';
       else if(cursor&&pages>=50)message.textContent='Only the most recent versions are shown.';
-    }catch(error){if(check()){console.error('Version history unavailable',error);message.textContent='Version history couldn’t be opened. Close this window and try again.';}}
-    finally{listing=false;if(current())controls();}
+    }catch(error){if(listOwner===owner&&!owner.controller.signal.aborted&&check()){console.error('Version history unavailable',error);message.textContent='Version history is unavailable.';}}
+    finally{owner.supervisor.stop();if(listOwner===owner){listOwner=undefined;listing=false;if(current())controls();}}
   }
   async function restoreSelected():Promise<void>{
     if(restoring||reading||!selected||loaded===undefined||!check())return;
@@ -78,9 +85,9 @@ export function openVersionHistory(options:VersionHistoryOptions):{close():void}
     try{
       const result=await options.restore(loaded);
       if(!current())return;
-      if(result==='restored'){restoring=false;close();return;}
-      message.textContent=result==='save_changes'?'Save your changes before restoring a version.':'This note changed. Close history and open it again before restoring.';
-    }catch(error){if(current()){console.error('Version restoration could not finish',error);message.textContent='Couldn’t finish restoring this version. Keep the note open and try saving it again.';}}
+      if(result==='restored'||result==='saving'){restoring=false;close();return;}
+      message.textContent=result==='save_changes'?'Your current changes were kept. Restoring is unavailable while they are unsaved.':'This note changed. Your current note was kept.';
+    }catch(error){if(current()){console.error('Version restoration could not finish',error);message.textContent='This version could not be restored. The note and your changes were kept.';}}
     finally{restoring=false;if(current())controls();else close();}
   }
   const keydown=(event:KeyboardEvent)=>{
@@ -95,6 +102,7 @@ export function openVersionHistory(options:VersionHistoryOptions):{close():void}
   };
   const observer=new MutationObserver(()=>{if(!current()&&!restoring)close();});
   document.body.append(overlay);observer.observe(document.body,{childList:true,subtree:true});
+  stopAvailable=options.history.subscribeAvailable?.(()=>{if(!check())return;readOwner?.supervisor.admissionAvailable();listOwner?.supervisor.admissionAvailable();})??(()=>{});
   document.addEventListener('keydown',keydown,true);cancel.focus();void loadPage();
   return{close};
 }

@@ -1,5 +1,6 @@
 'use strict';
 const { desktopDurableWrites } = require('./durable-writes.cjs');
+const {captureRecoveryList,captureRecoveryRead}=require('./recovery-history.cjs');
 const { desktopTextCreates } = require('./text-create.cjs');
 const { createDesktopDocumentSemantics } = require('./document-semantics.cjs');
 const {captureDatabaseRequest,isDatabaseMutation}=require('./databases.cjs');
@@ -170,6 +171,21 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
     async function drain() { while (pending.size) await Promise.allSettled([...pending]); }
     const context = Object.freeze({
       scope, durableWrites: writes, assertActive: () => allowed(),
+      recoveryHistoryAvailable:true,
+      recoveryList(entryId,options,assertCurrent){
+        const request=captureRecoveryList(entryId,options);
+        return invoke(()=>{
+          const accepted=dispatchOwners.getStore(),check=()=>{accepted?.();assertCurrent?.();};check();
+          return dispatchOwners.run(check,()=>guarded.recoveryList(request.entry_id,{limit:request.limit,...(request.before?{before:request.before}:{})}));
+        },null);
+      },
+      recoveryRead(entryId,snapshotId,assertCurrent){
+        const request=captureRecoveryRead(entryId,snapshotId);
+        return invoke(()=>{
+          const accepted=dispatchOwners.getStore(),check=()=>{accepted?.();assertCurrent?.();};check();
+          return dispatchOwners.run(check,()=>guarded.recoveryRead(request.entry_id,request.snapshot_id));
+        },null);
+      },
       async drainAccepted(){allowed();await drain();allowed();},
       ...(host.capabilities?.includes('conditional_saved_source_requests') === true ? {conditionalSavedSourceAvailable:true} : {}),
       ...(documents?{documentCommand}:{}),

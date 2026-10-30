@@ -1,3 +1,5 @@
+import {captureHistoryList,captureHistoryRead,decodeHistory} from './desktop-recovery-history.ts';
+import type {HistoryRequest} from './desktop-recovery-history.ts';
 import {createDesktopDurableTransport} from './desktop-durable-transport.ts';
 import {createDesktopIndependentDraftProvider} from './desktop-independent-drafts.ts';
 import {createDatabaseService} from '../core/databases.ts';
@@ -18,6 +20,7 @@ import type { VaultAdapter } from '../core/types';
 import type { DesktopBridge, DesktopVault, DesktopReconciliation, DesktopDurableContext } from './bridge';
 
 type ReadBudget={retries:number};
+const historyReadRunners=new WeakMap<import('./bridge').RecoveryHistory,(request:HistoryRequest,budget:ReadBudget)=>Promise<unknown>>();
 type AdapterReads=Required<Pick<VaultAdapter,'list'|'stat'|'read'|'readBinary'>>;
 // Replacement layers share one caller's retry budget without exposing it to
 // consumers or bypassing any layer's release and generation checks.
@@ -88,6 +91,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
     list:()=>bridge.list(info.path),stat:path=>bridge.stat(info.path,path),
     read:path=>bridge.read(info.path,path),readBinary:path=>bridge.readBinary(info.path,path),
   };
+  let recoveryHistory:import('./bridge').RecoveryHistory|undefined=bridge.recoveryList&&bridge.recoveryRead?{list:(entryId,options)=>bridge.recoveryList!(info.path,entryId,options),read:(entryId,snapshotId)=>bridge.recoveryRead!(info.path,entryId,snapshotId)}:undefined;
   let registerReadAdapter:((adapter:VaultAdapter)=>void)|undefined;
   let binary:ReturnType<typeof createDesktopBinaryStreams>|undefined;
   let databases:DatabaseService|undefined;
@@ -114,6 +118,14 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
     };
     const stopRecoveryReceiver=()=>{const stop=recoveryStop;recoveryStop=undefined;try{stop?.();}catch{/* A retired receiver cannot undo the backend acknowledgment. */}};
     const unavailable=(code:string,message:string)=>Object.assign(new Error(message),{code,source:'host',commitUncertain:true});
+    const historyListeners=new Set<()=>void>();let stopHistoryForward:(()=>void)|undefined,historyClosed=false;
+    const publishHistoryAvailable=()=>{if(historyClosed||readClosing)return;for(const listener of [...historyListeners])if(historyListeners.has(listener))try{listener();}catch{/* A presentation listener cannot undo scope recovery. */}};
+    const connectHistoryAvailable=()=>{
+      stopHistoryForward?.();stopHistoryForward=undefined;
+      const target=recovered?.recoveryHistory;
+      if(!historyClosed&&historyListeners.size&&target?.subscribeAvailable)stopHistoryForward=target.subscribeAvailable(()=>{if(!historyClosed&&recovered?.recoveryHistory===target)publishHistoryAvailable();});
+    };
+    const closeHistoryAvailable=()=>{historyClosed=true;stopHistoryForward?.();stopHistoryForward=undefined;historyListeners.clear();};
     let readClosing=false;
     const readWaiters=new Set<()=>void>();
     const wakeReads=()=>{for(const wake of readWaiters)wake();};
@@ -271,6 +283,23 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
       checkpoints:Object.freeze<DurableWrites['checkpoints']>({scope,load:key=>retainedCheckpoint('load',[key]),compareAndSwap:change=>retainedCheckpoint('compareAndSwap',[change]),list:options=>retainedCheckpoint('list',[options]),changes:options=>retainedCheckpoint('changes',[options])}),
     });
     noteReadRunners.set(durableWrites,readNote);
+    if(binding.recoveryHistoryAvailable===true){
+      const runHistory=(request:HistoryRequest,budget?:ReadBudget):Promise<unknown>=>readOnly(async shared=>{
+        const next=recovered?.recoveryHistory;
+        if(next){const runner=historyReadRunners.get(next);if(!runner)throw Object.assign(new Error('Recovered history capability is unavailable.'),{code:'invalid_durable_response',source:'protocol',commitUncertain:false});return runner(request,shared);}
+        const args=request.method==='recoveryList'?[request.entryId,request.options]:[request.entryId,request.snapshotId];
+        return decodeHistory(request,await call(request.method,...args));
+      },false,budget);
+      recoveryHistory=Object.freeze({
+        list:(entryId:string,options:Parameters<import('./bridge').RecoveryHistory['list']>[1])=>runHistory(captureHistoryList(entryId,options)) as ReturnType<import('./bridge').RecoveryHistory['list']>,
+        read:(entryId:string,snapshotId:string)=>runHistory(captureHistoryRead(entryId,snapshotId)) as ReturnType<import('./bridge').RecoveryHistory['read']>,
+        subscribeAvailable(listener:()=>void){
+          if(historyClosed||readClosing)return()=>{};historyListeners.add(listener);if(historyListeners.size===1)connectHistoryAvailable();
+          return()=>{historyListeners.delete(listener);if(!historyListeners.size){stopHistoryForward?.();stopHistoryForward=undefined;}};
+        },
+      });historyReadRunners.set(recoveryHistory,runHistory);
+    }
+
     savedSourceRunners.set(durableWrites,savedSource);
     let binaryDrained=false,documentsDrained=false,draftsDrained=false;
     type EntryCommand=Extract<DatabaseRequest,{op:'set_entry'}>;
@@ -412,7 +441,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
             if(!next||typeof next.admissionId!=='string'||!next.admissionId||next.admissionId===admissionId||next.admissionId.length>128
               ||!next.scope||next.scope.vaultId!==scope.vaultId||next.scope.clientId!==scope.clientId
               ||Object.keys(next.scope).length!==2)throw unavailable('durable_recovery_scope_changed','The recovered desktop context has another identity or scope.');
-            for(const capability of ['conditionalSavedSourceAvailable','databases','documentSemantics','documentMaintenance','metadataRowsAvailable','propertyTargetsAvailable','basePreviewAvailable','draftsAvailable'] as const)
+            for(const capability of ['recoveryHistoryAvailable','conditionalSavedSourceAvailable','databases','documentSemantics','documentMaintenance','metadataRowsAvailable','propertyTargetsAvailable','basePreviewAvailable','draftsAvailable'] as const)
               if(binding[capability]===true&&next[capability]!==true)throw unavailable('durable_recovery_scope_changed','The recovered desktop context is missing an admitted capability.');
             const selected=await bridge.getVault();
             if(selected?.path!==info.path)throw unavailable('durable_recovery_scope_changed','The selected vault changed during recovery.');
@@ -422,6 +451,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
             // cross this boundary. Native recovery positively retired old derived
             // owners; their closures never adopt replacement pin/runtime IDs.
             retainedTarget=target;recovered=fresh;released=true;recoveryNeeded=false;
+            connectHistoryAvailable();publishHistoryAvailable();
             stopRecoveryReceiver();recoveryListeners.clear();
             documentRuntime?.retire();drafts?.retire();
             if(replayEntries&&fresh.databases)replayEntries(fresh.databases);
@@ -447,7 +477,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
     };
     release=async()=>{
       readClosing=true;wakeReads();
-      try{await releaseOwned();}catch(error){if(!released&&!recovered&&!releasePending)readClosing=false;throw error;}
+      try{await releaseOwned();closeHistoryAvailable();}catch(error){if(!released&&!recovered&&!releasePending)readClosing=false;throw error;}
     };
     const directReads=adapterReads;
     const readAdapter=<K extends keyof AdapterReads>(method:K,path?:string,budget?:ReadBudget):ReturnType<AdapterReads[K]>=>readOnly(async shared=>{
@@ -464,7 +494,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
   const platform:PlatformVault={
     ...(release ? {release} : {}),
     ...(recovery?{recovery}:{}),
-    ...(bridge.recoveryList&&bridge.recoveryRead?{recoveryHistory:{list:(entryId,options)=>bridge.recoveryList!(info.path,entryId,options),read:(entryId,snapshotId)=>bridge.recoveryRead!(info.path,entryId,snapshotId)}}:{}),
+    ...(recoveryHistory?{recoveryHistory}:{}),
     ...(workBlocks?{workBlocks:workBlocks.service}:{}),
     ...(documents?{documentSemantics:documents.service}:{}),
     ...(databases?{databases}:{}),

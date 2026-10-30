@@ -482,7 +482,7 @@ class RustVaultService {
   withClientLease(reference, beforeRequest = () => {}) {
     const captured = Object.freeze({ local_store_id: reference.local_store_id, client_id: reference.client_id, token: reference.token });
     const context = { capabilities: this.capabilities?Object.freeze(this.capabilities.filter(value=>value!=='local_recovery_maintenance')):undefined, request: (command, bytes) => { beforeRequest(command); return this.request(command, bytes, captured, () => beforeRequest(command)); } };
-    const methods = ['documentDrafts', 'documentRuntime', 'changesAfter', 'rescan', 'reconcile', 'databaseCommand', 'workblockCommand', 'documentCommand', 'binaryCommand', 'fileCommand', 'createText', 'identity', 'readMetadata', 'readPath', 'readPresentedById', 'readEntryById', 'listSnapshot', 'listEntries', 'captureSavedSource', 'releaseSavedSource', 'listSavedSourceRequests', 'prepareIntent', 'commitIntent', 'queryIntent', 'listIntents', 'acknowledgeIntent',
+    const methods = ['recoveryList','recoveryRead','documentDrafts', 'documentRuntime', 'changesAfter', 'rescan', 'reconcile', 'databaseCommand', 'workblockCommand', 'documentCommand', 'binaryCommand', 'fileCommand', 'createText', 'identity', 'readMetadata', 'readPath', 'readPresentedById', 'readEntryById', 'listSnapshot', 'listEntries', 'captureSavedSource', 'releaseSavedSource', 'listSavedSourceRequests', 'prepareIntent', 'commitIntent', 'queryIntent', 'listIntents', 'acknowledgeIntent',
       'checkpointLoad', 'checkpointCompareAndSwap', 'checkpointList', 'checkpointChanges'];
     return Object.freeze({ capabilities: context.capabilities, ...Object.fromEntries(methods.map(name => [name, (...args) => RustVaultService.prototype[name].apply(context, args)])) });
   }

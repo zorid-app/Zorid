@@ -20,7 +20,7 @@ const independentJournal=async request=>{
     &&typeof reply.error.code==='string'&&/^[a-z_]{1,64}$/.test(reply.error.code)&&typeof reply.error.commitUncertain==='boolean'&&reply.error.source==='main')return reply;
   return journalFailure('invalid_draft_response',true,'protocol');
 };
-const durableMethods = new Set(['readText','readTextById','composeNote','planWrite','prepare','commit','query','listUnacknowledged','acknowledge',
+const durableMethods = new Set(['recoveryList','recoveryRead','readText','readTextById','composeNote','planWrite','prepare','commit','query','listUnacknowledged','acknowledge',
   'checkpoints.load','checkpoints.compareAndSwap','checkpoints.list','checkpoints.changes','createText','createTextReceipt','fileCommand',
   'captureSavedSource','releaseSavedSource','listSavedSourceRequests','databaseCommand','workblockCommand','documentCommand','documentDrafts','binaryCommand',
   'documentRuntimeObserve','documentRuntimeControl','documentRuntimeAckControl','documentRuntimeAckOutcome']);

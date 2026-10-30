@@ -3892,7 +3892,14 @@ export class Workspace {
       const validate=()=>{if(!current()||vault.entries.get(path)?.revision!==revision)throw new Error('The note changed before restoration');};
       this.updateMarkdownBuffer(buffer,text,validate);
       for(const view of this.loadedViews())if(view.viewPath===path){view.editor?.setValue(buffer.text);view.refreshPreview?.();view.properties?.refresh();}
-      await buffer.flush();this.renderStatus();return'restored';
+      try{await buffer.flush();}
+      catch(error){
+        // The original restore is already retained by this exact buffer. Its
+        // automatic save owns the same checkpoint/write; never author it again.
+        if(current()&&this.buffers.get(path)===buffer&&buffer.text===text&&buffer.dirty&&buffer.autosaveRetryPending)return'saving';
+        throw error;
+      }
+      this.renderStatus();return'restored';
     }});
   }
 

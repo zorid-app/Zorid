@@ -5,7 +5,7 @@ import type { ContextMenuRequest } from './context-menu';
 /** Positive conditional saved-source advertisement means the caller-owned V2
  * capture/release/bounded-list triple, with a same-scope independentJournal.
  * The old server-generated capture identity is never a fallback capability. */
-export interface DesktopDurableContext { conditionalSavedSourceAvailable?:true; textCreateReceiptsAvailable?:true; workBlocks?:true; databases?:true; documentSemantics?:true; documentMaintenance?:true; metadataRowsAvailable?:boolean; propertyTargetsAvailable?:boolean; basePreviewAvailable?:boolean; draftsAvailable?:boolean; admissionId: string; scope: CheckpointScope; binaryLimits?:import('../core/binary-streams.ts').BinaryStreamLimits }
+export interface DesktopDurableContext { recoveryHistoryAvailable?:true; conditionalSavedSourceAvailable?:true; textCreateReceiptsAvailable?:true; workBlocks?:true; databases?:true; documentSemantics?:true; documentMaintenance?:true; metadataRowsAvailable?:boolean; propertyTargetsAvailable?:boolean; basePreviewAvailable?:boolean; draftsAvailable?:boolean; admissionId: string; scope: CheckpointScope; binaryLimits?:import('../core/binary-streams.ts').BinaryStreamLimits }
 export interface DesktopIndependentJournalGrant {readonly token:string;readonly scope:import('../core/independent-drafts.ts').IndependentDraftScope}
 export interface DesktopDurableContext {readonly independentJournal?:DesktopIndependentJournalGrant}
 export interface DesktopIndependentJournalRequest {readonly vault:string;readonly token:string;readonly op:'list'|'read'|'compareAndSwap'|'retire'|'isRetiredIncarnation';readonly args:readonly unknown[]}
@@ -19,6 +19,8 @@ export interface DesktopReconciliation {
 export interface RecoveryCursor {captured_at_ms:number;snapshot_id:string}
 export interface RecoveryVersion {snapshotId:string;entryId:string;path:string;capturedAtMs:number;byteLength:number}
 export interface RecoveryHistory {
+  /** Positive replacement of the same admitted scope; never a retirement hint. */
+  subscribeAvailable?(listener:()=>void):()=>void;
   list(entryId:string,options:{limit:number;before?:RecoveryCursor}):Promise<{versions:RecoveryVersion[];nextCursor?:RecoveryCursor}>;
   read(entryId:string,snapshotId:string):Promise<{version:RecoveryVersion;content:string}>;
 }

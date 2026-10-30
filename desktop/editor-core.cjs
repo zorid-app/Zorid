@@ -30,7 +30,7 @@ function createEditorCoreManager(environment=process.env, options={}){
   if(documentRuntime&&typeof options.onDocumentRuntimeNudge!=='function')throw runtimeUnavailable();
   const initialAttempts=new Map(),backoffWaits=new Set();
   const contexts=new Map(), admissions=new Map(), released=new WeakMap(), services=new Set(), openings=new Map(), retirements=new Map(), recovering=new Map(), replacements=new Map(), recoveryStates=new WeakMap();
-  const describe=saved=>({admissionId:saved.id,scope:saved.admission.scope,...(saved.admission.createTextReceipt?{textCreateReceiptsAvailable:true}:{}),...(saved.admission.conditionalSavedSourceAvailable===true?{conditionalSavedSourceAvailable:true}:{}),...(saved.admission.documentCommand?{documentSemantics:true}:{}),...(saved.admission.metadataRowsAvailable===true?{metadataRowsAvailable:true}:{}),...(saved.admission.propertyTargetsAvailable===true?{propertyTargetsAvailable:true}:{}),...(saved.admission.basePreviewAvailable===true?{basePreviewAvailable:true}:{}),...(saved.admission.draftsAvailable===true?{draftsAvailable:true}:{}),...(documentRuntime&&runtimeAvailable(saved.admission)?{documentMaintenance:true}:{}),...(saved.admission.workblockCommand?{workBlocks:true}:{}),...(saved.admission.databaseCommand?{databases:true}:{}),...(saved.admission.binaryLimits?{binaryLimits:saved.admission.binaryLimits}:{})});
+  const describe=saved=>({admissionId:saved.id,scope:saved.admission.scope,...(saved.admission.recoveryHistoryAvailable===true?{recoveryHistoryAvailable:true}:{}),...(saved.admission.createTextReceipt?{textCreateReceiptsAvailable:true}:{}),...(saved.admission.conditionalSavedSourceAvailable===true?{conditionalSavedSourceAvailable:true}:{}),...(saved.admission.documentCommand?{documentSemantics:true}:{}),...(saved.admission.metadataRowsAvailable===true?{metadataRowsAvailable:true}:{}),...(saved.admission.propertyTargetsAvailable===true?{propertyTargetsAvailable:true}:{}),...(saved.admission.basePreviewAvailable===true?{basePreviewAvailable:true}:{}),...(saved.admission.draftsAvailable===true?{draftsAvailable:true}:{}),...(documentRuntime&&runtimeAvailable(saved.admission)?{documentMaintenance:true}:{}),...(saved.admission.workblockCommand?{workBlocks:true}:{}),...(saved.admission.databaseCommand?{databases:true}:{}),...(saved.admission.binaryLimits?{binaryLimits:saved.admission.binaryLimits}:{})});
   const executable=()=>require('./host-location.cjs').resolveDesktopHost({...options,override:config.executable});
   const terminated=service=>!!(service?.host?.fatal||service?.host?.exited);
   function openService(canonical){
@@ -325,6 +325,12 @@ function createEditorCoreManager(environment=process.env, options={}){
       broker.authenticate(event);
       const saved=checked(broker,record,expectedRoot,admissionId);
       if(typeof method!=='string'||!Array.isArray(args)||args.length>2)throw fail('invalid_durable_request');
+      if(method==='recoveryList'||method==='recoveryRead'){
+        if(args.length!==2||saved.admission.recoveryHistoryAvailable!==true||typeof saved.admission[method]!=='function')throw fail('invalid_durable_request');
+        const webContents=record.window.webContents,frame=event.senderFrame;
+        const current=()=>{try{broker.authenticate(event);}catch{throw fail('durable_scope_changed');}if(record.window.webContents!==webContents||webContents.mainFrame!==frame||checked(broker,record,expectedRoot,admissionId)!==saved)throw fail('durable_scope_changed');};
+        current();const value=await saved.admission[method](args[0],args[1],current);current();return value;
+      }
       if(Object.hasOwn(runtimeMethods,method)){
         if(!documentRuntime||!runtimeAvailable(saved.admission)||args.length!==(method==='documentRuntimeObserve'?0:1))throw fail('invalid_durable_request');
         const captured=captureDocumentRuntimeRequest(method,args);

@@ -27,14 +27,14 @@ test('history previews exact text, hides technical metadata and restores with ex
 test('history page requests use the captured cursor and show plain failure copy',async t=>{
   setup(t);let calls=0;
   openVersionHistory({history:history({list:async(_id,options)=>{calls++;if(calls===1)return{versions:[row()],nextCursor:{captured_at_ms:row().capturedAtMs,snapshot_id:'2'}};assert.deepEqual(options.before,{captured_at_ms:row().capturedAtMs,snapshot_id:'2'});throw new Error('IPC schema private-entry-id');}}),entryId:row().entryId,isCurrent:()=>true,restore:async()=>'restored'});
-  await settle();button('Show older versions').click();await settle();assert.equal(calls,2);assert.match(document.body.textContent!,/history couldn’t be opened/);assert.doesNotMatch(document.body.innerHTML,/IPC|schema|private-entry-id/);button('Close').click();
+  await settle();button('Show older versions').click();await settle();assert.equal(calls,2);assert.match(document.body.textContent!,/Version history is unavailable/);assert.doesNotMatch(document.body.innerHTML,/IPC|schema|private-entry-id/);button('Close').click();
 });
 test('dirty draft and failed restoration remain visible without technical error details',async t=>{
   setup(t);let calls=0;
   openVersionHistory({history:history(),entryId:row().entryId,isCurrent:()=>true,restore:async()=>{if(++calls===1)return'save_changes';throw new Error('IPC checkpoint_cas UUID');}});
   await settle();document.querySelector<HTMLButtonElement>('.version-history-version')!.click();await settle();
-  button('Restore version').click();await settle();assert.match(document.body.textContent!,/Save your changes before restoring/);
-  button('Restore version').click();await settle();assert.match(document.body.textContent!,/Keep the note open/);assert.doesNotMatch(document.body.innerHTML,/IPC|checkpoint_cas|UUID/);button('Close').click();
+  button('Restore version').click();await settle();assert.match(document.body.textContent!,/Restoring is unavailable while they are unsaved/);
+  button('Restore version').click();await settle();assert.match(document.body.textContent!,/note and your changes were kept/);assert.doesNotMatch(document.body.innerHTML,/IPC|checkpoint_cas|UUID/);button('Close').click();
 });
 test('stale asynchronous replies cannot preview or restore a different vault',async t=>{
   setup(t);let current=true,release!:(value:{version:RecoveryVersion;content:string})=>void,restores=0;
