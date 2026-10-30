@@ -1,5 +1,30 @@
 # User findings queue
 
+## Recovery scope correction — 2026-10-30, latest direct instruction
+
+User asks to inspect Obsidian's recovery edge cases, match its handling and remove
+extra recovery policy. This supersedes the broader invisible-failure wording in
+the older active-goal entry below. REA static audit covers adapter queue/write,
+text load/save/external changes, Base configuration/property/creation/embeds,
+Canvas, snapshots/manual restore, shutdown and separate Sync backoff. It confirms
+persistent primary save-error notices and best-effort backups; no universal
+invisible-recovery claim follows. Full runtime fault parity remains unverified.
+See [reference and actual cuts](plans/obsidian-recovery-reference.md).
+
+Root removed unused created-entry recovery helper, per-dialog history retry and
+unused history availability events, and the initial note-load retry wrapper.
+Exact ownership/cancellation/write-integrity checks remain. Integrated history
+28/28 and initial-load41/41 pass. Bespoke configuration Review/Copy removal is in
+focused review; unintegrated New/popup/compound recovery extensions stay frozen.
+No retained data is deleted by these cuts. Main and installed app are unchanged.
+
+Package013 passes TS/Vite/361-file verification. Its isolated LaunchServices
+diagnostic passes actual focus/readiness/normal quit with no owned processes left.
+One diagnostic attributes997ms to Electron window construction and437ms to Native
+service open; it does not prove800ms or performance improvement. Package013
+predates the final history plumbing/configuration cuts. Startup/import/index
+objectives continue separately from this recovery policy simplification.
+
 ## Active recovery/performance goal — 2026-10-29
 
 User reiterates that ordinary host/session interruptions must not require manual

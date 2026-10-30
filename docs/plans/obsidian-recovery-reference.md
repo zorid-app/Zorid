@@ -30,6 +30,8 @@ half-open UTF-8 byte offsets in that exact app.js.
 | Text external change | Ignores the event while saving. Otherwise rereads; dirty plaintext can merge base/local/remote and display a changed-file notice. | 2814142–2814700; 2683916–2684103 |
 | File loading | Generic BO catches the new onLoadFile failure, clears its file association, displays a notice and logs. No automatic retry in this method. Previous onUnloadFile is awaited outside that catch, so a failed unload save aborts transition. | 1537956–1538719 |
 | Base configuration | Q8 extends the text view. saveQuery requests the ordinary save and updates local query state. It uses the same save-failure path. | Q8 exact UTF-16 source region 3135652–3138930, recorded in private provenance |
+| Base properties and creation | Table property writes propagate failure without local replay/rollback. Undo grouping records history after success, rather than rolling back a partial filesystem sequence. Kanban drag failure restores its presentation and displays an error tooltip. New-note creation can precede a later frontmatter/presentation failure. | Additional REA evidence ev_4918236f7ff1330c85444b32c4362f399ffbdad01597f70a0cce4ccb9518305a; exact per-method ranges in private provenance |
+| Embedded Base configuration | A linked .base embed debounces direct modify and lacks a local catch in that callback. A fenced Base block checks the original block before replacement and reaches the Markdown text-save path. No per-control review workflow in these inspected chains. | Additional REA evidence ev_b2c8ab9b6bd6a96c6e4194f4da91d8b5c5c69f5a904e7deeb1064cff7ab9ecd9 |
 | Canvas | ste extends the text view, with non-plaintext JSON data. Inherits its save failure handling; JSON parse failure can reach the generic load catch. Plaintext merge branch does not apply. | 3428636–3432715 |
 | Embedded Markdown | Reassembles the parent note and modifies it. Failure restores saved baseline, logs, requests persistent notice and attempted-text backup, then rethrows. | 2694320–2695409 |
 | Snapshot policy | Enabled by default; ordinary md/canvas/base snapshots use a five-minute interval, seven-day retention, latest-content dedup. Pending paths drain each minute; expiry hourly and shortly after open. Forced backup bypasses cadence/dedup. | 3460161–3462197; 3465962–3467961 |
@@ -64,3 +66,33 @@ Still open: the configuration UI cut, remaining custom raw-input/reconnect/draft
 presentation routes, retained-journal compatibility, integrated verification,
 runtime reference checks and build/install. This document does not establish
 complete parity or the 800 ms editor target.
+
+## Implementation checkpoint
+
+Root integrated reviewed unused-helper removal as bdf09d1b, explicit history
+requests as 075d89e2, and single-attempt initial note loading as 908d5026.
+Initial-load checks pass 41/41; the history dialog's scoped checks pass 20/20.
+The broader history run exposed one old automatic-retry expectation (27/28).
+Its explicit-action successor and unused history availability plumbing removal
+are integrated as 0022fe9f; all four history suites now pass 28/28.
+
+Separate opt-in startup diagnostics are integrated as 12064e9a/4b0741a4/eda3a95e.
+Diagnostic unit checks pass 36/36; Native observer checks pass 11/11 with local
+child-process access. The sandboxed Native run timed out all fake handshakes;
+the access-enabled run passed, without source changes or longer timeouts.
+These are observer tests, not measured startup improvement or app acceptance.
+
+Package013 at source908d5026 passes TS, Vite and 361-file verification. ASAR SHA
+`d7f871616000b2edc5f8cc4232a9bd2290e233876cfc359e14fc5ad5612bd9f7`;
+unchanged verified Native SHA
+`2f5851c08d5e42c18b395123e929c0b3f50b2c6dbd3a9439b966afa5602684a3`.
+Actual LaunchServices diagnostic `/private/tmp/zorid-launchservices-focus-candidate013-20261030-002/report.json`
+is valid: genuine window/webContents/document focus, exact fixture readiness,
+one normal quit, Native exit0, no forced cleanup or remaining owned processes,
+unchanged fixture/artifact. App kernel exit status is unknown separately from
+observed normal app lifecycle and open-wrapper exit0. No input was sent.
+One instrumented run attributes 997.4 ms to BrowserWindow construction and
+436.9 ms to Native service open; Native internal reconciliation-yield phase
+reports 375.455 ms. These are diagnostic intervals, not an 800 ms usable-editor
+measurement, comparison, or representative first-import/large-note acceptance.
+Package013 predates history plumbing removal and the configuration UI cut.
