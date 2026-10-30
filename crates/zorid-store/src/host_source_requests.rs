@@ -2,6 +2,7 @@
 //! guard; old attached proofs remain an indexed immutable part of this ledger.
 use super::host_source_guards as guards;
 use super::*;
+use zorid_core::{OperationId, VaultPath};
 
 pub(super) const SCHEMA: &[(&str, &str)] = &[
     ("host_source_requests", "CREATE TABLE host_source_requests (capture_id TEXT PRIMARY KEY NOT NULL, client_id TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('pending','attached','released','changed')), lease_token TEXT, record TEXT NOT NULL)"),
