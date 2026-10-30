@@ -451,9 +451,10 @@ fn failed_retirement_cas_retries_the_original_fence_before_hint_import() {
 fn foreign_checkpoint_revision_is_not_retired_or_used_for_hints() {
     let (root, mut vault, old_scan) = fixture();
     save(&mut vault, 0);
-    let mut other =
-        zorid_store::Store::open_existing_no_follow(root.path().join(".zorid/vault.sqlite"))
-            .unwrap();
+    // Match NativeVault's canonical root at the no-follow storage boundary,
+    // including macOS's /var -> /private/var temporary-directory alias.
+    let database = fs::canonicalize(root.path().join(".zorid/vault.sqlite")).unwrap();
+    let mut other = zorid_store::Store::open_existing_no_follow(database).unwrap();
     let (revision, inventory) = other.external_scan_progress::<serde_json::Value>().unwrap();
     let foreign = other
         .save_external_scan_progress(revision.as_deref(), inventory.as_ref())
