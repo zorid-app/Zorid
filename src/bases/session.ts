@@ -325,7 +325,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   const sourceContext=()=>JSON.stringify([configurationSource(),configurationIndex(),controller.selectedViewIdentity,controller.configurationRead?.entryId,controller.configurationRead?.revision]);
   type CollectionUIOwner={owner:ReturnType<typeof createCollectionSubmission>;save(recovering?:boolean,validateAttempt?:()=>void):Promise<void>;readonly completion:CompletedCollectionSource|undefined;close():void};
   let chooser: SourceChooser | undefined, collectionEditor: CollectionEditor | undefined;
-  let chooserSubmission:CollectionUIOwner|undefined,editorSubmission:CollectionUIOwner|undefined;
+  let chooserSubmission:CollectionUIOwner|undefined,editorSubmission:CollectionUIOwner|undefined,restoreSubmission:CollectionUIOwner|undefined;
   const collectionMutations = new Map<string, DatabaseRequest>();
   type SetEntry=DatabaseRequest & {op:'set_entry'};
   type CollectionAttempt={signature:string;request:SetEntry;collectionId:string;widget?:BasePropertyEditRecovery;release?:()=>void;response?:DatabaseResponse};
@@ -433,6 +433,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   let actionMessage:string|undefined;
   let scheduled: ReturnType<typeof setTimeout> | undefined;
   let refreshIndicatorTimer:ReturnType<typeof setTimeout>|undefined,refreshIndicatorVisible=false;
+  const collectionSubmissionTasks=new Map<Promise<unknown>,CollectionUIOwner>();
   const pending = new Set<Promise<unknown>>(), changedBuffers = new Set<NoteBuffer>();
   let configurationLifecycle = 0;
   let acceptedConfiguration:{supervisor:NoteLoadSupervisor;command?:Promise<void>;retry?:()=>Promise<void>;error?:unknown}|undefined;
@@ -726,9 +727,12 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   function recoverableCollectionAttempts():{edits:CollectionAttempt[];rawElements:HTMLElement[];table:boolean;toolbar:boolean;ui:CollectionUIOwner[]}|undefined {
     try{alive();}catch{return;}
     if(acceptedConfiguration?.error)return;
-    const ui=[chooserSubmission,editorSubmission].filter((submission):submission is CollectionUIOwner=>!!submission?.owner.submitted);
+    const ui=[chooserSubmission,editorSubmission,restoreSubmission].filter((submission):submission is CollectionUIOwner=>!!submission?.owner.submitted);
     if(ui.some(submission=>!submission.owner.canRecover()))return;
-    if(disposed||closing&&!interruptFinish||pendingCollectionRestore||pendingCollectionCreate||optionCreations.size||controller.hasPendingViewReferences&&!acceptedConfiguration
+    // Submitted controls exclude only their explicitly registered full task.
+    // This also covers the no-cell early return below.
+    if(ui.length&&[...pending].some(task=>task!==acceptedConfiguration?.command&&!ui.includes(collectionSubmissionTasks.get(task)!)))return;
+    if(disposed||closing&&!interruptFinish||pendingCollectionRestore&&!restoreSubmission?.owner.canRecover()||pendingCollectionCreate||optionCreations.size||controller.hasPendingViewReferences&&!acceptedConfiguration
       ||mounted?.hasQueuedConfiguration?.()||settings.hasDraft()||(summaryDraft||summaryHasRawDraft?.())&&(!acceptedConfiguration||!captureSummaryAdmission)
       ||chooser?.hasPendingChanges()&&!chooserSubmission?.owner.canRecover()||collectionEditor?.hasPendingChanges()&&!editorSubmission?.owner.canRecover()||unfinishedNoteCreation()
       ||[...changedBuffers].some(buffer=>(buffer.dirty||!!buffer.error)&&!acceptedConfiguration&&!ui.some(submission=>buffer.path===options.basePath&&buffer.text===submission.completion?.desiredSource)))return;
@@ -749,7 +753,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       if(!attempt?.release||!options.canRecoverDatabaseEntry(attempt.request))return;
       selected.push(attempt);
     }
-    if(pending.size>selected.length||((rawElements.length||table||toolbar)&&!rawDraftOrigin(false)))return;
+    if(pending.size>selected.length+[...collectionSubmissionTasks].filter(([promise,submission])=>pending.has(promise)&&ui.includes(submission)).length||((rawElements.length||table||toolbar)&&!rawDraftOrigin(false)))return;
     return{edits:selected,rawElements,table,toolbar,ui};
   }
   function prepareAdmissionRecovery():BaseAdmissionRecovery {
@@ -1237,7 +1241,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       const restoringCollection=collection;
       const restore=doc.createElement('button');restore.type='button';restore.textContent='Restore collection';restore.dataset.collectionRestore='';restore.disabled=!!pending.size;
       restore.onclick=()=>{
-        if(pending.size||pendingCollectionRestore||!sourceUnavailable())return;
+        if(disposed||closing||admissionRecovery||pending.size||pendingCollectionRestore||!sourceUnavailable())return;
         pendingCollectionRestore={op:'restore',operationId:crypto.randomUUID(),collectionId:restoringCollection.id,expectedRevision:restoringCollection.revision};
         retryCollectionRestore();
       };sourceBar.append(restore);
@@ -1252,15 +1256,22 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   }
   function retryCollectionRestore():void{
     const request=pendingCollectionRestore;
-    if(!request||!databaseService||pending.size)return;
-    void track(async()=>{
-      try{
-        const reply=await databaseService.request(request);
-        if(reply.projection.pending||reply.projection.issues.length)throw new Error('Some collection files still need publication. Retry Restore.');
-        pendingCollectionRestore=undefined;
-      }catch(failure){const rejection=failure as {source?:unknown;commitUncertain?:unknown};if(rejection?.source==='host'&&rejection.commitUncertain===false)pendingCollectionRestore=undefined;throw failure;}
-      await options.vault.reload();await loadDefinitions();await controller.refresh();await loadDefinitions();
-    }).catch(()=>{/* track retains the action failure. */});
+    if(disposed||closing||admissionRecovery||!request||!databaseService||pending.size)return;
+    const submission=restoreSubmission??=collectionUIOwner({type:'none'});
+    let task:Promise<void>;
+    task=track(()=>submission.owner.submit(request,async(reply,recovering,validateAttempt)=>{
+      validateAttempt();
+      if(reply.projection.pending||reply.projection.issues.length)throw new Error('Some collection files still need publication. Retry Restore.');
+      await submission.save(recovering,validateAttempt);validateAttempt();pendingCollectionRestore=undefined;
+    }));
+    collectionSubmissionTasks.set(task,submission);
+    void task.catch(failure=>{
+      const rejection=failure as {source?:unknown;commitUncertain?:unknown};
+      if(rejection?.source==='host'&&rejection.commitUncertain===false&&!submission.owner.submitted){pendingCollectionRestore=undefined;submission.close();if(restoreSubmission===submission)restoreSubmission=undefined;}
+    }).finally(()=>{
+      collectionSubmissionTasks.delete(task);
+      if(!pendingCollectionRestore){submission.close();if(restoreSubmission===submission)restoreSubmission=undefined;}
+    }).catch(report);
   }
 
   function render(state: BaseControllerState): void {
@@ -1571,7 +1582,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       if (dismissCleanPanels) { mounted?.dismissCleanPanels?.(); toolbarUI.dismissCleanPanel(); settings.destroy(); destroySummaryEditor?.(); }
       if (close) {
         for(const attempt of collectionAttempts.values())attempt.release?.();collectionAttempts.clear();collectionMutations.clear();
-        closeSourceChooser();collectionEditor?.destroy();collectionEditor=undefined;if(collectionRefreshTimer!==undefined)clearTimeout(collectionRefreshTimer);
+        closeSourceChooser();collectionEditor?.destroy();collectionEditor=undefined;restoreSubmission?.close();restoreSubmission=undefined;if(collectionRefreshTimer!==undefined)clearTimeout(collectionRefreshTimer);
         tooltips.destroy(); toolbarUI.destroy(); settings.destroy(); destroySummaryEditor?.(); stopDefinitions.forEach(stop => stop()); stopFilterMetadata(); mounted?.destroy(); mounted = undefined; observer?.disconnect();
         if (scheduled !== undefined) clearTimeout(scheduled);
         if(refreshIndicatorTimer!==undefined)clearTimeout(refreshIndicatorTimer);
