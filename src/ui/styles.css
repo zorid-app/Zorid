@@ -252,6 +252,8 @@ button.search-snippet { white-space: normal; overflow-wrap: anywhere; }
 .status-mode { padding: 0; border: 0; background: transparent; color: inherit; font-size: inherit; cursor: pointer; white-space: nowrap; }
 .save-state { margin-right: auto; color: var(--text-faint); }
 .modal-overlay { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 24px; background: #0009; }
+/* Command input remains above retained Base popovers without closing their drafts. */
+.modal-overlay:has(> .command-modal) { z-index: 1600; }
 .modal { position: relative; background: var(--background-primary); border: 1px solid var(--background-modifier-border); border-radius: 12px; box-shadow: var(--shadow); max-width: 100%; max-height: 100%; overflow: auto; }
 .modal:not(.prompt-modal, .command-modal, .settings-modal) { width: 540px; padding: 28px; line-height: 1.6; }
 .modal h2 { font-size: 20px; font-weight: 600; margin: 0 0 22px; }
