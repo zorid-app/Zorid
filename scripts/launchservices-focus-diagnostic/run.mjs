@@ -14,6 +14,7 @@ import {installMainLifecycle} from '../packaged-startup-profile/main-observer.mj
 import {foregroundSource} from '../packaged-startup-profile/foreground.mjs';
 import {documentVisibilitySource} from '../packaged-startup-profile/measurement.mjs';
 import {authenticate,assertLifetime,cleanupVerdict,launchArguments,processRows} from './contract.mjs';
+import {observeDocument,observeMain,startupProfile,waitForWorkspace} from './observations.mjs';
 
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 export function discoverIdentity(){
@@ -39,8 +40,9 @@ export async function main(args=process.argv.slice(2)){
   const originalPins=await appPins(original,asar);execFileSync('/bin/cp',['-cR',original,app]);const pinned=await appPins(app,asar);
   for(const key of ['executableSha256','asarSha256','frameworkSha256','nativeSha256','infoSha256'])assert.equal(pinned[key],originalPins[key]);
   assert.ok(!allProcesses().some(row=>row.command.startsWith(app+'/Contents/')));
-  const fixtureHash=await hashFile(fixture),argv=launchArguments({app,profile,data,stdout,stderr});
-  const report={version:1,purpose:'LaunchServices focus diagnostic ONLY; no startup benchmark and no input',out,originalPins,pinned,profile,data,vault,argv,activationAttempts:0,inputAttempts:0,appKernelExitStatus:'unknown',errors:[],cleanupErrors:[],focusSamples:[]};
+  const profileRequested=args.includes('--startup-profile');
+  const fixtureHash=await hashFile(fixture),argv=launchArguments({app,profile,data,stdout,stderr,startupProfile:profileRequested});
+  const report={version:1,purpose:'LaunchServices focus diagnostic ONLY; no startup benchmark and no input',out,originalPins,pinned,profile,data,vault,argv,profileRequested,activationAttempts:0,inputAttempts:0,appKernelExitStatus:'unknown',errors:[],cleanupErrors:[],focusSamples:[],checkpoints:[]};
   const start=performance.now(),elapsed=()=>performance.now()-start;report.launchWallClock=new Date().toISOString();
   const wrapper=spawn('/usr/bin/open',argv,{env:launchEnvironment(profile,data),cwd:out,stdio:'ignore'});
   report.wrapper={pid:wrapper.pid,code:null,signal:null};wrapper.once('exit',(code,signal)=>Object.assign(report.wrapper,{code,signal,exitedAtMs:elapsed()}));wrapper.once('error',error=>report.wrapper.error=String(error));
@@ -48,6 +50,19 @@ export async function main(args=process.argv.slice(2)){
   const ownedRows=()=>allProcesses().filter(row=>row.command.startsWith(app+'/Contents/'));
   const write=()=>fs.writeFile(path.join(out,'report.json'),JSON.stringify(report,null,2)+'\n',{mode:0o600});
   const attempt=async(phase,action)=>{try{return await action();}catch(error){report.cleanupErrors.push({phase,error:String(error)});}};
+  async function checkpoint(phase){
+    const snapshot={phase,startedAtMs:elapsed(),requireProfile:profileRequested,expectedURL:pathToFileURL(path.join(pinned.archive,'dist/index.html')).href};if(phase!=='startup-readiness')report.checkpoints.push(snapshot);
+    if(!owner){snapshot.unavailable='No authenticated actual main';return snapshot;}
+    try{assertLifetime(owner,allProcesses());}catch(error){snapshot.unavailable=String(error);return snapshot;}
+    const values=await Promise.allSettled([
+      main?.evaluate(`(${observeMain.toString()})(${JSON.stringify({pid:owner.pid,executable:pinned.executable,appPath:pinned.archive,profile,data,timeOrigin:owner.timeOrigin})})`),
+      renderer?.evaluate(`(${observeDocument.toString()})()`),
+    ]);
+    if(values[0].status==='fulfilled'&&values[0].value){snapshot.window=values[0].value.window;snapshot.lifecycle=values[0].value.lifecycle;try{snapshot.profile=startupProfile(values[0].value.profile);}catch(error){snapshot.profileError=String(error);}}
+    else snapshot.mainError=String(values[0].reason??'Main unavailable');
+    if(values[1].status==='fulfilled')snapshot.document=values[1].value;else snapshot.documentError=String(values[1].reason);
+    snapshot.completedAtMs=elapsed();return snapshot;
+  }
   try{
     await write();process.stdout.write(JSON.stringify({event:'launchservices-wrapper-started',out,wrapperPid:wrapper.pid})+'\n');
     const mainURL=await poll(async()=>{if(report.wrapper.error)throw Error(report.wrapper.error);const value=await fs.readFile(stderr,'utf8'),url=/Debugger listening on (ws:\/\/127\.0\.0\.1:\d+\/[^\s]+)/.exec(value)?.[1];assert.ok(url,'Fresh main endpoint not available');return url;},remaining);
@@ -60,6 +75,7 @@ export async function main(args=process.argv.slice(2)){
     await main.evaluate(`(${authenticateMain.toString()})(${JSON.stringify({pid:owner.pid,executable:pinned.executable,appPath:pinned.archive,profile,localDataDirectory:data})})`);
     report.lifecycle=await main.evaluate(`(${installMainLifecycle.toString()})(${JSON.stringify({pid:owner.pid,executable:pinned.executable,expectedAppPath:pinned.archive,profile,localDataDirectory:data,outputFile:mainFinal})})`);
     report.lifecycleAttachedMs=elapsed();
+    await checkpoint('after-main-authentication');
     const endpoint=await poll(async()=>currentBrowserEndpoint(await fs.readFile(stderr,'utf8')),remaining);report.browserEndpoint=endpoint;
     browser=new CDP(endpoint.url);await browser.opened;
     const expectedURL=pathToFileURL(path.join(pinned.archive,'dist/index.html')).href;
@@ -76,9 +92,15 @@ export async function main(args=process.argv.slice(2)){
       assert.ok(window.focused&&window.visible&&!window.minimized&&document.url===expectedURL&&document.visibilityState==='visible'&&!document.hidden&&document.hasFocus===true,'Normal LaunchServices foreground not observed');
       report.focusConfirmed=sample;return sample;
     },remaining);
-  }catch(error){report.errors.push(String(error));}
+    report.workspacePreparation={};
+    await waitForWorkspace({sample:()=>checkpoint('startup-readiness'),remaining,pause,record:report.workspacePreparation});
+  }catch(error){report.errors.push(String(error));await checkpoint('failure-before-cleanup');}
   finally{
-    if(main&&owner)await attempt('normal-app-quit',async()=>{assertLifetime(owner,allProcesses());await main.evaluate('globalThis.__zoridPackagedQuit();true');});
+    await checkpoint('before-single-quit');
+    if(main&&owner)await attempt('normal-app-quit',async()=>{assertLifetime(owner,allProcesses());report.quitRequestedAtMs=elapsed();await main.evaluate('globalThis.__zoridPackagedQuit();true');});
+    // Preserve the real prevented-quit/opening state before closing inspectors;
+    // do not reconnect, reissue Quit or claim this is a later failure snapshot.
+    await checkpoint('after-single-quit-before-inspector-close');
     for(const [name,client]of [['renderer',renderer],['browser',browser],['main',main]])if(client)await attempt(name+'-close',()=>client.close());
     const end=elapsed()+shutdown;
     await attempt('normal-app-wrapper-exit-wait',()=>poll(async()=>{assert.equal(ownedRows().length,0,'Owned app/Native still alive');assert.notEqual(wrapper.exitCode,null,'open wrapper still alive');},()=>end-elapsed()));
@@ -89,7 +111,7 @@ export async function main(args=process.argv.slice(2)){
     report.cleanup=cleanupVerdict({wrapper:report.wrapper,final:report.final,remaining:report.remaining,forced:report.forced===true,appPid:owner?.pid});
     report.fixtureUnchanged=await attempt('fixture-proof',async()=>await hashFile(fixture)===fixtureHash);
     report.artifactsUnchanged=await attempt('artifact-proof',async()=>{for(const [key,file]of [['executableSha256',pinned.executable],['asarSha256',pinned.archive],['nativeSha256',pinned.native],['frameworkSha256',pinned.framework]])assert.equal(await hashFile(file),pinned[key]);return true;});
-    report.completeMs=elapsed();report.validDiagnostic=!!report.focusConfirmed&&report.cleanup.normalLifecycle&&report.fixtureUnchanged===true&&report.artifactsUnchanged===true&&report.errors.length===0&&report.cleanupErrors.length===0;
+    report.completeMs=elapsed();report.validDiagnostic=!!report.focusConfirmed&&!!report.workspacePreparation?.ready&&report.cleanup.normalLifecycle&&report.fixtureUnchanged===true&&report.artifactsUnchanged===true&&report.errors.length===0&&report.cleanupErrors.length===0;
     // Retain all diagnostics/owned surfaces. An unauthenticated surviving app is
     // explicitly unresolved; never signal a guessed PID or equate wrapper death
     // with application death. Detach only the wrapper handle so the report exits.

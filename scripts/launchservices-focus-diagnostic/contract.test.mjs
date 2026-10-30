@@ -8,6 +8,7 @@ const identity={pid:42,executable:expected.executable,appPath:expected.appPath,p
 const row={pid:42,started:'Fri Oct 30 10:00:00 2026',command:expected.executable+' --user-data-dir='+expected.profile};
 const final={pid:42,normalQuitObserved:true,quitExitCode:0,nativePids:[99],nativeExits:[{pid:99,code:0,signal:null}],errors:[]};
 test('normal LaunchServices arguments preserve profile/env and never hide/reset',()=>{const args=launchArguments({app:'/a.app',profile:'/p',data:'/d',stdout:'/o',stderr:'/e'});assert.deepEqual(args.slice(0,4),['-n','-W','-a','/a.app']);assert.ok(args.includes('ZORID_LOCAL_DATA_DIR=/d'));assert.ok(args.includes('--user-data-dir=/p'));for(const flag of ['-g','-j','-F'])assert.ok(!args.includes(flag));});
+test('Main chronology environment is explicit opt-in only',()=>{const config={app:'/a.app',profile:'/p',data:'/d',stdout:'/o',stderr:'/e'};assert.ok(!launchArguments(config).includes('ZORID_PROFILE_STARTUP=1'));assert.ok(launchArguments({...config,startupProfile:true}).includes('ZORID_PROFILE_STARTUP=1'));});
 test('actual main PID differs from wrapper and is admitted by exact identity',()=>assert.equal(authenticate(identity,expected,[row],7).pid,42));
 test('matching authenticated lifetime authorizes only actual main PID',()=>assert.equal(assertLifetime(authenticate(identity,expected,[row],7),[row]),42));
 test('wrapper must never be admitted as app',()=>assert.throws(()=>authenticate({...identity,pid:7},expected,[{...row,pid:7}],7)));

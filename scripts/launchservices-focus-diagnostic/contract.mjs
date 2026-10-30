@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 
-export function launchArguments({app,profile,data,stdout,stderr}){
-  return ['-n','-W','-a',app,'--stdout',stdout,'--stderr',stderr,'--env','ZORID_LOCAL_DATA_DIR='+data,'--args','--inspect=127.0.0.1:0','--user-data-dir='+profile,'--remote-debugging-address=127.0.0.1','--remote-debugging-port=0','--no-first-run'];
+export function launchArguments({app,profile,data,stdout,stderr,startupProfile=false}){
+  return ['-n','-W','-a',app,'--stdout',stdout,'--stderr',stderr,'--env','ZORID_LOCAL_DATA_DIR='+data,...(startupProfile?['--env','ZORID_PROFILE_STARTUP=1']:[]),'--args','--inspect=127.0.0.1:0','--user-data-dir='+profile,'--remote-debugging-address=127.0.0.1','--remote-debugging-port=0','--no-first-run'];
 }
 export function processRows(text){
   return text.split('\n').flatMap(line=>{const m=/^\s*(\d+)\s+([A-Za-z]{3}\s+[A-Za-z]{3}\s+\d+\s+\d\d:\d\d:\d\d\s+\d{4})\s+(.*)$/.exec(line);return m?[{pid:Number(m[1]),started:m[2].replace(/\s+/g,' '),command:m[3]}]:[];});
