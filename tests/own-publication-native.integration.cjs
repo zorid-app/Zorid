@@ -85,7 +85,7 @@ test('actual host and automatic Core polling finish positive hints before a fres
   const reference = { client_id: clientId, token: prepared.token };
   const committed = await scoped.commitIntent(reference);
   assert.equal(committed.state, 'committed');
-  assert.equal(committed.projection, 'projected');
+  assert.deepEqual(committed.projection, { state: 'projected' });
   assert.deepEqual((await scoped.commitIntent(reference)).receipt, committed.receipt, 'exact intent replay cannot author a second save');
   assert.equal(await fs.readFile(path.join(root, 'a-own.md'), 'utf8'), saved);
 
