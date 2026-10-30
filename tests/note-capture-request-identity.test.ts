@@ -13,9 +13,10 @@ const tick=()=>new Promise<void>(resolve=>setImmediate(resolve));
 async function until(predicate:()=>boolean){for(let i=0;i<50&&!predicate();i++)await tick();assert.ok(predicate());}
 const scope={vaultId:'capture-vault',clientId:'capture-client'},journalScope={...scope,incarnationId:'owned-document'};
 const observed={entryId:'entry',revision:'source-1',path:'One.md',content:'Original source',stat:{ctime:1,mtime:1,size:15}};
-async function fixture(t:TestContext){
-  let head:Checkpoint|null=null,journalGate:ReturnType<typeof held>|undefined,coreGate:ReturnType<typeof held>|undefined,journalRevision:string|null=null;
-  let coreCalls=0;
+async function fixture(t:TestContext,certificate=false){
+  let head:Checkpoint|null=null,journalGate:ReturnType<typeof held>|undefined,coreGate:ReturnType<typeof held>|undefined;
+  const journalRevisions=new Map<string,string>();
+  let coreCalls=0,pendingQueries=0;
   const native:ConditionalSavedSourceRequest[]=[],journal:IndependentDraftChange[]=[],releases:string[]=[];
   const unavailable=async():Promise<never>=>{throw Error('Unexpected source mutation');};
   const writes:DurableWrites={checkpoints:{scope,load:async()=>head,compareAndSwap:async change=>{
@@ -24,17 +25,24 @@ async function fixture(t:TestContext){
   },list:async()=>({items:[],cursor:null,highWater:'0'}),changes:async()=>({items:[],cursor:null,highWater:'0'})},
     readText:async()=>structuredClone(observed),readTextById:async()=>structuredClone(observed),planWrite:unavailable,prepare:unavailable,commit:unavailable,query:unavailable,acknowledge:unavailable,listUnacknowledged:async()=>[],
     captureSavedSource:async request=>{native.push(structuredClone(request));return{captureId:request.captureId??'old-server-id',logicalWitness:request.logicalWitness??{entryId:observed.entryId,revision:observed.revision,path:observed.path},source:observed.content};},
-    releaseSavedSource:async id=>{releases.push(id);},listSavedSourceRequests:async()=>[],
+    releaseSavedSource:async id=>{releases.push(id);},listSavedSourceRequests:async()=>{pendingQueries++;return[];},
   };
   const provider:IndependentDraftProvider={scope:journalScope,list:async()=>[],read:async()=>null,compareAndSwap:async request=>{
     journal.push(structuredClone(request));if(journalGate)await journalGate.promise;
-    assert.equal(request.expectedRevision,journalRevision);journalRevision=request.nextRevision;
+    assert.equal(request.expectedRevision,journalRevisions.get(request.writer)??null);journalRevisions.set(request.writer,request.nextRevision);
     return{...journalScope,entryId:request.entryId,writer:request.writer,generation:request.generation,revision:request.nextRevision,deleted:false};
   },retire:async request=>({...journalScope,entryId:request.entryId,writer:request.writer,generation:request.generation,revision:request.nextRevision,deleted:true})};
+  if(certificate)provider.isRetiredIncarnation=async()=>false;
   const vault={adapter:{durableWrites:writes,independentDrafts:provider},entries:new Map([['One.md',{entryId:'entry'}]]),readDurableText:writes.readText,readDurableTextById:writes.readTextById} as unknown as Vault;
   const buffer=new NoteBuffer(vault,'One.md',{debounceMs:60000});await buffer.load('entry');t.after(()=>buffer.closeMetadataProjection());
-  return{buffer,vault,writes,provider,native,journal,releases,get coreCalls(){return coreCalls;},holdCore(){return coreGate=held();},releaseCore(){coreGate?.resolve();coreGate=undefined;},holdJournal(){return journalGate=held();},releaseJournal(){journalGate?.resolve();journalGate=undefined;}};
+  return{buffer,vault,writes,provider,native,journal,releases,get pendingQueries(){return pendingQueries;},get coreCalls(){return coreCalls;},holdCore(){return coreGate=held();},releaseCore(){coreGate?.resolve();coreGate=undefined;},holdJournal(){return journalGate=held();},releaseJournal(){journalGate?.resolve();journalGate=undefined;}};
 }
+
+test('healthy ordinary note opening never queries pending saved-source requests',async t=>{
+  const f=await fixture(t,true);await tick();await tick();
+  assert.equal(f.buffer.hasAdmittedContent,true);assert.equal(f.buffer.text,observed.content);assert.equal(f.buffer.dirty,false);
+  assert.equal(f.pendingQueries,0,'Ordinary admission must not run Native capture cleanup');assert.deepEqual(f.native,[]);assert.deepEqual(f.journal,[]);
+});
 
 test('clean-note capture dispatch waits for a real journal ACK containing its caller-owned UUID and scope',async t=>{
   const f=await fixture(t);f.holdJournal();
@@ -222,15 +230,15 @@ test('cancelling a capture does not wait for an unrelated held orphan-proof look
   lookup.resolve();await assert.rejects(pending,/closing/);await closing;
 });
 
-test('a malformed ACK after Native accepted cleanup keeps the ID sealed and a new actor retries only that ID even with no pending row',async t=>{
+test('a malformed ACK after Native accepted cleanup keeps the ID sealed until an actual capture from a new actor retries that ID even with no pending row',async t=>{
   const f=await fixture(t),id=crypto.randomUUID(),old=abandonedCandidate(id);let pending=true,calls=0;
   f.writes.listSavedSourceRequests=async()=>pending?[{captureId:id,logicalWitness:witness,legacy:false}]:[];f.provider.isRetiredIncarnation=async()=>true;f.provider.list=async()=>[old];
   f.provider.read=async address=>address.writer===old.writer&&address.incarnationId===old.incarnationId?old:null;
   f.writes.releaseSavedSource=async captureId=>{f.releases.push(captureId);if(captureId===id){pending=false;if(++calls===1)throw Object.assign(Error('Malformed release ACK'),{code:'invalid_durable_response',source:'protocol'});}};
   const own=await f.buffer.captureConditionalSavedSource(witness);assert.ok(own);assert.equal(calls,1);assert.equal(pending,false);
   assert.throws(()=>claimCaptureRequest(scope,id,{}),{code:'capture_cleanup_unsettled'});
-  const next=new NoteBuffer(f.vault,'One.md',{debounceMs:60000});t.after(()=>next.closeMetadataProjection());await next.load('entry');await until(()=>calls===2);await tick();
-  assert.throws(()=>claimCaptureRequest(scope,id,{}),{code:'capture_request_released'});assert.deepEqual(f.releases,[id,id]);assert.equal(f.native.length,1,'Cleanup retries release only; no source recapture');await f.buffer.releaseConditionalSavedSource(own);
+  const next=new NoteBuffer(f.vault,'One.md',{debounceMs:60000});t.after(()=>next.closeMetadataProjection());await next.load('entry');assert.equal(calls,1,'Ordinary note admission must not retry cleanup');const nextCapture=await next.captureConditionalSavedSource(witness);assert.ok(nextCapture);await until(()=>calls===2);await tick();
+  assert.throws(()=>claimCaptureRequest(scope,id,{}),{code:'capture_request_released'});assert.deepEqual(f.releases,[id,id]);assert.deepEqual(f.native.map(request=>request.captureId),[own.captureId,nextCapture.captureId],'Only the two explicitly requested captures dispatch; cleanup never recaptures the orphan ID');await f.buffer.releaseConditionalSavedSource(own);await next.releaseConditionalSavedSource(nextCapture);
 });
 test('a cancelled unadmitted actor cannot claim an old guard after its contended proof wait wakes',async t=>{
   const f=await fixture(t),id=crypto.randomUUID(),old=abandonedCandidate(id),lookup=held(),entered=held();let hold=true,adopterRead=false;

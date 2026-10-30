@@ -165,7 +165,6 @@ export class DurableNoteState {
   }
   private admitProtection():void{
     if(this.protectionStopped)return;
-    void this.cleanupAbandonedCaptureRequests();
     this.protectionAdmitted=true;const pending=this.deferredProtectionInventory;this.deferredProtectionInventory=undefined;
     if(pending)this.protection?.markInventory(pending.state,pending.error);
     this.captureProtection();
