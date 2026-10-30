@@ -4,7 +4,7 @@ import {NoteLoadSupervisor} from './note-load-supervisor.ts';
 import type { Vault } from '../core/vault.ts';
 import { isMarkdown, normalizePath } from '../core/types.ts';
 import type { NoteMetadata } from '../core/types.ts';
-import type { ConditionalSavedSourceCapture, ConditionalSavedSourceWitness, ConditionalSavedSourceStatus } from '../core/durable-writes.ts';
+import type { ConditionalSavedSourceCapture, ConditionalSavedSourceWitness, ConditionalSavedSourceStatus,ConditionalSavedSourceRequest } from '../core/durable-writes.ts';
 import { DocumentDraftProjection } from './document-draft-projection.ts';
 import type { DraftMetadataState } from './document-draft-projection.ts';
 import type {NoteDraftProtectionStatus} from './note-draft-protection.ts';
@@ -157,6 +157,10 @@ export class NoteBuffer {
     return this.durable.captureConditionalSavedSource(witness,()=>{validate();if(this.disposing)throw new Error('This note buffer is closing');},run=>this.enqueueResult(run));
   }
   conditionalSavedSourceStatus(capture:ConditionalSavedSourceCapture):ConditionalSavedSourceStatus{return this.durable?.conditionalSavedSourceStatus(capture)??'foreign';}
+  resumeConditionalSavedSourceOperation(request:ConditionalSavedSourceRequest,operationId:string,validate:()=>void):Promise<boolean>{
+    return this.enqueueResult(async()=>{this.requireLoaded();validate();if(this.disposing||!this.durable)return false;
+      const resumed=await this.durable.resumeConditionalSavedSourceOperation(request,operationId,()=>{validate();if(this.disposing)throw Error('This note buffer is closing');});this.syncDurable();return resumed;});
+  }
   releaseConditionalSavedSource(capture:ConditionalSavedSourceCapture):Promise<void>{
     if(!this.durable)return Promise.reject(new Error('Conditional saved-source release is unavailable'));
     return this.durable.releaseConditionalSavedSource(capture);

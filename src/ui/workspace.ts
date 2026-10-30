@@ -90,6 +90,7 @@ import { ChangeSet, EditorSelection } from '@codemirror/state';
 import { textChanges } from '../editor/text-changes.ts';
 import { WorkspaceStorageScope, validateWorkspaceWindowInfo, workspaceWindowBridge } from './workspace-window.ts';
 import {DeferredNoteRecovery} from './deferred-note-recovery.ts';
+import {registerNoteCaptureCapacityRecovery} from './note-capture-capacity.ts';
 import { resolveWorkspaceShortcut } from './workspace-keymap.ts';
 import { createSidebarControls } from './sidebar-controls.ts';
 import { buildFileListBackgroundMenu, installFileListBackgroundMenu } from './file-list-background-menu.ts';
@@ -996,7 +997,22 @@ export class Workspace {
         if(!entry)throw new Error('Recovered note entry is missing; draft retained');
         await this.bufferFor(entry.path,entryId,validate);validate();
       }});
-    this.deferredNoteRecovery=recovery;this.disposers.push(()=>recovery.stop());
+    const capacityActors=new Map<string,NoteBuffer>();
+    const writes=adapter.durableWrites!,viewed=(entryId:string)=>[...this.panes,...this.cachedViews.values()].some(pane=>pane.tabs.some(tab=>tab.path&&vault.entries.get(tab.path)?.entryId===entryId));
+    const unopened=(entryId:string)=>{
+      if(viewed(entryId)){capacityActors.delete(entryId);return false;}
+      const owned=capacityActors.get(entryId);
+      return![...registry.values()].some(buffer=>buffer!==owned&&buffer.savedDurableWitness?.entryId===entryId)&&![...vault.entries.values()].some(entry=>entry.entryId===entryId&&registry.has(entry.path)&&registry.get(entry.path)!==owned);
+    };
+    const unregisterCapacity=registerNoteCaptureCapacityRecovery(writes,{validate,unopened,resume:async(request,operationId,check)=>{
+      check();if(!unopened(request.logicalWitness.entryId))return false;
+      const entry=[...vault.entries.values()].find(entry=>entry.type==='file'&&entry.entryId===request.logicalWitness.entryId);
+      if(!entry||entry.path!==request.logicalWitness.path)return false;
+      const current=()=>{check();if(viewed(entry.entryId!)){capacityActors.delete(entry.entryId!);throw Error('The note was opened while its retained operation was being recovered.');}};
+      const buffer=await this.bufferFor(entry.path,entry.entryId,current);current();capacityActors.set(entry.entryId!,buffer);
+      return buffer.resumeConditionalSavedSourceOperation(request,operationId,current);
+    }});
+    this.deferredNoteRecovery=recovery;this.disposers.push(()=>{recovery.stop();unregisterCapacity();});
   }
   private async recoverDurableBuffers(vault:Vault):Promise<void>{
     if(this.vault!==vault)return;

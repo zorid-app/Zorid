@@ -5,6 +5,7 @@ import type { Checkpoint,CheckpointChange } from '../core/durable-checkpoints.ts
 import { boundedUtf8,checkpointRevision,checkpointStateLimit,snapshotCheckpointChange } from '../core/checkpoint-input.ts';
 import {NoteDraftProtection} from './note-draft-protection.ts';
 import {NoteLoadSupervisor} from './note-load-supervisor.ts';
+import {recoverNoteCaptureCapacity} from './note-capture-capacity.ts';
 import {claimCaptureRequest,reserveCaptureRequestCleanup,retryCaptureRequestCleanups,captureRequestCleanupAdmissionAvailable} from './capture-request-cleanup.ts';
 import type {CaptureRequestClaim} from './capture-request-cleanup.ts';
 import type {NoteDraftCapture,NoteDraftProtectionStatus} from './note-draft-protection.ts';
@@ -552,7 +553,7 @@ export class DurableNoteState {
         const claim=Object.freeze({captureId:request.captureId,logicalWitness:request.logicalWitness});
         const capture=await owner.supervisor.run(async()=>{
           try{dispatched=true;return await this.writes.captureSavedSource!(claim);}
-          catch(error){if(error&&typeof error==='object'&&Object.getOwnPropertyDescriptor(error,'source')?.value==='host'&&Object.getOwnPropertyDescriptor(error,'code')?.value==='source_capture_capacity')await this.cleanupAbandonedCaptureRequests();throw error;}
+          catch(error){if(error&&typeof error==='object'&&Object.getOwnPropertyDescriptor(error,'source')?.value==='host'&&Object.getOwnPropertyDescriptor(error,'code')?.value==='source_capture_capacity'){await this.cleanupAbandonedCaptureRequests();check();await recoverNoteCaptureCapacity(this.writes,this.base.entryId,check);}throw error;}
         },check,{signal:owner.controller.signal});
         received=true;check();
         if(!capture||capture.captureId!==request.captureId||typeof capture.source!=='string')throw failure('invalid conditional saved-source capture');
@@ -778,6 +779,13 @@ export class DurableNoteState {
     await this.persist(adopted);
     if(this.state!.generation!==generation){await this.persist();this.changed();return{path,resolved:false};}
     this.state=adopted;this.error=null;this.changed();return{path,resolved:true};
+  });}
+  /** Capacity recovery may finish only this accepted operation. Unlike flush,
+   * it must never plan a newer raw draft that arrived while it was settling. */
+  resumeConditionalSavedSourceOperation(request:ConditionalSavedSourceRequest,operationId:string,validate:()=>void):Promise<boolean>{return this.queue(async()=>{
+    validate();this.assertLoadScope();const op=this.state?.operation,guard=op?.input?.conditionalSavedSource;
+    if(!op||op.ref||op.input?.operationId!==operationId||!guard||guard.captureId!==request.captureId||!['entryId','revision','path'].every(key=>guard.logicalWitness[key as keyof ConditionalSavedSourceWitness]===request.logicalWitness[key as keyof ConditionalSavedSourceWitness]))return false;
+    await this.resume(validate);validate();this.changed();return true;
   });}
   private async resume(validate:()=>void):Promise<void>{
     if(this.sourceRecoveryTerminal)throw this.sourceRecoveryTerminal;
