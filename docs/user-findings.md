@@ -3238,3 +3238,13 @@ Startup002 warm correctly refused unsupported old-baseline journal reset; defaul
 both builds failed foreground before input, normal app/Native cleanup. No800ms result.
 Named owners continue DB transient/collection continuation, typed version history and
 genuine SQLitebusy/host-death automatic-recovery verification. See latest plan delta.
+
+
+### 2026-10-30 — Recovery behavior must match Obsidian; remove extras
+
+Direct user steering: audit Obsidian recovery edge-case handling, match it and remove
+extra handling beyond the reference. New custom recovery expansion/fixture migrations
+FROZEN, drafts/pins preserved. REA reference audit first, scoped simplification next.
+Startup800ms and unnecessary import/index/rescan optimization remain active. Root
+package012 is built/361verified, not merged/installed; no800ms claim. Source/runtime
+coverage and freeze manifests are in instant-editor-execution.md scope correction.

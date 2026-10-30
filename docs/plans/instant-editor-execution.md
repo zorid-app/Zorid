@@ -1,5 +1,66 @@
 # Instant editor and automatic recovery
 
+
+## Recovery scope correction — direct user instruction, 2026-10-30
+
+User now directs: inspect everything Obsidian does for recovery edge cases, match
+that handling, and remove extra handling beyond it. This supersedes expanding
+custom recovery guarantees to satisfy every hypothetical edge case. The 800 ms
+usable-editor/startup and redundant computation objectives remain active.
+
+Root has FROZEN new recovery implementation, custom edge-case expansion and fixture
+migrations. All ready commits and uncommitted New/popup/compound drafts are preserved,
+not discarded or silently considered complete. Reference audit first, then explicit
+behavior comparison and coherent simplification/removal. Absence in a bounded static
+slice is not proof Obsidian lacks a mechanism. Preserve engine-required consistency
+while distinguishing it from optional recovery policy; do not equate Rust transaction
+internals with a reference user-facing feature. No proprietary recovered code enters
+this repository.
+
+REA reused retained Obsidian1.14.5 artifact evidence; cached ASAR SHA3a349274... and
+app.js SHA95b9fd39... reverified. Parent region evidence ev_f56103a467bb6188e376c4c5697b539d32bcf961247f394a268bdd9e36d48e43.
+Known text-view static path coalesces saves, queues a second write for later input,
+and shows a persistent failure notice plus requests backup. Snapshots are separate.
+Full adapter/snapshots/Bases/Canvas/view-lifecycle audit and runtime limits OPEN.
+Prior intent to exceed that policy is superseded; no promise of impossible zero
+failure or blanket removal of storage invariants follows from static analysis.
+
+Current Root branch codex/instant-editor-current in .worktrees/instant-editor,
+HEAD before this documentation5c723b0a. Main7d8006b8/installed app unchanged.
+Runtime5402c8ab/package012: TS/Vite/macOS361file verification PASS; Native SHA
+2f5851c08d5e42c18b395123e929c0b3f50b2c6dbd3a9439b966afa5602684a3,
+ASARb99ee437bff75a15797d7343f108ba956ffb7b545899b4353a67b02844f78d4d.
+Root177/177 combined collection/source/browser/helper checks,71/71 Native harness,
+63/63 A database,25/25 history and fullTS pass. These do not establish full Native
+or startup parity. Package011 preserved byte-for-byte all259regularfiles/symlinks at
+tmp/instant-editor-artifacts/candidate011; receipt there.
+
+Root genuineAuto001 against5402 injected real SQLite contention. It observed
+original A commit followed by real debounced B commit; prior test incorrectly forbade
+healthy same-admission queued-expression autosave. No live-preview explanation: B
+was persisted. Source-owner/independent classification preserves normal A→B autosave;
+host-restored/terminal rawB stays passive. Harness correction ready work is frozen
+pending reference scope; do not alter product merely to satisfy wrong oracle.
+Native host-death phase unrun; whole campaign unaccepted. All Auto001 owned processes
+closed with SIGTERM cleanup0/no leaks, not normal acceptance.
+
+LaunchServices diagnostic001 on package012 observed genuine Native window/webContents
+and document focus without input/activation. Cleanup timed out/usedTERM and was INVALID;
+late final normal appquit0/Native0 and allPIDs gone do not retroactively validate it.
+Native-open211s spans an early quit request while still opening, not established Rust
+startup cost. All owned processes eventually absent. Separate diagnostic readiness
+successora8ce0ed8 reviewed, not yet Root-composed. Main opt-in chronology1a7a87bf and
+Native diagnostic754d66a9 independently reviewed but uncomposed/unrun. No800ms proof.
+
+Latest resource: user restored~5.8GiB,~5.2GiB after package012. Root reclaimed~1GiB
+OWN rebuildable Rust deps; receipt rebuildable-rust-cache-cleanup002.json preserves
+productionhost SHA before/after. Removed test binaries require rebuild; do not claim
+historical cache executables still exist. Vaults/preferences/installed app untouched.
+
+Frozen recovery owner manifests (ignored):
+- .worktrees/database-command-recovery/tmp/database-command-recovery/freeze-manifest.json
+- .worktrees/native-auto-relay/tmp/native-recovery-handoff-20261030.md
+
 ## Active objective — 2026-10-29
 
 Make the correct editor usable within 800 ms: visible viewport, trusted typing,
