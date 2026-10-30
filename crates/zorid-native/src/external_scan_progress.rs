@@ -298,6 +298,11 @@ impl ProgressScan {
         seed.mode = mode;
         seed.options = Some(options.clone());
         seed.authority = Some(vault.store.identity()?);
+        #[cfg(test)]
+        external_positive_continuation::record_seed_refresh(
+            self.inventory.processed.len(),
+            seed.paths.len(),
+        );
         seed.processed = self
             .inventory
             .processed
@@ -993,6 +998,8 @@ impl NativeVault {
                         marker: directory.marker,
                     })
                     .collect();
+                #[cfg(test)]
+                external_positive_continuation::record_seed_build(names.len());
                 let paths = names
                     .iter()
                     .map(|name| child_path(saved.path.as_ref(), name))

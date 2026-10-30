@@ -7,6 +7,35 @@ use std::collections::BTreeSet;
 pub(super) const MAX_POSITIVE_HINTS: usize = 4096;
 const MAX_HINT_PATH_BYTES: usize = 1024 * 1024;
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default)]
+struct SeedWork {
+    builds: usize,
+    path_constructions: usize,
+    processed_visits: usize,
+    retain_visits: usize,
+}
+#[cfg(test)]
+thread_local! { static SEED_WORK: std::cell::Cell<SeedWork> = const { std::cell::Cell::new(SeedWork { builds: 0, path_constructions: 0, processed_visits: 0, retain_visits: 0 }) }; }
+#[cfg(test)]
+pub(super) fn record_seed_build(paths: usize) {
+    SEED_WORK.with(|work| {
+        let mut next = work.get();
+        next.builds += 1;
+        next.path_constructions += paths;
+        work.set(next);
+    });
+}
+#[cfg(test)]
+pub(super) fn record_seed_refresh(processed: usize, retained: usize) {
+    SEED_WORK.with(|work| {
+        let mut next = work.get();
+        next.processed_visits += processed;
+        next.retain_visits += retained;
+        work.set(next);
+    });
+}
+
 pub(super) struct HintDirectory {
     pub path: Option<VaultPath>,
     pub identity: String,
@@ -257,5 +286,68 @@ impl NativeVault {
         self.external_positive_hints = Some(hints);
         result?;
         Ok(Some(quantum))
+    }
+}
+
+#[cfg(test)]
+mod perf_tests {
+    use super::*;
+    use std::{num::NonZeroU16, time::Duration};
+
+    #[test]
+    fn positive_seed_work_reuses_one_directory_without_rewalking_candidates() {
+        let root = tempfile::tempdir().unwrap();
+        const COUNT: usize = 32;
+        for index in 0..COUNT {
+            std::fs::write(
+                root.path().join(format!("note-{index:03}.md")),
+                format!("note {index}\n"),
+            )
+            .unwrap();
+        }
+        let mut vault = NativeVault::open(root.path()).unwrap();
+        vault
+            .family_enroll(&FamilyScope {
+                realm_id: zorid_sync_protocol::RealmId::new("seed-work-realm").unwrap(),
+                vault_id: zorid_sync_protocol::VaultId::new("seed-work-vault").unwrap(),
+            })
+            .unwrap();
+        SEED_WORK.with(|work| work.set(SeedWork::default()));
+        let options = ExternalReconcileOptions {
+            scan: ScanOptions {
+                max_duration: Duration::from_secs(5),
+                ..Default::default()
+            },
+            max_work_units: NonZeroU16::new(1).unwrap(),
+        };
+        let mut scan = None;
+        for _ in 0..8 {
+            let turn = vault
+                .reconcile_external_quantum(options.clone(), ExternalFileMode::Auto)
+                .unwrap();
+            assert!(turn.pending && !turn.reconciliation.run.complete);
+            assert!(turn.work_units <= 1);
+            if let Some(original) = &scan {
+                assert_eq!(original, &turn.reconciliation.run.scan_id);
+            }
+            scan = Some(turn.reconciliation.run.scan_id);
+        }
+        let work = SEED_WORK.with(std::cell::Cell::get);
+        assert_eq!(
+            work.builds, 1,
+            "same checked directory must reuse one candidate vector: {work:?}"
+        );
+        assert_eq!(
+            work.path_constructions, COUNT,
+            "each cached candidate path is constructed once: {work:?}"
+        );
+        assert_eq!(
+            work.processed_visits, 0,
+            "normal turns must move validated metadata instead of rescanning eligibility: {work:?}"
+        );
+        assert_eq!(
+            work.retain_visits, 0,
+            "normal turns must not repeatedly filter the candidate vector: {work:?}"
+        );
     }
 }
