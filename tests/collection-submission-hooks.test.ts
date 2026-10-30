@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {JSDOM} from 'jsdom';
-import {mountSourceChooser,mountCollectionEditor,mountCollectionBrowser} from '../src/databases/collection-ui.ts';
+import {mountSourceChooser,mountCollectionEditor,mountCollectionBrowser,mountCollectionPropertyPicker} from '../src/databases/collection-ui.ts';
+import {createCollectionSubmission} from '../src/databases/collection-submission.ts';
 import type {CollectionSubmit} from '../src/databases/collection-ui.ts';
 import type {DatabaseRequest,DatabaseResponse} from '../src/core/databases.ts';
 const tick=()=>new Promise<void>(resolve=>setImmediate(resolve));
@@ -30,4 +31,17 @@ test('a successful old browser refresh held across handoff cannot publish or sta
 });
 test('the exact completion proof reaches an awaited onSaved callback before its own side effects',async t=>{
  const f=fixture(),s=submission();let release!:()=>void,liveAttempt=true,effects=0;const gate=new Promise<void>(done=>{release=done;}),stale=Error('Old save completion retired'),guard=()=>{if(!liveAttempt)throw stale;};const editor=mountCollectionEditor(f.host,{service:{async request(){return reply();}},submit:s.submit,collection,entries:[],isCurrent:()=>true,onSaved:async(_collection,_recovering,validateAttempt)=>{await gate;validateAttempt!();effects++;},onClose:()=>{}});t.after(()=>{release();s.resolve();editor.destroy();f.dom.window.close();});control(f.host,'Apply').click();const completing=s.complete(reply(),false,guard);await tick();liveAttempt=false;release();await assert.rejects(completing,error=>error===stale);assert.equal(effects,0);
+});
+
+for(const route of ['empty','configured','picker'] as const)test(`an accepted ${route} retry stays inside its original submission through another handoff`,async t=>{
+ const f=fixture();let native=0,finished=0,attempts=0,heldStarted=false,release!:()=>void,closed=false;const gate=new Promise<void>(done=>{release=done;});const service={async request(command:DatabaseRequest){if(command.op==='list')return{collections:[],entries:[],projection:{pending:0,issues:[]}};native++;const result=reply();if(command.op==='create')result.collections[0].name=command.name;return result;}};
+ const owner=createCollectionSubmission({service,validate(){if(closed)throw Error('Closed');},contains:()=>true,hold:()=>()=>{},claim:()=>()=>{}});
+ const complete=async(_value:unknown,recovering?:boolean,validateAttempt?:()=>void)=>{attempts++;if(attempts===1)throw Error('Initial source persistence failed');if(!recovering){heldStarted=true;await gate;validateAttempt?.();}else finished++;};
+ const common={service,submit:owner.submit,onDestroy:()=>{closed=true;owner.close();},isCurrent:()=>!closed};const controlHandle=route==='picker'?mountCollectionPropertyPicker(f.host,{...common,collection,onSaved:complete,onClose:()=>{}}):mountSourceChooser(f.host,{...common,choose:complete});t.after(()=>{release();controlHandle.destroy();f.dom.window.close();});
+ if(route==='empty')control(f.host,'New empty data source').click();else if(route==='configured'){control(f.host,'Tasks').click();control(f.host,'Create collection').click();}else{const input=f.host.querySelector<HTMLInputElement>('[aria-label="Type property name…"]')!;input.value='New field';input.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));}
+ await until(()=>attempts===1);await tick();control(f.host,route==='empty'?'Retry data source':route==='configured'?'Create collection':'Retry creation').click();await until(()=>heldStarted);assert.equal(owner.canRecover(),true,'accepted retries must join their original exact task before admission selection');const prepared=owner.prepareAdmissionRecovery()!;await prepared.settle();await tick();assert.equal(finished,1);assert.equal(native,1,'a known published receipt must not submit another Native mutation');release();await tick();assert.equal(controlHandle.hasPendingChanges(),false);
+});
+
+test('a browser keeps its accepted exact command through a failed derived refresh and retries only its held receipt',async t=>{
+ const f=fixture();let deleted=false,mutations=0,refreshes=0;const service={async request(command:DatabaseRequest){if(command.op==='delete'){mutations++;deleted=true;}return reply(deleted);}};const owner=createCollectionSubmission({service,validate(){},contains:()=>true,hold:()=>()=>{},claim:()=>()=>{}});const browser=mountCollectionBrowser(f.host,{service,submit:owner.submit,isCurrent:()=>true,onDestroy:()=>owner.close(),open:async()=>{},openEntry:async()=>{},duplicatePath:()=>'',onMutation:async()=>{if(++refreshes===1)throw Error('Unknown derived refresh failure');}});t.after(()=>{browser.destroy();f.dom.window.close();});await tick();control(f.host,'Original').click();await tick();control(f.host,'Delete collection').click();control(f.host,'Move to Trash').click();await until(()=>refreshes===1);await tick();const retry=control(f.host,'Retry unfinished operation');assert.equal(retry.hidden,false,'the acknowledged original command remains the only retry target');retry.click();await until(()=>refreshes===2);await tick();assert.equal(mutations,1);assert.equal(owner.pending,false);assert.equal(retry.hidden,true);
 });

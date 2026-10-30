@@ -140,6 +140,14 @@ export function mountSourceChooser(container: HTMLElement, options: SourceChoose
     if (!options.service || busy || !live()) return;
     draft = true;
     await run(async () => {
+      const completeEmpty:Parameters<CollectionSubmit>[1]=async(response,recovering,validateAttempt)=>{
+        validateAttempt();if(!live())throw new Error('This collection control was closed.');
+        emptyAccepted = true;
+        if (response.projection.pending || response.projection.issues.length) throw new Error(response.projection.issues.map(issue => issue.message).join('\n') || 'The data source is committed locally but its files still need publication. Retry this creation.');
+        const created = response.collections.filter(collection => !collection.deleted && emptyRequest?.op === 'create' && collection.name === emptyRequest.name);
+        if (created.length!==1) throw new Error('The data source was not returned unambiguously. Retry this creation.');
+        emptySource = { kind: 'collection', id: created[0].id };await options.choose(emptySource,recovering,validateAttempt);validateAttempt();if(!live())throw new Error('This collection control was closed.');
+      };
       try {
         if (!emptySource) {
           if (!emptyRequest) {
@@ -149,15 +157,8 @@ export function mountSourceChooser(container: HTMLElement, options: SourceChoose
             while (names.has(name.toLowerCase())) name = `New database ${++suffix}`;
             emptyRequest = { op: 'create', operationId: operationId(), name, preset: 'blank' };
           }
-          await submitCollection(options,emptyRequest,async(response,recovering,validateAttempt)=>{
-            validateAttempt();if(!live())throw new Error('This collection control was closed.');
-            emptyAccepted = true;
-            if (response.projection.pending || response.projection.issues.length) throw new Error(response.projection.issues.map(issue => issue.message).join('\n') || 'The data source is committed locally but its files still need publication. Retry this creation.');
-            const created = response.collections.filter(collection => !collection.deleted && emptyRequest?.op === 'create' && collection.name === emptyRequest.name);
-            if (created.length!==1) throw new Error('The data source was not returned unambiguously. Retry this creation.');
-            emptySource = { kind: 'collection', id: created[0].id };await options.choose(emptySource,recovering,validateAttempt);validateAttempt();if(!live())throw new Error('This collection control was closed.');
-          });
-        }else{if(!live())return;await options.choose(emptySource);}
+          await submitCollection(options,emptyRequest,completeEmpty);
+        }else if(options.submit&&emptyRequest)await options.submit(emptyRequest,completeEmpty);else{if(!live())return;await options.choose(emptySource);}
         if (live()) { emptyRequest = undefined; emptySource = undefined; emptyAccepted = false; emptyUncertain = false; draft = false; }
       } catch (problem) {
         const rejected = problem as { source?: unknown; commitUncertain?: unknown };
@@ -229,6 +230,13 @@ export function mountSourceChooser(container: HTMLElement, options: SourceChoose
     let capturedDraft: {name: string; preset: string} | undefined;
     const hint = element(doc, 'p'); hint.className = 'collection-source-create-hint'; hint.setAttribute('role', 'status'); hint.hidden = true;
     const submit = button(doc, 'Create collection', () => { void run(async () => {
+      const completeCreated:Parameters<CollectionSubmit>[1]=async(response,recovering,validateAttempt)=>{
+        validateAttempt();if(!live())throw new Error('This collection control was closed.');accepted = true;
+        if (response.projection.pending || response.projection.issues.length) throw new Error(response.projection.issues.map(issue => issue.message).join('\n') || 'The collection is committed locally but its files still need publication. Retry creation.');
+        const created = response.collections.filter(item => !item.deleted && item.name === request!.name);
+        if (created.length!==1) throw new Error('The collection was not returned unambiguously. Retry this creation.');
+        source = { kind: 'collection', id: created[0].id };await options.choose(source,recovering,validateAttempt);validateAttempt();if(!live())throw new Error('This collection control was closed.');
+      };
       try {
         if (!source) {
           if (!request) {
@@ -236,14 +244,8 @@ export function mountSourceChooser(container: HTMLElement, options: SourceChoose
             request = { op: 'create', operationId: operationId(), name: name.value.trim(), preset: preset.value as 'blank' | 'tasks' };
             retainedCreate = true;
           }
-          await submitCollection(options,request,async(response,recovering,validateAttempt)=>{
-            validateAttempt();if(!live())throw new Error('This collection control was closed.');accepted = true;
-            if (response.projection.pending || response.projection.issues.length) throw new Error(response.projection.issues.map(issue => issue.message).join('\n') || 'The collection is committed locally but its files still need publication. Retry creation.');
-            const created = response.collections.filter(item => !item.deleted && item.name === request!.name);
-            if (created.length!==1) throw new Error('The collection was not returned unambiguously. Retry this creation.');
-            source = { kind: 'collection', id: created[0].id };await options.choose(source,recovering,validateAttempt);validateAttempt();if(!live())throw new Error('This collection control was closed.');
-          });
-        }else await options.choose(source);
+          await submitCollection(options,request,completeCreated);
+        }else if(options.submit&&request)await options.submit(request,completeCreated);else await options.choose(source);
         if (live()) { request = undefined; source = undefined; capturedDraft = undefined; retainedCreate = false; accepted = false; uncertain = false; draft = false; }
       } catch (problem) {
         const rejected = problem as {source?: unknown; commitUncertain?: unknown};
@@ -342,16 +344,17 @@ export function mountCollectionPropertyPicker(container: HTMLElement, options: C
         properties: [...structuredClone(options.collection.properties), property] };
     }
     busy = true; root.setAttribute('aria-busy', 'true'); error.hidden = true; controls();
+    const completeProperty:Parameters<CollectionSubmit>[1]=async(response,recovering,validateAttempt)=>{
+      validateAttempt();if(!live())throw new Error('This collection control was closed.');
+      if (response.projection.pending || response.projection.issues.length) throw new Error(response.projection.issues.map(issue => issue.message).join('\n') || 'The property is committed locally but its files still need publication. Retry creation.');
+      accepted = response.collections.find(collection => collection.id === options.collection.id);
+      if (!accepted) throw new Error('The updated collection was not returned. Retry creation.');
+      await options.onSaved(accepted,recovering,validateAttempt);validateAttempt();if(!live())throw new Error('This collection control was closed.');
+    };
     try {
       if (!accepted) {
-        await submitCollection(options,request,async(response,recovering,validateAttempt)=>{
-          validateAttempt();if(!live())throw new Error('This collection control was closed.');
-          if (response.projection.pending || response.projection.issues.length) throw new Error(response.projection.issues.map(issue => issue.message).join('\n') || 'The property is committed locally but its files still need publication. Retry creation.');
-          accepted = response.collections.find(collection => collection.id === options.collection.id);
-          if (!accepted) throw new Error('The updated collection was not returned. Retry creation.');
-          await options.onSaved(accepted,recovering,validateAttempt);validateAttempt();if(!live())throw new Error('This collection control was closed.');
-        });
-      }else await options.onSaved(accepted);
+        await submitCollection(options,request,completeProperty);
+      }else if(options.submit&&request)await options.submit(request,completeProperty);else await options.onSaved(accepted);
       if (live()) { request = undefined; dirty = false; options.onClose(); }
     } catch (problem) {
       if (live()) {
@@ -584,7 +587,7 @@ export function mountCollectionBrowser(container: HTMLElement, options: Collecti
   const live=()=>!destroyed&&options.isCurrent();
   async function run(action:()=>Promise<void>){if(busy||!live())return;busy=true;error.hidden=true;root.setAttribute('aria-busy','true');for(const control of root.querySelectorAll<HTMLButtonElement>('button'))control.disabled=true;try{await action();}catch(problem){if(live()){error.textContent=problemText(problem);error.hidden=false;}}finally{busy=false;root.removeAttribute('aria-busy');for(const control of root.querySelectorAll<HTMLButtonElement>('button'))control.disabled=false;retry.hidden=!request;}}
   async function refresh(validateAttempt:()=>void=()=>{}){const response=await options.service.request({op:'list'});validateAttempt();if(!live())return;list.replaceChildren();for(const collection of response.collections){const row=element(doc,'div');row.className='collection-browser-item';row.append(button(doc,collection.name+(collection.deleted?' (deleted)':''),()=>{void run(()=>select(collection.id));}));list.append(row);}if(!list.childNodes.length)list.append(element(doc,'p','Create a collection from a Base’s Add view menu.'));}
-  async function mutate(command:DatabaseRequest){if(request&&JSON.stringify({...request,operationId:undefined})!==JSON.stringify({...command,operationId:undefined}))throw new Error('Retry the unfinished collection operation before starting another one.');request??=command;await submitCollection(options,request,async(reply,recovering,validateAttempt)=>{validateAttempt();if(!live())throw new Error('This collection control was closed.');if(reply.projection.pending||reply.projection.issues.length)throw new Error(reply.projection.issues.map(issue=>issue.message).join('\n')||'Some collection files still need publication. Retry this operation.');request=undefined;if(!recovering){await options.onMutation(validateAttempt);validateAttempt();if(!live())throw new Error('This collection control was closed.');await refresh(validateAttempt);validateAttempt();if(!live())throw new Error('This collection control was closed.');if(current){await select(current.id,validateAttempt);validateAttempt();if(!live())throw new Error('This collection control was closed.');}}});}
+  async function mutate(command:DatabaseRequest){if(request&&JSON.stringify({...request,operationId:undefined})!==JSON.stringify({...command,operationId:undefined}))throw new Error('Retry the unfinished collection operation before starting another one.');request??=command;await submitCollection(options,request,async(reply,recovering,validateAttempt)=>{validateAttempt();if(!live())throw new Error('This collection control was closed.');if(reply.projection.pending||reply.projection.issues.length)throw new Error(reply.projection.issues.map(issue=>issue.message).join('\n')||'Some collection files still need publication. Retry this operation.');if(!recovering){await options.onMutation(validateAttempt);validateAttempt();if(!live())throw new Error('This collection control was closed.');await refresh(validateAttempt);validateAttempt();if(!live())throw new Error('This collection control was closed.');if(current){await select(current.id,validateAttempt);validateAttempt();if(!live())throw new Error('This collection control was closed.');}}validateAttempt();request=undefined;});}
   async function select(id:string,validateAttempt:()=>void=()=>{}){const reply=await options.service.request({op:'get',collectionId:id});validateAttempt();if(!live())return;const collection=reply.collections.find(item=>item.id===id);if(!collection)throw new Error('This collection is unavailable.');current=collection;detail.replaceChildren();detail.append(element(doc,'h3',collection.name));
     if(collection.deleted){detail.append(element(doc,'p','This collection and its entries are in Trash.'),button(doc,'Restore collection',()=>{void run(()=>mutate({op:'restore',operationId:operationId(),collectionId:collection.id,expectedRevision:collection.revision}));}));return;}
     detail.append(button(doc,'Open collection',()=>{void run(()=>options.open(collection));}));
