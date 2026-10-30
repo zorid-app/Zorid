@@ -9,9 +9,10 @@ import { MemoryAdapter } from '../src/core/memory-adapter.ts';
 import { inlineBaseRequest } from '../src/bases/inline-base.ts';
 import type { InlineBaseRequest } from '../src/bases/inline-base.ts';
 import type { BaseSession, BaseSessionOptions } from '../src/bases/session.ts';
+import type { IndependentDraftProvider, IndependentDraftCandidate, IndependentDraftReceipt } from '../src/core/independent-drafts.ts';
 import type { Checkpoint } from '../src/core/durable-checkpoints.ts';
 import type {
-  ConditionalSavedSourceCapture, DurableWriteInput,
+  ConditionalSavedSourceCapture, ConditionalSavedSourceRequest, DurableWriteInput,
   DurableWriteIntent, DurableWriteRead, DurableWriteRef, DurableWrites,
 } from '../src/core/durable-writes.ts';
 
@@ -32,7 +33,7 @@ function provider(initial: string) {
   let current: DurableWriteRead = { entryId: 'source-entry', revision: 'r1', path: 'Source.md', content: initial,
     stat: { ctime: 1, mtime: 1, size: Buffer.byteLength(initial) } };
   let saved = initial, capturesTaken = 0, authorships = 0;
-  const adapter = new MemoryAdapter({ 'Source.md': initial }) as MemoryAdapter & { durableWrites: DurableWrites };
+  const adapter = new MemoryAdapter({ 'Source.md': initial }) as MemoryAdapter & { durableWrites: DurableWrites;independentDrafts:IndependentDraftProvider };
   const write = adapter.write.bind(adapter), list = adapter.list.bind(adapter), stat = adapter.stat.bind(adapter);
   // Native inventory and coherent reads name the same logical entry/revision.
   adapter.list = async () => (await list()).map(entry => entry.path === current.path ? { ...entry, entryId: current.entryId, revision: current.revision, ...current.stat } : entry);
@@ -40,6 +41,17 @@ function provider(initial: string) {
     const entry = await stat(path);
     return entry && entry.path === current.path ? { ...entry, entryId: current.entryId, revision: current.revision, ...current.stat } : entry;
   };
+  const journalScope={...scope,incarnationId:crypto.randomUUID()},journal=new Map<string,IndependentDraftCandidate|IndependentDraftReceipt>();
+  const address=(value:{entryId:string;writer:string;incarnationId?:string})=>JSON.stringify([value.entryId,value.writer,value.incarnationId??journalScope.incarnationId]);
+  const receipt=(value:IndependentDraftReceipt):IndependentDraftReceipt=>({vaultId:value.vaultId,clientId:value.clientId,incarnationId:value.incarnationId,entryId:value.entryId,writer:value.writer,generation:value.generation,revision:value.revision,deleted:value.deleted});
+  adapter.independentDrafts={scope:journalScope,list:async options=>[...journal.values()].filter(row=>!row.deleted&&(!options||row.entryId===options.entryId)).map(receipt),read:async key=>clone(journal.get(address(key))??null),compareAndSwap:async request=>{
+    const key=address(request),before=journal.get(key);assert.equal(request.expectedRevision,before?.revision??null);
+    const row:IndependentDraftCandidate={...journalScope,entryId:request.entryId,writer:request.writer,generation:request.generation,revision:request.nextRevision,deleted:false,baseline:clone(request.baseline),draft:request.draft,checkpointRevision:request.checkpointRevision,pendingOperation:request.pendingOperation};
+    journal.set(key,row);return receipt(row);
+  },retire:async request=>{
+    const key=address(request),before=journal.get(key);assert.equal(request.expectedRevision,before?.revision);const row:IndependentDraftReceipt={...journalScope,entryId:request.entryId,writer:request.writer,generation:request.generation,revision:request.nextRevision,deleted:true};journal.set(key,row);return clone(row);
+  }};
+  const captureRequests:ConditionalSavedSourceRequest[]=[],captureIds:string[]=[];
   const checkpoints = new Map<string, Checkpoint>();
   const captures = new Map<string, ConditionalSavedSourceCapture>();
   const inputs = new Map<string, { input: DurableWriteInput; physical?: string }>();
@@ -68,12 +80,17 @@ function provider(initial: string) {
     },
     readText: async path => { assert.equal(path, current.path); return clone(current); },
     readTextById: async id => id === current.entryId ? clone(current) : null,
-    captureSavedSource: async witness => {
-      assert.deepEqual(witness, { entryId: current.entryId, revision: current.revision, path: current.path });
-      const capture = { captureId: `capture-${++capturesTaken}`, logicalWitness: clone(witness), source: saved };
+    captureSavedSource: async request => {
+      captureRequests.push(clone(request));assert.match(request.captureId,/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+      assert.deepEqual(request.logicalWitness, { entryId: current.entryId, revision: current.revision, path: current.path });
+      const protectedRequest=[...journal.values()].some(row=>!row.deleted&&'pendingOperation'in row&&row.pendingOperation&&JSON.parse(row.pendingOperation).captureRequests?.some((claim:{captureId:string;logicalWitness:unknown})=>claim.captureId===request.captureId&&JSON.stringify(claim.logicalWitness)===JSON.stringify(request.logicalWitness)));
+      assert.equal(protectedRequest,true,'the exact caller request has an independently acknowledged capsule before physical capture');
+      const before=captures.get(request.captureId);if(before){assert.deepEqual(before.logicalWitness,request.logicalWitness);return clone(before);}
+      const capture = { captureId: request.captureId, logicalWitness: clone(request.logicalWitness), source: saved };capturesTaken++;captureIds.push(request.captureId);
       captures.set(capture.captureId, capture);
       await onCapture?.(); return clone(capture);
     },
+    listSavedSourceRequests:async()=>[...captures.values()].map(value=>({captureId:value.captureId,logicalWitness:clone(value.logicalWitness),legacy:false})),
     releaseSavedSource: async id => { released.push(id); captures.delete(id); },
     planWrite: async input => {
       planned.push(clone(input));
@@ -126,7 +143,7 @@ function provider(initial: string) {
     },
   };
   adapter.durableWrites = writes;
-  return { adapter, writes, planned, prepared, committed, queried, released,
+  return { adapter, writes, planned, prepared, committed, queried, released,captureRequests,captureIds,
     get current() { return clone(current); }, get saved() { return saved; },
     get capturesTaken() { return capturesTaken; }, get authorships() { return authorships; },
     setCapture(fn: typeof onCapture) { onCapture = fn; }, setCommit(fn: typeof onCommit) { onCommit = fn; },
@@ -214,9 +231,9 @@ test('clean inline save changes only the selected duplicate fence and carries th
   assert.equal(f.editor().state.doc.toString(), expected);
   assert.equal(f.authority.capturesTaken, 1); assert.equal(f.authority.authorships, 1);
   assert.equal(f.planned[0].expectedContent, source);
-  assert.deepEqual(f.planned[0].conditionalSavedSource, { captureId: 'capture-1', logicalWitness: { entryId: 'source-entry', revision: 'r1', path: 'Source.md' } });
+  assert.deepEqual(f.planned[0].conditionalSavedSource, { captureId: f.authority.captureIds[0], logicalWitness: { entryId: 'source-entry', revision: 'r1', path: 'Source.md' } });
   assert.equal('source' in f.planned[0].conditionalSavedSource!, false);
-  assert.deepEqual(f.released, ['capture-1']);
+  assert.deepEqual(f.released, [f.authority.captureIds[0]]);
 });
 
 test('dirty body and exact latest fence save together while physical CAS uses the original saved source', async t => {
@@ -238,7 +255,7 @@ test('external physical change before capture rejects without changing either dr
   assert.equal(f.buffer.text, source); assert.equal(f.buffer.savedText, source);
   assert.equal(f.authority.current.content, source); assert.equal(f.authority.saved, external);
   assert.equal(f.planned.length, 0); assert.equal(f.authority.authorships, 0);
-  assert.deepEqual(f.released, ['capture-1']); assert.equal(host.captureSaveRetry?.(), undefined);
+  assert.deepEqual(f.released, [f.authority.captureIds[0]]); assert.equal(host.captureSaveRetry?.(), undefined);
 });
 
 test('physical change after capture rejects native authorship and retains the exact newest shared draft', async t => {
@@ -250,7 +267,7 @@ test('physical change after capture rejects native authorship and retains the ex
   assert.equal(f.buffer.hasRecoveryConflict, true);
   assert.equal(f.authority.current.content, source); assert.equal(f.authority.saved, external);
   assert.equal(f.authority.authorships, 0); assert.equal(f.planned.length, 1);
-  assert.equal(f.planned[0].content, replaceSecond(source)); assert.deepEqual(f.released, ['capture-1']);
+  assert.equal(f.planned[0].content, replaceSecond(source)); assert.deepEqual(f.released, [f.authority.captureIds[0]]);
 });
 
 for (const invalidation of ['draft', 'owner'] as const) test(`an ${invalidation === 'draft' ? 'edited draft' : 'owner retired'} during source capture releases its unused proof`, async t => {
@@ -259,7 +276,7 @@ for (const invalidation of ['draft', 'owner'] as const) test(`an ${invalidation 
   f.authority.setCapture(() => { if (invalidation === 'draft') f.buffer.update(latest); else pane.runtime = undefined; });
   try {
     await assert.rejects(host.transform(config, renamed, () => {}), /changed|closed|superseded/i);
-    assert.deepEqual(f.released, ['capture-1']); assert.equal(f.planned.length, 0);
+    assert.deepEqual(f.released, [f.authority.captureIds[0]]); assert.equal(f.planned.length, 0);
     assert.equal(f.authority.current.content, source); assert.equal(f.authority.saved, source);
     assert.equal(f.buffer.text, invalidation === 'draft' ? latest : source);
   } finally { pane.runtime = runtime; }
@@ -280,7 +297,7 @@ test('lost committed reply retries the original capture, plan and ref without pu
   assert.deepEqual(f.committed, [ref]); assert.ok(f.queried.length >= 2);
   for (const queried of f.queried) assert.deepEqual(queried, ref);
   assert.equal(f.authority.capturesTaken, 1); assert.equal(f.authority.authorships, 1);
-  assert.deepEqual(f.released, ['capture-1']); assert.equal(host.captureSaveRetry?.(), undefined);
+  assert.deepEqual(f.released, [f.authority.captureIds[0]]); assert.equal(host.captureSaveRetry?.(), undefined);
 });
 
 test('a moved duplicate occurrence fails the latest whole-document guard before physical capture', async t => {
@@ -309,7 +326,7 @@ test('already clean exact source is a no-op and releases an unused physical proo
   assert.equal(f.buffer.text, source); assert.equal(f.buffer.savedText, source);
   assert.equal(f.authority.saved, source); assert.equal(f.planned.length, 0);
   assert.equal(f.authority.capturesTaken, 1); assert.equal(f.authority.authorships, 0);
-  assert.deepEqual(f.released, ['capture-1']);
+  assert.deepEqual(f.released, [f.authority.captureIds[0]]);
 });
 
 test('late owner acknowledgement failure cannot author another intent for already durable exact source', async t => {
@@ -319,6 +336,6 @@ test('late owner acknowledgement failure cannot author another intent for alread
   assert.equal(f.editor().state.doc.toString(), source, 'a rejected owner cannot publish into the editor');
   await host.transform(config, renamed, () => {});
   assert.equal(f.planned.length, 1); assert.equal(f.authority.authorships, 1);
-  assert.equal(f.authority.capturesTaken, 2); assert.deepEqual(f.released, ['capture-1', 'capture-2']);
+  assert.equal(f.authority.capturesTaken, 2); assert.deepEqual(f.released, f.authority.captureIds);
   assert.equal(f.editor().state.doc.toString(), source, 'the clean no-op does not replay a publication acknowledgement');
 });
