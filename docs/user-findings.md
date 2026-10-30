@@ -16,6 +16,13 @@ The built-in goal is active again. See [execution gates](plans/instant-editor-ex
 Implementation/review, native measurement, main integration and installed acceptance
 remain distinct; no complete automatic-recovery or 800 ms claim yet.
 
+## Background watcher continuity — implemented, runtime validation pending
+
+Healthy app background/foreground transitions unnecessarily stopped the watcher
+and forced a complete rescan. Reviewed6c7ff9e8 keeps bounded metadata observation
+for authenticated paused owners while Native maintenance stays paused.124focused
+checks and build006 pass; actual improved app timing remains unverified.
+
 ## Delivery delay — 2026-10-29
 
 User repeatedly requests status and objects to the duration. Root acknowledges

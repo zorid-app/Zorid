@@ -21,6 +21,105 @@ The user resumed the existing thread goal: it is active. The objective is not
 complete. Earlier create_goal replacement was rejected while the unfinished goal
 was blocked; that is historical, not a current execution blocker.
 
+## Latest delivery state — runtime6c7ff9e8 / harness7d954b57
+
+Goal ACTIVE. Main remains7d8006b8; installed app remains the prior verified Notion
+bundle. No800ms startup claim, no main integration or new installation. Root is
+sole integration owner and does not coordinate with the finished other session.
+
+Current reviewed source includes automatic typed note-load continuation,
+unadmitted per-view cancellation and guarded fresh-admission wakeups. Root
+composed JS004:631/632 pass plusTS pass, unchanged source. The remaining old
+immediate-load canonical-settlement assertion was strengthened in812acd96 with an
+actual held recovery CAS; its full11-test file passes while retaining exact plan,
+one-commit and final canonical-body assertions. Cancellation author165tests and
+independent review pass. Already-dispatched serial Vault provider reads still
+await settlement; no underlying provider cancellation claim.
+
+Native no-op revision writes fell from1310–1349 to698 across two unchanged
+inventories (~47%). Its first timing sample regressed to12.31s startup completion /
+10.26s audit; this is NOT a latency win. Followup1c83cd65 removes duplicate JSON
+allocations and fixes the real scalar-readiness private-recovery-capture regression.
+Actual Root73scan+2capture+57namespace tests all pass, including the previously
+failing postcommit preservation and strict full/selected corruption controls.
+Release host9febfe217ae6909d9980742867ae69355b3dd3fac4f00f27f79fa2401e433c76,
+Native source1c83cd65, unchanged Rust input digestd95b15e2…; receipt
+`tmp/instant-editor-validation/native-inventory-followup-green004.json`.
+
+Native hello008 measured916ms:20ms vault open,9ms recovery/cache,344ms initial
+reconciliation,543ms unattributed loader/framing/parent scheduling. Native004–008
+ran under DEFAULT sandbox. Separate same-binary CLI validation (no vault opened)
+measured first557ms then4–5ms default; later warmed escalated3.7–7.2ms. Cache/order
+confounds prevent isolating sandbox/loader. Do not describe half a second as Rust
+runtime initialization. Cold SQLite COUNT68ms, warm0.003ms does not establish a
+new schema optimization requirement. Large external maps are NOT packaged;
+profiling may use only external maps tied to exact packaged JS and pinned hashes.
+
+New6c7ff9e8 fixes a concrete unnecessary rescan trigger: a healthy authenticated
+paused runtime retains its existing bounded metadata watcher while Native polling,
+indexing and history remain paused. Known changes queue until resume; real gaps,
+failed grants, last owner teardown, watcher failures and overflow retain recovery
+scan duties. Author independent review and Root124focused CJS checks pass.
+Build006 passedTS/Vite/package/361-file verification with unchanged runtime inputs:
+ASAR11ccd1cb8166c25a32ec6ab15404993ac93b0832b1504e49bbf9613c11398059;
+Native9feb… unchanged; source6c7ff9e8. Receipt build-006.json SHA
+5f88af176cfb668a6ae2a8e02eab8d233442c26c07162c4e8d3ff512ece19d33,
+manifest SHA2d0895893256155393109331a9d2a367edba467371c931ffc5dc5c1695b6264a.
+Minimum free disk7.09GB during build; later6.6GiB available.
+
+Packaged pilots001–005 remain FAILED/INVALID evidence. Final005 got real trusted
+ordinary input candidate527ms vsbaseline682ms, large968ms vs731ms, then bothBase
+checks failed with hidden/unfocused windows. Both owned apps/native hosts normal0,
+dependent reopens skipped; no whole-run performance acceptance. Earlier003/004
+exposed observer starvation and hidden RAF; no negative snapshot can prove an800ms
+miss without continuous eligibility coverage. Reviewed harness now polls readiness
+observationally, includes normal activation in original clocks and confirms focus
+passively, aborts on interference, and captures Base/visibility diagnostics.
+Root42pure harness checks pass; original source/body/receipt/clock guards remain.
+
+One CPU diagnostic006 failed before profiling because focus was lost after initial
+activation; cleanup normal quit timed out and owned app was terminated. All102
+fixture files and app/map hashes unchanged, no owned PIDs remain. This is NOT a
+normal-close/performance pass or established product defect. Preserved report:
+`/private/tmp/zorid-packaged-startup-cpu006-authorized-20261029/report.json`.
+file_open_audit owns ignored CPU script preparation only, correcting initial joint
+renderer/window confirmation and failure evidence before any Root quiet run.
+maintenance_triggers owns a bounded fresh1000-note Native-only comparison with
+frozen baseline/newhost and new fixtures; no GUI or source implementation there.
+Serialize the Native comparison and any actual CPU app pass. No other heavy lane.
+
+Additional authoritative evidence: escalated fresh0091000-note pair normal0/all1001
+bodies exact, baselinehello6.30s/full11.76s vsnewhello1.60s/full14.25s. Candidate
+longest FIFOread203ms vs5453ms, but totalcompletion21%slower. Fresh010 then used
+the ORIGINAL9feb executable, no newcopy: emptyfreshhello93ms, fresh1000hello97ms,
+selectedCorebody0.32ms, phasevaultopen32/reconcile58ms. No completion/UI claim;
+copy/first-exec/cache/environment effects remain confounders, not an inherent
+Rust initializer cost. Source reports under import-quantum native-workloadtmp.
+
+Escalated sample011 succeeded(earlier default-sandbox samples had failed): late
+import828samples, wholephysical_bindings304(36.7%), baselineJSON193(23.3%total),
+fullproofload34(4.1%),noopguard11(1.3%). Early import durablecommits/fsync remain
+necessary. maintenance_triggers now owns isolated namespace-candidate-metadata,
+base6c7ff9e8: scheduling-only binding metadata then strict full selected/member
+validation. No Source mutation authority may come from that metadata. Root has
+not composed or compiled this new batch yet; sampled whole-inventory body loading
+is a real remaining unnecessary import cost, not a claim already fixed.
+
+Quiet CPU006 retry ran under Root blocking command, no agent notifications; still
+lost focus before any mousepress/CPU capture. It DID close normally (app/native0,
+no forced/no ownedPIDs), all102 source paths and product/map hashes unchanged.
+Report `/private/tmp/zorid-packaged-startup-cpu006-quiet-20261029/report.json`.
+Failure timeline shows joint native/documentforeground confirmed then hide/blur
+before the second navigation guard. Cause is not established. The async user
+question for30seconds of uninterrupted foreground is pending; do NOT run dependent
+GUI work before an actual availability reply. Continue useful non-GUI Native work.
+
+Remaining REQUIRED: trustworthy actual startup/ordinary/large/Base measurements,
+first-import Native completion comparison, actual fault recovery campaign,
+main integration/build/install, caller-owned pre-dispatch capture request identity,
+and the preserved recovery scopes/raw Base settings/date batches not yet composed.
+Do not silently drop these or mark the whole goal complete from the green checks.
+
 ## Delivery checkpoint — 2026-10-29, source f08e63d7
 
 User reports unacceptable elapsed time. Freeze scope expansion and prioritize a
@@ -90,6 +189,47 @@ navigation while rows become available or are outside the viewport; no direct
 Workspace/bridge opening is permitted.
 Native owner is measuring the remaining unchanged-audit cost; no additional
 architecture or feature scopes are approved by this checkpoint.
+
+## Follow-up implementation checkpoint — source93c0f3f7
+
+Actual RED for redundant inventory writes is now reproduced on Root: 4 controls
+pass, 2 fail; a healthy no-delta import tail appends3 checkpoint revisions, and
+repeating already-confirmed acknowledgements also appends3. Frozen tests composed
+asded3d4cc; log`tmp/instant-editor-validation/inventory-noop-red001.log`.
+The narrow fix must preserve read-only revision/scope/corruption/path checks even
+when avoiding mutation. Existing restart, present-proof and retirement controls
+remain required. No-op product fix is not yet Root-composed or validated.
+
+Reviewed load continuation batch is composed throughc1efd719. Confirmed canonical
+content can mount before held recovery acknowledgments, exact original requests
+retain their continuation, and new journal offers wait for content admission.
+Both reentrant-callback ordering and canceled pre-admission duplicate-branch
+regressions were reproduced and fixed. Workspace93c0f3f7 broadcasts only a fresh
+matching admission before dependent view settlement and disposes only unadmitted
+failed loads. Root106focused checks plus1mountedorderingcheck passed; per-view
+initial-read cancellation wiring remains incomplete. No package/install proof is
+claimed for these newly composed load changes.
+
+## Inventory no-op validation — sourced161468b
+
+The reviewed no-op product fix is composed. Its6 focused native tests pass;
+no-delta acknowledgements append zero revisions, while real changes/restart,
+foreign revision, corruption, present-proof and explicit retirement checks hold.
+A broader native external filter ran73 checks:72passed,1failed. The existing
+`enrolled_scan_full_boundaries_reject_graph_corruption` still expects the old
+whole-graph status traversal at scalar readiness boundaries. The owner must
+reconcile this oracle with explicit full-status and selected-source integrity
+checks; it is not a passing suite yet.
+
+An earlier overly broad97-test filter was stopped after entering an unrelated
+large-binary fixture while free disk fell to1.6GiB. Owned testPID64526 received
+SIGTERM; preserved run is failed/aborted, not accepted. Its preceding namespace
+postcommit observation test also failed on exact rerun and remains under source
+investigation. Do not dismiss it as preexisting without evidence. No user app or
+vault was touched. Native host rebuild/performance remeasurement for the no-op
+fix is still pending. Root Workspace cancellation work is owned by
+native_enrollment_review in a separate new worktree; current Root TypeScript
+identified private buffer.vault access in93c0f3f7, assigned to that batch.
 
 ## Implementation and evidence gates
 
