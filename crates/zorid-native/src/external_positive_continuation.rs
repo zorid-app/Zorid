@@ -20,6 +20,7 @@ pub(super) struct PositiveSeed {
     pub processed: BTreeSet<VaultPath>,
     pub mode: ExternalFileMode,
     pub authority: Option<AuthorityIdentity>,
+    pub options: Option<ScanOptions>,
 }
 impl PositiveSeed {
     pub(super) fn new(
@@ -41,12 +42,21 @@ impl PositiveSeed {
             processed: BTreeSet::new(),
             mode: ExternalFileMode::Auto,
             authority: None,
+            options: None,
         })
     }
     pub(super) fn scope(&self) -> Option<VaultPath> {
         self.directories
             .last()
             .and_then(|directory| directory.path.clone())
+    }
+    fn same_options(&self, options: &ScanOptions) -> bool {
+        self.options.as_ref().is_some_and(|original| {
+            original.max_entries == options.max_entries
+                && original.max_total_bytes == options.max_total_bytes
+                && original.max_depth == options.max_depth
+                && original.max_duration == options.max_duration
+        })
     }
     fn parent(&self, vault: &NativeVault, check_markers: bool) -> Result<File> {
         vault.paths.verify()?;
@@ -57,7 +67,8 @@ impl PositiveSeed {
         for directory in &self.directories {
             parent = match directory.path.as_ref() {
                 None => vault.paths.root.try_clone()?,
-                Some(path) => vault.paths.directory(path)?,
+                Some(path) => fs::optional_directory(&parent, path.file_name())?
+                    .ok_or(Error::Busy("positive hint ancestor disappeared"))?,
             };
             if fs::identity(&parent)? != directory.identity
                 || check_markers && external_scan_progress::marker(&parent)? != directory.marker
@@ -118,9 +129,14 @@ impl NativeVault {
         enrolled: &external_namespace::EnrolledScan<'_>,
         budget: &mut external_scan_quantum::ExternalWorkBudget,
     ) -> Result<Option<ExternalReconcileQuantum>> {
+        if !(1..=external_scan_progress::MAX_INVENTORY).contains(&options.scan.max_entries) {
+            self.external_positive_armed = None;
+            self.external_positive_hints = None;
+            return Ok(None); // The ordinary scan returns its existing typed rejection.
+        }
         if self.external_positive_hints.is_none() {
             if let Some(seed) = self.external_positive_armed.take() {
-                if seed.mode == mode {
+                if seed.mode == mode && seed.same_options(&options.scan) {
                     let retired = match self.retire_inventory_for_positive_hints(&seed) {
                         Ok(retired) => retired,
                         Err(error) => {
@@ -141,11 +157,19 @@ impl NativeVault {
         let Some(mut hints) = self.external_positive_hints.take() else {
             return Ok(None);
         };
+        let authority = match self.store.identity() {
+            Ok(authority) => authority,
+            Err(error) => {
+                self.external_positive_hints = Some(hints);
+                return Err(error.into());
+            }
+        };
         // Drain exactly once. Later writes do not reset or append names. The
         // following turn must start an entirely fresh normal inventory.
         if hints.next == hints.seed.paths.len()
             || hints.seed.mode != mode
-            || hints.seed.authority.as_ref() != Some(&self.store.identity()?)
+            || !hints.seed.same_options(&options.scan)
+            || hints.seed.authority.as_ref() != Some(&authority)
         {
             return Ok(None);
         }
@@ -214,7 +238,7 @@ impl NativeVault {
                 }
                 hints.next += 1;
             }
-            enrolled.check(self)?;
+            enrolled.finish(self)?;
             Ok(())
         })();
         let quantum = ExternalReconcileQuantum {

@@ -15,7 +15,7 @@ use zorid_store::{
     Sha256Digest,
 };
 
-const MAX_INVENTORY: u32 = 100_000;
+pub(super) const MAX_INVENTORY: u32 = 100_000;
 pub(super) type Marker = (u64, u64, i64, i64, i64, i64);
 pub(super) fn marker(file: &File) -> Result<Marker> {
     let m = file.metadata()?;
@@ -279,6 +279,7 @@ impl ProgressScan {
         &self,
         vault: &mut NativeVault,
         mode: ExternalFileMode,
+        options: &ScanOptions,
     ) -> Result<()> {
         let Some(seed) = vault.external_positive_seed.as_mut() else {
             return Ok(());
@@ -295,6 +296,7 @@ impl ProgressScan {
         }
         seed.revision = self.checkpoint_revision.clone();
         seed.mode = mode;
+        seed.options = Some(options.clone());
         seed.authority = Some(vault.store.identity()?);
         seed.processed = self
             .inventory
@@ -597,6 +599,7 @@ impl NativeVault {
             || inventory.publication_started
             || inventory.absence_bindings.is_some()
             || !inventory.authority_matches(self)?
+            || seed.authority.as_ref() != Some(&self.store.identity()?)
         {
             return Ok(None);
         }

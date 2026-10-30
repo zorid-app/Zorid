@@ -165,6 +165,11 @@ fn own_saves_drain_finite_positive_hints_before_a_fresh_namespace_inventory() {
         assert!(next.pending, "{next:?}");
         assert_eq!(next.phase, ExternalWorkPhase::Discovery);
         assert!(!next.reconciliation.complete && !next.reconciliation.run.complete);
+        assert!(next.reconciliation.run.finished);
+        assert_eq!(
+            next.reconciliation.run.observed, 1,
+            "hint discoveries do not rewrite the retired scan record"
+        );
         assert!(
             next.reconciliation.issues.is_empty(),
             "owned continuation stays quiet: {next:?}"
@@ -309,5 +314,156 @@ fn mixed_hint_pass_defers_external_add_move_and_replacement_to_fresh_inventory()
             fresh,
             "finite mixed hints must hand off to fresh inventory: {race}"
         );
+        let mut terminal = None;
+        for _ in 0..256 {
+            let next = turn(&mut vault);
+            if !next.pending {
+                terminal = Some(next);
+                break;
+            }
+        }
+        let terminal = terminal.expect("fresh normal inventory must settle");
+        if race != "replace" {
+            assert!(terminal.reconciliation.complete, "{race}: {terminal:?}");
+        }
+        match race {
+            "add" => assert!(listed(&vault, "00-added.md")),
+            "move" => assert_eq!(
+                vault.read(&tracked).unwrap().unwrap().state.path.as_str(),
+                "00-moved.md",
+                "normal namespace reconciliation preserves moved identity"
+            ),
+            "replace" => {
+                assert!(
+                    terminal.reconciliation.complete
+                        || !terminal.reconciliation.issues.is_empty()
+                        || !terminal.publication.blocked.is_empty(),
+                    "replacement must have an explicit normal outcome"
+                );
+                assert_eq!(
+                    fs::read(root.path().join("c-tracked.md")).unwrap(),
+                    b"initial saved body\n"
+                );
+                assert_eq!(
+                    fs::read(held.path().join("retained.md")).unwrap(),
+                    b"initial saved body\n"
+                );
+                assert_eq!(
+                    vault.read(&tracked).unwrap().unwrap().content,
+                    original.content
+                );
+            }
+            _ => unreachable!(),
+        }
     }
+}
+
+#[test]
+fn invalid_or_changed_scan_options_cannot_bypass_normal_validation() {
+    for maximum in [0, 100_001] {
+        let (_root, mut vault, _) = fixture();
+        save(&mut vault, 0);
+        let mut invalid = options();
+        invalid.scan.max_entries = maximum;
+        assert!(matches!(
+            vault.reconcile_external_quantum(invalid, ExternalFileMode::Auto),
+            Err(zorid_native::Error::Unsupported(_))
+        ));
+        assert!(!listed(&vault, "n-000.md"));
+    }
+    let root = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(root.path()).unwrap();
+    vault
+        .family_enroll(&FamilyScope {
+            realm_id: RealmId::new("nested-hint-realm").unwrap(),
+            vault_id: VaultId::new("nested-hint-vault").unwrap(),
+        })
+        .unwrap();
+    vault
+        .family_apply(
+            &MutationRequest {
+                operation_id: op("create-folder"),
+                mutation: Mutation::Create {
+                    id: EntryId::new("folder").unwrap(),
+                    path: VaultPath::new("Folder").unwrap(),
+                    kind: EntryKind::Folder,
+                    content: None,
+                },
+            },
+            None,
+        )
+        .unwrap();
+    create(&mut vault, "own", "Folder/a-own.md");
+    fs::write(
+        root.path().join("Folder/z-new.md"),
+        b"nested deferred body\n",
+    )
+    .unwrap();
+    turn(&mut vault); // Root folder.
+    let nested = turn(&mut vault); // Already owned file in that folder.
+    assert!(nested.pending);
+    let old_scan = nested.reconciliation.run.scan_id;
+    save(&mut vault, 0);
+    let mut changed = options();
+    changed.scan.max_depth = 0;
+    let rejected = vault
+        .reconcile_external_quantum(changed, ExternalFileMode::Auto)
+        .unwrap();
+    assert_eq!(rejected.reconciliation.run.scan_id, old_scan);
+    assert!(!rejected.pending && !rejected.reconciliation.complete);
+    assert!(!listed(&vault, "Folder/z-new.md"));
+}
+
+#[test]
+fn failed_retirement_cas_retries_the_original_fence_before_hint_import() {
+    let (root, mut vault, old_scan) = fixture();
+    save(&mut vault, 0);
+    let db = rusqlite::Connection::open(root.path().join(".zorid/vault.sqlite")).unwrap();
+    let before: String = db
+        .query_row(
+            "SELECT encoded_state FROM checkpoint_heads WHERE client_id='zorid_core_external_scan'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    db.execute_batch("CREATE TRIGGER stop_hint_retirement BEFORE UPDATE ON checkpoint_heads WHEN NEW.client_id='zorid_core_external_scan' AND NEW.encoded_state IS NULL BEGIN SELECT RAISE(ABORT,'owned retirement failure'); END;").unwrap();
+    assert!(vault
+        .reconcile_external_quantum(options(), ExternalFileMode::Auto)
+        .is_err());
+    let after: String = db
+        .query_row(
+            "SELECT encoded_state FROM checkpoint_heads WHERE client_id='zorid_core_external_scan'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(after, before);
+    assert!(!listed(&vault, "n-000.md"));
+    db.execute_batch("DROP TRIGGER stop_hint_retirement")
+        .unwrap();
+    let retry = turn(&mut vault);
+    assert_eq!(retry.reconciliation.run.scan_id, old_scan);
+    assert!(retry.pending && !retry.reconciliation.complete);
+    assert_fenced(root.path(), &old_scan);
+}
+
+#[test]
+fn foreign_checkpoint_revision_is_not_retired_or_used_for_hints() {
+    let (root, mut vault, old_scan) = fixture();
+    save(&mut vault, 0);
+    let mut other =
+        zorid_store::Store::open_existing_no_follow(root.path().join(".zorid/vault.sqlite"))
+            .unwrap();
+    let (revision, inventory) = other.external_scan_progress::<serde_json::Value>().unwrap();
+    let foreign = other
+        .save_external_scan_progress(revision.as_deref(), inventory.as_ref())
+        .unwrap();
+    assert!(vault
+        .reconcile_external_quantum(options(), ExternalFileMode::Auto)
+        .is_err());
+    let (after, retained) = other.external_scan_progress::<serde_json::Value>().unwrap();
+    assert_eq!(after.as_deref(), Some(foreign.as_str()));
+    assert_eq!(retained, inventory);
+    assert!(!other.scan_run(&old_scan).unwrap().finished);
+    assert!(!listed(&vault, "n-000.md"));
 }

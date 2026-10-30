@@ -44,7 +44,7 @@ impl<'lock> EnrolledScan<'lock> {
         }
         Ok(())
     }
-    fn finish(&self, vault: &NativeVault) -> Result<()> {
+    pub(super) fn finish(&self, vault: &NativeVault) -> Result<()> {
         self.check(vault)?;
         if !vault.store.family_enrollment_ready()? {
             return Err(Error::Busy("external scan enrollment changed"));
@@ -700,6 +700,7 @@ impl NativeVault {
         external_scan_progress::ProgressScan,
     )> {
         let namespace_origin = OperationId::new("native_external_namespace")?;
+        let seed_options = options.clone();
         let started = budget
             .as_ref()
             .map_or_else(std::time::Instant::now, |b| b.started());
@@ -1233,7 +1234,7 @@ impl NativeVault {
             &processed.into_iter().collect::<Vec<_>>(),
             budget.is_some(),
         )?;
-        scan.refresh_positive_seed(self, mode)?;
+        scan.refresh_positive_seed(self, mode, &seed_options)?;
         self.paths.verify()?;
         enrolled.finish(self)?;
         report.complete =
