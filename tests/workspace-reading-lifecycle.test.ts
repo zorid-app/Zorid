@@ -8,7 +8,7 @@ import type { EditorHandle } from '../src/ui/editor.ts';
 
 async function settle(){for(let index=0;index<20;index++)await Promise.resolve();}
 async function setup(t:TestContext){
-  const dom=new JSDOM('<!doctype html><main></main>',{url:'https://zorid.test/'}),doc=dom.window.document;
+  const dom=new JSDOM('<!doctype html><main></main>',{url:'https://zorid.test/',pretendToBeVisual:true}),doc=dom.window.document;
   const pending:{source:string;resolve:(node:HTMLElement)=>void}[]=[],workers:DeferredWorker[]=[];
   class DeferredWorker {
     onmessage:((event:{data:unknown})=>void)|null=null;onerror:unknown;terminated=0;job:any;
@@ -19,7 +19,7 @@ async function setup(t:TestContext){
   }
   const previous=new Map<string,PropertyDescriptor|undefined>();
   const media=(query:string)=>({matches:false,media:query,addEventListener(){},removeEventListener(){}});
-  for(const [key,value]of Object.entries({window:dom.window,document:doc,localStorage:dom.window.localStorage,HTMLElement:dom.window.HTMLElement,Node:dom.window.Node,MutationObserver:dom.window.MutationObserver,matchMedia:media,Worker:DeferredWorker})){
+  for(const [key,value]of Object.entries({window:dom.window,document:doc,localStorage:dom.window.localStorage,HTMLElement:dom.window.HTMLElement,Node:dom.window.Node,MutationObserver:dom.window.MutationObserver,matchMedia:media,Worker:DeferredWorker,requestAnimationFrame:dom.window.requestAnimationFrame.bind(dom.window),cancelAnimationFrame:dom.window.cancelAnimationFrame.bind(dom.window)})){
     previous.set(key,Object.getOwnPropertyDescriptor(globalThis,key));Object.defineProperty(globalThis,key,{configurable:true,writable:true,value});
   }
   dom.window.matchMedia=media as any;dom.window.HTMLElement.prototype.scrollIntoView=()=>{};
@@ -86,7 +86,7 @@ test('partial Reading render failure disposes already-created asynchronous outpu
   }) as typeof ui.doc.createElement;
   await ui.workspace.openNote('Old.md');ui.doc.createElement=original;
   const failed=ui.pane.element.querySelector<HTMLElement>('.math')!;
-  assert.ok(failed);assert.equal(ui.pane.element.querySelector('.error-message')?.textContent,'This note couldn’t be opened. Please try opening it again.');
+  assert.ok(failed);assert.equal(ui.pane.element.querySelector('.error-message')?.textContent,'This note couldn’t be opened.');
   assert.doesNotMatch(ui.pane.element.textContent??'',/injected renderer failure/);
   assert.equal(ui.pane.refreshPreview,undefined);await ui.finish();
   assert.equal(failed.textContent,'old');assert.equal(failed.classList.contains('is-loaded'),false);

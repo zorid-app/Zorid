@@ -2066,7 +2066,7 @@ export class Workspace {
       if(!ownsLoad()||(error as {code?:unknown})?.code==='note_load_cancelled')return;
       pane.readingFind?.destroy();pane.readingFind=undefined;destroyMarkdown(scroll);pane.embeds?.destroy();pane.embeds=undefined;pane.refreshPreview=undefined;
       console.error('Note could not be opened',error);
-      scroll.append(el('p','error-message','This note couldn’t be opened. Please try opening it again.'));
+      scroll.append(el('p','error-message','This note couldn’t be opened.'));
     }
     finally{this.finishPaneInitialLoad(initialPane,load);}
     if(ownsLoad()){pane.viewReady=true;this.cancelledNoteViews.delete(initialPane);}this.renderStatus();
