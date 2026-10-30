@@ -3133,3 +3133,15 @@ requests, accepted save preservation, same-path replacement refusal and both Pin
 overlap outcomes. Log:
 `/private/tmp/zorid-sidebar-follow-adjacent-20261026-001.log`.
 Independent review, integration and native validation remain separate gates.
+
+
+### 2026-10-29 — Namespace candidate baseline decoding
+
+Root instant-editor626a14b9 removes repeated full-body baseline decoding from
+namespace candidate scheduling; full selected/member and Store transaction guards
+remain. Independent review and138focused Native tests/host build pass. Reversed
+1000-note Native pairs show unchanged audit5.59→4.92s and8.80→5.46s; all1001
+bodies/sourceIDs/revisions/cursor preserved, zero auditimports, normalEOF. Fresh
+import total changes direction acrosspairs, so no stable import speedup claim.
+Package007 verified; actual800ms editor/faultcampaign/integration/install remain
+open. Evidence and exact pins: docs/plans/instant-editor-execution.md.

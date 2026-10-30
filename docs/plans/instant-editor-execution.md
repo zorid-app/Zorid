@@ -21,7 +21,7 @@ The user resumed the existing thread goal: it is active. The objective is not
 complete. Earlier create_goal replacement was rejected while the unfinished goal
 was blocked; that is historical, not a current execution blocker.
 
-## Latest delivery state — runtime6c7ff9e8 / harness7d954b57
+## Latest delivery state — runtime626a14b9 / harness7d954b57
 
 Goal ACTIVE. Main remains7d8006b8; installed app remains the prior verified Notion
 bundle. No800ms startup claim, no main integration or new installation. Root is
@@ -101,9 +101,35 @@ import828samples, wholephysical_bindings304(36.7%), baselineJSON193(23.3%total),
 fullproofload34(4.1%),noopguard11(1.3%). Early import durablecommits/fsync remain
 necessary. maintenance_triggers now owns isolated namespace-candidate-metadata,
 base6c7ff9e8: scheduling-only binding metadata then strict full selected/member
-validation. No Source mutation authority may come from that metadata. Root has
-not composed or compiled this new batch yet; sampled whole-inventory body loading
-is a real remaining unnecessary import cost, not a claim already fixed.
+validation. No Source mutation authority may come from that metadata. Root composed tests097f5e22 and corrected-scope c3944a77. Actual RED002
+finished101: intended already-processed positive acknowledgement fails on unrelated
+baseline JSON; four selected-corruption/folder/restart controls pass. The correction
+does not promise unrelated namespace mutation can bypass Store global transaction
+validation. Product implementation/review is still pending; no latency win claim.
+Log: tmp/instant-editor-validation/namespace-candidate-red002.log.
+Product1c65c690 plus explicit-import correctiona576 composed0beed631/626a14b9.
+Independent final review accepted. GREEN005 failed compilation on the missing
+PhysicalBinding import (preserved receipt); GREEN006 is the corrected serial lane.
+79scan/candidate +2capture +57namespace checks and host build all pass, Rust
+inputs unchangeda2eba327e0a97a153f976de5ca80a01c44379246cf6682263c63bf35c13c0b91.
+New host598c4ba046570a0ba2311362accfac63c8b88949565c66563434b969792750ae.
+Actual paired fresh012 then reversed013 both normal0/all1001 bodies exact,
+source/IDs/revisions/cursor unchanged during explicit audit and zero auditimports.
+Fresh012 candidate-first: full12.03→11.26s, audit5.59→4.92s.
+Fresh013 baseline-first: full11.01→11.93s, audit8.80→5.46s.
+Thus repeated audit work improved in both pairs; first-import total improvement is
+NOT established (opposite directions), no800ms editor claim. Original executable
+paths, one --help warmup each; cache/memory/order remain uncontrolled. Reports under
+.worktrees/import-quantum/tmp/native-workload-20261029/fresh-012 and fresh-013.
+Package007 passedTS/Vite/macOS unsigneddir/package361file verification, runtime
+inputs unchanged; Native598c and unchangedASAR11ccd1cb8166c25a32ec6ab15404993ac93b0832b1504e49bbf9613c11398059.
+Receipt build-007.json SHA f92cf0793879fa50fabda6368e4b4dfea4132aef3e73c0e56ca67edbf13dd3c9.
+No app launched for007; main/installedapp still untouched. maintenance_triggers
+owns one bounded optimizedaudit Native CPU diagnostic, noCargo/GUI; Rootheavy
+lane free until that diagnostic is terminal. file_open_audit owns read-only
+large-note repeated-computation audit, no execution or scope expansion.
+Known remaining cost: metadata enumeration/sort per quantum and selected folder
+member validation are still unbounded by one scheduling unit; no800ms claim.
 
 Quiet CPU006 retry ran under Root blocking command, no agent notifications; still
 lost focus before any mousepress/CPU capture. It DID close normally (app/native0,
