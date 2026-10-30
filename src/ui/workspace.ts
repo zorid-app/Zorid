@@ -67,7 +67,9 @@ import {baseFileHoverAnchor} from '../bases/file-hover.ts';
 import type {BaseFileHoverTarget,BaseFileHoverContent} from './base-file-hover.ts';
 import {createNotePropertyTargets} from './note-property-targets.ts';
 import type {NotePropertyTargets} from './note-property-targets.ts';
-import type {DatabaseRequest} from '../core/databases.ts';
+import type {DatabaseCollection,DatabaseEntry,DatabaseRequest,DatabaseResponse,DatabaseService} from '../core/databases.ts';
+import {createCollectionSubmission} from '../databases/collection-submission.ts';
+import type {CollectionSubmission} from '../databases/collection-submission.ts';
 import {collectionValue,mountCollectionBrowser,mountCollectionPropertyPicker} from '../databases/collection-ui.ts';
 import type {CollectionEditor} from '../databases/collection-ui.ts';
 import {prepareCollectionOptionCreation} from '../databases/collection-option-creation.ts';
@@ -583,24 +585,50 @@ export class Workspace {
   private admissionRawCandidates?:HTMLElement;
   private retiredAdmissionVaults=new WeakSet<Vault>();
   private recoveringAdmissionVaults=new WeakSet<Vault>();
+  private collectionSubmissions=new Map<CollectionSubmission,{vault:Vault;platform:PlatformVault;generation:number;root:HTMLElement;dispose():void}>();
+  private collectionSubmissionTransitions=new WeakMap<Vault,symbol>();
+  private currentCollectionSubmissions(vault:Vault):[CollectionSubmission,{root:HTMLElement;dispose():void}][]{
+    const entries:[CollectionSubmission,{root:HTMLElement;dispose():void}][]=[];
+    for(const [owner,entry]of this.collectionSubmissions){
+      if(!entry.root.isConnected){entry.dispose();continue;}
+      if(entry.vault===vault&&entry.platform===this.platform&&entry.generation===this.vaultGeneration)entries.push([owner,entry]);
+    }
+    return entries;
+  }
+  private hasBlockingCollectionSubmissions(vault:Vault):boolean{return this.currentCollectionSubmissions(vault).some(([owner])=>owner.pending&&!owner.canRecover());}
+  private waitForCollectionSubmissions(vault:Vault):Promise<void>{return Promise.all(this.currentCollectionSubmissions(vault).map(([owner])=>owner.waitForCompletion())).then(()=>{});}
+  private closeCollectionSubmissions(vault:Vault):void{for(const entry of [...this.collectionSubmissions.values()])if(entry.vault===vault)entry.dispose();}
+  private prepareCollectionSubmissions(vault:Vault,settlements:{settle():Promise<void>}[]):void{
+    for(const [owner,entry]of this.currentCollectionSubmissions(vault)){
+      if(!owner.pending){entry.dispose();continue;}
+      const prepared=owner.prepareAdmissionRecovery();if(!prepared)throw new Error('The submitted collection owner was lost before recovery.');
+      entry.root.inert=true;settlements.push({settle:async()=>{try{await prepared.settle();}catch(error){if(entry.root.isConnected)entry.root.inert=false;throw error;}}});
+    }
+  }
   private admissionRetirement?:{platform:PlatformVault;vault:Vault;generation:number;retired:boolean;signal:Promise<void>;retire():void};
   private admissionPreflightCancellations=new WeakSet<object>();
   /** A lifecycle preflight may be waiting on a write whose exact replay needs
    * this transition to unwind first. Retirement cancels only that wait. */
-  private async flushAdmissionPreflight(platform:PlatformVault,vault:Vault):Promise<void>{
+  private async flushAdmissionPreflight(platform:PlatformVault,vault:Vault,mode:'close'|'replace'='close'):Promise<void>{
     const scope=vault.adapter.durableWrites?.checkpoints.scope;
-    if(scope&&this.retainedAdmissionRawInputs.some(candidate=>candidate.scope.vaultId===scope.vaultId&&candidate.scope.clientId===scope.clientId))throw Object.assign(new Error('Unfinished input is retained here. Resolve or discard it before closing this vault.'),{code:'workspace_raw_input_retained'});
+    // A live Workspace keeps scoped RAM candidates across explicit replacement;
+    // closing/releasing the window still requires their original resolution.
+    if(mode==='close'&&scope&&this.retainedAdmissionRawInputs.some(candidate=>candidate.scope.vaultId===scope.vaultId&&candidate.scope.clientId===scope.clientId))throw Object.assign(new Error('Unfinished input is retained here. Resolve or discard it before closing this vault.'),{code:'workspace_raw_input_retained'});
+    const portals=this.currentCollectionSubmissions(vault).map(([,entry])=>({root:entry.root,inert:entry.root.inert}));for(const entry of portals)entry.root.inert=true;
+    try{
     const retirement=this.admissionRetirement;
     const reversible=()=>retirement&&this.admissionRetirement===retirement&&retirement.platform===platform&&retirement.vault===vault
       &&this.platform===platform&&this.vault===vault&&this.vaultGeneration===retirement.generation
       &&!this.platformDraining&&!this.platformDrained&&!this.platformReleased;
     const cancelled=()=>{const error=Object.assign(new Error('Notes are reconnecting.'),{code:'workspace_admission_retired'});this.admissionPreflightCancellations.add(error);return error;};
-    if(!retirement||!reversible()){await this.flush();return;}
+    const flush=()=>Promise.all([this.flush(),this.waitForCollectionSubmissions(vault)]).then(()=>{});
+    if(!retirement||!reversible()){await flush();return;}
     if(retirement.retired)throw cancelled();
-    const saving=this.flush();
+    const saving=flush();
     // Promise.race observes the original flush even after cancellation. Its
     // Base finishing owner is separately retired before any view is rebuilt.
     await Promise.race([saving,retirement.signal.then(()=>{if(reversible())throw cancelled();return saving;})]);
+    }finally{if(this.platform===platform&&this.vault===vault&&!this.platformDraining&&!this.platformDrained&&!this.platformReleased&&!this.recoveringAdmissionVaults.has(vault)&&!this.collectionSubmissionTransitions.has(vault))for(const entry of portals)if(entry.root.isConnected)entry.root.inert=entry.inert;}
   }
   private async releasePlatform():Promise<void>{
     if(this.releasingPlatform)return this.releasingPlatform;
@@ -624,6 +652,7 @@ export class Workspace {
         await this.flushAdmissionPreflight(platform,vault);await this.closeBaseNewItem();await this.sidebarBase?.session.close();this.sidebarBase=undefined;this.sidebarBaseIntent++;
         cancelTasksClose=await this.prepareTasksViewsClose();current();this.saveSession();
         this.platformDraining=true;
+        this.closeCollectionSubmissions(vault);
         await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();this.platformDrained=true;
       }
       this.clearDocumentBacklinks();await this.closeDocumentSearchPins().catch(()=>{});
@@ -735,6 +764,7 @@ export class Workspace {
       if(title){const titleLocation=this.admissionRawLocation(pane,pane.noteTitleActor);settlements.push(title);ready.push(title.settle());collect.push(()=>{const draft=title.rawDrafts;if(draft.value===draft.baseline)return[];if(!titleLocation)throw new Error('The retained title lost its owning note.');return[add(titleLocation,{kind:'title',draft})];});}
     }
     const sidebar=this.sidebarBase;if(sidebar){const path=this.sidebarBasePath,entry=path?vault.entries.get(path):undefined;prepareBase(sidebar.session,path&&entry?.entryId?{sidebar:true,path,entryId:entry.entryId}:undefined);}
+    this.prepareCollectionSubmissions(vault,settlements);
     const prepared={settlements,ready,collect:()=>collect.flatMap(read=>read()),collected:false};this.admissionRawPreparations.set(vault,prepared);return prepared;
   }
   /** Keep native composition alive in its original control. Submission paths
@@ -764,7 +794,7 @@ export class Workspace {
     current();this.recoveringAdmissionVaults.add(vault);clearTimeout(this.reloadTimer);
     const panes=[...this.panes,...this.cachedViews.values()];
     const bases=new Set([this.sidebarBase?.session,...panes.flatMap(pane=>[pane.baseView,pane.baseEmbeds])].filter((base):base is BaseSession|BaseEmbedSessions=>!!base));
-    const pendingViews=()=>this.hasPendingBaseCreation()||this.baseNewItemOpening||this.retiringBaseNewItems.size||this.baseNewItem?.hasPendingChanges()
+    const pendingViews=()=>this.hasBlockingCollectionSubmissions(vault)||this.hasPendingBaseCreation()||this.baseNewItemOpening||this.retiringBaseNewItems.size||this.baseNewItem?.hasPendingChanges()
       ||panes.some(pane=>(pane.properties?.prepareAdmissionRecovery?pane.properties.canRecoverAdmission?.()!==true:pane.properties?.hasPendingChanges())||pane.noteTitle?.canRecoverAdmission()===false||pane.tasksView?.hasPendingChanges()||pane.calendarView?.hasPendingChanges()||pane.canvasView?.hasPendingChanges())
       ||[...bases].some(base=>base.prepareAdmissionRecovery?base.canRecoverAdmission?.()!==true:base.hasPendingChanges());
     if(!this.admissionRawPreparations.has(vault)&&pendingViews()){this.root.inert=true;throw new Error('Pending view changes are retained while storage reconnects.');}
@@ -898,6 +928,7 @@ export class Workspace {
   }
   private async disposeRetiredAdmissionViews(vault:Vault):Promise<void>{
     if(!this.retiredAdmissionVaults.has(vault))throw new Error('Derived ownership has not been retired.');
+    this.closeCollectionSubmissions(vault);
     // The backend ACK already retired these exact read-only handles. A close
     // reply from the old process cannot authorize or block a new admission.
     try{await this.closeBaseNewItem();}catch{this.baseNewItem?.element.remove();this.baseNewItem=undefined;}
@@ -1265,17 +1296,21 @@ export class Workspace {
     // Migration failures must abort before teardown/save can replace legacy recovery.
     this.storageScope.migrateLegacy(localStorage, platform.id);
     const searchVault=this.vault,searchWasSuspended=this.documentSearchSuspended;
+    const collectionTransition=Symbol('collection replacement'),collectionPlatform=this.platform,collectionGeneration=this.vaultGeneration;
+    const collectionPortals=searchVault?this.currentCollectionSubmissions(searchVault).map(([,entry])=>({root:entry.root,inert:entry.root.inert})):[];
+    if(searchVault){this.collectionSubmissionTransitions.set(searchVault,collectionTransition);for(const entry of collectionPortals)entry.root.inert=true;}
     const previousRawTabs=new Map(this.panes.flatMap(pane=>pane.tabs.map(tab=>[tab.id,this.admissionRestoredTabIds.get(tab)] as const)));
     this.documentSearchSuspended=true;this.clearDocumentSearch();
     let cancelTasksClose:(recover?:boolean)=>void=()=>{};
     try{
     this.menuSerial++; await dismissContextMenu(this.root.ownerDocument);
-    if(!this.platformReleased)await this.flush();
+    if(!this.platformReleased){if(searchVault&&this.platform)await this.flushAdmissionPreflight(this.platform,searchVault,'replace');else await this.flush();}
     await this.closeBaseNewItem();
     await this.sidebarBase?.session.close();this.sidebarBase=undefined;this.sidebarBaseIntent++;
     cancelTasksClose=await this.prepareTasksViewsClose();
     this.saveSession();
     this.platformDraining=true;
+    this.closeCollectionSubmissions(searchVault);
     for (const dispose of this.disposers) dispose(); this.disposers = [];
     clearTimeout(this.reloadTimer);
     this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();
@@ -1480,6 +1515,10 @@ export class Workspace {
     this.renderSidebar(); this.renderRight(); this.saveSession();
     this.bindMobileLifecycle();this.bindNativeEditor();this.bindNativeDocumentNavigation();
     }catch(error){cancelTasksClose();if(this.vault===searchVault)this.documentSearchSuspended=searchWasSuspended;throw error;}
+    finally{
+      if(searchVault&&this.collectionSubmissionTransitions.get(searchVault)===collectionTransition)this.collectionSubmissionTransitions.delete(searchVault);
+      if(this.vault===searchVault&&this.platform===collectionPlatform&&this.vaultGeneration===collectionGeneration&&!this.platformDraining&&!this.platformDrained&&!this.platformReleased&&!this.recoveringAdmissionVaults.has(searchVault))for(const entry of collectionPortals)if(entry.root.isConnected)entry.root.inert=entry.inert;
+    }
   }
 
   private disposeShell(): void {
@@ -3584,15 +3623,59 @@ export class Workspace {
   }
   private openCollections():void{
     const vault=this.vault,generation=this.vaultGeneration,service=vault.adapter.databases;if(!service)throw new Error('Collections are unavailable in this vault.');
+    if(this.closing||this.root.inert||this.recoveringAdmissionVaults.has(vault)||this.collectionSubmissionTransitions.has(vault))throw new Error('Collections cannot open while this admission is reconnecting.');
+    const platform=this.platform,recovery=platform.recovery;
     const {content,close}=modal('Collections');content.classList.add('collections-modal');
-    const current=()=>vault===this.vault&&generation===this.vaultGeneration&&content.isConnected&&!this.platformReleased;
-    const browser=mountCollectionBrowser(content,{service,isCurrent:current,
+    let disposed=false,browser:ReturnType<typeof mountCollectionBrowser>|undefined,observer:MutationObserver|undefined;
+    const current=()=>!disposed&&vault===this.vault&&platform===this.platform&&generation===this.vaultGeneration&&content.isConnected&&!this.platformDraining&&!this.platformDrained&&!this.platformReleased;
+    const validate=()=>{if(!current())throw new Error('The collection browser is no longer current.');};
+    const collections=new Map<string,DatabaseCollection>(),entries=new Map<string,DatabaseEntry>();
+    let baseline:{command:DatabaseRequest;collection:DatabaseCollection;entry?:DatabaseEntry}|undefined;
+    const readService:DatabaseService={request:async command=>{
+      validate();if(!['list','get','get_entry'].includes(command.op))throw new Error('A collection mutation must retain its submitted owner.');
+      const reply=await service.request(command);
+      if(current()&&!this.recoveringAdmissionVaults.has(vault)){
+        for(const collection of reply.collections)collections.set(collection.id,structuredClone(collection));
+        for(const entry of reply.entries)entries.set(entry.entryId,structuredClone(entry));
+      }
+      return reply;
+    }};
+    const capture=(command:DatabaseRequest)=>{
+      validate();
+      if(this.closing||this.choosingVault||this.vaultLifecycleOwner||this.root.inert||this.recoveringAdmissionVaults.has(vault)||this.collectionSubmissionTransitions.has(vault))throw new Error('New collection commands cannot start during an admission transition.');
+      if(command.op==='delete'||command.op==='restore'){
+        const collection=collections.get(command.collectionId);
+        if(!collection||collection.revision!==command.expectedRevision||collection.deleted!==(command.op==='restore'))throw new Error('The selected collection changed before submission.');
+        baseline={command,collection:structuredClone(collection)};
+      }else if(command.op==='duplicate_entry'){
+        const entry=entries.get(command.entryId),collection=entry&&collections.get(entry.collectionId);
+        if(!entry||!collection||entry.deleted||collection.deleted||entry.revision!==command.expectedRevision||command.newEntryId===entry.entryId||vault.entries.has(command.path))throw new Error('The selected entry changed before duplication.');
+        baseline={command,collection:structuredClone(collection),entry:structuredClone(entry)};
+      }else throw new Error('This collection command has no browser recovery owner.');
+    };
+    const receipt=(reply:DatabaseResponse,command:DatabaseRequest)=>{
+      validate();const before=baseline,collection=reply.collections[0];
+      if(!before||JSON.stringify(before.command)!==JSON.stringify(command)||reply.collections.length!==1||!collection||collection.id!==before.collection.id)throw new Error('The collection receipt belongs to another submitted target.');
+      if(command.op==='delete'||command.op==='restore'){
+        if(collection.deleted!==(command.op==='delete')||collection.name!==before.collection.name||JSON.stringify(collection.properties)!==JSON.stringify(before.collection.properties)
+          ||reply.entries.some(entry=>entry.collectionId!==collection.id||entry.deleted!==(command.op==='delete')))throw new Error('The collection receipt did not confirm the submitted change.');
+      }else if(command.op==='duplicate_entry'){
+        const copies=reply.entries.filter(entry=>entry.entryId===command.newEntryId),copy=copies[0];
+        if(collection.deleted||!before.entry||copies.length!==1||!copy||copy.deleted||copy.collectionId!==before.entry.collectionId||copy.path!==command.path||JSON.stringify(copy.values)!==JSON.stringify(before.entry.values))throw new Error('The duplicate receipt did not confirm the original entry and destination.');
+      }
+      if(reply.projection.pending||reply.projection.issues.length)throw Object.assign(new Error(reply.projection.issues.map(issue=>issue.message).join('\n')||'The collection change is retained until its files can be published.'),{code:'collection_publication_pending'});
+    };
+    const owner=createCollectionSubmission({service,validate,capture,receipt,contains:command=>recovery?.containsCapturedDatabaseMutation?.(command)===true,
+      hold:command=>recovery?.holdCapturedDatabaseMutation?.(command)??(()=>{}),claim:command=>{if(!recovery?.claimCapturedDatabaseMutation)throw new Error('Collection admission recovery is unavailable.');return recovery.claimCapturedDatabaseMutation(command);}});
+    const dispose=()=>{if(disposed)return;disposed=true;this.collectionSubmissions.delete(owner);owner.close();observer?.disconnect();browser?.destroy();close();};
+    this.collectionSubmissions.set(owner,{vault,platform,generation,root:content,dispose});
+    browser=mountCollectionBrowser(content,{service:readService,isCurrent:current,submit:(command,complete)=>owner.submit(command,complete).then(()=>{if(this.retiredAdmissionVaults.has(vault))dispose();}),onDestroy:dispose,
       open:async collection=>{if(!current())return;const stem=collection.name.replace(/[\\/:*?"<>|\u0000-\u001f]/g,' ').trim()||'Collection';let path='',index=0;do{path=`${stem}${index?' '+index:''}.base`;index++;}while(vault.entries.has(path));await vault.create(path,JSON.stringify({views:[{id:newBaseViewId(),type:'table',name:collection.name,source:{kind:'collection',id:collection.id}}]},null,2)+'\n');if(!current())return;close();await this.openNote(path);},
       openEntry:async entry=>{if(!current())return;close();await this.openNote(entry.path,false,this.activePane,true,'',undefined,undefined,entry.entryId);},
       duplicatePath:entry=>{const stem=entry.path.replace(/\.md$/i,'');let path='',index=1;do{path=`${stem} copy${index>1?' '+index:''}.md`;index++;}while(vault.entries.has(path));return path;},
-      onMutation:async()=>{if(current())await vault.reload();},
+      onMutation:async validateAttempt=>{validateAttempt?.();if(current())await vault.reload();validateAttempt?.();},
     });
-    const observer=new MutationObserver(()=>{if(!content.isConnected){browser.destroy();observer.disconnect();}});observer.observe(document.body,{childList:true});
+    observer=new MutationObserver(()=>{if(!content.isConnected)dispose();});observer.observe(document.body,{childList:true});
   }
   private hasPendingBaseCreation():boolean{return !!this.pendingBaseCreation&&this.pendingBaseCreation.operation?.status!=='committed';}
   private async newBase(folder='',beforeOpen?:(path:string)=>boolean):Promise<void>{
@@ -4207,6 +4290,7 @@ export class Workspace {
       this.cancelInitialNoteLoads();this.vaultRequest++;await this.vaultTransition;current();this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);
       await this.flushAdmissionPreflight(platform,vault);await this.closeBaseNewItem();await this.sidebarBase?.session.close();this.sidebarBase=undefined;this.sidebarBaseIntent++;
       cancelTasksClose=await this.prepareTasksViewsClose();current();this.saveSession();this.platformDraining=true;
+      this.closeCollectionSubmissions(vault);
       this.disposers.forEach(dispose=>dispose());this.disposers=[];clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;
       await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();
       await this.drainMetadataOpenings();await this.closeVaultMetadata(vault);await this.closeRetiredVaultMetadata();current();
