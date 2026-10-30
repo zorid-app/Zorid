@@ -1,5 +1,48 @@
 # Instant editor and automatic recovery
 
+## Main integration and user deferral — 2026-10-30
+
+User explicitly requests: "just merge things that u did to the main branch" and
+"I'll figure other things out later." Root fast-forwarded clean main7d8006b8 to
+runtime79a93b14. Further startup optimization is deferred at the user's request;
+the full goal is not achieved. Do not resume the frozen New/popup/compound work.
+
+Build014 at79a93b14 passes release compilation, two actual framed-host checks,
+TS/Vite and361-file package verification, with unchanged source inputs. Native
+SHA7eb957c8aaee17004c03160f88d2f3b658b6ee93cf42f644331297a855f72447;
+ASAR35461b9fc70d0d72acdab1207747da98f2cdb7a8ddab17c29645e51ef17d92c1.
+Integrated Rust72/72, normal-save/recovery236/236, Base159/159, summary-close2/2,
+Reading9/9, shutdown43/43, collection boundary53/53 and benchmark96/96 pass.
+Shared test Cargo artifacts initially linked old Store/FileSync libraries; after
+cleaning only those three owned packages,005 actually rebuilt all three libraries
+and passed72 with unchanged Rust source90bd44ec... . Do not share target caches
+between worktrees without re-establishing artifact provenance.
+
+Actual native paired002 (rebuilt7eb versus installeda1c, candidate-first) passes
+all four normal EOFs,1,001-body/identity/reopen/unchanged-audit/external checks.
+Candidate readiness83.7ms first import/28.0ms reopen; external queued-read maximum
+86.5ms, versus prior candidate1,386.6ms. Candidate unchanged audit2.55s versus
+prior3.73s and installed1.53s; full import7.98s versus installed6.87s. Thus
+responsiveness improves substantially, with background throughput still slower
+than installed in some phases. No overall-fastest or800ms editor claim.
+
+Actual packaged LS1000-001 confirms ordinary trusted editing278.4ms and432KB
+editing527.8ms after file selection. First-import confirmed edit upper bound
+4,956.2ms includes launch/observation overhead; earliest startup is indeterminate.
+Both launches later lost focus, so whole campaign invalid and dependent reopens
+skipped. Both apps/Native hosts quit normally, owned processes gone. No verified
+end-to-end1,000-note reopen or800ms result.
+
+First terminal-only Native GUI001 stopped at editable-summary oracle, before
+original A/B save acceptance; it is NOT accepted. The oracle rejects the enhanced
+editor's intentionally hidden backing textarea. A corrected oracle and actual
+rerun remain open; do not silently convert the failure into product acceptance.
+Failed test cleanup usedSIGKILL on its disposable app, leaked[]; personal vaults
+and apps were untouched. This unresolved native acceptance gate is the concrete
+installation blocker: installed Zorid remains unchanged. Verified build is at
+.worktrees/instant-editor/release/mac-arm64/Zorid.app. Main integration is complete;
+installation and remaining performance work are not.
+
 ## Current continuation — recovery simplification and release gates
 
 Root now includes reviewed cuts bdf09d1b/075d89e2/908d5026/0022fe9f: unused New

@@ -1,5 +1,18 @@
 # User findings queue
 
+## Merge now; defer further work — 2026-10-30
+
+User asks to merge completed changes into main and says they will figure out the
+other work later. Main fast-forwarded to runtime79a93b14; no further performance
+implementation requested now.800ms usable-editor target remains unproven.
+Build014 verifies361 files and the integrated focused gates pass. Latest native
+readiness84/28ms and external stall86ms are backend measurements, not editor
+startup. Actual packaged first confirmed edit was observed by4.96s with test/launch
+overhead; ordinary/432KB file opens278/528ms. Full campaign was invalidated by later
+focus loss; no end-to-end reopen result. Installation is blocked by unresolved
+native terminal-summary acceptance (hidden-backing-textarea oracle needs correction
+and rerun); the installed app is unchanged. See the top execution checkpoint.
+
 ## Recovery scope correction — 2026-10-30, latest direct instruction
 
 User asks to inspect Obsidian's recovery edge cases, match its handling and remove
