@@ -156,3 +156,14 @@ input. Native requests before `nativeObserverAttachedMs` remain censored; early
 observation does not invent earlier native work evidence. Missing800ms attachment
 or incomplete readiness coverage stays indeterminate. No debugger pause, hidden
 window, throttling change, fake packaged mode or launch-clock reset is used.
+
+The earlier attachment can overlap ordinary about:blank-to-packaged navigation.
+The future-document observer is registered once. Only recognized CDP execution
+context replacement/loading errors retry the current passive observation and its
+clock handshake, within the original startup budget; attempts and discarded
+cross-document clock samples are retained. Source/protocol/interference failures
+are terminal. Early readiness requires a visible document before and after both
+frames. Before each trusted input, a separate current selected-source/viewport
+two-frame proof accounts for already accepted probe markers and preserves the
+historical first-ready event. It reads only document length and the bounded prefix;
+it does not copy a whole large note. All guard and dispatch costs remain measured.

@@ -13,6 +13,7 @@ export function installObserver(config){
     return {pane,node,view};
   };
   const eligible=()=>{
+    if(document.hidden||document.visibilityState!=='visible')return null;
     const item=current();if(!item)return null;
     const {node,view}=item,bounds=node.getBoundingClientRect();
     if(view.state.doc.length!==config.characters||view.state.doc.sliceString(0,config.prefix.length)!==config.prefix||node.getAttribute('contenteditable')!=='true'||node.closest('[inert]')||bounds.width<=0||bounds.height<=0||bounds.bottom<=0||bounds.top>=innerHeight)return null;

@@ -11,9 +11,10 @@ import {CDP} from '../../tests/tasks-electron-integration/cdp.mjs';
 import {assessNote,baseFixtureSource,clockInterval,DEADLINE_MS,fixtureText,planCampaign,reopenPrepared} from './oracle.mjs';
 import {navigateFileTree} from './file-navigation.mjs';
 import {foregroundSource} from './foreground.mjs';
+import {configurePassiveObserver,probeViewportSource} from './passive-observer.mjs';
 import {assertFreshNativeScope,authenticateMain,emptyWarmEvidence,observeEarly,resetEmptyWarmState,validateEmptyWarmEvidence} from './preparation.mjs';
 import {boundedMeasurement,documentVisibilitySource,isMeasurementInterference,MeasurementInterference,requireForeground,visibleFramesSource} from './measurement.mjs';
-import {captureObserverFailure,observerSource,sampleObserverSource} from './observer.mjs';
+import {captureObserverFailure,sampleObserverSource} from './observer.mjs';
 import {installMainObserver} from './main-observer.mjs';
 import {stopOwned} from './cleanup.mjs';
 import {appPins,currentBrowserEndpoint,hash,hashFile,journalHeads,launchEnvironment,ownedOutput,ownedProcesses} from './support.mjs';
@@ -83,8 +84,8 @@ export async function main(args=process.argv.slice(2)){
   async function configure(launch,record,newDocument=false){
     const config={identity:record.identity,path:record.path,characters:record.expectedCharacters,prefix:record.original.slice(0,160),visibleText:record.original.split('\n')[0].replace(/^#+\s*/,''),markers:{ready:'x',deadline:'y'}};
     Object.defineProperty(record,'client',{value:active.renderer});
-    if(newDocument)record.newDocumentScript=await active.renderer.call('Page.addScriptToEvaluateOnNewDocument',{source:observerSource(config)});
-    await active.renderer.evaluate(observerSource(config));record.clockSamples.push(await clock(active.renderer,launch));
+    try{const value=await configurePassiveObserver({renderer:active.renderer,config,newDocument,sampleClock:()=>clock(active.renderer,launch),now:launch.elapsed,timeoutMs:newDocument?remaining(launch,record):timeoutMs,pause:sleep});record.newDocumentScript=value.script;record.passiveObserverSetup=value.setup;record.clockSamples.push(value.sample);}
+    catch(error){record.passiveObserverSetup=error.passiveObservation;throw error;}
   }
   function noteCase(launch,name,kind,originMs){
     const original=pairs.get(launch.pairId).sources.get(name);
@@ -107,6 +108,7 @@ export async function main(args=process.argv.slice(2)){
       await checkForeground(launch);
       if(!record.focused){await renderer.evaluate("document.querySelector('.pane.is-active .cm-content').focus();true");await press(renderer,'Home','Home',['moveToBeginningOfDocument']);record.focused=true;}
       await renderer.evaluate(`(()=>{const s=window.__zoridPackagedProbe,p=document.querySelector('.pane.is-active'),n=p?.querySelector('.cm-content'),v=n?.cmTile?.root?.view??n?.cmView?.view;const title=${JSON.stringify(record.path.split('/').at(-1).replace(/\.md$/i,''))};if(s?.identity!==${JSON.stringify(record.identity)}||p?.querySelector('.note-title')?.value!==title||!v||n.closest('[inert]')||n.getAttribute('contenteditable')!=='true'||v.state.doc.length!==${record.expectedCharacters}+s.probes.length||v.state.doc.sliceString(s.probes.length,s.probes.length+${record.prefix.length})!==${JSON.stringify(record.prefix)})throw Error('Selected fixture changed before trusted input');return true;})()`);
+      attempt.viewport=await renderer.evaluate(probeViewportSource({identity:record.identity,path:record.path,characters:record.expectedCharacters,prefix:record.prefix,visibleText:record.original.split('\n')[0].replace(/^#+\s*/,'' )}));await checkForeground(launch);
       if(record.cancelled||active?.renderer!==renderer)throw Error('Owned input scope retired during preparation');
       attempt.dispatchAtMs=launch.elapsed();await renderer.call('Input.insertText',{text:attempt.name==='ready'?'x':'y'});attempt.completedAtMs=launch.elapsed();attempt.status='sent';
     });await record.inputQueue;

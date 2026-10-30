@@ -18,5 +18,5 @@ test('arbitrary source/protocol/interference failure is never retried as navigat
   }
 });
 test('passive context retries exhaust the original budget without registering again or sending input',async()=>{
-  const f=fixture(()=>{throw replaced();});f.options.timeoutMs=15;await assert.rejects(configurePassiveObserver(f.options));assert.equal(f.registrations(),1);assert.ok(f.evaluations()<=2);
+  const f=fixture(()=>{throw replaced();});f.options.timeoutMs=15;await assert.rejects(configurePassiveObserver(f.options));assert.equal(f.registrations(),1);assert.equal(f.evaluations(),2);
 });
