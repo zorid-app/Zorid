@@ -137,6 +137,7 @@ function createEditorCoreManager(environment=process.env, options={}){
     async open(input){
       if(closed)throw fail('editor_core_closed');
       const canonical=await fs.realpath(input);
+      if(closed)throw fail('editor_core_closed');
       while(retirements.has(canonical)){await retirements.get(canonical);if(closed)throw fail('editor_core_closed');}
       return openService(canonical);
     },

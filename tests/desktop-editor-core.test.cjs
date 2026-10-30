@@ -8,13 +8,13 @@ const {createRequire}=require('node:module');
 const {WindowBroker}=require('../desktop/window-broker.cjs');
 const deferred=()=>{let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};};
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
-function fixture({admission,admissionFactory,options={}}={}){
+function fixture({admission,admissionFactory,options={},realpath=async value=>value}={}){
   const opened=[],closed=deferred();
   const filename=path.resolve(__dirname,'../desktop/editor-core.cjs');
   const sourceRequire=createRequire(filename);
   const module={exports:{}};
   vm.runInNewContext(fs.readFileSync(filename,'utf8'),{module,exports:module.exports,process,structuredClone,require(name){
-    if(name==='node:fs/promises')return {realpath:async value=>value};
+    if(name==='node:fs/promises')return {realpath};
     if(name==='./vault-service.cjs')return {VaultService:{async open(root,configuration){
       const service={root,configuration,host:{fatal:null,exited:false,async identity(){return{local_store_id:admission?.scope.vaultId??'store',realm_id:null,vault_id:null};}},closed:false,subscribe(){return ()=>{};},async close(){this.closed=true;if(opened[0]===this)await closed.promise;this.host.exited=true;}};
       opened.push(service);return service;
@@ -33,6 +33,15 @@ function fixture({admission,admissionFactory,options={}}={}){
   const window=()=>{const record=broker.register({webContents:{id:++id,mainFrame:{url:'https://zorid.test/'},isDestroyed:()=>false},isDestroyed:()=>false});record.clientSlot={clientId:admission?.scope.clientId??'client'};return record;};
   return {manager,broker,window,opened,closed};
 }
+test('shutdown prevents a vault from opening after pending path resolution completes',async()=>{
+  const pathReady=deferred(),f=fixture({realpath:()=>pathReady.promise});
+  f.closed.resolve();
+  const opening=f.manager.open('/vault');
+  await f.manager.close();
+  pathReady.resolve('/vault');
+  await assert.rejects(opening,{code:'editor_core_closed'});
+  assert.equal(f.opened.length,0,'a closed manager must not start another host');
+});
 function bindJournal(f,record,context,assertCurrent=()=>{}){
   const grant={token:'10000000-0000-4000-8000-000000000007',scope:{...context.scope,incarnationId:'10000000-0000-4000-8000-000000000008'}};
   f.manager.bindIndependentJournal(f.broker,record,'/vault',context.admissionId,grant,assertCurrent);
