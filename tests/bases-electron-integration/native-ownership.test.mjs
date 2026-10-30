@@ -204,3 +204,11 @@ test('normal shutdown rejects contradictory close outcomes and current requires 
     assert.equal(current.observe({events:[first],rows:changed,appPid:10}).current,null);
   }
 });
+test('close metadata is primitive typed and digest validated before entering generation evidence',()=>{
+  const first=startGeneration(firstGeneration,11,12),initial={events:[first],rows:generationRows(11,12),appPid:10};
+  for(const metadata of [{nativeTerminatedDuringHold:'true'},{nativeTerminatedDuringHold:{leaseToken:'private'}},{withheldResponseSha256:'not-a-digest'},{withheldResponseSha256:{reference:'private'}}]){
+    const registry=ownership.createNativeGenerationRegistry({...input,appCommand});registry.observe(initial);
+    assert.throws(()=>registry.observe({events:[first,{...first,kind:'closed',exitCode:0,signal:null,...metadata}],rows:[],appPid:10}),/Typed hold termination flag|SHA-256 sealed response digest/);
+    assert.equal(registry.observe(initial).generations[0].closeObservations.length,0,'Malformed metadata never commits into evidence');
+  }
+});

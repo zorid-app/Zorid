@@ -111,6 +111,8 @@ export function createNativeGenerationRegistry({native,vault,identity,appCommand
       record.closeObservations=closes.map(event=>{
         assert.ok(event.exitCode===null||Number.isSafeInteger(event.exitCode),'Explicit Native close exit code');
         assert.ok(event.signal===null||typeof event.signal==='string','Explicit Native close signal');
+        if(event.nativeTerminatedDuringHold!==undefined)assert.equal(typeof event.nativeTerminatedDuringHold,'boolean','Typed hold termination flag');
+        if(event.withheldResponseSha256!==undefined)assert.ok(typeof event.withheldResponseSha256==='string'&&/^[0-9a-f]{64}$/.test(event.withheldResponseSha256),'SHA-256 sealed response digest');
         return{kind:event.kind,exitCode:event.exitCode,signal:event.signal,...(event.at!==undefined?{at:event.at}:{}),...(event.nativeTerminatedDuringHold!==undefined?{nativeTerminatedDuringHold:event.nativeTerminatedDuringHold}:{}),...(event.withheldResponseSha256!==undefined?{withheldResponseSha256:event.withheldResponseSha256}:{})};
       });
       const terminal=new Set(record.terminalProcessIds);
