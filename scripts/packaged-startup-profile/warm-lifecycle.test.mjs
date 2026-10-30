@@ -1,7 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs/promises';
-import path from 'node:path';
 import vm from 'node:vm';
 import {EventEmitter} from 'node:events';
 import * as mainObservers from './main-observer.mjs';
@@ -37,4 +35,15 @@ test('an owned Native PID without an observed exit can never become normal merel
   const launch={directory:'/unused',mainFinalFile:'/unused/final',stderr:'',stdout:''},child={pid:22,exitCode:0,signalCode:null};let first=true;
   await stopOwned({child,exit:Promise.resolve()},launch,{apps:['/clone.app'],shutdownMs:1,io:{snapshot:()=>{if(first){first=false;return [{pid:23,command:'/clone.app/Contents/Resources/native/zorid-desktop-host --vault /fixture'}];}return [];},readMain:async()=>({normalQuitObserved:true,quitExitCode:0,nativePids:[],nativeExits:[]}),writeLogs:async()=>{}}});
   assert.equal(launch.cleanup.gone,true);assert.equal(launch.cleanup.nativeNormal,false);assert.equal(launch.cleanup.normal,false);
+});
+
+test('later detailed instrumentation shares lifecycle state and never duplicates final-quit or child-exit listeners',async()=>{
+  const f=nativeFixture();f.install();const initial=f.context.__zoridPackagedMain,host=new f.Host();host.child=f.child;await host.request({method:'identity'});
+  const request=host.request;f.install();assert.equal(host.request,request);assert.equal(f.app.listenerCount('quit'),1);assert.equal(f.child.listenerCount('exit'),1);
+  vm.runInNewContext(`(${mainObservers.installMainObserver.toString()})(${JSON.stringify(f.config)})`,f.context);
+  assert.equal(f.context.__zoridPackagedMain,initial);assert.equal(f.app.listenerCount('quit'),1);assert.equal(f.child.listenerCount('exit'),1);
+  f.child.emit('exit',0,null);f.app.quit();assert.equal(f.writes.length,1);assert.equal(f.writes[0].nativeExits.length,1);
+});
+test('foreign lifecycle scope cannot install quit or Native tracking hooks',()=>{
+  const f=nativeFixture(),original=f.Host.prototype.request;f.config.pid=99;assert.throws(f.install,/scope differs/);assert.equal(f.Host.prototype.request,original);assert.equal(f.app.listenerCount('quit'),0);assert.equal(f.context.__zoridPackagedMain,undefined);
 });

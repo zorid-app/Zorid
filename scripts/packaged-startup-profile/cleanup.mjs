@@ -49,7 +49,9 @@ export async function stopOwned(owned,launch,{apps,shutdownMs,io={}}){
   remaining=await readProcesses();
   const readMain=io.readMain??(async()=>JSON.parse(await fs.readFile(launch.mainFinalFile,'utf8')));
   launch.mainFinal=await attempt('main-final-evidence',readMain);
-  const known=launch.mainFinal?.nativePids??[],exits=launch.mainFinal?.nativeExits??[];
+  const nativeExecutables=apps.map(app=>app+'/Contents/Resources/native/zorid-desktop-host');
+  const scopedNative=(launch.ownedProcessesBeforeQuit??[]).filter(row=>typeof row.command==='string'&&nativeExecutables.some(executable=>row.command===executable||row.command.startsWith(executable+' '))).map(row=>row.pid);
+  const known=[...new Set([...(launch.mainFinal?.nativePids??[]),...scopedNative])],exits=launch.mainFinal?.nativeExits??[];
   const nativeNormal=known.length?known.every(pid=>exits.some(row=>row.pid===pid&&row.code===0&&row.signal===null)):null;
   launch.cleanup={normal:!forced&&!alive()&&owned.child.exitCode===0&&owned.child.signalCode===null&&launch.mainFinal?.normalQuitObserved===true&&launch.mainFinal?.quitExitCode===0&&nativeNormal!==false,
     gone:remaining!==null&&remaining.length===0&&!alive(),forced,remaining:remaining??[{unverifiable:true}],nativeNormal,nativeExits:exits};

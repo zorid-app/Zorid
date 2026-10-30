@@ -11,12 +11,13 @@ import {CDP} from '../../tests/tasks-electron-integration/cdp.mjs';
 import {assessNote,clockInterval,DEADLINE_MS,planCampaign} from './oracle.mjs';
 import {navigateFileTree} from './file-navigation.mjs';
 import {foregroundSource} from './foreground.mjs';
+import {captureSetupFailure} from './setup-failure.mjs';
 import {fixtureOptions,fixtureSources,preparedRestore,returnTarget,startupTarget} from './fixtures.mjs';
 import {configurePassiveObserver,probeViewportSource} from './passive-observer.mjs';
 import {assertFreshNativeScope,authenticateMain,emptyWarmEvidence,observeEarly,resetEmptyWarmState,validateEmptyWarmEvidence} from './preparation.mjs';
 import {boundedMeasurement,documentVisibilitySource,isMeasurementInterference,MeasurementInterference,requireForeground,visibleFramesSource} from './measurement.mjs';
-import {captureObserverFailure,sampleObserverSource} from './observer.mjs';
-import {installMainObserver} from './main-observer.mjs';
+import {sampleObserverSource} from './observer.mjs';
+import {installMainLifecycle,installMainObserver} from './main-observer.mjs';
 import {stopOwned} from './cleanup.mjs';
 import {appPins,currentBrowserEndpoint,hash,hashFile,journalHeads,launchEnvironment,ownedOutput,ownedProcesses} from './support.mjs';
 
@@ -97,7 +98,7 @@ export async function main(args=process.argv.slice(2)){
     let done;record.deadlineDone=new Promise(resolve=>{done=resolve;});record.resolveDeadline=done;record.inputQueue=Promise.resolve();
     record.deadlineTimer=setTimeout(()=>{record.deadlineTask=(async()=>{
       const attempt={name:'deadline',scheduledForMs:record.originMs+DEADLINE_MS,attemptedAtMs:launch.elapsed(),status:'unobservable'};record.dispatches.push(attempt);
-      if(!record.cancelled&&launch.vaultVerified&&record.client&&active?.renderer===record.client&&record.configured&&launch.nativeInstrumentationReady&&launch.nativeScopeVerified&&active.foregroundEstablished){
+      if(launch.measured===true&&!record.cancelled&&launch.vaultVerified&&record.client&&active?.renderer===record.client&&record.configured&&launch.nativeInstrumentationReady&&launch.nativeScopeVerified&&active.foregroundEstablished){
         try{const observed=await record.client.evaluate(serializableState);if(observed?.identity===record.identity){attempt.observation={at:observed.sampledAt,ready:observed.ready,readinessCheck:observed.readinessCheck};if(observed.ready)await sendProbe(launch,record,attempt);else if(observed.readinessCheck?.eligible===false&&observed.readinessCheck.framesPending===false)attempt.status='observed-not-ready';else attempt.status='readiness-unresolved';}}
         catch(error){attempt.error=String(error);if(isMeasurementInterference(error))record.measurementInterference=String(error);}
       }
@@ -106,7 +107,7 @@ export async function main(args=process.argv.slice(2)){
   async function sendProbe(launch,record,attempt){
     record.inputQueue=record.inputQueue.then(async()=>{
       const renderer=record.client;
-      if(record.cancelled||!launch.vaultVerified||!launch.scopeVerified||!launch.nativeInstrumentationReady||!launch.nativeScopeVerified||active?.renderer!==renderer)throw Error('Owned input scope retired before dispatch');
+      if(launch.measured!==true||record.cancelled||!launch.vaultVerified||!launch.scopeVerified||!launch.nativeInstrumentationReady||!launch.nativeScopeVerified||active?.renderer!==renderer)throw Error('Owned input scope retired before dispatch');
       await checkForeground(launch);
       if(!record.focused){await renderer.evaluate("document.querySelector('.pane.is-active .cm-content').focus();true");await press(renderer,'Home','Home',['moveToBeginningOfDocument']);record.focused=true;}
       await renderer.evaluate(`(()=>{const s=window.__zoridPackagedProbe,p=document.querySelector('.pane.is-active'),n=p?.querySelector('.cm-content'),v=n?.cmTile?.root?.view??n?.cmView?.view;const title=${JSON.stringify(record.path.split('/').at(-1).replace(/\.md$/i,''))};if(s?.identity!==${JSON.stringify(record.identity)}||p?.querySelector('.note-title')?.value!==title||!v||n.closest('[inert]')||n.getAttribute('contenteditable')!=='true'||v.state.doc.length!==${record.expectedCharacters}+s.probes.length||v.state.doc.sliceString(s.probes.length,s.probes.length+${record.prefix.length})!==${JSON.stringify(record.prefix)})throw Error('Selected fixture changed before trusted input');return true;})()`);
@@ -181,10 +182,15 @@ export async function main(args=process.argv.slice(2)){
   async function attachLaunch(launch,pair,pinned,startup){
     const expectedURL=pathToFileURL(path.join(pinned.archive,'dist/index.html')).href;
     await observeEarly({
+      measured:launch.measured,
       connectMain:async()=>{
         const mainURL=await bounded(()=>{const url=/Debugger listening on (ws:\/\/127\.0\.0\.1:\d+\/[^\s]+)/.exec(launch.stderr)?.[1];assert.ok(url,'Packaged main inspector not observable');return url;},launch);
         active.main=new CDP(mainURL);await active.main.call('Runtime.enable');launch.mainAttachedMs=launch.elapsed();launch.mainClockSamples=[await clock(active.main,launch)];
         launch.mainScope=await active.main.evaluate(`(${authenticateMain.toString()})(${JSON.stringify(foregroundConfig(launch,false))})`);return active.main;
+      },
+      installLifecycle:async main=>{
+        launch.lifecycleScope=await main.evaluate(`(${installMainLifecycle.toString()})(${JSON.stringify({pid:launch.pid,executable:pinned.executable,expectedAppPath:pinned.archive,profile:pair.profile,localDataDirectory:pair.data,outputFile:launch.mainFinalFile})})`);
+        launch.lifecycleAttachedMs=launch.elapsed();launch.mainClockSamples.push(await clock(main,launch));
       },
       connectRenderer:async()=>{
         const endpoint=await bounded(()=>currentBrowserEndpoint(launch.stderr),launch);launch.browserEndpoint=endpoint;
@@ -218,7 +224,7 @@ export async function main(args=process.argv.slice(2)){
     if(pair.preparation?.reset)assertFreshNativeScope(pair.preparation.evidence.scope,launch.nativeScope);launch.nativeScopeVerified=true;
   }
   function beginLaunch(launch,pair,pinned,measured){
-    launch.measured=measured;const start=performance.now();Object.defineProperty(launch,'elapsed',{value:()=>performance.now()-start});launch.spawnWallClockDiagnostic=new Date().toISOString();
+    launch.measured=measured;launch.foregroundPolicy=measured?'required':'not-required-read-only-preparation';launch.inputAllowed=measured;const start=performance.now();Object.defineProperty(launch,'elapsed',{value:()=>performance.now()-start});launch.spawnWallClockDiagnostic=new Date().toISOString();
     const startup=noteCase(launch,startupTarget(fixturePolicy,launch.mode),measured?(launch.mode==='reopen'?fixturePolicy.reopenKind:'startup-'+launch.mode):'prewarm-empty',0);if(!measured)Object.assign(startup,{path:'__empty_prewarm__.md',original:'',prefix:'',expectedCharacters:0});launch.cases.push(startup);if(measured)arm(launch,startup);
     const child=spawn(pinned.executable,['--inspect=127.0.0.1:0','--user-data-dir='+pair.profile,'--remote-debugging-address=127.0.0.1','--remote-debugging-port=0','--no-first-run'],{env:launchEnvironment(pair.profile,pair.data),cwd:out,stdio:['ignore','pipe','pipe']});launch.pid=child.pid;
     const exit=new Promise(resolve=>{child.once('exit',(code,signal)=>{launch.exitCode=code;launch.signal=signal;resolve();});child.once('error',error=>{launch.launchError=String(error);resolve();});});active={child,exit,main:null,renderer:null,launch};(measured?report.actualOrder:report.preparationOrder).push({label:launch.label,pairId:launch.pairId,mode:launch.mode,pid:child.pid});
@@ -232,9 +238,10 @@ export async function main(args=process.argv.slice(2)){
     report.preparations.push(launch);pair.preparation=launch;const startup=beginLaunch(launch,pair,pinned,false);
     try{
       await attachLaunch(launch,pair,pinned,startup);
+      try{launch.passiveWindow=await active.main.evaluate(foregroundSource(foregroundConfig(launch,false)));}catch(error){launch.passiveWindow={error:String(error)};}launch.passiveDocument=await active.renderer.evaluate(documentVisibilitySource);
       await bounded(async()=>assert.equal(await active.renderer.evaluate("!!document.querySelector('.workspace')&&!document.querySelector('.cm-content')"),true,'Warm empty workspace not settled'),launch);
       launch.evidence=await active.renderer.evaluate(`(${emptyWarmEvidence.toString()})(${JSON.stringify(pair.vault)})`);launch.emptyProof=validateEmptyWarmEvidence(launch.evidence);
-    }catch(error){launch.errors.push(error.stack??String(error));await captureObserverFailure(active?.renderer,launch);throw error;}
+    }catch(error){launch.errors.push(error.stack??String(error));await captureSetupFailure({renderer:active?.renderer,main:active?.main,windowSource:foregroundSource(foregroundConfig(launch,false)),launch});throw error;}
     finally{await stop(launch);await fs.writeFile(path.join(directory,'result.json'),JSON.stringify(launch,null,2));await save();}
     assert.ok(!launch.cleanupErrors?.length,'Warm cleanup evidence failed');
     const after=await appPins(pinned.app,asar);launch.artifactsUnchanged=['executableSha256','asarSha256','nativeSha256','frameworkSha256','infoSha256'].every(field=>after[field]===pinned[field]);assert.ok(launch.artifactsUnchanged,'Warm app changed');
@@ -280,7 +287,7 @@ export async function main(args=process.argv.slice(2)){
         await baseCase(launch,pair);
         await prepareRestoreTarget(launch,pair);
         launch.mainClockSamples.push(await clock(active.main,launch));
-      }catch(error){launch.errors.push(error.stack??String(error));if(isMeasurementInterference(error))launch.measurementInterference={code:'PACKAGED_MEASUREMENT_INTERFERENCE',error:String(error),atMs:launch.elapsed()};report.errors.push({pairId:scheduled.pairId,mode:scheduled.mode,error:String(error)});await captureObserverFailure(active.renderer,launch);try{launch.failureWindow=active.main?await active.main.evaluate(foregroundSource(foregroundConfig(launch,false))):{unavailable:'Main inspector not attached'};}catch(windowError){launch.failureWindow={error:String(windowError)};}try{if(active.renderer){const image=await active.renderer.call('Page.captureScreenshot',{format:'png'});await fs.writeFile(path.join(directory,'failure.png'),Buffer.from(image.data,'base64'));}}catch{}}
+      }catch(error){launch.errors.push(error.stack??String(error));if(isMeasurementInterference(error))launch.measurementInterference={code:'PACKAGED_MEASUREMENT_INTERFERENCE',error:String(error),atMs:launch.elapsed()};report.errors.push({pairId:scheduled.pairId,mode:scheduled.mode,error:String(error)});await captureSetupFailure({renderer:active.renderer,main:active.main,windowSource:foregroundSource(foregroundConfig(launch,false)),launch});try{if(active.renderer){const image=await active.renderer.call('Page.captureScreenshot',{format:'png'});await fs.writeFile(path.join(directory,'failure.png'),Buffer.from(image.data,'base64'));}}catch{}}
       finally{
         for(const record of launch.cases){
           record.cancelled=true;

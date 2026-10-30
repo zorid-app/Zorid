@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {EventEmitter} from 'node:events';
-import {installMainObserver} from './main-observer.mjs';
+import {installMainLifecycle,installMainObserver} from './main-observer.mjs';
 import {appPins,currentBrowserEndpoint,hash,launchEnvironment,ownedOutput} from './support.mjs';
 import {BaseDocument} from '../../src/bases/document.ts';
 import {baseFixtureSource} from './oracle.mjs';
@@ -47,6 +47,7 @@ test('main observer preserves actual request/open Promise identity and records f
     throw Error('Unexpected module '+name);
   };
   const context={process:{pid:22,resourcesPath:'/clone.app/Contents/Resources',execPath:'/clone.app/Contents/MacOS/Zorid',versions:{electron:'44.9.1'},env:{ZORID_LOCAL_DATA_DIR:'/owned/data'},getBuiltinModule(name){return name==='module'?{createRequire:()=>req}:name==='perf_hooks'?{performance:{now:()=>now++,timeOrigin:1000}}:{writeFileSync:(...args)=>writes.push(args)};}},structuredClone,Uint8Array};
+  vm.runInNewContext(`(${installMainLifecycle.toString()})(${JSON.stringify({pid:22,executable:'/clone.app/Contents/MacOS/Zorid',expectedAppPath:'/clone.app/Contents/Resources/app.asar',profile:'/owned/profile',localDataDirectory:'/owned/data',outputFile:'/owned/final.json'})})`,context);
   vm.runInNewContext(`(${installMainObserver.toString()})(${JSON.stringify({expectedAppPath:'/clone.app/Contents/Resources/app.asar',profile:'/owned/profile',localDataDirectory:'/owned/data',outputFile:'/owned/final.json'})})`,context);
   const host=new Host();host.tail=Promise.resolve();host.child=nativeChild;
   const command={method:'checkpoint_cas',scope:{vault_id:'store',client_id:'client'},key:'note/v1/entry',next_revision:'2',has_state:true},bytes=new Uint8Array([1]);

@@ -4,9 +4,9 @@ import path from 'node:path';
 /** Passive renderer attachment is independent of main startup. Join both before
  * foregrounding or native instrumentation, and join failures before cleanup. */
 export async function observeEarly(hooks){
-  const results=await Promise.allSettled([hooks.connectMain(),(async()=>{const renderer=await hooks.connectRenderer();await hooks.installObserver(renderer);return renderer;})()]);
+  const results=await Promise.allSettled([(async()=>{const main=await hooks.connectMain();await hooks.installLifecycle?.(main);return main;})(),(async()=>{const renderer=await hooks.connectRenderer();await hooks.installObserver(renderer);return renderer;})()]);
   const failures=results.filter(value=>value.status==='rejected');if(failures.length===1)throw failures[0].reason;if(failures.length)throw new AggregateError(failures.map(value=>value.reason),'Early attachment failures: '+failures.map(value=>String(value.reason)).join('; '));
-  const [main,renderer]=results.map(value=>value.value);await hooks.foreground();await hooks.installNativeObserver(main);return {main,renderer};
+  const [main,renderer]=results.map(value=>value.value);if(hooks.measured!==false)await hooks.foreground();await hooks.installNativeObserver(main);return {main,renderer};
 }
 /** Lightweight actual-process proof before any native module instrumentation. */
 export function authenticateMain(config){

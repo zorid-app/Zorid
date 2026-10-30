@@ -119,7 +119,7 @@ Observer snapshots request a fresh readiness check so property or layout changes
 
 Instantaneous eligibility and pending-frame state are retained as deadline diagnostics. They do not establish continuous readiness coverage, so unresolved readiness remains indeterminate and never manufactures a valid target miss.
 
-The runner normally activates only its authenticated packaged child and single owned window before observer frame checks and each file-open action. Process, executable, ASAR, profile, local-data and window URL are checked on every call. Native activation time stays inside the original spawn/open clock; background throttling is unchanged. Foreground/window and failure document visibility/focus are recorded. Human input while the test window is foreground can invalidate exact-source checks and is never filtered or ignored.
+Measured launches normally activate only their authenticated packaged child and single owned window before observer frame checks and each file-open action. Process, executable, ASAR, profile, local-data and window URL are checked on every call. Native activation time stays inside the original spawn/open clock; background throttling is unchanged. Foreground/window and failure document visibility/focus are recorded. Human input while the test window is foreground can invalidate exact-source checks and is never filtered or ignored.
 
 Activation is requested once per boundary and confirmed through passive owned-window focus/visibility plus renderer visibility, within the original time budget. Passive checks during navigation, readiness and Base waits treat foreground/visibility loss as explicit measurement interference and stop; they never refocus continuously or retry input. Frame waits reject visibility loss instead of waiting for hidden RAF. Failures include small Base grid, row-count, busy, error and toolbar diagnostics.
 
@@ -189,3 +189,19 @@ Default Note0000 restore preparation and default metric names remain compatible.
 For example, append `--large-note-bytes 5242880 --restore-large` to a short100-note
 campaign after the default432000-byte control is accepted. No large restore result
 is established by the pure helper tests or by merely setting these options.
+
+
+Empty-profile warming is unmeasured and read-only: it does not request activation
+or require foreground/RAF readiness. Passive document/window state is recorded,
+while actual app/PID/vault/native authentication, every zero-work proof, normal
+app AND Native exits, no owned PIDs and all reset-path checks remain mandatory.
+It never arms input probes; measured launches retain every foreground/input gate.
+
+Minimal main lifecycle and real Native-child exit observation starts immediately
+after main authentication, independently of renderer setup or foreground success.
+Detailed request decoding attaches later to that same lifecycle state. A real
+final `quit(0)` and observed child `exit(0,null)` remain required; disappearance of
+a Native PID from `ps` does not invent an exit status. Native PIDs seen in the
+owned pre-quit process snapshot also require matching actual exit receipts. Warm
+setup failures preserve case/activation history plus independently attempted
+renderer and passive owned-window diagnostics, even when one observation fails.
