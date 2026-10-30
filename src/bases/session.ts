@@ -958,7 +958,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     };
     captureSummarySaveAcknowledgement=()=>{
       const next=retryAccepted;
-      return()=>{if(!destroyed&&next&&retryAccepted===next)accept(next);};
+      return()=>{if(!destroyed&&next&&retryAccepted===next&&accept(next)&&dirty)summaryPassive=true;};
     };
     const fail = (failure: unknown, next: SummaryAttempt) => {
       error.textContent = failure instanceof Error ? failure.message : String(failure); dirty = true;
@@ -979,7 +979,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     }
     name.addEventListener('input', () => { if(!summaryFrozen)summaryPassive=false;generation++; updateDirty(); });
     name.addEventListener('blur', () => { void save(); });
-    name.addEventListener('keydown', event => { if (event.isComposing) return; if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); name.value = acceptedName; updateDirty(); name.blur(); } else if (event.key === 'Enter') { event.preventDefault(); name.blur(); } });
+    name.addEventListener('keydown', event => { if (event.isComposing||event.keyCode===229||nameComposing||nameSettling) return; if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); name.value = acceptedName; updateDirty(); name.blur(); } else if (event.key === 'Enter') { event.preventDefault();summaryPassive=false; name.blur(); } });
     expression.addEventListener('input', () => { if(!summaryFrozen)summaryPassive=false;generation++; updateDirty(); if(summaryFrozen)return;if (timer) clearTimeout(timer); timer = setTimeout(() => { timer = undefined; void save(); }, 250); });
     cancelChanges.addEventListener('click', () => { if (saving || retryPersistence) return; name.value = acceptedName; expression.value = acceptedExpression; dirty = false; mark(); close(true); });
     back.addEventListener('click', () => close(true));
@@ -1004,7 +1004,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     const outside = (event: Event) => { if (!panel.contains(event.target as Node)) close(false); };
     doc.addEventListener('pointerdown', outside, true); win?.addEventListener('resize', place); win?.addEventListener('scroll', scroll, true); resize?.observe(panel); destroySummaryEditor = cleanup;
     if(restoring)expression.value=restoring.formula.initial;
-    try { formulaEditor = enhanceBaseSummaryEditor(expression, { onEscape: () => close(true), onCommit: () => { void save(); } }); } catch (failure) { cleanup(); throw failure; }
+    try { formulaEditor = enhanceBaseSummaryEditor(expression, { onEscape: () => close(true), onCommit: () => { summaryPassive=false;void save(); } }); } catch (failure) { cleanup(); throw failure; }
     if(restoring){
       if(!formulaEditor.restoreAdmissionDraft(restoring.formula)){cleanup();throw new Error('The retained summary presentation could not be restored.');}
       name.value=restoring.name;const selection=restoring.nameSelection;if(selection.start!==null&&selection.end!==null)name.setSelectionRange(selection.start,selection.end,selection.direction??undefined);if(selection.focus)name.focus({preventScroll:true});summaryPassive=true;updateDirty();cancelChanges.hidden=!dirty;

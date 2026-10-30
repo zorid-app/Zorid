@@ -4101,7 +4101,15 @@ export class Workspace {
   private help():void{const{content}=modal('Help');content.append(el('h2','','Get started'),el('p','',`Link to another note with [[note name]]. Customize workspace shortcuts in Settings → Hotkeys. Create note: ${this.hotkeys.label('new-note')||'not assigned'}. Find file: ${this.hotkeys.label('quick-switcher')||'not assigned'}. Command palette: ${this.hotkeys.label('command-palette')||'not assigned'}.`));
   }
   private hotkeySurfaceBlocked(): boolean {
-    return this.startupFailed||this.closing||this.tasksRetiring||this.root.inert||this.recoveringAdmissionVaults.has(this.vault)||!!document.querySelector('.modal-overlay,[aria-modal="true"],[role="menu"]');
+    if(this.startupFailed||this.closing||this.tasksRetiring||this.root.inert||this.recoveringAdmissionVaults.has(this.vault)||document.querySelector('.modal-overlay,[aria-modal="true"]'))return true;
+    return [...document.querySelectorAll<HTMLElement>('[role="menu"]')].some(menu=>{
+      const visibility=getComputedStyle(menu).visibility;if(visibility==='hidden'||visibility==='collapse')return false;
+      for(let node:HTMLElement|null=menu;node;node=node.parentElement){
+        const style=getComputedStyle(node);
+        if(node.hidden||node.inert||node.getAttribute('aria-hidden')==='true'||style.display==='none')return false;
+      }
+      return true;
+    });
   }
   private onKey(event:KeyboardEvent):void{
     if(event.defaultPrevented||event.isComposing||event.getModifierState('AltGraph')||this.hotkeySurfaceBlocked())return;
