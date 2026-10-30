@@ -34,6 +34,12 @@ export function decodeHistory(request:HistoryRequest,value:unknown):{versions:Re
  if(!keys(value,['versions'],['nextCursor'])||!Array.isArray(value.versions)||value.versions.length>request.options.limit)throw failure();
  let before=request.options.before;
  for(const row of value.versions){if(!version(row,request.entryId)||before&&!(row.capturedAtMs<before.captured_at_ms||row.capturedAtMs===before.captured_at_ms&&BigInt(row.snapshotId)<BigInt(before.snapshot_id)))throw failure();before={captured_at_ms:row.capturedAtMs,snapshot_id:row.snapshotId};}
- if(value.nextCursor===undefined?value.versions.length>=request.options.limit:!cursor(value.nextCursor)||value.versions.length!==request.options.limit||!before||value.nextCursor.captured_at_ms!==before.captured_at_ms||value.nextCursor.snapshot_id!==before.snapshot_id)throw failure();
- return {versions:value.versions.map(row=>Object.freeze({...row})),...(value.nextCursor?{nextCursor:Object.freeze({...value.nextCursor})}:{})};
+ let nextCursor:RecoveryCursor|undefined;
+ if(value.nextCursor===undefined){if(value.versions.length>=request.options.limit)throw failure();}
+ else{
+  const candidate=value.nextCursor;
+  if(!cursor(candidate)||value.versions.length!==request.options.limit||!before||candidate.captured_at_ms!==before.captured_at_ms||candidate.snapshot_id!==before.snapshot_id)throw failure();
+  nextCursor=Object.freeze({captured_at_ms:candidate.captured_at_ms,snapshot_id:candidate.snapshot_id});
+ }
+ return {versions:value.versions.map(row=>Object.freeze({...row})),...(nextCursor?{nextCursor}:{})};
 }
