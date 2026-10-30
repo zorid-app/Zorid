@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {Workspace} from '../src/ui/workspace.ts';
+import {DeferredNoteRecovery} from '../src/ui/deferred-note-recovery.ts';
 import {Vault} from '../src/core/vault.ts';
 import {MemoryAdapter} from '../src/core/memory-adapter.ts';
 import {NoteBuffer} from '../src/ui/note-buffer.ts';
@@ -29,18 +29,24 @@ function fixture(count=1){
     planWrite:async()=>{scopeRequests.plans++;return unsupported();},prepare:unsupported,commit:unsupported,query:unsupported,listUnacknowledged:async()=>[],acknowledge:unsupported,
   };
   const vault=new Vault(adapter);
-  const owner={draftMetadataChanged(){},draftBufferStateChanged(){}};
-  const recovery=Workspace.prototype as unknown as {recoverDurableBuffers(this:unknown,vault:Vault):Promise<Map<string,NoteBuffer>>};
-  const recover=()=>recovery.recoverDurableBuffers.call(owner,vault);
+  const buffers=new Map<string,NoteBuffer>();
+  const recovery=new DeferredNoteRecovery({checkpoints:adapter.durableWrites.checkpoints,validate(){},
+    admitted:entryId=>[...buffers.values()].some(buffer=>buffer.savedDurableWitness?.entryId===entryId),
+    recover:async entryId=>{const current=records.get(entryId);if(!current)throw new Error('Recovered note entry is missing; draft retained');
+      const buffer=new NoteBuffer(vault,current.path);await buffer.load(entryId);buffers.set(current.path,buffer);}});
+  const recover=async()=>{await recovery.flush();return buffers;};
   const state=(index=0)=>JSON.parse(heads.get(`note/v1/entry-${index}`)!.encodedState!);
   const setState=(raw:unknown,index=0)=>{const head=heads.get(`note/v1/entry-${index}`)!,encodedState=JSON.stringify(raw);heads.set(head.key,{...head,encodedState,byteLength:Buffer.byteLength(encodedState,'utf8')});};
-  return{scope,records,heads,reads,scopeRequests,vault,recover,state,setState};
+  return{scope,records,heads,reads,scopeRequests,vault,recover,discover:()=>recovery.discover(),state,setState};
 }
 
-test('startup reads each clean checkpoint once without reading bodies or retaining unopened buffers',async()=>{
-  const f=fixture(100),buffers=await f.recover();
+test('startup discovers metadata without reading any clean checkpoint or source body',async()=>{
+  const f=fixture(100);await f.discover();
+  assert.equal(f.reads.checkpoint,0,'metadata discovery must not hydrate unrelated checkpoint bodies');
+  assert.equal(f.reads.body,0);
+  const buffers=await f.recover();
   assert.equal(f.reads.body,0,'clean note history must not read every body before the workspace can open');
-  assert.equal(f.reads.checkpoint,100,'clean checkpoint bodies need only one classification read');
+  assert.equal(f.reads.checkpoint,100,'global flush classifies each unopened clean checkpoint only once');
   assert.equal(buffers.size,0,'unopened clean notes must not retain a NoteBuffer');
   assert.equal(f.scopeRequests.plans,0);
 });
@@ -53,22 +59,22 @@ test('deferred clean note opens with current authoritative source and retained c
   assert.equal(f.scopeRequests.plans,0);assert.equal(f.heads.get('note/v1/entry-0')!.revision,initialCheckpointRevision);
 });
 
-test('startup still recovers an unsaved draft without creating a write plan',async()=>{
+test('global flush still recovers an unsaved draft without creating a write plan',async()=>{
   const f=fixture(),raw=f.state();raw.draft+='\nRetained unsaved body';raw.generation=1;f.setState(raw);
   const buffers=await f.recover(),note=buffers.get(raw.base.path)!;
-  assert.equal(buffers.size,1);assert.equal(note.text,raw.draft);assert.equal(note.dirty,true);assert.equal(f.reads.body,2);assert.equal(f.scopeRequests.plans,0);
+  assert.equal(buffers.size,1);assert.equal(note.text,raw.draft);assert.equal(note.dirty,true);assert.equal(f.reads.body,1);assert.equal(f.scopeRequests.plans,0);
 });
 
-test('startup still recovers a conflicted checkpoint even when its source and draft match',async()=>{
+test('global flush still recovers a conflicted checkpoint even when its source and draft match',async()=>{
   const f=fixture(),raw=f.state();raw.conflict=true;f.setState(raw);
   const note=(await f.recover()).get(raw.base.path)!;
-  assert.equal(note.hasRecoveryConflict,true);assert.equal(note.text,raw.draft);assert.equal(f.reads.body,2);
+  assert.equal(note.hasRecoveryConflict,true);assert.equal(note.text,raw.draft);assert.equal(f.reads.body,1);
 });
 
-test('startup still retains a planned operation even when its source and draft match',async()=>{
+test('global flush still retains a planned operation even when its source and draft match',async()=>{
   const f=fixture(),raw=f.state();raw.operation={content:raw.draft,plan:{version:1,...f.scope,entryId:raw.base.entryId,operationId:'retained-operation',encodedPlan:'exact-plan'}};f.setState(raw);
   const note=(await f.recover()).get(raw.base.path)!;
-  assert.equal(note.dirty,true);assert.equal(f.reads.body,2);assert.equal(f.scopeRequests.plans,0);
+  assert.equal(note.dirty,true);assert.equal(f.reads.body,1);assert.equal(f.scopeRequests.plans,0);
 });
 
 test('clean missing notes need no body read while missing unsaved notes still stop recovery',async()=>{

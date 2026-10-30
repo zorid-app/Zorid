@@ -89,6 +89,7 @@ import type { DockIntent, DockPane } from './tab-docking.ts';
 import { ChangeSet, EditorSelection } from '@codemirror/state';
 import { textChanges } from '../editor/text-changes.ts';
 import { WorkspaceStorageScope, validateWorkspaceWindowInfo, workspaceWindowBridge } from './workspace-window.ts';
+import {DeferredNoteRecovery} from './deferred-note-recovery.ts';
 import { resolveWorkspaceShortcut } from './workspace-keymap.ts';
 import { createSidebarControls } from './sidebar-controls.ts';
 import { buildFileListBackgroundMenu, installFileListBackgroundMenu } from './file-list-background-menu.ts';
@@ -981,32 +982,26 @@ export class Workspace {
     }finally{if(!this.platformDraining&&!this.platformDrained&&!this.platformReleased)this.root.inert=inert;}
   }
 
-  private async recoverDurableBuffers(vault:Vault):Promise<Map<string,NoteBuffer>>{
-    const result=new Map<string,NoteBuffer>(),checkpoints=vault.adapter.durableWrites?.checkpoints;
-    if(!checkpoints)return result;
-    const keys=new Set<string>();let cursor:string|undefined,highWater='0';
-    do{const page=await checkpoints.list({limit:100,cursor});highWater=page.highWater;for(const row of page.items)if(!row.deleted&&row.key.startsWith('note/v1/'))keys.add(row.key);cursor=page.cursor??undefined;}while(cursor);
-    do{const page=await checkpoints.changes({after:highWater,limit:100,cursor});for(const row of page.items)if(row.key.startsWith('note/v1/'))keys.add(row.key);cursor=page.cursor??undefined;}while(cursor);
-    for(const key of keys){
-      const head=await checkpoints.load(key);if(!head?.encodedState)continue;
-      const raw=JSON.parse(head.encodedState),entryId=key.slice('note/v1/'.length);
-      if(raw.version!==1||raw.base?.entryId!==entryId)throw new Error('Unsupported durable note recovery checkpoint; retained');
-      // Clean history has no draft or operation to recover. Leave it on disk
-      // until that note is actually opened, rather than reading every old body
-      // and keeping an unused buffer on the startup path. Only skip states that
-      // satisfy the same basic validation as DurableNoteState.load; malformed
-      // checkpoints still take the existing retained-recovery error path.
-      if(typeof raw.writer==='string'&&Number.isSafeInteger(raw.generation)&&raw.generation>=0
-        &&typeof raw.draft==='string'&&raw.conflict===false&&!raw.operation
-        &&typeof raw.base.content==='string'&&typeof raw.base.revision==='string'&&typeof raw.base.path==='string'
-        &&raw.draft===raw.base.content)continue;
-      const current=await vault.readDurableTextById(entryId);
-      if(!current){if(raw.operation||raw.draft!==raw.base.content)throw new Error('Recovered note entry is missing; draft retained');continue;}
-      let buffer:NoteBuffer;
-      buffer=new NoteBuffer(vault,current.path,{onMetadata:()=>this.draftMetadataChanged(buffer,vault),onState:()=>this.draftBufferStateChanged(buffer,vault)});
-      await buffer.load(entryId);result.set(current.path,buffer);
-    }
-    return result;
+  private deferredNoteRecovery?:DeferredNoteRecovery;
+  private deferredNoteRecoveryGeneration=0;
+  private registerDeferredNoteRecovery(vault:Vault):void{
+    this.deferredNoteRecovery?.stop();this.deferredNoteRecovery=undefined;this.deferredNoteRecoveryGeneration=this.vaultGeneration;
+    const checkpoints=vault.adapter.durableWrites?.checkpoints;if(!checkpoints)return;
+    const generation=this.vaultGeneration,registry=this.buffers,adapter=vault.adapter;
+    const validate=()=>{if(this.vault!==vault||this.vaultGeneration!==generation||this.buffers!==registry||vault.adapter!==adapter||adapter.durableWrites?.checkpoints!==checkpoints||this.platformReleased||this.platformDrained||this.recoveringAdmissionVaults.has(vault))throw new Error('The note recovery owner changed; checkpoints are retained.');};
+    const recovery=new DeferredNoteRecovery({checkpoints,validate,
+      admitted:entryId=>[...registry.values()].some(buffer=>buffer.hasAdmittedContent&&buffer.savedDurableWitness?.entryId===entryId),
+      recover:async entryId=>{
+        validate();const entry=[...vault.entries.values()].find(entry=>entry.type==='file'&&entry.entryId===entryId);
+        if(!entry)throw new Error('Recovered note entry is missing; draft retained');
+        await this.bufferFor(entry.path,entryId,validate);validate();
+      }});
+    this.deferredNoteRecovery=recovery;this.disposers.push(()=>recovery.stop());
+  }
+  private async recoverDurableBuffers(vault:Vault):Promise<void>{
+    if(this.vault!==vault)return;
+    if(this.deferredNoteRecovery&&this.deferredNoteRecoveryGeneration!==this.vaultGeneration)this.registerDeferredNoteRecovery(vault);
+    await this.deferredNoteRecovery?.flush();
   }
 
   // At most one pending state per live runtime. No presentation promise joins
@@ -1175,10 +1170,10 @@ export class Workspace {
     const transition=this.vaultTransition.then(async()=>{if(request===this.vaultRequest){
       this.nativeOpening=platform;
       try{
-        let recovered=await this.recoverDurableBuffers(next);
-        if(await platform.recoverCommands?.()){await next.initialize({metadata:'background'});recovered=await this.recoverDurableBuffers(next);}
-        await this.replaceVault(platform,next,recovered);
+        if(await platform.recoverCommands?.())await next.initialize({metadata:'background'});
+        await this.replaceVault(platform,next);
         if(request===this.vaultRequest&&this.platform===platform)await this.openNativeInitialNote(platform);
+        if(request===this.vaultRequest&&this.platform===platform)this.deferredNoteRecovery?.start();
       }finally{if(this.nativeOpening===platform){this.nativeOpening=undefined;if(request===this.vaultRequest&&this.platform===platform)this.flushNativePresentation(this.activePane);}}
       if(request===this.vaultRequest&&this.platform===platform)this.notifyNativeNoteOpened(this.activePane);
     }});
@@ -1266,6 +1261,7 @@ export class Workspace {
     this.nativeDocumentCleanup?.();this.nativeDocumentCleanup=undefined;
     this.cancelLifecycleRecoveryRetry();this.admissionRawCandidates?.remove();this.admissionRawCandidates=undefined;
     this.platform = platform; this.vault = next; this.platformReleased=false;this.platformDrained=false;this.platformDraining=false;this.buffers=recovered; this.recoveredBufferBindings=new WeakSet(recovered.values()); this.vaultGeneration++;
+    this.registerDeferredNoteRecovery(next);
     this.subscribeAdmissionRecovery(platform,next);
     this.attachments=new AttachmentResources(this.vault);
     this.attachmentImporter=new AttachmentImporter(this.vault);
@@ -4139,7 +4135,7 @@ export class Workspace {
     }
   }
   private async flushPane(pane:Pane):Promise<void>{await this.finishInlinePublicationAt(this.current(pane)?.path);await pane.properties?.flush();await pane.tasksView?.flush();await pane.calendarView?.flush();await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flushForNavigation();}
-  async flush():Promise<void>{if(this.platformReleased||this.platformDrained)return;if(this.hasPendingBaseCreation())throw new Error('Base creation is unconfirmed. Retry New base in its original folder before closing or switching vaults.');await this.finishInlinePublications();await this.flushBaseNewItem();await this.sidebarBase?.session.flush();for(const pane of [...this.panes,...this.cachedViews.values()]){await pane.properties?.flush();await pane.tasksView?.flush();if(pane.tasksView?.hasPendingChanges())throw new Error('Tasks has unsaved or unconfirmed changes. Save, discard, or resolve them before closing.');await pane.calendarView?.flush();await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();}await this.flushBaseNewItem();for(const buffer of this.buffers.values())await buffer.flush();}
+  async flush():Promise<void>{if(this.platformReleased||this.platformDrained)return;await this.recoverDurableBuffers(this.vault);if(this.hasPendingBaseCreation())throw new Error('Base creation is unconfirmed. Retry New base in its original folder before closing or switching vaults.');await this.finishInlinePublications();await this.flushBaseNewItem();await this.sidebarBase?.session.flush();for(const pane of [...this.panes,...this.cachedViews.values()]){await pane.properties?.flush();await pane.tasksView?.flush();if(pane.tasksView?.hasPendingChanges())throw new Error('Tasks has unsaved or unconfirmed changes. Save, discard, or resolve them before closing.');await pane.calendarView?.flush();await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();}await this.flushBaseNewItem();for(const buffer of this.buffers.values())await buffer.flush();}
   private destroying?:Promise<void>;
   async destroy():Promise<void>{
     if(this.destroying)return this.destroying;
