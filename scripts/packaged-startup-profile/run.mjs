@@ -8,9 +8,10 @@ import {randomUUID} from 'node:crypto';
 import {createRequire} from 'node:module';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {CDP} from '../../tests/tasks-electron-integration/cdp.mjs';
-import {assessNote,baseFixtureSource,clockInterval,DEADLINE_MS,fixtureText,planCampaign,reopenPrepared} from './oracle.mjs';
+import {assessNote,clockInterval,DEADLINE_MS,planCampaign} from './oracle.mjs';
 import {navigateFileTree} from './file-navigation.mjs';
 import {foregroundSource} from './foreground.mjs';
+import {fixtureOptions,fixtureSources,preparedRestore,returnTarget,startupTarget} from './fixtures.mjs';
 import {configurePassiveObserver,probeViewportSource} from './passive-observer.mjs';
 import {assertFreshNativeScope,authenticateMain,emptyWarmEvidence,observeEarly,resetEmptyWarmState,validateEmptyWarmEvidence} from './preparation.mjs';
 import {boundedMeasurement,documentVisibilitySource,isMeasurementInterference,MeasurementInterference,requireForeground,visibleFramesSource} from './measurement.mjs';
@@ -28,7 +29,7 @@ export async function main(args=process.argv.slice(2)){
   assert.ok(candidate.endsWith('.app')&&baseline.endsWith('.app'),'Two explicit .app inputs are required');
   const out=ownedOutput(getOption(args,'--out',`/private/tmp/zorid-packaged-startup-${Date.now()}-${randomUUID().slice(0,8)}`));
   const notes=Number(getOption(args,'--notes','1000')),repetitions=Number(getOption(args,'--repetitions','1')),seed=Number(getOption(args,'--seed','42'));
-  const prewarmEmptyProfile=args.includes('--prewarm-empty-profile');
+  const prewarmEmptyProfile=args.includes('--prewarm-empty-profile'),fixturePolicy=fixtureOptions(args);
   const timeoutMs=Number(getOption(args,'--timeout-ms','30000')),shutdownMs=Number(getOption(args,'--shutdown-timeout-ms','60000'));
   assert.ok(Number.isSafeInteger(notes)&&notes>=2&&notes<=10000);assert.ok(Number.isSafeInteger(timeoutMs)&&timeoutMs>=4000&&timeoutMs<=120000&&Number.isSafeInteger(shutdownMs)&&shutdownMs>=10000&&shutdownMs<=120000);
   const schedule=planCampaign(repetitions,seed),asar=await import(pathToFileURL(require.resolve('@electron/asar')).href);
@@ -42,6 +43,7 @@ export async function main(args=process.argv.slice(2)){
       'Independent journal disk heads are read-only evidence, not a journal fsync/ACK or recovery proof. Core ACKs are reported only when actually observed.',
       'An unobservable fixed800ms attempt is indeterminate, not a fabricated valid target miss. Base readiness is a separate view metric without protected edit acceptance.',
     ]};
+  report.fixturePolicy={...fixturePolicy,returnPath:returnTarget(fixturePolicy)};
   report.harnessFiles={};
   for(const name of await fs.readdir(fileURLToPath(new URL('.',import.meta.url))))if(/\.(mjs|md)$/.test(name))report.harnessFiles[name]=await hashFile(fileURLToPath(new URL(name,import.meta.url)));
   report.cdpHelperSha256=await hashFile(fileURLToPath(new URL('../../tests/tasks-electron-integration/cdp.mjs',import.meta.url)));
@@ -160,6 +162,22 @@ export async function main(args=process.argv.slice(2)){
     record.metric='normal Base controls and known fixture row ready; not CodeMirror/protected edit latency';
   }
 
+  async function prepareRestoreTarget(launch,pair){
+    const target=returnTarget(fixturePolicy),original=pair.sources.get(target),returnCase={path:target,originMs:launch.elapsed()};
+    await selectFile(launch,returnCase,target);launch.returnNavigation=returnCase;
+    if(fixturePolicy.restoreLarge){
+      // Poll only bounded source identity/length and visible clean-state metadata.
+      // Copy/hash the whole selected document once, after it is ready.
+      await bounded(async()=>assert.equal(await active.renderer.evaluate(`(()=>{const p=document.querySelector('.pane.is-active'),n=p?.querySelector('.cm-content'),v=n?.cmTile?.root?.view??n?.cmView?.view,s=document.querySelector('.status-bar .save-state');return !!v&&v.contentDOM===n&&p.querySelector('.note-title')?.value===${JSON.stringify(target.replace(/\.md$/i,''))}&&v.state.doc.length===${original.length}&&v.state.doc.sliceString(0,160)===${JSON.stringify(original.slice(0,160))}&&!!s&&s.textContent.trim()==='';})()`),true,'Large restore target is not selected and clean'),launch,remaining(launch,returnCase));
+      const body=await active.renderer.evaluate("(()=>{const n=document.querySelector('.pane.is-active .cm-content');return(n?.cmTile?.root?.view??n?.cmView?.view)?.state.doc.toString();})()");assert.equal(body,original,'Prepared large restore document differs');
+      const physicalSha256=await hashFile(path.join(pair.vault,target)),expectedSha256=pair.fixtureHashes[target];assert.equal(physicalSha256,expectedSha256,'Prepared large source physical bytes changed');
+      const core=await coreRead(active.renderer,pair.vault,target);assert.equal(core.content,original,'Prepared large canonical Core source differs');
+      launch.restorePreparation={path:target,bytes:Buffer.byteLength(original),sourceExact:true,physicalSha256,expectedSha256,coreExact:true,coreSha256:hash(core.content),entryId:core.entryId,revision:core.revision,uiClean:true};
+      await checkForeground(launch);
+    }else await bounded(async()=>assert.equal(await active.renderer.evaluate("(()=>{const n=document.querySelector('.pane.is-active .cm-content');return(n?.cmTile?.root?.view??n?.cmView?.view)?.state.doc.toString();})()"),original),launch);
+    launch.preparedRestorePath=target;launch.returnToStartupNoteVerified=true;
+  }
+
   async function attachLaunch(launch,pair,pinned,startup){
     const expectedURL=pathToFileURL(path.join(pinned.archive,'dist/index.html')).href;
     await observeEarly({
@@ -201,7 +219,7 @@ export async function main(args=process.argv.slice(2)){
   }
   function beginLaunch(launch,pair,pinned,measured){
     launch.measured=measured;const start=performance.now();Object.defineProperty(launch,'elapsed',{value:()=>performance.now()-start});launch.spawnWallClockDiagnostic=new Date().toISOString();
-    const startup=noteCase(launch,'Note 0000.md',measured?'startup-'+launch.mode:'prewarm-empty',0);if(!measured)Object.assign(startup,{path:'__empty_prewarm__.md',original:'',prefix:'',expectedCharacters:0});launch.cases.push(startup);if(measured)arm(launch,startup);
+    const startup=noteCase(launch,startupTarget(fixturePolicy,launch.mode),measured?(launch.mode==='reopen'?fixturePolicy.reopenKind:'startup-'+launch.mode):'prewarm-empty',0);if(!measured)Object.assign(startup,{path:'__empty_prewarm__.md',original:'',prefix:'',expectedCharacters:0});launch.cases.push(startup);if(measured)arm(launch,startup);
     const child=spawn(pinned.executable,['--inspect=127.0.0.1:0','--user-data-dir='+pair.profile,'--remote-debugging-address=127.0.0.1','--remote-debugging-port=0','--no-first-run'],{env:launchEnvironment(pair.profile,pair.data),cwd:out,stdio:['ignore','pipe','pipe']});launch.pid=child.pid;
     const exit=new Promise(resolve=>{child.once('exit',(code,signal)=>{launch.exitCode=code;launch.signal=signal;resolve();});child.once('error',error=>{launch.launchError=String(error);resolve();});});active={child,exit,main:null,renderer:null,launch};(measured?report.actualOrder:report.preparationOrder).push({label:launch.label,pairId:launch.pairId,mode:launch.mode,pid:child.pid});
     process.stdout.write(JSON.stringify({event:'launch-start',label:launch.label,pairId:launch.pairId,mode:launch.mode,pid:child.pid,app:pinned.app,profile:pair.profile,directory:launch.directory})+'\n');
@@ -237,15 +255,14 @@ export async function main(args=process.argv.slice(2)){
       if(!pair){
         const directory=path.join(out,scheduled.pairId),profile=path.join(directory,'profile'),vault=path.join(directory,'vault'),data=path.join(directory,'app-data');
         await fs.mkdir(directory);await fs.mkdir(profile);await fs.mkdir(vault);await fs.mkdir(data);
-        const sources=new Map(Array.from({length:notes},(_,index)=>[`Note ${String(index).padStart(4,'0')}.md`,fixtureText(8192,index)]));sources.set('Large 432000.md',fixtureText(432000,notes));
-        sources.set('Profile.base',baseFixtureSource());
+        const sources=fixtureSources(notes,fixturePolicy);
         await fs.writeFile(path.join(profile,'vault.json'),JSON.stringify({path:vault}),{flag:'wx'});
         pair={campaign:out,directory,profile,vault,data,sources,fixtureHashes:Object.fromEntries([...sources].map(([name,text])=>[name,hash(text)]))};pairs.set(scheduled.pairId,pair);
         if(prewarmEmptyProfile)await prewarmPair(pair,scheduled.label);
         for(const [name,text] of sources)await fs.writeFile(path.join(vault,name),text,{flag:'wx',mode:0o600});
       }
       if(scheduled.mode==='reopen'&&pair.reopenPrepared!==true){
-        const skipped={...scheduled,status:'skipped-dependency',reason:'Prior first-import did not complete verified Note0000 return, fixture restoration and normal cleanup',priorResult:path.join(pair.directory,'first-import/result.json')};
+        const skipped={...scheduled,status:'skipped-dependency',reason:'Prior first-import did not complete verified '+returnTarget(fixturePolicy)+' return, fixture restoration and normal cleanup',priorResult:path.join(pair.directory,'first-import/result.json')};
         report.skipped.push(skipped);process.stdout.write(JSON.stringify({event:'launch-skipped',...skipped})+'\n');await save();continue;
       }
       const directory=path.join(pair.directory,scheduled.mode);await fs.mkdir(directory);
@@ -257,13 +274,11 @@ export async function main(args=process.argv.slice(2)){
         await finishNote(launch,startup);
         launch.navigationTiming=await active.renderer.evaluate('performance.getEntriesByType("navigation").map(value=>value.toJSON())');
         launch.rendererResources=await active.renderer.evaluate('performance.getEntriesByType("resource").slice(0,500).map(value=>({name:value.name,startTime:value.startTime,duration:value.duration,transferSize:value.transferSize,decodedBodySize:value.decodedBodySize}))');
-        for(const [name,kind] of [['Note 0001.md','ordinary-note-open'],['Large 432000.md','large432000-note-open']]){
+        for(const [name,kind] of [['Note 0001.md','ordinary-note-open'],[fixturePolicy.largePath,fixturePolicy.largeOpenKind]]){
           const record=noteCase(launch,name,kind,0);launch.cases.push(record);await configure(launch,record);record.configured=true;record.originMs=launch.elapsed();arm(launch,record);await selectFile(launch,record,name);await finishNote(launch,record);
         }
         await baseCase(launch,pair);
-        const returnCase={originMs:launch.elapsed()};await selectFile(launch,returnCase,'Note 0000.md');launch.returnNavigation=returnCase;
-        await bounded(async()=>assert.equal(await active.renderer.evaluate("(()=>{const n=document.querySelector('.pane.is-active .cm-content');return(n?.cmTile?.root?.view??n?.cmView?.view)?.state.doc.toString();})()"),pair.sources.get('Note 0000.md')),launch);
-        launch.returnToStartupNoteVerified=true;
+        await prepareRestoreTarget(launch,pair);
         launch.mainClockSamples.push(await clock(active.main,launch));
       }catch(error){launch.errors.push(error.stack??String(error));if(isMeasurementInterference(error))launch.measurementInterference={code:'PACKAGED_MEASUREMENT_INTERFERENCE',error:String(error),atMs:launch.elapsed()};report.errors.push({pairId:scheduled.pairId,mode:scheduled.mode,error:String(error)});await captureObserverFailure(active.renderer,launch);try{launch.failureWindow=active.main?await active.main.evaluate(foregroundSource(foregroundConfig(launch,false))):{unavailable:'Main inspector not attached'};}catch(windowError){launch.failureWindow={error:String(windowError)};}try{if(active.renderer){const image=await active.renderer.call('Page.captureScreenshot',{format:'png'});await fs.writeFile(path.join(directory,'failure.png'),Buffer.from(image.data,'base64'));}}catch{}}
       finally{
@@ -283,7 +298,7 @@ export async function main(args=process.argv.slice(2)){
       launch.fixtureHashesAfter={};for(const name of pair.sources.keys())launch.fixtureHashesAfter[name]=await hashFile(path.join(pair.vault,name));
       launch.fixturesRestored=JSON.stringify(launch.fixtureHashesAfter)===JSON.stringify(pair.fixtureHashes);
       launch.sourcePathsExact=JSON.stringify((await fs.readdir(pair.vault)).filter(name=>!name.startsWith('.')).sort())===JSON.stringify([...pair.sources.keys()].sort());
-      if(scheduled.mode==='first-import')pair.reopenPrepared=reopenPrepared(launch);
+      if(scheduled.mode==='first-import')pair.reopenPrepared=preparedRestore(launch,fixturePolicy);
       for(const record of launch.cases)if(record.kind!=='base'){record.cleanup=launch.cleanup;record.artifactsUnchanged=launch.artifactsUnchanged;record.assessment=assessNote(record);}
       await fs.writeFile(path.join(directory,'result.json'),JSON.stringify(launch,null,2));await save();
       process.stdout.write(JSON.stringify({event:'launch-complete',label:launch.label,mode:launch.mode,pid:launch.pid,cleanup:launch.cleanup,cases:launch.cases.map(c=>({kind:c.kind,assessment:c.assessment??c.readyMs}))})+'\n');
@@ -299,7 +314,7 @@ export async function main(args=process.argv.slice(2)){
     report.runtimeComparison={baseline:runtimeVersions('baseline'),candidate:runtimeVersions('candidate')};
     report.runtimeComparison.sameElectronVersion=report.runtimeComparison.baseline.length===1&&report.runtimeComparison.candidate.length===1&&report.runtimeComparison.baseline[0]===report.runtimeComparison.candidate[0];
     report.noteSummary=[];
-    for(const label of ['baseline','candidate'])for(const kind of ['startup-first-import','startup-reopen','ordinary-note-open','large432000-note-open']){
+    for(const label of ['baseline','candidate'])for(const kind of ['startup-first-import',fixturePolicy.reopenKind,'ordinary-note-open',fixturePolicy.largeOpenKind]){
       const cases=report.launches.filter(launch=>launch.label===label).flatMap(launch=>launch.cases.filter(record=>record.kind===kind));
       const observed=cases.map(record=>record.assessment?.inputMs?.upper).filter(Number.isFinite).sort((a,b)=>a-b);
       report.noteSummary.push({label,kind,attempts:cases.length,valid:cases.filter(c=>c.assessment?.valid).length,outcomes:cases.map(c=>c.assessment?.outcome??'missing'),observedInputUpperMs:observed,

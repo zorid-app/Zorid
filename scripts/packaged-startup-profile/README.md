@@ -167,3 +167,25 @@ frames. Before each trusted input, a separate current selected-source/viewport
 two-frame proof accounts for already accepted probe markers and preserves the
 historical first-ready event. It reads only document length and the bounded prefix;
 it does not copy a whole large note. All guard and dispatch costs remain measured.
+
+
+`--large-note-bytes N` selects an exact ASCII fixture size from1024 bytes through
+**5 MiB (5,242,880 bytes)**. The default remains432000 bytes. Its filename, open
+metric kind, expected document length and report fixture policy use the actual
+byte count; larger fixtures are never labeled432KB. This is a harness bound,
+not native capacity or performance acceptance.
+
+`--restore-large` changes only the next process's prepared restore target. First
+import still starts with Note0000. After all ordinary cases and Base succeed, the
+runner selects the large note through the normal file tree, waits for its current
+length/prefix and clean save status, then verifies its whole selected document
+once, unchanged physical bytes and exact canonical Core content/entry/revision.
+Normal quit and all existing fixture, Base, artifact and PID proofs remain required
+before the dependent reopen is allowed. The next process observes that large note
+from its ORIGINAL spawn clock with a byte-specific `startup-reopen-largeN` kind.
+There is no session, entry-ID, preference or storage injection and no elapsed reset.
+Default Note0000 restore preparation and default metric names remain compatible.
+
+For example, append `--large-note-bytes 5242880 --restore-large` to a short100-note
+campaign after the default432000-byte control is accepted. No large restore result
+is established by the pure helper tests or by merely setting these options.
