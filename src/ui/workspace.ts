@@ -2046,7 +2046,7 @@ export class Workspace {
     const inlineSource=inline?{
       captureSaveRetry:()=>inlineRetryAvailable()?inlineRetry:undefined,
       read:async()=>{validate();const request=captured!;const source=await vault.read(path);validate();if(source!==request.documentText)throw new Error('The containing note changed. Refresh this embedded Base.');const entry=vault.adapter.stat?await vault.adapter.stat(path):vault.entries.get(path);validate();if(captured!==request||!entry?.entryId||!entry.revision||inlineEntryId&&entry.entryId!==inlineEntryId)throw new Error('The containing note identity changed. Refresh this embedded Base.');return{source:request.source,startByte:new TextEncoder().encode(source.slice(0,request.from)).length,endByte:new TextEncoder().encode(source.slice(0,request.to)).length,witness:{entryId:entry.entryId,revision:entry.revision}};},
-      transform:async(expected:string,next:string,validateSelection:()=>void)=>{
+      transform:async(expected:string,next:string,validateSelection:()=>void,validateWrite:()=>void=validateSelection,custody?:import('../bases/controller.ts').BaseSourceStorageCustody)=>{
         validate();validateSelection();const request=captured!;
         if(expected!==request.source&&next!==request.source)throw new Error('The fenced Base configuration changed.');
         const buffer=await this.baseBufferFor(path,validate);validateSelection();
@@ -2077,6 +2077,10 @@ export class Workspace {
           if(sourceCapture&&(sourceCapture.source!==savedText||sourceCapture.logicalWitness.entryId!==witness!.entryId||sourceCapture.logicalWitness.revision!==witness!.revision||sourceCapture.logicalWitness.path!==witness!.path))throw new Error('The saved containing note changed outside this editor. Refresh before editing its Base configuration.');
           // An already durable exact source needs no new intent or publication.
           if(desired===buffer.text&&!buffer.dirty&&!buffer.error)return;
+          const acknowledged=()=>{
+            try{validate();validateWrite();return captured===fresh&&buffer.path===path&&this.buffers.get(path)===buffer&&buffer.text===desired&&buffer.savedText===desired&&!buffer.dirty&&!buffer.error&&!buffer.hasRecoveryConflict
+              &&(!sourceCapture||buffer.conditionalSavedSourceStatus(sourceCapture)==='settled');}catch{return false;}
+          };
           let completion:Promise<void>|undefined;
           const held={owner:inlineOwner,text:desired,failed:false,valid:true,complete:():Promise<void>=>{
             if(completion)return completion;
@@ -2085,7 +2089,9 @@ export class Workspace {
               const admit=()=>{validate();if(!held.valid||this.inlinePublications.get(buffer)!==held||this.buffers.get(path)!==buffer||buffer.text!==desired||captured!==fresh)throw new Error('The containing note changed while its Base configuration was saved.');};
               try{
                 admit();await buffer.flush();admit();
-                if(buffer.savedText!==desired||buffer.dirty||buffer.error)throw new Error('The containing note changed while its Base configuration was saved.');
+                if(buffer.savedText!==desired||buffer.dirty||buffer.error||buffer.hasRecoveryConflict)throw new Error('The containing note changed while its Base configuration was saved.');
+                validateWrite();
+                if(custody){if(!acknowledged())throw new Error('The original containing note source is not acknowledged.');custody.accepted();custody.validatePublication?.();}
                 if(onInlineSourceSaved&& !onInlineSourceSaved(fresh))throw new Error('The saved Base session is no longer current.');
                 this.inlinePublications.delete(buffer);held.valid=false;
                 this.bufferSubscriptions.publish(buffer);
@@ -2106,9 +2112,10 @@ export class Workspace {
             return held.complete();
           };
           this.inlinePublications.set(buffer,held);
-          try{buffer.update(desired,{validateWrite:()=>{validate();validateSelection();},...(sourceCapture?{conditionalSavedSource:sourceCapture}:{})});}
+          try{buffer.update(desired,{validateWrite:()=>{validate();validateWrite();},...(sourceCapture?{conditionalSavedSource:sourceCapture}:{})});}
           catch(error){if(this.inlinePublications.get(buffer)===held)this.inlinePublications.delete(buffer);held.valid=false;throw error;}
           captured=fresh;this.mapInactiveSelections(path,previous,desired);
+          custody?.submitted(acknowledged);
           await held.complete();
         }finally{
           // Accepted captures belong to the exact retained NoteBuffer intent,
@@ -2119,6 +2126,9 @@ export class Workspace {
     }:undefined;
     let session:BaseSession,composed:BaseSession|undefined;
     try{session=(this.viewFactories.base??createBaseSession)(host,{vault,basePath:path,validate,viewName,viewId,inlineSource,
+            canRecoverDatabaseMutation:request=>platform.recovery?.containsCapturedDatabaseMutation?.(request)===true,
+            holdRecoverDatabaseMutation:request=>platform.recovery?.holdCapturedDatabaseMutation?.(request)??(()=>{}),
+            claimRecoverDatabaseMutation:request=>{if(!platform.recovery?.claimCapturedDatabaseMutation)throw new Error('This collection command cannot be claimed for recovery.');return platform.recovery.claimCapturedDatabaseMutation(request);},
             canRecoverDatabaseEntry:request=>platform.recovery?.containsCapturedSetEntry?.(request)===true,
             holdRecoverDatabaseEntry:request=>platform.recovery?.holdCapturedSetEntry?.(request)??(()=>{}),
             claimRecoverDatabaseEntry:request=>{if(!platform.recovery?.claimCapturedSetEntry)throw new Error('This collection edit cannot be claimed for recovery.');return platform.recovery.claimCapturedSetEntry(request);},

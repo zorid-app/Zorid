@@ -26,11 +26,20 @@ export interface BaseMutationHost {
   /** Must validate inside the host's serialized rename transaction. */
   rename?(path: string, destination: string, validate: () => void, expectedWitness?: BaseSavedWitness): Promise<void>;
 }
+export interface BaseSourceStorageCustody {
+  /** Read-only proof is bound to this accepted buffer, body, actor and capture. */
+  submitted(acknowledged:()=>boolean):void;
+  accepted():void;
+  /** Storage custody never grants an old renderer publication authority. */
+  validatePublication?():void;
+}
 export interface BaseConditionalSavedSource {
   /** Stable only for retries of this original semantic command. */
   readonly attempt: object;
   /** Original logical bytes are captured before the physical-source await. */
   validate(source: string, originalSavedSource: string): void;
+  /** Exact original storage completion, independent of a renderer attempt. */
+  readonly custody?:BaseSourceStorageCustody;
 }
 export interface BaseBufferHost {
   /** Must return the workspace's shared buffer, including existing dirty drafts. */
@@ -47,7 +56,7 @@ export function createBaseMutationHost(options: BaseBufferHost): BaseMutationHos
   return {
     transform(path, transform, validate, validateWrite = validate, expectedWitness, sourceCondition) {
       const expected = expectedWitness && Object.freeze({ ...expectedWitness });
-      const conditionalSource = sourceCondition && Object.freeze({ attempt: sourceCondition.attempt, validate: sourceCondition.validate });
+      const conditionalSource = sourceCondition && Object.freeze({ attempt: sourceCondition.attempt, validate: sourceCondition.validate, custody: sourceCondition.custody });
       const result = pending.then(async () => {
         withBaseEditAdmissionPhase('before-buffer', () => { options.validate(); validate(); });
         const buffer = await options.getBuffer(path);
@@ -133,10 +142,19 @@ export function createBaseMutationHost(options: BaseBufferHost): BaseMutationHos
           const attach = retained && guarded.conditionalSavedSourceStatus!(retained.capture) === 'unattached' ? retained.capture : undefined;
           buffer.update(next, { validateWrite: () => withBaseEditAdmissionPhase('durable-validation', () => { options.validate(); validateWrite(); validateIdentity(); }), ...(attach ? { conditionalSavedSource: attach } : {}) });
           if (retained && retained.desiredSource === undefined) retained.desiredSource = next;
+          const acknowledged=()=>{
+            try{options.validate();validateWrite();validateIdentity();return buffer.path===path&&buffer.text===next&&buffer.savedText===next&&!buffer.dirty&&!buffer.error&&!buffer.hasRecoveryConflict
+              &&(!retained||guarded.conditionalSavedSourceStatus!(retained.capture)==='settled');}catch{return false;}
+          };
+          conditionalSource?.custody?.submitted(acknowledged);
           options.onBufferChange?.(path, buffer, source);
           // Do not replay or roll back a failed write: recovery draft owns that state.
           await buffer.flush();
           if (retained && guarded.conditionalSavedSourceStatus!(retained.capture) !== 'settled') throw new Error('The original conditional Base save is still pending');
+          if(conditionalSource?.custody){
+            if(!acknowledged())throw new Error('The original Base source has a newer or unresolved draft; its completion was not acknowledged.');
+            conditionalSource.custody.accepted();
+          }
           forget();
         } catch (error) {
           if (retained && guarded.conditionalSavedSourceStatus!(retained.capture) === 'unattached') {
@@ -202,7 +220,7 @@ export interface BaseControllerOptions {
   /** Saved fenced configuration; byte spans are verified by the Rust service. */
   inlineSource?: {
     read(): Promise<{ source: string; startByte: number; endByte: number; witness?: BaseSavedWitness }>;
-    transform(expectedSource: string, nextSource: string, validate: () => void): Promise<void>;
+    transform(expectedSource: string, nextSource: string, validate: () => void, validateWrite?: () => void, custody?:BaseSourceStorageCustody): Promise<void>;
   };
   /** A fixed coalescing window; sustained events cannot postpone refresh forever. */
   delayMs?: number;
@@ -450,8 +468,15 @@ export class BaseController {
           this.emptyConfigurationWitness = latest.entryId && latest.revision ? Object.freeze({ entryId: latest.entryId, revision: latest.revision }) : undefined;
           this.query = { ...this.query, viewIndex: 0 }; this.stale = false; this.clearWake();
           const signature = JSON.stringify([source, this.identities.get(this.path), 'no-views']);
-          if (signature === this.signature && !this.settled.error) { this.publish(this.settled); return; }
+          // The first collection view needs the same source/actor custody as
+          // an existing view. Reuse this already checked before/read/after pair;
+          // retaining proof must not add another healthy Native read.
+          const emptyRead = definition?.entryId && definition.revision && latest.entryId === definition.entryId && latest.revision === definition.revision
+            && latest.mtime === definition.mtime && latest.size === definition.size
+            ? {source,path:this.path,entryId:definition.entryId,revision:definition.revision,viewIndex:0} : undefined;
+          if (signature === this.signature && !this.settled.error) { if(emptyRead)this.retainConfigurationRead({...emptyRead,version:this.settled.version},false);this.publish(this.settled); return; }
           this.version = version; this.signature = signature;
+          if(emptyRead)this.retainConfigurationRead({...emptyRead,version},false);
           this.publish({ version, source, result: null, error: null, updating: false }); return;
         }
         this.emptyConfigurationWitness = undefined;

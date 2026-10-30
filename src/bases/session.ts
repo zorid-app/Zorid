@@ -1,8 +1,11 @@
 import { BaseController, createBaseMutationHost } from './controller.ts';
-import type { BaseBufferHost, BaseControllerState, BaseViewRenamed, BaseConfigurationRead } from './controller.ts';
+import type { BaseBufferHost, BaseControllerState, BaseViewRenamed, BaseConfigurationRead,BaseSourceStorageCustody } from './controller.ts';
 import { BaseDocument, baseViewSource, baseViewSetting } from './document.ts';
 import type { BaseViewSource,BaseViewConfig } from './document.ts';
 import { mountSourceChooser, mountCollectionEditor, mountCollectionPropertyPicker, collectionPropertyDefinitions, collectionValue } from '../databases/collection-ui.ts';
+import {createCollectionSubmission} from '../databases/collection-submission.ts';
+import {captureCollectionSourceCompletion} from './collection-source-completion.ts';
+import type {CollectionSourceCompletionKind,CompletedCollectionSource,CollectionSourceCompletion} from './collection-source-completion.ts';
 import type { SourceChooser, CollectionEditor } from '../databases/collection-ui.ts';
 import {planCollectionEntryCreation} from '../databases/creation.ts';
 import {collectionClipboardValue} from '../databases/collection-clipboard.ts';
@@ -205,7 +208,7 @@ export interface BaseSessionOptions {
     /** Capture only the host's exact failed persistence attempt, never replay a configuration command. */
     captureSaveRetry?(): (() => Promise<void>) | undefined;
     read(): Promise<{ source: string; startByte: number; endByte: number; witness?: { entryId: string; revision: string } }>;
-    transform(expectedSource: string, nextSource: string, validate: () => void): Promise<void>;
+    transform(expectedSource: string, nextSource: string, validate: () => void, validateWrite?: () => void, custody?:BaseSourceStorageCustody): Promise<void>;
   };
   readonly contextMenu?: BasePresentationOptions['contextMenu'];
   readonly hoverFile?: BasePresentationOptions['hoverFile'];
@@ -231,6 +234,9 @@ export interface BaseSessionOptions {
   /** A local draft or accepted edit finished; query refreshes alone do not emit this. */
   readonly onEditsSettled?: () => void;
   readonly onError?: (error: unknown) => void;
+  readonly canRecoverDatabaseMutation?: (request:DatabaseRequest)=>boolean;
+  readonly holdRecoverDatabaseMutation?: (request:DatabaseRequest)=>()=>void;
+  readonly claimRecoverDatabaseMutation?: (request:DatabaseRequest)=>()=>void;
   readonly canRecoverDatabaseEntry?: (request: DatabaseRequest & {op:'set_entry'}) => boolean;
   readonly holdRecoverDatabaseEntry?: (request: DatabaseRequest & {op:'set_entry'}) => () => void;
   readonly claimRecoverDatabaseEntry?: (request: DatabaseRequest & {op:'set_entry'}) => () => void;
@@ -317,7 +323,9 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   const configurationSource=()=>controller.configurationRead?.source??controller.state.source;
   const configurationIndex=()=>controller.configurationRead?.viewIndex??controller.selectedViewIndex;
   const sourceContext=()=>JSON.stringify([configurationSource(),configurationIndex(),controller.selectedViewIdentity,controller.configurationRead?.entryId,controller.configurationRead?.revision]);
+  type CollectionUIOwner={owner:ReturnType<typeof createCollectionSubmission>;save(recovering?:boolean,validateAttempt?:()=>void):Promise<void>;readonly completion:CompletedCollectionSource|undefined;close():void};
   let chooser: SourceChooser | undefined, collectionEditor: CollectionEditor | undefined;
+  let chooserSubmission:CollectionUIOwner|undefined,editorSubmission:CollectionUIOwner|undefined;
   const collectionMutations = new Map<string, DatabaseRequest>();
   type SetEntry=DatabaseRequest & {op:'set_entry'};
   type CollectionAttempt={signature:string;request:SetEntry;collectionId:string;widget?:BasePropertyEditRecovery;release?:()=>void;response?:DatabaseResponse};
@@ -544,14 +552,83 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     onDraftChange: schedule,
     onError: report,
   });
+  function collectionUIOwner(kind:CollectionSourceCompletionKind):CollectionUIOwner {
+    let plan:CollectionSourceCompletion|undefined,completed:CompletedCollectionSource|undefined;
+    let original:{source:string;entryId:string;revision:string;path:string;index:number;viewId?:string}|undefined,saved=false,sourceStarted=false;
+    let persistence:Promise<void>|undefined,sourceIO:NoteLoadSupervisor|undefined,acknowledged:(()=>boolean)|undefined;const preAuthorFailures=new Set<unknown>();
+    const validate=()=>{
+      alive();if(!original)return;
+      const source=configurationSource(),index=controller.selectedViewIndex,viewId=controller.selectedViewIdentity;
+      const originalSelection=index===original.index&&viewId===original.viewId;
+      const completedSelection=sourceStarted&&completed&&index===completed.viewIndex&&viewId===completed.viewId;
+      if((source!==original.source&&(!sourceStarted||source!==completed?.desiredSource))||(!originalSelection&&!completedSelection))throw new Error('The original collection view changed; its submitted command is retained.');
+      const actor=options.vault.entries.get(original.path);
+      if(actor?.entryId!==original.entryId||!sourceStarted&&actor.revision!==original.revision)throw new Error('The original Base identity or revision changed; its submitted command is retained.');
+    };
+    const owner=createCollectionSubmission({service:databaseService!,validate,
+      contains:command=>options.canRecoverDatabaseMutation?.(command)===true,
+      hold:command=>options.holdRecoverDatabaseMutation?.(command)??(()=>{}),
+      claim:command=>{if(!options.claimRecoverDatabaseMutation)throw new Error('This collection command has no admitted recovery owner.');return options.claimRecoverDatabaseMutation(command);},
+      capture(){
+        const read=controller.configurationRead??deletedConfigurationRead;
+        if(!read||read.source!==configurationSource())throw new Error('The original saved Base source is unavailable. Refresh before creating its collection.');
+        original={source:read.source,entryId:read.entryId,revision:read.revision,path:read.path,index:controller.selectedViewIndex,viewId:controller.selectedViewIdentity};saved=false;sourceStarted=false;completed=undefined;persistence=undefined;acknowledged=undefined;sourceIO?.stop();sourceIO=undefined;preAuthorFailures.clear();
+        plan=captureCollectionSourceCompletion({source:read.source,entryId:read.entryId,revision:read.revision,viewIndex:read.viewIndex,viewId:read.viewId,kind});
+      },
+      receipt(reply,command){if(!plan)throw new Error('The submitted collection lost its original source plan.');completed=plan.complete(reply,command);},
+    });
+    return{owner,close(){sourceIO?.stop();owner.close();},get completion(){return completed;},async save(recovering=false,validateAttempt:()=>void=()=>{}){
+      const check=()=>{try{validateAttempt();}catch(error){preAuthorFailures.add(error);throw error;}validate();};check();if(!completed)throw new Error('The collection receipt has not completed its original source plan.');
+      const source=completed;
+      if(recovering)sourceIO?.admissionAvailable();
+      while(!saved&&source.desiredSource!==source.expectedSource){
+        check();
+        if(!persistence){
+          sourceStarted=true;const io=new NoteLoadSupervisor();sourceIO=io;
+          const acknowledge=()=>{validate();if(!acknowledged?.())throw new Error('The original Base storage acknowledgement is unconfirmed.');saved=true;};
+          const storageCheck=()=>{validate();if(!acknowledged)check();};
+          const custody:BaseSourceStorageCustody={submitted(proof){acknowledged=proof;},accepted:acknowledge,validatePublication(){check();if(recovering||admissionRecovery)throw Object.assign(new Error('The storage task is acknowledged; its old view was retired.'),{code:'collection_publication_retired',source:'context'});}};
+          const operation=io.run(async()=>{
+            if(acknowledged?.()){acknowledge();return;}
+            try{
+              const retryInline=acknowledged&&options.inlineSource?.captureSaveRetry?.();
+              if(retryInline)await retryInline();
+              else if(options.inlineSource)await options.inlineSource.transform(source.expectedSource,source.desiredSource,storageCheck,validate,custody);
+              else await mutations.transform(options.basePath,current=>{storageCheck();if(current!==source.expectedSource&&current!==source.desiredSource)throw new Error('The Base has a newer draft; the submitted collection cannot replace it.');return source.desiredSource;},storageCheck,validate,{entryId:source.entryId,revision:source.revision},{attempt:plan!,validate(physical){storageCheck();if(physical!==source.expectedSource)throw new Error('The original Base saved source changed; its external edit was preserved.');},custody});
+            }catch(error){if(acknowledged?.()){acknowledge();return;}throw baseConfigurationRecoveryFailure(error);}
+          },validate);
+          const tracked=operation.finally(()=>{io.stop();if(sourceIO===io)sourceIO=undefined;if(persistence===tracked)persistence=undefined;});persistence=tracked;void tracked.catch(()=>{});
+        }
+        const pendingSource=persistence;
+        try{await pendingSource;}catch(error){
+          check();if(saved)break;
+          // Only OUR invalidated pre-author proof can restart after its unused
+          // capture was released. Unknown IO retains its original task failure.
+          if(preAuthorFailures.delete(error))continue;
+          throw error;
+        }
+        check();if(!saved)throw new Error('The original Base storage acknowledgement is unavailable; its source plan was retained.');
+      }
+      // A handoff can begin while the original callback is awaiting its exact
+      // buffer operation. Recheck dynamically before EVERY old derived read.
+      if(recovering||admissionRecovery)return;
+      await options.vault.reload();check();if(admissionRecovery)return;
+      await controller.refresh();check();if(admissionRecovery)return;
+      if(saved&&controller.selectedViewIndex!==source.viewIndex){await controller.setView(source.viewIndex);check();if(admissionRecovery)return;}
+      await loadDefinitions();check();if(admissionRecovery)return;
+    }};
+  }
   function closeSourceChooser(): void { chooser?.destroy(); chooser=undefined; }
-  function chooseSource(choose:(source:BaseViewSource)=>Promise<void>, cancel=true):Promise<void> {
+  function chooseSource(choose:(source:BaseViewSource)=>Promise<void>, cancel=true,kind:CollectionSourceCompletionKind={type:'change-source'}):Promise<void> {
     action(); if (options.readOnly) return Promise.reject(new Error('This Base is read-only.'));
     if(pendingCollectionRestore||pendingCollectionCreate||unfinishedNoteCreation()||chooser?.hasPendingChanges()||collectionEditor?.hasPendingChanges())return Promise.reject(new Error('Finish or cancel the current collection edit before changing the view source.'));
     closeSourceChooser(); collectionEditor?.destroy(); collectionEditor=undefined;
     return new Promise((resolve,reject)=>{
+      const submission=collectionUIOwner(kind);chooserSubmission=submission;
       chooser=mountSourceChooser(sourcePanel,{service:databaseService,isCurrent:()=>!disposed&&!closing,
-        choose:async source=>{await choose(source);closeSourceChooser();await loadDefinitions();if(!disposed)render(controller.state);resolve();},
+        submit:(command,complete)=>submission.owner.submit(command,complete).then(()=>{closeSourceChooser();if(!disposed&&!admissionRecovery)render(controller.state);resolve();}),
+        onDestroy:()=>{submission.close();if(chooserSubmission===submission)chooserSubmission=undefined;},
+        choose:async(source,recovering,validateAttempt)=>{if(submission.owner.submitted){await submission.save(recovering,validateAttempt);return;}await choose(source);closeSourceChooser();await loadDefinitions();if(!disposed)render(controller.state);resolve();},
         ...(cancel?{onCancel:()=>{closeSourceChooser();resolve();}}:{}),onError:report});
     });
   }
@@ -559,34 +636,26 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     action();if(options.readOnly||!databaseService||!collection||collection.deleted)throw new Error('This collection is unavailable.');
     if(pendingCollectionRestore||pendingCollectionCreate||unfinishedNoteCreation()||pending.size||propertyDraft()||toolbarUI.hasDraft())throw new Error('Finish editing the current value or retry the unfinished New first.');
     if(collectionEditor){collectionEditor.element.querySelector<HTMLInputElement>('input')?.focus();return;}
-    const editingCollection=collection;
+    const editingCollection=collection,submission=collectionUIOwner({type:'none'});editorSubmission=submission;
     collectionEditor=mountCollectionEditor(sourcePanel,{service:databaseService,collection:editingCollection,entries:[...collectionEntries.values()],propertyId,anchor,
       isCurrent:()=>!disposed&&!closing&&currentViewSource().kind==='collection'&&(currentViewSource() as {id:string}).id===editingCollection.id,
-      onSaved:async()=>{await options.vault.reload();await loadDefinitions();await controller.refresh();await loadDefinitions();},
+      submit:submission.owner.submit,onDestroy:()=>{submission.close();if(editorSubmission===submission)editorSubmission=undefined;},
+      onSaved:async(_saved,recovering,validateAttempt)=>{await submission.save(recovering,validateAttempt);},
       onClose:()=>{collectionEditor?.destroy();collectionEditor=undefined;schedule();}});
   }
   function addCollectionProperty(anchor:HTMLElement):void {
     action();if(options.readOnly||!databaseService||!collection||collection.deleted)throw new Error('This collection is unavailable.');
     if(pendingCollectionRestore||pendingCollectionCreate||unfinishedNoteCreation()||pending.size||propertyDraft()||toolbarUI.hasDraft()||collectionEditor)throw new Error('Finish editing the current value before adding a property.');
-    const editingCollection=collection, previousIds=new Set(collection.properties.map(field=>field.id));
-    const editingSource=controller.state.source,editingViewId=controller.selectedViewIdentity,editingIndex=controller.selectedViewIndex;
+    const editingCollection=collection;
+    const editingSource=controller.state.source,editingIndex=controller.selectedViewIndex;
     const ownerCurrent=()=>!disposed&&!closing&&currentViewSource().kind==='collection'&&(currentViewSource() as {id:string}).id===editingCollection.id;
-    const visibilityOwnerCurrent=()=>ownerCurrent()&&controller.state.source===editingSource&&controller.selectedViewIdentity===editingViewId&&controller.selectedViewIndex===editingIndex;
+    const originalView=BaseDocument.parse(editingSource).views[editingIndex];
+    const originalOrder=Array.isArray(originalView?.order)?originalView.order.filter((id):id is string=>typeof id==='string'):[...(controller.state.result?.properties??[])];
+    const submission=collectionUIOwner({type:'append-properties',collection:editingCollection,originalOrder});editorSubmission=submission;
     collectionEditor=mountCollectionPropertyPicker(sourcePanel,{service:databaseService,collection:editingCollection,anchor,
       isCurrent:ownerCurrent,
-      onSaved:async saved=>{
-        await options.vault.reload();await loadDefinitions();await controller.refresh();await loadDefinitions();
-        if(!visibilityOwnerCurrent()){
-          notice='Property added. The original view changed; choose its visibility in Settings.';renderStatus(controller.state);return;
-        }
-        const added=saved.properties.filter(field=>!previousIds.has(field.id));
-        const state=controller.state, view=BaseDocument.parse(state.source).views[controller.selectedViewIndex];
-        if(added.length&&view&&state.result){
-          const order=Array.isArray(view.order)?view.order.filter((id):id is string=>typeof id==='string'):[...state.result.properties];
-          for(const field of added){const id=`note.${field.id}`;if(!order.includes(id))order.push(id);}
-          await controller.updateView(numericVersion(state.version),{order});
-        }
-      },
+      submit:submission.owner.submit,onDestroy:()=>{submission.close();if(editorSubmission===submission)editorSubmission=undefined;},
+      onSaved:async(_saved,recovering,validateAttempt)=>{await submission.save(recovering,validateAttempt);},
       onClose:()=>{collectionEditor?.destroy();collectionEditor=undefined;schedule();}});
   }
   async function editCollectionProperties(edits:readonly Parameters<typeof actions.editProperty>[0][]):Promise<void> {
@@ -654,19 +723,21 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     return{entryId:read.entryId,path:read.path,revision:read.revision,source:read.source,viewId:read.viewId,viewIndex:read.viewIndex,
       ...(presentedCollection?{collectionId:presentedCollection.id,schemaFingerprint:JSON.stringify(presentedCollection.properties)}:{})};
   }
-  function recoverableCollectionAttempts():{edits:CollectionAttempt[];rawElements:HTMLElement[];table:boolean;toolbar:boolean}|undefined {
+  function recoverableCollectionAttempts():{edits:CollectionAttempt[];rawElements:HTMLElement[];table:boolean;toolbar:boolean;ui:CollectionUIOwner[]}|undefined {
     try{alive();}catch{return;}
     if(acceptedConfiguration?.error)return;
+    const ui=[chooserSubmission,editorSubmission].filter((submission):submission is CollectionUIOwner=>!!submission?.owner.submitted);
+    if(ui.some(submission=>!submission.owner.canRecover()))return;
     if(disposed||closing&&!interruptFinish||pendingCollectionRestore||pendingCollectionCreate||optionCreations.size||controller.hasPendingViewReferences&&!acceptedConfiguration
       ||mounted?.hasQueuedConfiguration?.()||settings.hasDraft()||(summaryDraft||summaryHasRawDraft?.())&&(!acceptedConfiguration||!captureSummaryAdmission)
-      ||chooser?.hasPendingChanges()||collectionEditor?.hasPendingChanges()||unfinishedNoteCreation()
-      ||[...changedBuffers].some(buffer=>(buffer.dirty||!!buffer.error)&&!acceptedConfiguration))return;
+      ||chooser?.hasPendingChanges()&&!chooserSubmission?.owner.canRecover()||collectionEditor?.hasPendingChanges()&&!editorSubmission?.owner.canRecover()||unfinishedNoteCreation()
+      ||[...changedBuffers].some(buffer=>(buffer.dirty||!!buffer.error)&&!acceptedConfiguration&&!ui.some(submission=>buffer.path===options.basePath&&buffer.text===submission.completion?.desiredSource)))return;
     const toolbarCapturable=toolbarUI.canCaptureAdmissionDraft(),toolbar=!acceptedConfiguration&&(toolbarUI.hasDraft()||toolbarCapturable);if(toolbar&&!toolbarCapturable)return;
     const elements=[...content.querySelectorAll<HTMLElement>('[data-base-editing]')],table=!!content.querySelector('.zorid-bases-table-input');
     if(table&&!mounted?.canCaptureRawDraft?.())return;
     if(!elements.length){
       if(propertyDraft()||toolbar&&(pending.size||!rawDraftOrigin(false)))return;
-      return{edits:[],rawElements:[],table:false,toolbar};
+      return{edits:[],rawElements:[],table:false,toolbar,ui};
     }
     const selected:CollectionAttempt[]=[],rawElements:HTMLElement[]=[];
     for(const element of elements){
@@ -679,19 +750,20 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       selected.push(attempt);
     }
     if(pending.size>selected.length||((rawElements.length||table||toolbar)&&!rawDraftOrigin(false)))return;
-    return{edits:selected,rawElements,table,toolbar};
+    return{edits:selected,rawElements,table,toolbar,ui};
   }
   function prepareAdmissionRecovery():BaseAdmissionRecovery {
     if(admissionRecovery)return admissionRecovery.capsule;
     const selected=recoverableCollectionAttempts();if(!selected)throw new Error('Unsubmitted Base changes must be retained before reconnecting.');
-    const {edits,rawElements,table,toolbar}=selected,origin=rawDraftOrigin(false),rawDrafts:BaseSessionRawDraft[]=[];
+    const {edits,rawElements,table,toolbar,ui}=selected,origin=rawDraftOrigin(false),rawDrafts:BaseSessionRawDraft[]=[];
     const configuration=acceptedConfiguration;
     let acceptedOrigin:BaseSessionDraftOrigin|undefined;
     const acceptedToolbar=configuration?toolbarUI.suspendAdmission():undefined;
     const acceptedSummary=configuration?captureSummaryAdmission?.():undefined;
     if(acceptedSummary){if(!origin)throw new Error('The accepted summary lost its original draft target.');rawDrafts.push({kind:'summary',get origin(){return acceptedOrigin??origin!;},raw:acceptedSummary});}
     if(acceptedToolbar){if(!origin)throw new Error('The accepted Base configuration lost its original draft target.');rawDrafts.push({kind:'toolbar',get origin(){return acceptedOrigin??origin!;},raw:acceptedToolbar});}
-    if(configuration)controller.suspendDerivedActivity();
+    if(configuration||ui.length)controller.suspendDerivedActivity();
+    const uiPrepared=ui.map(submission=>submission.owner.prepareAdmissionRecovery());
     const releases:(()=>void)[]=[];
     try{
       for(const edit of edits)releases.push(options.claimRecoverDatabaseEntry!(edit.request));
@@ -705,6 +777,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         alive();
         // Workspace invokes settle only after a positive same-scope admission.
         configuration?.supervisor.admissionAvailable();
+        await Promise.all(uiPrepared.map(prepared=>prepared?.settle()));alive();
         await Promise.all(rawDrafts.map(draft=>draft.raw.ready));alive();await Promise.allSettled([...pending]);
         if(configuration?.error)throw configuration.error;
         if(configuration){
@@ -714,7 +787,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
           if(raw){const current=rawDraftOrigin(false);if(!current)throw new Error('The accepted Base configuration lost its original draft target.');rawDrafts.push({kind:'toolbar',origin:{...current,source:controller.state.source,viewId:controller.selectedViewIdentity,viewIndex:controller.selectedViewIndex},raw});await raw.ready;}
           if(acceptedSummary&&acceptedSummary.name===acceptedSummary.baselineName&&acceptedSummary.formula.state.text===acceptedSummary.baselineExpression){const index=rawDrafts.findIndex(draft=>draft.raw===acceptedSummary);if(index>=0)rawDrafts.splice(index,1);}
           controller.dispose();
-        }await Promise.resolve();alive();
+        }else if(ui.length)controller.dispose();await Promise.resolve();alive();
         for(const attempt of edits){
           const widget=attempt.widget!;
           if(widget.isCurrent()){
@@ -731,7 +804,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       })();recovery.settling=settling;void settling.finally(()=>{if(recovery.settling===settling)recovery.settling=undefined;}).catch(()=>{});return settling;
     }}};
     admissionRecovery=recovery;collectionLoad++;if(collectionRefreshTimer!==undefined){clearTimeout(collectionRefreshTimer);collectionRefreshTimer=undefined;}
-    if(!configuration)controller.dispose();interruptFinish?.();retireDerived();void Promise.all(rawDrafts.map(draft=>draft.raw.ready)).then(()=>{root.inert=true;});return recovery.capsule;
+    if(!configuration&&!ui.length)controller.dispose();interruptFinish?.();retireDerived();void Promise.all(rawDrafts.map(draft=>draft.raw.ready)).then(()=>{root.inert=true;});return recovery.capsule;
   }
   const restoredRawDrafts=new WeakSet<BaseSessionRawDraft>();
   async function restoreAdmissionDrafts(drafts:readonly BaseSessionRawDraft[]):Promise<BaseAdmissionDraftRestore> {
@@ -1216,7 +1289,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
           toolbar.hidden=true;sourceBar.hidden=true;
           if(pending.size||toolbarUI.hasDraft()){deferred=state;return;}
           mounted?.destroy();mounted=undefined;mountedResult=undefined;content.replaceChildren();
-          if(!chooser)void chooseSource(async source=>{await saveConfigurationCommand(()=>controller.addView(controller.state.version,'table','Table',{source}));},false);
+          if(!chooser)void chooseSource(async source=>{await saveConfigurationCommand(()=>controller.addView(controller.state.version,'table','Table',{source}));},false,{type:'add-view',viewType:'table',viewName:'Table'});
         }
       } catch(failure) { report(failure); }
       return;
