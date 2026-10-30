@@ -10,10 +10,19 @@ export function installMainLifecycle(config){
   const now=()=>performance.now(),state={installedAt:now(),timeOrigin:performance.timeOrigin,pid:process.pid,
     packaged:app.isPackaged,appPath:app.getAppPath(),executable:process.execPath,resourcesPath:process.resourcesPath,
     userData:app.getPath('userData'),localDataDirectory:process.env.ZORID_LOCAL_DATA_DIR,electron:process.versions.electron,
-    phases:[],requests:[],nativeOpen:[],nativePids:[],nativeExits:[],errors:[],normalQuitObserved:false};
+    phases:[],focusEvents:[],focusEventsTruncated:false,requests:[],nativeOpen:[],nativePids:[],nativeExits:[],errors:[],normalQuitObserved:false};
   globalThis.__zoridPackagedMain=state;
   globalThis.__zoridPackagedQuit=()=>app.quit();
   const mark=(phase,extra={})=>state.phases.push({phase,at:now(),...extra});
+  // Passive bounded chronology: callbacks never focus/activate a window, retry
+  // input, or change foreground acceptance. App deactivation can be distinguished
+  // from focus moving between this app's own windows without guessing its cause.
+  const markFocus=(event,window)=>{
+    if(state.focusEvents.length<128)state.focusEvents.push({event,at:now(),...(window?{windowId:window.id}:{})});
+    else state.focusEventsTruncated=true;
+  };
+  for(const event of ['did-become-active','did-resign-active'])app.on(event,()=>markFocus(event));
+  for(const event of ['browser-window-focus','browser-window-blur'])app.on(event,(_event,window)=>markFocus(event,window));
   mark('inspector-attached',{appReadyAlready:app.isReady(),windowCountAlready:BrowserWindow.getAllWindows().length});
   if(!app.isReady())app.once('ready',()=>mark('app-ready'));
   const windowEvents=window=>{

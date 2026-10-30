@@ -11,6 +11,7 @@ import {CDP} from '../../tests/tasks-electron-integration/cdp.mjs';
 import {assessNote,clockInterval,DEADLINE_MS,planCampaign} from './oracle.mjs';
 import {navigateFileTree} from './file-navigation.mjs';
 import {foregroundSource} from './foreground.mjs';
+import {pressProfileKey} from './keyboard-input.mjs';
 import {requestOwnedForeground} from './os-foreground.mjs';
 import {captureSetupFailure} from './setup-failure.mjs';
 import {fixtureOptions,fixtureSources,preparedRestore,returnTarget,startupTarget} from './fixtures.mjs';
@@ -100,7 +101,6 @@ export async function main(args=process.argv.slice(2)){
     }catch(error){receipt.error=String(error);throw error;}finally{receipt.completedAtMs=launch.elapsed();}
   }
   async function selectFile(launch,record,name){await foreground(launch,record);record.navigation={};return navigateFileTree(active.renderer,name,{now:launch.elapsed,timeoutMs:remaining(launch,record),receipt:record.navigation,guard:()=>checkForeground(launch)});}
-  async function press(renderer,key,code,commands){await renderer.call('Input.dispatchKeyEvent',{type:'keyDown',key,code,modifiers:4,...(commands?.length?{commands}:{})});await renderer.call('Input.dispatchKeyEvent',{type:'keyUp',key,code,modifiers:4});}
   async function coreRead(renderer,vault,name){return renderer.evaluate(`(async()=>{const context=await window.zorid.getDurableContext(${JSON.stringify(vault)});const value=await window.zorid.durableInvoke(${JSON.stringify(vault)},context.admissionId,'readText',[${JSON.stringify(name)}]);return{entryId:value.entryId,revision:value.revision,content:value.content};})()`);}
   async function stop(launch){
     if(!active)return;
@@ -133,7 +133,7 @@ export async function main(args=process.argv.slice(2)){
       const renderer=record.client;
       if(launch.measured!==true||record.cancelled||!launch.vaultVerified||!launch.scopeVerified||!launch.nativeInstrumentationReady||!launch.nativeScopeVerified||active?.renderer!==renderer)throw Error('Owned input scope retired before dispatch');
       await checkForeground(launch);
-      if(!record.focused){await renderer.evaluate("document.querySelector('.pane.is-active .cm-content').focus();true");await press(renderer,'Home','Home',['moveToBeginningOfDocument']);record.focused=true;}
+      if(!record.focused){await renderer.evaluate("document.querySelector('.pane.is-active .cm-content').focus();true");await pressProfileKey(renderer,'Home','Home',['moveToBeginningOfDocument']);record.focused=true;}
       await renderer.evaluate(`(()=>{const s=window.__zoridPackagedProbe,p=document.querySelector('.pane.is-active'),n=p?.querySelector('.cm-content'),v=n?.cmTile?.root?.view??n?.cmView?.view;const title=${JSON.stringify(record.path.split('/').at(-1).replace(/\.md$/i,''))};if(s?.identity!==${JSON.stringify(record.identity)}||p?.querySelector('.note-title')?.value!==title||!v||n.closest('[inert]')||n.getAttribute('contenteditable')!=='true'||v.state.doc.length!==${record.expectedCharacters}+s.probes.length||v.state.doc.sliceString(s.probes.length,s.probes.length+${record.prefix.length})!==${JSON.stringify(record.prefix)})throw Error('Selected fixture changed before trusted input');return true;})()`);
       attempt.viewport=await renderer.evaluate(probeViewportSource({identity:record.identity,path:record.path,characters:record.expectedCharacters,prefix:record.prefix,visibleText:record.original.split('\n')[0].replace(/^#+\s*/,'' )}));await checkForeground(launch);
       if(record.cancelled||active?.renderer!==renderer)throw Error('Owned input scope retired during preparation');
@@ -149,7 +149,7 @@ export async function main(args=process.argv.slice(2)){
     const inserted=record.observed.probes.map(p=>p.marker).join(''),expected=inserted+record.original;
     const body=await active.renderer.evaluate("(()=>{const node=document.querySelector('.pane.is-active .cm-content'),view=node?.cmTile?.root?.view??node?.cmView?.view;if(!view)throw Error('Actual CodeMirror missing');return view.state.doc.toString();})()");
     record.expectedEditedSha256=hash(expected);record.body={exact:body===expected,sha256:hash(body),characters:body.length};assert.ok(record.body.exact,'Later full body was truncated or changed');
-    await press(active.renderer,'s','KeyS',[]);
+    await pressProfileKey(active.renderer,'s','KeyS',[]);
     const pair=pairs.get(launch.pairId),file=path.join(pair.vault,record.path);
     await bounded(async()=>assert.equal(await fs.readFile(file,'utf8'),expected),launch);
     const committed=await coreRead(active.renderer,pair.vault,record.path);assert.equal(committed.content,expected);
@@ -162,11 +162,11 @@ export async function main(args=process.argv.slice(2)){
     // Stop as soon as source is exact: typing history may coalesce two probes.
     let restored=body;
     for(let count=0;restored!==record.original&&count<record.observed.probes.length;count++){
-      await press(active.renderer,'z','KeyZ');
+      await pressProfileKey(active.renderer,'z','KeyZ');
       restored=await active.renderer.evaluate("(()=>{const n=document.querySelector('.pane.is-active .cm-content');return(n.cmTile?.root?.view??n.cmView?.view).state.doc.toString();})()");
     }
     assert.equal(restored,record.original,'Normal Undo did not restore the exact disposable source');
-    await press(active.renderer,'s','KeyS',[]);await bounded(async()=>assert.equal(await fs.readFile(file,'utf8'),record.original),launch);
+    await pressProfileKey(active.renderer,'s','KeyS',[]);await bounded(async()=>assert.equal(await fs.readFile(file,'utf8'),record.original),launch);
     const restoredCore=await coreRead(active.renderer,pair.vault,record.path);assert.equal(restoredCore.content,record.original);
     record.restoration={physicalSha256:await hashFile(file),coreSha256:hash(restoredCore.content),revision:restoredCore.revision,exact:true};
     delete record.original;delete record.deadlineDone;delete record.deadlineTimer;delete record.inputQueue;delete record.deadlineTask;delete record.resolveDeadline;

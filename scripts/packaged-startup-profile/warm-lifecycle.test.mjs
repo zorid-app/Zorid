@@ -47,3 +47,14 @@ test('later detailed instrumentation shares lifecycle state and never duplicates
 test('foreign lifecycle scope cannot install quit or Native tracking hooks',()=>{
   const f=nativeFixture(),original=f.Host.prototype.request;f.config.pid=99;assert.throws(f.install,/scope differs/);assert.equal(f.Host.prototype.request,original);assert.equal(f.app.listenerCount('quit'),0);assert.equal(f.context.__zoridPackagedMain,undefined);
 });
+
+test('passive window blur and app deactivation chronology is bounded and preserves lifecycle behavior',()=>{
+  const f=nativeFixture();f.install();const state=f.context.__zoridPackagedMain;
+  const window={id:7,focus:()=>assert.fail('observer cannot focus'),blur:()=>assert.fail('observer cannot blur')};
+  f.app.emit('browser-window-focus',{},window);f.app.emit('browser-window-blur',{},window);f.app.emit('did-resign-active',{});f.app.emit('did-become-active',{});
+  assert.deepEqual(JSON.parse(JSON.stringify(state.focusEvents)),[{event:'browser-window-focus',at:1,windowId:7},{event:'browser-window-blur',at:1,windowId:7},{event:'did-resign-active',at:1},{event:'did-become-active',at:1}]);
+  f.install();assert.equal(f.app.listenerCount('browser-window-blur'),1);assert.equal(f.app.listenerCount('did-resign-active'),1);
+  for(let index=0;index<200;index++)f.app.emit('browser-window-blur',{},window);
+  assert.equal(state.focusEvents.length,128);assert.equal(state.focusEventsTruncated,true);
+  f.app.quit();assert.equal(f.writes.length,1);assert.equal(f.writes[0].normalQuitObserved,true);assert.equal(f.writes[0].focusEvents.length,128);
+});
