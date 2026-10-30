@@ -45,22 +45,23 @@ async function setup(t:TestContext,options:{terminal?:boolean;holdLater?:boolean
   return{root,workspace,canvas,buffer,adapter,commitIds,plans,retryGate,laterGate,notify:()=>notify(),get unsubscribed(){return unsubscribed;},move(){const item=root.querySelector<HTMLElement>('[data-node-id="a"]')!;pointer(item,'pointerdown',20);pointer(viewport,'pointermove',45);pointer(viewport,'pointerup',45);}};
 }
 
-test('Canvas clears its failed-save latch after the real NoteBuffer automatically recovers the original native intent',async t=>{
-  const f=await setup(t);t.mock.timers.enable({apis:['setTimeout']});f.move();await until(()=>f.commitIds.length===1&&f.buffer.autosaveRetryPending);
+test('Canvas clears its failed-save latch after an explicit NoteBuffer save settles the original native intent',async t=>{
+  const f=await setup(t);t.mock.timers.enable({apis:['setTimeout']});f.move();await until(()=>f.commitIds.length===1&&!!f.buffer.error);
   await until(()=>!!f.root.querySelector('.zorid-canvas-status')?.textContent?.includes('Unable to save Canvas'));
   assert.equal(f.canvas.hasPendingChanges(),true);assert.equal(f.buffer.dirty,true);assert.equal(f.plans.size,1);
-  t.mock.timers.tick(500);await until(()=>f.commitIds.length===2);assert.equal(f.buffer.dirty,true);assert.equal(f.canvas.hasPendingChanges(),true);
-  f.retryGate.resolve();await until(()=>!f.buffer.dirty&&f.buffer.error===null);await tick();
+  t.mock.timers.tick(300000);await tick();assert.equal(f.commitIds.length,1);assert.match(f.root.querySelector('.zorid-canvas-status')!.textContent!,/Unable to save Canvas/);
+  const saving=f.buffer.flush();await until(()=>f.commitIds.length===2);assert.equal(f.buffer.dirty,true);assert.equal(f.canvas.hasPendingChanges(),true);
+  f.retryGate.resolve();await saving;await until(()=>!f.buffer.dirty&&f.buffer.error===null);await tick();
   assert.deepEqual(f.commitIds,[...f.plans.keys(),...f.plans.keys()]);assert.equal(await f.adapter.read('Board.canvas'),f.canvas.document.toString());assert.equal(JSON.parse(f.buffer.text).custom.retained,true);
-  assert.equal(f.canvas.hasPendingChanges(),false,'Canvas must follow the buffer’s acknowledged recovery without another edit or save command');
+  assert.equal(f.canvas.hasPendingChanges(),false,'Canvas must follow the buffer’s acknowledged recovery without another edit or a new authored operation');
   assert.doesNotMatch(f.root.querySelector('.zorid-canvas-status')!.textContent!,/Unable to save Canvas/);assert.equal(f.plans.size,1,'UI recovery cannot author a new operation');
 });
 
 test('an older recovered Canvas intent cannot acknowledge newer geometry before its own held save succeeds',async t=>{
-  const f=await setup(t,{holdLater:true});t.mock.timers.enable({apis:['setTimeout']});f.move();await until(()=>f.commitIds.length===1&&f.buffer.autosaveRetryPending);await until(()=>!!f.root.querySelector('.zorid-canvas-status')?.textContent?.includes('Unable to save Canvas'));
-  const older=f.canvas.document.toString();t.mock.timers.tick(500);await until(()=>f.commitIds.length===2);f.move();const newer=f.canvas.document.toString();assert.notEqual(newer,older);await until(()=>f.buffer.text===newer);
+  const f=await setup(t,{holdLater:true});t.mock.timers.enable({apis:['setTimeout']});f.move();await until(()=>f.commitIds.length===1&&!!f.buffer.error);await until(()=>!!f.root.querySelector('.zorid-canvas-status')?.textContent?.includes('Unable to save Canvas'));
+  const older=f.canvas.document.toString();const saving=f.buffer.flush();await until(()=>f.commitIds.length===2);f.move();const newer=f.canvas.document.toString();assert.notEqual(newer,older);await until(()=>f.buffer.text===newer);
   f.retryGate.resolve();await until(()=>f.commitIds.length===3);assert.equal(f.buffer.savedText,older);assert.equal(f.buffer.text,newer);assert.equal(f.buffer.dirty,true);assert.equal(f.canvas.hasPendingChanges(),true);
-  f.laterGate.resolve();await until(()=>!f.buffer.dirty&&f.buffer.error===null);await tick();assert.equal(f.canvas.hasPendingChanges(),false);assert.doesNotMatch(f.root.querySelector('.zorid-canvas-status')!.textContent!,/Unable to save Canvas/);assert.equal(await f.adapter.read('Board.canvas'),newer);
+  f.laterGate.resolve();await saving;await until(()=>!f.buffer.dirty&&f.buffer.error===null);await tick();assert.equal(f.canvas.hasPendingChanges(),false);assert.doesNotMatch(f.root.querySelector('.zorid-canvas-status')!.textContent!,/Unable to save Canvas/);assert.equal(await f.adapter.read('Board.canvas'),newer);
   assert.equal(f.plans.size,2,'Only the two actual user edits may author operations');assert.equal(f.commitIds[0],f.commitIds[1]);assert.notEqual(f.commitIds[1],f.commitIds[2]);
 });
 test('terminal Canvas conflicts retain the complete accepted source and visible failure without automatic replay',async t=>{
@@ -70,7 +71,7 @@ test('terminal Canvas conflicts retain the complete accepted source and visible 
 });
 
 test('a destroyed Canvas releases its save observer and retained callbacks cannot clear its failure or author another operation',async t=>{
-  const f=await setup(t);t.mock.timers.enable({apis:['setTimeout']});f.move();await until(()=>f.commitIds.length===1&&f.buffer.autosaveRetryPending);await until(()=>!!f.root.querySelector('.zorid-canvas-status')?.textContent?.includes('Unable to save Canvas'));t.mock.timers.tick(500);await until(()=>f.commitIds.length===2);
+  const f=await setup(t);t.mock.timers.enable({apis:['setTimeout']});f.move();await until(()=>f.commitIds.length===1&&!!f.buffer.error);await until(()=>!!f.root.querySelector('.zorid-canvas-status')?.textContent?.includes('Unable to save Canvas'));const saving=f.buffer.flush();await until(()=>f.commitIds.length===2);
   const status=f.canvas.element.querySelector('.zorid-canvas-status')!,before=status.textContent;f.canvas.destroy();f.workspace.activePane.canvasView=undefined;assert.equal(f.unsubscribed,1);
-  f.retryGate.resolve();await until(()=>!f.buffer.dirty&&f.buffer.error===null);f.notify();assert.equal(status.textContent,before);assert.equal(f.plans.size,1);assert.equal(f.commitIds.length,2);
+  f.retryGate.resolve();await saving;await until(()=>!f.buffer.dirty&&f.buffer.error===null);f.notify();assert.equal(status.textContent,before);assert.equal(f.plans.size,1);assert.equal(f.commitIds.length,2);
 });

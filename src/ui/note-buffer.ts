@@ -23,28 +23,6 @@ export interface NoteBufferOptions {
   onMetadata?: () => void;
 }
 interface Draft { base: string; content: string; pending?: string }
-const autosaveRetryDelays=[500,1500,4000,30000] as const;
-const nativeRetryCodes=new Set(['storage_busy','storage_io_retryable','storage_capacity','filesystem_io_retryable','lock_timeout']);
-const transientSaveCodes=new Set([...nativeRetryCodes,'busy','io','timeout','request_timeout','outcome_unknown','durable_transport_lost','transport_error','transport_lost','planning_transport_lost','temporarily_unavailable','checkpoint_unavailable','EAGAIN','EBUSY','EIO','ETIMEDOUT','ECONNRESET','ECONNREFUSED','EPIPE']);
-function retryableSaveError(error:unknown):boolean {
-  const seen=new Set<unknown>();
-  // Vault wraps commit uncertainty with its original cause. A terminal inner
-  // rejection must not become retryable merely because that wrapper is unknown.
-  for(let depth=0;depth<8;depth++){
-    if(!error||typeof error!=='object'||seen.has(error))return false;
-    seen.add(error);
-    const value=error as {code?:unknown;message?:unknown;cause?:unknown;source?:unknown};
-    if(value.source!==undefined&&value.source!=='host'&&value.source!=='transport')return false;
-    if(typeof value.code==='string'){
-      if(!transientSaveCodes.has(value.code))return false;
-      if(nativeRetryCodes.has(value.code)&&value.source!=='host'||value.code==='durable_transport_lost'&&value.source!=='transport')return false;
-    }else if(typeof value.message!=='string'||!/^Durable(?: editor)? request failed(?:; retain pending recovery state\.)?\.?$/.test(value.message))return false;
-    if(value.cause===undefined)return true;
-    error=value.cause;
-  }
-  return false;
-}
-
 /** A note's editor state, independent of any particular pane or editor widget. */
 export class NoteBuffer {
   path: string;
@@ -60,11 +38,8 @@ export class NoteBuffer {
   private disposed = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private autosaveEpoch=0;
-  private autosaveRetries=0;
   private autosaveRunningEpoch?:number;
-  private recoverableFlushEpoch?:number;
-  private autosaveRequested=false;
-  private retryingAutosave=false;
+  private autosaveRequested?:string;
   private pending: Promise<unknown> = Promise.resolve();
   private recoveryCheckpoint?: { key: string; draft: Draft | null };
   private recoveryBase?: { text: string; json: string };
@@ -109,14 +84,6 @@ export class NoteBuffer {
    * close remains owned by this buffer and is retried by calling again. */
   async closeMetadataProjection():Promise<void>{this.metadataRetired=true;this.cancelAutosave();await this.metadataProjection?.close();}
 
-  /** A retry at a bounded interval is scheduled or running; the original error stays visible
-   * to callers until the durable save actually succeeds. */
-  get autosaveRetryPending():boolean {
-    if(!this.error||!this.canAutosave()||!this.dirty||this.conflict||this.hasRecoveryConflict||!retryableSaveError(this.error))return false;
-    // Durable state can publish its error before the outer save promise rejects.
-    // Its first notification already belongs to this admitted automatic attempt.
-    return this.retryingAutosave||this.timer!==undefined||this.autosaveRunningEpoch===this.autosaveEpoch||this.recoverableFlushEpoch===this.autosaveEpoch;
-  }
   /** Independent protection never clears dirty or claims a domain save. */
   get draftProtectionStatus():NoteDraftProtectionStatus|undefined{return this.durable?.draftProtectionStatus;}
   flushDraftProtection():Promise<void>{return this.durable?.flushDraftProtection()??Promise.resolve();}
@@ -236,8 +203,8 @@ export class NoteBuffer {
     this.timer = undefined;
   }
   private cancelAutosave():void {
-    this.cancelTimer();this.autosaveEpoch++;this.autosaveRetries=0;
-    this.autosaveRequested=false;this.retryingAutosave=false;this.recoverableFlushEpoch=undefined;
+    this.cancelTimer();this.autosaveEpoch++;
+    this.autosaveRequested=undefined;
   }
   private canAutosave():boolean{return this.loaded&&!this.disposed&&!this.disposing&&!this.durable?.terminalCanonicalRecovery;}
   private scheduleAutosave(delay:number):void {
@@ -246,35 +213,23 @@ export class NoteBuffer {
     this.timer=setTimeout(()=>{
       this.timer=undefined;
       if(epoch!==this.autosaveEpoch||!this.canAutosave())return;
-      if(!this.dirty){const retrying=this.retryingAutosave;this.retryingAutosave=false;this.autosaveRetries=0;if(retrying)this.notify();return;}
-      if(this.autosaveRunningEpoch!==undefined){this.autosaveRequested=true;return;}
-      this.autosaveRunningEpoch=epoch;this.autosaveRequested=false;
-      const saving=this.enqueue(async()=>{if(epoch===this.autosaveEpoch&&this.canAutosave()&&this.dirty)await this.save();});
-      void saving.then(()=>this.finishAutosave(epoch),error=>this.finishAutosave(epoch,error));
+      if(!this.dirty)return;
+      if(this.autosaveRunningEpoch!==undefined){this.autosaveRequested=this.text;return;}
+      this.autosaveRunningEpoch=epoch;this.autosaveRequested=undefined;
+      let attemptedContent:string|undefined;
+      const saving=this.enqueue(async()=>{if(epoch===this.autosaveEpoch&&this.canAutosave()&&this.dirty)await this.save(content=>{attemptedContent=content;});});
+      void saving.then(()=>this.finishAutosave(epoch,undefined,attemptedContent),error=>this.finishAutosave(epoch,error,attemptedContent));
     },delay);
   }
-  private finishAutosave(epoch:number,error?:unknown):void {
+  private finishAutosave(epoch:number,error?:unknown,attemptedContent?:string):void {
     this.autosaveRunningEpoch=undefined;
-    const requested=this.autosaveRequested;this.autosaveRequested=false;
-    if(epoch!==this.autosaveEpoch){if(requested)this.scheduleAutosave(this.options.debounceMs??400);return;}
-    const wasRetrying=this.retryingAutosave;
-    if(error!==undefined&&this.retryAutosave(error))return;
-    this.retryingAutosave=false;
+    const requested=this.autosaveRequested;this.autosaveRequested=undefined;
+    // Preserve only an edit debounce the active save has not already consumed.
+    const newerRequest=requested!==undefined&&requested!==attemptedContent&&this.text===requested;
+    if(epoch!==this.autosaveEpoch){if(newerRequest)this.scheduleAutosave(this.options.debounceMs??400);return;}
     if(error===undefined){
-      this.autosaveRetries=0;
       if(!this.dirty)this.cancelTimer();else this.scheduleAutosave(this.options.debounceMs??400);
-    }
-    if(wasRetrying)this.notify();
-  }
-  private retryAutosave(error:unknown):boolean {
-    if(this.canAutosave()&&this.dirty&&!this.conflict&&!this.hasRecoveryConflict
-      &&retryableSaveError(error)){
-      const step=Math.min(this.autosaveRetries,autosaveRetryDelays.length-1);
-      this.autosaveRetries=Math.min(step+1,autosaveRetryDelays.length-1);
-      this.retryingAutosave=true;this.scheduleAutosave(autosaveRetryDelays[step]);
-      this.notify();return true;
-    }
-    return false;
+    }else if(newerRequest)this.scheduleAutosave(this.options.debounceMs??400);
   }
   private enqueue(operation: () => Promise<void>): Promise<void> {
     const result = this.pending.then(async () => {
@@ -398,16 +353,16 @@ export class NoteBuffer {
     if(this.durable){this.durable.update(text,options.conditionalSavedSource);this.dirty=this.durable.dirty;}else this.updateDirty();
     if (!this.dirty) {this.writeValidators.clear();this.cancelAutosave();}
     if(!this.durable)this.persist();
-    if (changed) {this.cancelTimer();this.autosaveRetries=0;}
+    if (changed) this.cancelTimer();
     // Repeated delivery of the same snapshot must not postpone a pending save.
     // persist still retries if its previous attempt failed.
     this.scheduleAutosave(this.options.debounceMs??400);
     this.notify();
   }
 
-  private async save(): Promise<void> {
-    this.requireLoaded();
-    if(this.durable){await this.durable.flush(()=>this.validateWrite());this.syncDurable();if(!this.dirty)this.writeValidators.clear();return;}
+  private async save(attempt?:(content:string)=>void): Promise<void> {
+    this.requireLoaded();attempt?.(this.text);
+    if(this.durable){await this.durable.flush(()=>this.validateWrite(),attempt);this.syncDurable();if(!this.dirty)this.writeValidators.clear();return;}
     this.validateWrite();
     if (this.writeIntent !== undefined || this.conflict) {
       const disk = await this.readForReconciliation();
@@ -423,6 +378,7 @@ export class NoteBuffer {
     while (this.dirty) {
       this.validateWrite();
       const content = this.text;
+      attempt?.(content);
       this.writeIntent = content;
       this.updateDirty();
       this.persist();
@@ -439,32 +395,22 @@ export class NoteBuffer {
     this.writeValidators.clear();
   }
 
-  flush(options:{autoRetry?:boolean}={}): Promise<void> {
+  flush(): Promise<void> {
     if(!this.loaded)return Promise.resolve(); // No authoring or source mutation is admitted yet.
     this.cancelAutosave();
     this.durable?.retryCanonicalRecovery();
     // A completed retirement already saved this immutable buffer. Workspace
     // teardown may retry after a later buffer's independent close failed.
     if(this.disposed)return Promise.resolve();
-    const epoch=this.autosaveEpoch;
-    // Irreversible platform drains opt out; a failed live-editor preflight keeps
-    // its caller's rejection while recovery continues on this exact buffer.
-    if(options.autoRetry!==false)this.recoverableFlushEpoch=epoch;
-    return this.enqueue(() => this.save()).then(()=>{
-      if(this.recoverableFlushEpoch===epoch)this.recoverableFlushEpoch=undefined;
-      if(!this.dirty)this.cancelTimer();
-    },error=>{
-      if(this.recoverableFlushEpoch===epoch){this.recoverableFlushEpoch=undefined;if(epoch===this.autosaveEpoch)this.retryAutosave(error);}
-      throw error;
-    });
+    return this.enqueue(() => this.save()).then(()=>{if(!this.dirty)this.cancelTimer();});
   }
 
   get hasRecoveryConflict():boolean { return !!this.durable?.conflicted; }
 
   /** Retained conflicts stay navigable without turning navigation into a save. */
-  flushForNavigation(options:{autoRetry?:boolean}={}):Promise<void> {
+  flushForNavigation():Promise<void> {
     if(this.durable?.pendingCanonicalRecovery&&this.draftProtectionStatus)return this.flushDraftProtection();
-    if(!this.hasRecoveryConflict)return this.flush(options);
+    if(!this.hasRecoveryConflict)return this.flush();
     this.cancelAutosave();
     if(this.draftProtectionStatus)return this.durable!.preserveDraft().then(()=>this.syncDurable());
     return this.enqueue(async()=>{await this.durable!.preserveDraft();this.syncDurable();});

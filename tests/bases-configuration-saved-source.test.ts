@@ -403,14 +403,14 @@ test('source custody acknowledges a late Native success once after its renderer 
   }finally{reply.resolve();await mutation?.pending.catch(()=>{});await f.close();}
 });
 
-test('source custody survives typed busy autosave on the original ref after the renderer attempt expires',async()=>{
+test('source custody survives explicit busy retry on the original ref after the renderer attempt expires',async()=>{
   const f=await fixture(),entered=gate(),busyReply=gate(),retryEntered=gate(),retryReply=gate();let mutation:ReturnType<typeof custodiedMutation>|undefined;
   f.setCommit(async()=>{if(f.committed.length===1){entered.resolve();await busyReply.promise;throw Object.assign(Error('Native temporarily busy'),{code:'storage_busy',source:'host'});}retryEntered.resolve();await retryReply.promise;});
   try{
     mutation=custodiedMutation(f);await waitFor(()=>entered.settled);assert.equal(mutation.state.submitted,1);mutation.state.rendererCurrent=false;
     busyReply.resolve();await assert.rejects(mutation.pending,error=>{const failure=error as Error&{code?:string;source?:string;cause?:{code?:string;source?:string}};assert.equal(failure.code,'outcome_unknown');assert.equal(failure.source,'host');assert.equal(failure.cause?.code,'storage_busy');assert.equal(failure.cause?.source,'host');return true;});assert.equal(mutation.state.proof?.(),false);assert.equal(mutation.state.accepted,0);
-    await waitFor(()=>retryEntered.settled);assert.equal(mutation.state.proof?.(),false,'retry dispatch alone is not an acknowledgement');
-    retryReply.resolve();await waitFor(()=>!f.buffer.dirty&&f.buffer.error===null);
+    const retry=f.buffer.flush();await waitFor(()=>retryEntered.settled);assert.equal(mutation.state.proof?.(),false,'retry dispatch alone is not an acknowledgement');
+    retryReply.resolve();await retry;await waitFor(()=>!f.buffer.dirty&&f.buffer.error===null);
     assert.equal(mutation.state.proof?.(),true);assert.equal(mutation.state.accepted,0,'a rejected outer host promise never fabricates another completion callback');
     assert.equal(f.planned.length,1);assert.equal(f.capturesTaken,1);assert.equal(f.committed.length,2);assert.equal(f.committed[0],f.committed[1]);
     assert.equal(f.logical,mutation.desired);assert.equal(f.physical,mutation.desired);assert.equal(f.planned[0].conditionalSavedSource?.captureId,f.requestIds[0]);assert.deepEqual(f.released,[f.requestIds[0]]);

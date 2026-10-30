@@ -53,8 +53,8 @@ for(const [kind,corrupt]of Object.entries(corruptions).filter(([kind])=>!['body'
 
 for(const [kind,corrupt]of Object.entries(corruptions))test(`a malformed ${kind} CAS ACK retains the exact request before later input`,async t=>{
   const f=await fixture(t);await f.note.load('entry');f.forge(head=>corrupt(head));f.note.update('First protected body');
-  await assert.rejects(f.note.flush({autoRetry:false}),proofError);const original=f.calls[0];assert.ok(original);assert.equal(f.note.dirty,true);assert.equal(f.plans.size,0);
-  f.forge(head=>head);f.note.update('Later body');await f.note.flush({autoRetry:false});
+  await assert.rejects(f.note.flush(),proofError);const original=f.calls[0];assert.ok(original);assert.equal(f.note.dirty,true);assert.equal(f.plans.size,0);
+  f.forge(head=>head);f.note.update('Later body');await f.note.flush();
   for(const call of f.calls.filter(call=>call.nextRevision===original.nextRevision))assert.equal(call,original);
   assert.ok(f.calls.filter(call=>call.nextRevision===original.nextRevision).length>=3);assert.equal(f.note.text,'Later body');assert.equal(f.current.content,'Later body');assert.equal(f.note.error,null);
 });
@@ -69,5 +69,5 @@ for(const kind of ['vault','key','body','deleted'])test(`a forged final clean ${
 
 test('a coherent tombstone remains a usable revision fence without claiming clean body coverage',async t=>{
   const f=await fixture(t);f.seed();f.forgeLoad(head=>({...head!,deleted:true,encodedState:null,byteLength:0}));await f.note.load('entry');
-  assert.equal((f.note as any).durable.coreCoversCurrentDraft,false);f.note.update('After tombstone');await f.note.flush({autoRetry:false});assert.equal(f.calls[0].expectedRevision,loadedRevision);
+  assert.equal((f.note as any).durable.coreCoversCurrentDraft,false);f.note.update('After tombstone');await f.note.flush();assert.equal(f.calls[0].expectedRevision,loadedRevision);
 });

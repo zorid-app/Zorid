@@ -717,14 +717,16 @@ export class DurableNoteState {
     this.state!.draft=text;if(changed){this.state!.generation++;this.protectionAuthoringStarted=true;}
     this.captureProtection();if(!this.sourceRecoveryTerminal)void this.queue(()=>this.persist()).catch(()=>{});
   }
-  flush(validate:()=>void):Promise<void>{if(this.sourceRecoveryTerminal)return Promise.reject(this.sourceRecoveryTerminal);return this.queue(async()=>{
+  /** Selection observation only; it neither authorizes IO nor acknowledges storage. */
+  flush(validate:()=>void,attempt?:(content:string)=>void):Promise<void>{if(this.sourceRecoveryTerminal)return Promise.reject(this.sourceRecoveryTerminal);return this.queue(async()=>{
+    attempt?.(this.state!.operation?.content??this.text);
     // A retained uncertain checkpoint must settle under its original identity
     // before a recovered admission may plan any new source mutation.
     if(this.uncertain)await this.persist();
     if(this.state!.operation)await this.resume(validate);
     if(this.state!.conflict)throw failure('file advanced or write rejected; draft preserved');
     while(this.text!==this.base.content){
-      validate();const base=this.base,content=this.text;
+      validate();const base=this.base,content=this.text;attempt?.(content);
       let plan:DurableWritePlan;
       try{plan=await this.writes.planWrite({operationId:crypto.randomUUID(),path:base.path,expectedEntryId:base.entryId,expectedRevision:base.revision,expectedContent:base.content,content});}
       catch(error){

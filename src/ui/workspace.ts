@@ -326,7 +326,7 @@ export class Workspace {
   private noteStorageFailure(error:unknown,message='Your edits are retained in this window.'):void {
     console.error('Note storage operation failed',error);
     const buffer=[...this.buffers.values()].find(buffer=>buffer.error===error);
-    if(buffer&&(buffer.autosaveRetryPending||buffer.pendingCanonicalRecovery||this.lifecycleRecovery))return;
+    if(buffer&&(buffer.pendingCanonicalRecovery||this.lifecycleRecovery))return;
     notice(buffer?.draftProtectionStatus?.currentProtected?'Your latest edits are protected locally.':message);
   }
   private run(operation: () => unknown | Promise<unknown>): void { Promise.resolve().then(operation).catch(error => {
@@ -826,7 +826,7 @@ export class Workspace {
         if(!prepared.collected){this.retainedAdmissionRawInputs.push(...prepared.collect());prepared.collected=true;}
         // The proxy was rebound by the checked adapter. SAME buffers, retained
         // plans and uncertain checkpoint IDs resume through their normal queue.
-        for(const buffer of this.buffers.values()){await buffer.flush({autoRetry:false});current();if(buffer.dirty||buffer.error)throw new Error('A retained note write is not settled yet.');}
+        for(const buffer of this.buffers.values()){await buffer.flush();current();if(buffer.dirty||buffer.error)throw new Error('A retained note write is not settled yet.');}
         this.platformDraining=true;this.platformDrained=true;this.platformReleased=true;
         await this.disposeRetiredAdmissionViews(vault);
         await this.openVault(fresh,owner);
@@ -3504,7 +3504,7 @@ export class Workspace {
       const conflict=buffer.hasRecoveryConflict,versions=!!this.vault.adapter.independentDrafts&&buffer.draftProtectionStatus?.inventory==='retained';
       // Current-note conflicts already have the full shared recovery banner.
       const showConflict=conflict&&this.activePane?.viewPath!==path;
-      const retainedError=!conflict&&!!buffer.error&&!buffer.autosaveRetryPending&&!buffer.pendingCanonicalRecovery&&!this.lifecycleRecovery;
+      const retainedError=!conflict&&!!buffer.error&&!buffer.pendingCanonicalRecovery&&!this.lifecycleRecovery;
       if(!showConflict&&!retainedError&&!versions)continue;
       const row=el('div','native-document-notice');
       row.append(el('p','',showConflict?`Retained draft for “${nameOf(path)}” needs attention.`:retainedError
@@ -3596,7 +3596,7 @@ export class Workspace {
   private noteSaveLabel(buffer:NoteBuffer|undefined):string{
     if(!buffer||!buffer.dirty&&!buffer.error)return'';
     if(buffer.draftProtectionStatus?.currentProtected)return'Protected locally';
-    if(buffer.error&&!buffer.autosaveRetryPending&&!buffer.pendingCanonicalRecovery&&!this.lifecycleRecovery)return'Local draft';
+    if(buffer.error&&!buffer.pendingCanonicalRecovery&&!this.lifecycleRecovery)return'Local draft';
     return'Saving…';
   }
   private renderStatus():void{
@@ -3985,13 +3985,7 @@ export class Workspace {
       const validate=()=>{if(!current()||vault.entries.get(path)?.revision!==revision)throw new Error('The note changed before restoration');};
       this.updateMarkdownBuffer(buffer,text,validate);
       for(const view of this.loadedViews())if(view.viewPath===path){view.editor?.setValue(buffer.text);view.refreshPreview?.();view.properties?.refresh();}
-      try{await buffer.flush();}
-      catch(error){
-        // The original restore is already retained by this exact buffer. Its
-        // automatic save owns the same checkpoint/write; never author it again.
-        if(current()&&this.buffers.get(path)===buffer&&buffer.text===text&&buffer.dirty&&buffer.autosaveRetryPending)return'saving';
-        throw error;
-      }
+      await buffer.flush();
       this.renderStatus();return'restored';
     }});
   }

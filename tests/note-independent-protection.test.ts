@@ -245,7 +245,7 @@ test('a protocol or terminal Core error is not promoted to an automatic reconcil
   await buffer.load('entry');await until(()=>!!buffer.error);assert.equal((buffer.error as any).code,'outcome_unknown');assert.equal(buffer.pendingCanonicalRecovery,false);assert.equal(f.checkpointCalls.length,2);
   buffer.update('Raw typing remains protected but planning stays blocked');await buffer.flushDraftProtection();assert.equal(f.checkpointCalls.length,2);assert.equal(f.commits,0);
   buffer.draftProtectionAvailable();await new Promise(resolve=>setImmediate(resolve));assert.equal(buffer.pendingCanonicalRecovery,false);assert.equal(f.checkpointCalls.length,2);
-  t.mock.timers.tick(120000);await new Promise(resolve=>setImmediate(resolve));assert.equal(buffer.autosaveRetryPending,false);assert.equal(f.checkpointCalls.length,2);assert.equal(buffer.pendingCanonicalRecovery,false);
+  t.mock.timers.tick(120000);await new Promise(resolve=>setImmediate(resolve));assert.equal(f.checkpointCalls.length,2);assert.equal(buffer.pendingCanonicalRecovery,false);
   invalid=false;gate.resolve();await buffer.dispose();assert.equal(f.current.content,'Raw typing remains protected but planning stays blocked');
 });
 

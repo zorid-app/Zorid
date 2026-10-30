@@ -31,19 +31,18 @@ async function fixture(t:TestContext){
  return{workspace,internal,calls,plans,get source(){return source;},get commits(){return commits;},get updates(){return updates;},block(value:boolean,code='filesystem_io_retryable'){blocked=value;blockedCode=code;}};
 }
 
-test('restoring once yields to exact automatic checkpoint recovery and closes to the retained note',async t=>{
- const f=await fixture(t);await f.internal.showVersionHistory('Note.md');await settle();document.querySelector<HTMLButtonElement>('.version-history-version')!.click();await settle();f.block(true);
+test('failed restoration stays visible and idle until explicit save settles the exact retained write',async t=>{
+ const f=await fixture(t);t.mock.timers.enable({apis:['setTimeout']});await f.internal.showVersionHistory('Note.md');await settle();document.querySelector<HTMLButtonElement>('.version-history-version')!.click();await settle();f.block(true);
  document.querySelector<HTMLButtonElement>('.version-history .mod-cta')!.click();for(let i=0;i<8;i++)await settle();
- const buffer=f.workspace.buffers.get('Note.md')!;assert.equal(buffer.text,'old');assert.equal(buffer.autosaveRetryPending,true);assert.equal(document.querySelector('.version-history'),null,'a supervised save must not ask for a manual restore/save retry');assert.equal(f.updates,1);
- const original=f.calls.find(row=>row.encodedState?.includes('old'));assert.ok(original);f.block(false);
- for(let i=0;i<400&&buffer.dirty;i++)await new Promise(resolve=>setTimeout(resolve,2));assert.equal(buffer.dirty,false);assert.equal(f.source,'old');assert.equal(f.updates,1);assert.equal(f.plans.size,1);assert.equal(f.commits,1);
+ const buffer=f.workspace.buffers.get('Note.md')!;assert.equal(buffer.text,'old');assert.equal(buffer.dirty,true);assert.ok(buffer.error);assert.match(document.querySelector('.status-bar')!.textContent!,/Local draft/);assert.ok(document.querySelector('.version-history'));assert.match(document.body.textContent!,/note and your changes were kept/);assert.equal(f.updates,1);
+ const original=f.calls.find(row=>row.encodedState?.includes('old'));assert.ok(original);const boundary=f.calls.length;f.block(false);t.mock.timers.tick(300000);await settle();assert.equal(f.calls.length,boundary);assert.equal(buffer.dirty,true);assert.equal(f.source,'current');assert.equal(f.commits,0);
+ await buffer.flush();assert.equal(buffer.dirty,false);assert.equal(buffer.error,null);assert.equal(f.source,'old');assert.equal(f.updates,1);assert.equal(f.plans.size,1);assert.equal(f.commits,1);
  const replays=f.calls.filter(row=>row.nextRevision===original.nextRevision);assert.ok(replays.length>=2);for(const request of replays)assert.deepEqual(request,original);
- assert.doesNotMatch(document.body.textContent!,/try saving|couldn.t finish restoring/i);
 });
 
 
 for(const code of ['permission_denied','storage_corrupt'])test(`terminal restore ${code} keeps the original draft and does not claim automatic saving`,async t=>{
  const f=await fixture(t);await f.internal.showVersionHistory('Note.md');await settle();document.querySelector<HTMLButtonElement>('.version-history-version')!.click();await settle();f.block(true,code);
  document.querySelector<HTMLButtonElement>('.version-history .mod-cta')!.click();for(let i=0;i<8;i++)await settle();
- const buffer=f.workspace.buffers.get('Note.md')!;assert.equal(buffer.text,'old');assert.equal(buffer.dirty,true);assert.equal(buffer.autosaveRetryPending,false);assert.ok(document.querySelector('.version-history'));assert.match(document.body.textContent!,/note and your changes were kept/);assert.equal(f.source,'current');assert.equal(f.commits,0);assert.equal(f.updates,1);f.block(false);
+ const buffer=f.workspace.buffers.get('Note.md')!;assert.equal(buffer.text,'old');assert.equal(buffer.dirty,true);assert.ok(document.querySelector('.version-history'));assert.match(document.body.textContent!,/note and your changes were kept/);assert.equal(f.source,'current');assert.equal(f.commits,0);assert.equal(f.updates,1);f.block(false);
 });

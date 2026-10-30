@@ -70,9 +70,8 @@ test('a stale vault owner ignores a held page before inspecting its results',asy
  const held=deferred<{versions:RecoveryVersion[]}>();let inspected=0;const f=fixture(t,{list:()=>held.promise});f.retire();held.resolve({get versions(){inspected++;return[version()];}});await settle();assert.equal(inspected,0);assert.equal(document.querySelector('[role=dialog]'),null);
 });
 
-test('restoration that is already saving closes the dialog without another restore request',async t=>{
- const f=fixture(t);let saves=0;
- // Use the public dialog API with the same history and explicit saving receipt.
- f.dialog.close();const dialog=openVersionHistory({history:f.history,entryId:'entry',isCurrent:()=>true,restore:async content=>{assert.equal(content,'old');saves++;return'saving';}});
- await settle();row().click();await settle();document.querySelector<HTMLButtonElement>('.mod-cta')!.click();await settle();assert.equal(saves,1);assert.equal(document.querySelector('[role=dialog]'),null);dialog.close();assert.equal(saves,1);
+test('restoration closes the dialog only after its save actually completes',async t=>{
+ const f=fixture(t),held=deferred<void>();let saves=0;
+ f.dialog.close();const dialog=openVersionHistory({history:f.history,entryId:'entry',isCurrent:()=>true,restore:async content=>{assert.equal(content,'old');saves++;await held.promise;return'restored';}});
+ await settle();row().click();await settle();document.querySelector<HTMLButtonElement>('.mod-cta')!.click();await settle();assert.equal(saves,1);assert.ok(document.querySelector('[role=dialog]'));held.resolve();await settle();assert.equal(document.querySelector('[role=dialog]'),null);dialog.close();assert.equal(saves,1);
 });

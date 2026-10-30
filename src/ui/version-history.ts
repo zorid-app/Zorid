@@ -5,7 +5,7 @@ export interface VersionHistoryOptions {
   history:RecoveryHistory;
   entryId:string;
   isCurrent():boolean;
-  restore(content:string):Promise<'restored'|'saving'|'save_changes'|'changed'>;
+  restore(content:string):Promise<'restored'|'save_changes'|'changed'>;
 }
 
 /** Optional history browsing is separate from automatic interrupted-save recovery. */
@@ -83,7 +83,7 @@ export function openVersionHistory(options:VersionHistoryOptions):{close():void}
     try{
       const result=await options.restore(loaded);
       if(!current())return;
-      if(result==='restored'||result==='saving'){restoring=false;close();return;}
+      if(result==='restored'){restoring=false;close();return;}
       message.textContent=result==='save_changes'?'Your current changes were kept. Restoring is unavailable while they are unsaved.':'This note changed. Your current note was kept.';
     }catch(error){if(current()){console.error('Version restoration could not finish',error);message.textContent='This version could not be restored. The note and your changes were kept.';}}
     finally{restoring=false;if(current())controls();else close();}
