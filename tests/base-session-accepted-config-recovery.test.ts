@@ -127,3 +127,12 @@ test('ordinary shared-buffer resolution acknowledges only accepted A and retains
   const capsule=f.session.prepareAdmissionRecovery!();await capsule.settle();assert.equal(capsule.rawDrafts?.length,1);assert.equal(capsule.rawDrafts![0].kind,'toolbar');assert.equal(f.adapter.writes.length,2);assert.deepEqual(baseViewSetting(BaseDocument.parse(await f.adapter.read('Work.base')),0,'filters'),{and:[`note["${score}"] > 9`]});
  }finally{held.resolve();f.adapter.fail=false;await f.cleanup();}
 });
+
+test('admission during the post-save query tail retains the accepted source for newer raw input',async()=>{
+ const old=await fixture(),held=old.holdQuery();let settling:Promise<void>|undefined,fresh:Awaited<ReturnType<typeof fixture>>|undefined;try{
+  old.control<HTMLButtonElement>('Filter').click();old.control<HTMLButtonElement>('Add filter').click();old.edit('Filter property',`note.${score}`,'change');old.edit('Condition','gt','change');old.edit('Filter value','9');await held.entered.promise;
+  assert.equal(old.adapter.writes.length,1);const saved=await old.adapter.read('Work.base');assert.notEqual(saved,initial,'the exact accepted write precedes the held old query tail');old.edit('Filter value','9e');
+  assert.equal(old.session.canRecoverAdmission!(),true);const capsule=old.session.prepareAdmissionRecovery!();settling=capsule.settle();held.finished.resolve();await settling;
+  assert.equal(capsule.rawDrafts?.length,1);assert.equal(capsule.rawDrafts![0].origin.source,saved,'query cancellation cannot erase the exact accepted source');fresh=await fixture({source:saved,revision:2});const restored=await fresh.session.restoreAdmissionDrafts!(capsule.rawDrafts!);assert.equal(restored.restored.length,1);assert.equal(restored.conflicts.length,0);assert.equal(fresh.control<HTMLInputElement>('Filter value').value,'9e');assert.equal(fresh.adapter.writes.length,0);assert.equal(old.adapter.writes.length,1);
+ }finally{held.finished.resolve();await settling?.catch(()=>{});await old.cleanup();await fresh?.cleanup();}
+});

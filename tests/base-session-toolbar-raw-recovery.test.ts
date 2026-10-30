@@ -55,11 +55,11 @@ test('unsubmitted creation-folder settings recover into a fresh session without 
  }finally{await old.cleanup();await fresh.cleanup();}
 });
 
-test('an in-flight accepted configuration command cannot be captured as raw settings',async()=>{
+test('an in-flight accepted configuration resumes its original save without becoming raw settings',async()=>{
  const f=await fixture(),held=gate();try{
   f.control<HTMLButtonElement>('New item options').click();f.edit('New item folder','Accepted folder');f.adapter.hold=held.promise;f.apply();await until(()=>f.adapter.writes.length===1);
-  assert.equal(f.session.canRecoverAdmission!(),false);assert.throws(()=>f.session.prepareAdmissionRecovery!(),/retained before reconnecting/);assert.equal(f.control<HTMLInputElement>('New item folder').value,'Accepted folder');assert.equal(await f.adapter.read('Work.base'),initial);
-  held.resolve();await until(()=>!f.session.hasPendingChanges());assert.equal(f.adapter.writes.length,1);assert.equal(baseViewSetting(BaseDocument.parse(await f.adapter.read('Work.base')),0,'newItemFolder'),'Accepted folder');
+  assert.equal(f.session.canRecoverAdmission!(),true);const recovery=f.session.prepareAdmissionRecovery!();assert.equal(recovery.rawDrafts?.length??0,0,'an accepted command is not an unsubmitted raw settings capsule');assert.equal(f.control<HTMLInputElement>('New item folder').value,'Accepted folder');assert.equal(await f.adapter.read('Work.base'),initial);
+  const settling=recovery.settle();held.resolve();await settling;await until(()=>!f.session.hasPendingChanges());assert.equal(f.adapter.writes.length,1);assert.equal(baseViewSetting(BaseDocument.parse(await f.adapter.read('Work.base')),0,'newItemFolder'),'Accepted folder');
  }finally{held.resolve();await f.cleanup();}
 });
 

@@ -1056,7 +1056,7 @@ export class BaseController {
       this.epoch++; this.lastInvalidation = { kind: 'configuration-commit' }; this.sharedQueries.cancel();
     }
     if(this.derivedSuspended)this.current=Object.freeze({...this.current,source:desired,updating:false});
-    try { return await retry.committed?.(); } finally { await this.refresh(); }
+    try { return await retry.committed?.(); } finally { await this.refresh();if(this.derivedSuspended&&!this.disposed)this.current=Object.freeze({...this.current,source:desired,updating:false}); }
   }
 
   /** The session may flush an already transformed recovery draft itself. Only
@@ -1087,7 +1087,7 @@ export class BaseController {
     }
     this.pendingConfigurations.clear(); this.configurationViewIds = undefined;
     if(this.derivedSuspended)this.current=Object.freeze({...this.current,source,updating:false});
-    try { await retry.committed?.(); } finally { await this.refresh(); } return true;
+    try { await retry.committed?.(); } finally { await this.refresh();if(this.derivedSuspended&&!this.disposed)this.current=Object.freeze({...this.current,source,updating:false}); } return true;
   }
 
   async renameView(version: number, index: number, name: string): Promise<BaseViewRenameReport> {
