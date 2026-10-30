@@ -1,6 +1,7 @@
 import {captureHistoryList,captureHistoryRead,decodeHistory} from './desktop-recovery-history.ts';
 import type {HistoryRequest} from './desktop-recovery-history.ts';
 import {createDesktopDurableTransport} from './desktop-durable-transport.ts';
+import {DatabaseMutationSupervisor} from './database-mutation-recovery.ts';
 import {createDesktopIndependentDraftProvider} from './desktop-independent-drafts.ts';
 import {createDatabaseService} from '../core/databases.ts';
 import type {DatabaseService,DatabaseRequest,DatabaseResponse,DesktopDatabaseRequest} from '../core/databases.ts';
@@ -28,6 +29,12 @@ const adapterReadRunners=new WeakMap<VaultAdapter,(method:keyof AdapterReads,pat
 const noteReadRunners=new WeakMap<DurableWrites,(method:'readText'|'readTextById',key:string,budget:ReadBudget)=>Promise<DurableWriteRead|null>>();
 type SavedSourceMethod='captureSavedSource'|'releaseSavedSource'|'listSavedSourceRequests';
 const savedSourceRunners=new WeakMap<DurableWrites,(method:SavedSourceMethod,input:unknown,budget:ReadBudget)=>Promise<unknown>>();
+type EntryCommand=Extract<DatabaseRequest,{op:'set_entry'}>;
+type EntryHold={fingerprint:string;count:number};
+type EntryCapsule={command:EntryCommand;fingerprint:string;attempt:number;io?:DatabaseMutationSupervisor;claims:number;holds:Set<EntryHold>;registrations:Set<Map<string,EntryCapsule>>;promise?:Promise<DatabaseResponse>;resolve?:(value:DatabaseResponse)=>void;reject?:(error:unknown)=>void;response?:DatabaseResponse;error?:unknown};
+// A checked replacement adopts the SAME owner capsule. No nested promise,
+// retry supervisor, or newly minted operation is introduced at a context hop.
+const databaseCapsuleRunners=new WeakMap<DatabaseService,(capsule:EntryCapsule)=>Promise<DatabaseResponse>>();
 
 export interface PlatformVault {
   /** Recovery preserves retained durable write identities; derived owners are rebuilt. */
@@ -302,10 +309,9 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
 
     savedSourceRunners.set(durableWrites,savedSource);
     let binaryDrained=false,documentsDrained=false,draftsDrained=false;
-    type EntryCommand=Extract<DatabaseRequest,{op:'set_entry'}>;
-    type EntryCapsule={command:EntryCommand;fingerprint:string;attempt:number;claims:number;promise?:Promise<DatabaseResponse>;resolve?:(value:DatabaseResponse)=>void;reject?:(error:unknown)=>void;response?:DatabaseResponse;error?:unknown};
     const entryCapsules=new Map<string,EntryCapsule>();
-    const entryHolds=new Map<string,{fingerprint:string;count:number}>();
+    const entryClaims=new Map<EntryCapsule,number>();
+    const entryHolds=new Map<string,EntryHold>();
     const captureEntry=(command:DatabaseRequest):DesktopDatabaseRequest=>captureDatabaseRequest({schemaVersion:1,command});
     const capsuleFor=(command:DatabaseRequest)=>{
       try{const captured=captureEntry(command);if(captured.command.op!=='set_entry')return;
@@ -322,49 +328,54 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
         capsule.error=undefined;resolve?.(response);
       }else{capsule.error=error;reject?.(error);}
     };
-    const failEntries=(error:unknown)=>{for(const capsule of entryCapsules.values()){capsule.attempt++;if(capsule.promise)settleEntry(capsule,error);}};
-    const heldEntry=(capsule:EntryCapsule)=>{const hold=entryHolds.get(capsule.command.operationId);return hold?.fingerprint===capsule.fingerprint&&hold.count>0;};
-    const repairingEntry=(capsule:EntryCapsule)=>!!recovery&&!!recovering&&heldEntry(capsule)&&capsule.claims>0;
+    const failEntries=(error:unknown)=>{for(const capsule of entryCapsules.values()){capsule.attempt++;capsule.io?.stop();capsule.io=undefined;if(capsule.promise)settleEntry(capsule,error);}};
+    const heldEntry=(capsule:EntryCapsule)=>[...capsule.holds].some(hold=>hold.fingerprint===capsule.fingerprint&&hold.count>0);
+    const repairingEntry=(capsule:EntryCapsule)=>!!recovery&&!!recovering&&heldEntry(capsule)&&(entryClaims.get(capsule)??0)>0;
     const afterRetirement=(capsule:EntryCapsule,attempt:number,reject:()=>void)=>{
       if(!recovery||!heldEntry(capsule)||!retirementDelivery||!recoveryListeners.size)return false;
       void retirementDelivery.then(()=>{if(capsule.attempt===attempt&&!repairingEntry(capsule))reject();});return true;
     };
-    const forgetReceipt=(capsule:EntryCapsule)=>{if(!capsule.claims&&!heldEntry(capsule)&&capsule.response&&entryCapsules.get(capsule.command.operationId)===capsule)entryCapsules.delete(capsule.command.operationId);};
+    const forgetReceipt=(capsule:EntryCapsule,settled=false)=>{if(!capsule.claims&&!heldEntry(capsule)&&(capsule.response||settled)){for(const owners of capsule.registrations)if(owners.get(capsule.command.operationId)===capsule)owners.delete(capsule.command.operationId);capsule.registrations.clear();}};
     let replayEntries:((fresh:DatabaseService)=>void)|undefined;
     if(binding.databases===true){
       const original=createDatabaseService(request=>call('databaseCommand',request));
-      const runEntry=(capsule:EntryCapsule,service:DatabaseService,replay=false)=>{
+      const runEntry=(capsule:EntryCapsule,service:DatabaseService)=>{
         if(!capsule.promise){capsule.promise=new Promise<DatabaseResponse>((resolve,reject)=>{capsule.resolve=resolve;capsule.reject=reject;});
           // Recovery also resumes an already rejected command before its widget
           // joins again. Preserve rejection for that owner without an unhandled task.
           void capsule.promise.catch(()=>{});
         }
         const result=capsule.promise,attempt=++capsule.attempt,epoch=durableEpoch;
-        void service.request(capsule.command).then(value=>{
+        capsule.io?.stop();const io=new DatabaseMutationSupervisor();capsule.io=io;
+        const check=()=>{
+          if(capsule.attempt!==attempt||entryCapsules.get(capsule.command.operationId)!==capsule
+            ||(released||recoveryNeeded||!!releasePending||epoch!==durableEpoch))throw unavailable('client_not_admitted','This collection edit owner is no longer active.');
+        };
+        void io.run(()=>service.request(capsule.command),check).then(value=>{
           if(capsule.attempt!==attempt)return;
-          if(!replay&&(epoch!==durableEpoch||recoveryNeeded)){
+          if(epoch!==durableEpoch||recoveryNeeded){
             const reject=()=>settleEntry(capsule,unavailable('client_not_admitted','The desktop context was released before this edit was confirmed.'));
             if(releasePending||released)reject();else if(!repairingEntry(capsule)&&!afterRetirement(capsule,attempt,reject))reject();
             return;
           }
-          settleEntry(capsule,undefined,value);if(!replay&&!heldEntry(capsule)&&!capsule.claims)entryCapsules.delete(capsule.command.operationId);
+          settleEntry(capsule,undefined,value);forgetReceipt(capsule,true);
         },error=>{
           if(capsule.attempt!==attempt)return;
           const code=error&&typeof error==='object'&&'code'in error?String(error.code):'';
           const uncertain=error&&typeof error==='object'&&'commitUncertain'in error&&error.commitUncertain===true;
           const host=error&&typeof error==='object'&&'source'in error&&error.source==='host';
           const retired=host&&(['client_not_admitted','client_ownership_lost'].includes(code)||code==='host_exited'&&uncertain);
-          const reject=()=>{settleEntry(capsule,error);if(!replay&&!retired&&!uncertain&&!recoveryNeeded)entryCapsules.delete(capsule.command.operationId);};
-          if(!replay&&retired&&!releasePending&&!released)markRetired();
-          if(!replay&&(retired||epoch!==durableEpoch||recoveryNeeded)&&!releasePending&&!released
+          const reject=()=>{settleEntry(capsule,error);if(!retired&&!uncertain&&!recoveryNeeded)entryCapsules.delete(capsule.command.operationId);};
+          if(retired&&!releasePending&&!released)markRetired();
+          if((retired||epoch!==durableEpoch||recoveryNeeded)&&!releasePending&&!released
             &&(repairingEntry(capsule)||afterRetirement(capsule,attempt,reject)))return;
           reject();
-        });
+        }).finally(()=>{io.stop();if(capsule.io===io)capsule.io=undefined;}).catch(()=>{});
         return result;
       };
       replayEntries=fresh=>{for(const capsule of entryCapsules.values()){
-        if(capsule.claims>0){if(!capsule.response)runEntry(capsule,fresh,true);}
-        else{capsule.attempt++;settleEntry(capsule,unavailable('client_not_admitted','This edit was not selected by its owner for recovery.'));entryCapsules.delete(capsule.command.operationId);}
+        if((entryClaims.get(capsule)??0)>0){if(!capsule.response)databaseCapsuleRunners.get(fresh)!(capsule);}
+        else{capsule.attempt++;capsule.io?.stop();settleEntry(capsule,unavailable('client_not_admitted','This edit was not selected by its owner for recovery.'));entryCapsules.delete(capsule.command.operationId);}
       }};
       databases=Object.freeze({request(command:DatabaseRequest):Promise<DatabaseResponse>{
         let captured:DesktopDatabaseRequest;try{captured=captureEntry(command);}catch(error){return Promise.reject(error);}
@@ -374,13 +385,14 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
           if(prior&&prior.fingerprint===fingerprint){
             if(prior.promise)return prior.promise;
             if(prior.response)return Promise.resolve(structuredClone(prior.response));
-            if(recovered&&prior.claims>0)return runEntry(prior,recovered.databases!,true);
+            if(recovered&&prior.claims>0)return databaseCapsuleRunners.get(recovered.databases!)!(prior);
             if(!blocked)return runEntry(prior,original);
             return Promise.reject(prior.error??unavailable('client_not_admitted','This desktop context is no longer active.'));
           }
           if(blocked)return Promise.reject(unavailable('client_not_admitted','This desktop context is no longer active.'));
           if(prior)return Promise.reject(unavailable('idempotency_conflict','This edit differs from its originally captured request.'));
-          const capsule:EntryCapsule={command:captured.command,fingerprint,attempt:0,claims:0};entryCapsules.set(capsule.command.operationId,capsule);
+          const hold=entryHolds.get(captured.command.operationId);
+          const capsule:EntryCapsule={command:captured.command,fingerprint,attempt:0,claims:0,holds:new Set(hold?[hold]:[]),registrations:new Set([entryCapsules])};entryCapsules.set(capsule.command.operationId,capsule);
           return runEntry(capsule,original);
         }
         if(blocked)return Promise.reject(unavailable('client_not_admitted','This desktop context is no longer active.'));
@@ -388,6 +400,13 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
           if(epoch!==durableEpoch||released||recoveryNeeded)throw unavailable('client_not_admitted','The desktop context changed while this request was pending.');return value;
         });
       }});
+      databaseCapsuleRunners.set(databases,capsule=>{
+        if(released||recoveryNeeded||recovering||releasePending||capsule.claims<=0)return Promise.reject(unavailable('client_not_admitted','This collection edit has no active replacement owner.'));
+        const prior=entryCapsules.get(capsule.command.operationId);
+        if(prior&&prior!==capsule)return Promise.reject(unavailable('idempotency_conflict','The replacement context already owns another collection command.'));
+        entryCapsules.set(capsule.command.operationId,capsule);capsule.registrations.add(entryCapsules);
+        return runEntry(capsule,original);
+      });
     }
     if(binding.workBlocks===true)workBlocks=createDesktopWorkBlocks(request=>call('workblockCommand',request).then(reply=>decodeWorkBlockEnvelope(request,reply)));
     if(binding.documentMaintenance===true){
@@ -415,13 +434,13 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
           const captured=captureEntry(command);if(captured.command.op!=='set_entry'||released||recoveryNeeded||recovering||releasePending)throw unavailable('client_not_admitted','This edit cannot acquire a receipt hold in a retired context.');
           const id=captured.command.operationId,fingerprint=JSON.stringify(captured),prior=entryHolds.get(id);
           if(prior&&prior.fingerprint!==fingerprint)throw unavailable('idempotency_conflict','This edit differs from its original receipt hold.');
-          const hold=prior??{fingerprint,count:0};entryHolds.set(id,hold);hold.count++;let active=true;
-          return()=>{if(!active)return;active=false;if(--hold.count===0&&entryHolds.get(id)===hold)entryHolds.delete(id);const capsule=capsuleFor(captured.command);if(capsule)forgetReceipt(capsule);};
+          const hold=prior??{fingerprint,count:0};entryHolds.set(id,hold);hold.count++;capsuleFor(captured.command)?.holds.add(hold);let active=true;
+          return()=>{if(!active)return;active=false;if(--hold.count===0&&entryHolds.get(id)===hold)entryHolds.delete(id);const capsule=capsuleFor(captured.command);if(capsule){if(!hold.count)capsule.holds.delete(hold);forgetReceipt(capsule);}};
         },
         claimCapturedSetEntry(command:DatabaseRequest){
           const capsule=capsuleFor(command);if(!capsule||released)throw unavailable('client_not_admitted','This edit has no admitted recovery capsule.');
-          capsule.claims++;let active=true;
-          return()=>{if(!active)return;active=false;capsule.claims--;forgetReceipt(capsule);};
+          capsule.claims++;entryClaims.set(capsule,(entryClaims.get(capsule)??0)+1);let active=true;
+          return()=>{if(!active)return;active=false;capsule.claims--;const count=(entryClaims.get(capsule)??1)-1;if(count)entryClaims.set(capsule,count);else entryClaims.delete(capsule);if(!capsule.claims&&capsule.promise)capsule.io?.stop();forgetReceipt(capsule);};
         },
         subscribe(listener:()=>void|Promise<void>){
           if(typeof listener!=='function')throw new Error('Recovery listener required');
@@ -471,7 +490,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault, recovered
         if(binary&&!binaryDrained){await scheduleBinaryTransfer(binary.streams,()=>binary!.release());binaryDrained=true;}
         if(documents&&!documentsDrained){await documents.release();documentsDrained=true;}
         await releaseContext(info.path,admissionId);released=true;durableEpoch++;stopRecoveryReceiver();recoveryListeners.clear();documentRuntime?.retire();
-        failEntries(unavailable('client_not_admitted','The desktop context was released.'));entryCapsules.clear();entryHolds.clear();
+        failEntries(unavailable('client_not_admitted','The desktop context was released.'));entryCapsules.clear();entryHolds.clear();entryClaims.clear();
       })();releasePending=retiring;
       try{await retiring;}catch(error){failEntries(error);throw error;}finally{if(releasePending===retiring)releasePending=undefined;}
     };
