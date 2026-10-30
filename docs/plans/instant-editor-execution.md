@@ -40,9 +40,18 @@ failures before implementation. Independent source reviews do not establish UX.
 Root Main retirement certificate/trusted journal binding reviewed; focused checks
 pass. First composed JS gate366/371: four fake-main binding omissions corrected,
 focused checks pass; unchanged one-second fake-host timeout passed isolated.
-Second composed JS run is pending. Raw settings through4be56035 passed254 focused
+Second composed JS run passed385/385, zero skips. Reviewed ordinary-open cleanup
+follow-up10fd7ffa also passed46/46 after composition; healthy note admission now
+queries no pending-capture inventory. Optimized production host build011 passed
+with unchanged Rust inputs; SHA256
+6c385c3ed3296cc4fff1366b83940d7c8c41f497c5ed7d60fad5c3561a3edaaf.
+Packaged startup harness pure checks42/42 pass; no GUI timing claim. Raw settings through4be56035 passed254 focused
 checks andTS. Base configuration/summary/inline/reference continuation remains owned
-by base_config_recovery in its isolated worktree, pending product pin/review.
+by base_config_recovery in its isolated worktree, producta5fcf278 awaits review follow-up for a held post-save query race.
+Additional confirmed note Properties submitted-set_entry recovery gap is owned
+by checkpoint_review in .worktrees/managed-properties-recovery, Properties plus
+narrow Workspace managed-property callbacks and dedicated test only. Canvas
+post-recovery failed-save latch is under scoped reproduction by capture_note_ui_finish.
 capture_note_ui_finish owns removing ordinary-admission pending-request discovery,
 keeping before-capture cleanup and exact release wake/claims intact.
 
@@ -53,6 +62,39 @@ old binaries were deleted rather than archived: exact cleanup receipt at
 Vaults/preferences/installed app/fixture reports preserved. Disk now~7.5GiB;
 heavy builds serialized. Production host/new package/actual GUI timing and faults/
 main integration/install remain required. Package008 predates recovery changes.
+
+## Package009 measurement checkpoint — 2026-10-30
+
+Reviewed Base batch7e1aa050/a5fcf278/9d351261 composed as504731ad/1d35dec3/
+26c39aec. Root new configuration/raw/inline group33/33 passes. Package009 passed
+TS/Vite/361-file verification, unchanged runtime inputs. ASAR
+1b57047938892f80eaba0d655ae7b255a53ed0d6b72e1ee76dac1051eb066927;
+Native6c385c3ed3296cc4fff1366b83940d7c8c41f497c5ed7d60fad5c3561a3edaaf.
+Frozen tmp/instant-editor-artifacts/candidate009 retains ASAR/host/dist/manifest/
+source inputs/build receipt; build-receipt SHAa270a0d98e55b5028a4e4181a77a31f501cef1b4020cb35c9d26f4a9959ef1c3.
+Actual-host framed integration996c0c32 composedc050ec8c; Root1/1pass0skip. Checks
+original guards after EOF restart/offline same-size+mtime mutation, exact replay,
+sticky Changed and cancel tombstones. Normal EOF exits; no crash/lostACK/UI claim.
+
+Actual campaign /private/tmp/zorid-packaged-startup-capture009-20261030 is NOT
+accepted overall. Candidate trusted ordinary input upper185.991ms, large432000
+upper293.694292ms: both per-case valid target-met. Firstimport input~8.3s is
+indeterminate with late main4.62s/renderer6.40s attachment, not valid800ms verdict.
+Candidate Base failed: Profile.base tree row unavailable before navigationdeadline
+while namespace import still incomplete. Baseline Base failed focusloss; earlier
+commentary misattributing candidate focusloss was explicitly corrected. Both
+reopens skipped dependent first-import return preparation. Both app/native exits
+normal0/nullsignal, ownedprocesses gone, testclones removed. Fixtures/reports kept.
+Initial part overlapped bounded worker checks; no whole comparative speedup claim.
+
+Trace296 rescan RPCs contain only5scanIDs; these include bounded incremental
+quanta, NOT296fullscans. Last249 calls continued one scan to observed849. Native
+owner capture_native_finish tracing why5scan starts overlap owned save/undo;
+no new reset optimization approved yet. checkpoint_dedup owns deferred unrelated
+checkpoint startup hydration; checkpoint_review owns note Properties exact pending
+set_entry recovery; capture_note_ui_finish owns Canvas truthful recovered save-state
+plus narrowly ACKed Workspace factory wiring. Active Base owner retains reviewed
+follow-ups/legacy compatibility. Source-only progress is not native acceptance.
 
 ## Prior verified performance delivery — runtimed180c9b6 / harness7d954b57
 

@@ -3171,3 +3171,15 @@ are functional evidence only. Raw settings254+TS pass. Accepted Base configurati
 summary/inline/reference recovery remains in progress; ordinary-open cleanup-query
 overhead under scoped follow-up. Actual800ms GUI/faultcampaign, production build,
 main integration/install remain OPEN. See instant-editor-execution checkpoint.
+
+
+### 2026-10-30 — Packaged ordinary and large note measurements
+
+Package009 actual trusted input ordinary186ms /432KB294ms, valid per-case under800.
+Fullcampaign remainsunaccepted: late observer made startupindeterminate; candidate
+Base tree entry timedout during incompleteimport, baseline lostfocus, reopens skipped.
+Owned apps/native normal0/gone. Trace shows5scanIDs across296 boundedrescanRPCs;
+reset causes under investigation, not296fullrescans. Unrelatedcheckpoint startup
+hydration, managed-note Properties admission, Canvas recovered-save latch remain
+owned implementation tasks. Installedapp/main unchanged. Exact evidence in
+instant-editor-execution.md package009 checkpoint.
