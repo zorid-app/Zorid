@@ -21,7 +21,14 @@ The user resumed the existing thread goal: it is active. The objective is not
 complete. Earlier create_goal replacement was rejected while the unfinished goal
 was blocked; that is historical, not a current execution blocker.
 
-## Latest delivery state — runtime626a14b9 / harness7d954b57
+## Latest delivery state — runtimed180c9b6 / harness7d954b57
+
+Current acceptance: d180c9b6, independently reviewed; Root140Native +52frontend
+focused checks pass, package008 TS/Vite/361file verification pass. ReversedNative
+pairs show fullimport13–17%/explicitunchangedaudit17–23% faster than prior598c.
+No actual800ms/wholeGUI/faultcampaign/mainintegration/install acceptance. Exact
+currentreceipt/artifact/ownership details are in Current verified performance
+delivery below; preceding measurements preserve historical comparisons.
 
 Goal ACTIVE. Main remains7d8006b8; installed app remains the prior verified Notion
 bundle. No800ms startup claim, no main integration or new installation. Root is
@@ -145,6 +152,77 @@ first-import Native completion comparison, actual fault recovery campaign,
 main integration/build/install, caller-owned pre-dispatch capture request identity,
 and the preserved recovery scopes/raw Base settings/date batches not yet composed.
 Do not silently drop these or mark the whole goal complete from the green checks.
+
+## Followup baseline — now implemented in current verified delivery below
+
+Nativeaudit014 is terminalnormalEOF0/reaped79331, sampler0; newdisposable1000-note
+fixture only. Sampledaudit5330.7ms;1001bodies before/after exact, IDs/revisions/
+cursor/head andphysicalnamespace unchanged, zeroimports.762mainthread samples:
+Paths.verify406(53.3%), file_snapshot260(34.1%), confirm_snapshot214(28.1%);
+inclusive counts overlap. Fullbaseline decode now18(2.4%), wholebodylist hotspot
+absent from this window. Source reveals confirm_snapshot internallyfile_snapshot
+then positivefileloop repeatsfile_snapshot for same immutable inventoryproof.
+maintenance_triggers owned minimal per-attempt snapshot reuse and adversarialrace
+controls in namespace-candidate-metadata; now closed and composed as recorded below.
+No broader pathguard refactor.
+
+file_open_audit owns codex/large-note-copy-cost, isolated from626a14b9. Bounded
+realEditorState counterreproducer shows plain432000note causes full-text copies
+in Base/callout collection despite neitherfeature present, and Bases repeats on
+selection/effect-only updates. This is proven unnecessary work, not an attribution
+of pilot005968ms. Root test-only1c1cb4e5/d4137212 both actualRED, logs
+live-bases-copy-red001.log/live-callouts-copy-red001.log. Subsequent product/review/gates are recorded below; acceptance requires actualBase/callout match before wholetext capture, preserve syntax-tree,
+selection/focus/exclusion changes and exact containing-document/occurrence guards.
+NoGUI/rust execution by frontendauthor; Root serializes any newheavyNativechecks.
+
+## Current verified performance delivery — d180c9b6 / package008
+
+Native3b5f7e7e tests composed99b02ba0 actualRED: onceproof2vs1 fails, six
+post-capture inode/parent/same-size+restored-mtime race controls pass. Product
+af5058b0 composedd180c9b6 independently accepted. RootGREEN00781external+
+2capture+57namespace=140pass plusreleasehostbuild, Rust inputs unchanged
+cb898cdcaf0fdd1579bbf15791e1604a8fc56e582f9cb0cde69a896c6992f90b.
+Nativecba21d7165925473c6ccb31939f9d8f1b15978072700403fe1e0887aaa0a09e2.
+
+Front22bfd7f0/bbd09165 composed6614c86e/cc19e3fa, independent review accepted.
+Root52focused Base/callout/parser/exclusion/sourceauthority tests pass, zero skips.
+Both actualRootRED logs preserved; plainnotes/ordinaryfences avoid these fulltext
+copies, selection/effect-only Base updates reuse exact spans while doc/tree/
+exclusion changes still refresh. This does not establish actual GUI latency.
+
+Nativefresh015 failed argument-only baselinewarmup3s before any vault launched;
+Python subprocess.run killed/waited the timed-out child. Preserve failed report+
+failure-envelope; no performance verdict. Fresh016 was prepared but not run.
+Corrected017/018 extend only warmupbound15s (not vault/measurementcaps), andboth
+normalEOF0/all1001body checks/sourceIDs/revisions/cursor/namespace pass, zeroaudit
+imports. Baseline fixed existingpackage007598c, candidate originaltargetcba; one
+--help perbinary, no cache/order equivalence claim. Candidate-first017full
+11.994→9.959s, audit4.903→4.080s. Baseline-first018full10.803→9.399s,
+audit4.942→3.828s. Thus this fixture shows fullimport13–17% and explicitaudit
+17–23% faster than preceding598c inbothorders; not editor800ms acceptance.
+Reports .worktrees/import-quantum/tmp/native-workload-20261029/fresh-017,018.
+Package007baseline path was kept unchanged throughbothterminal pairs, then
+replaced bypackage008; runtimehashes checked before/after eachcase. No retained
+598c executable artifact claim; source626a14b9 and build007 receipt preserved.
+
+Package008 passed RootTS/Vite/macOSunsigneddir/361fileverification, inputs
+unchanged. Source/NativeSourced180c9b6, ASAR921780c98c8ea5219ea2d4581ac293444b7060b5987cd31ebeacc62d8b48e95e,
+Nativecba21… above. Receipt build-008.json SHA92a4bc3c25dd2e97ba4df9d6d369b74e84a76b52f3b5c6018f8d658110b37f01;
+manifest1be44910687cfac0431bf868ba8474928ca0b778020de7bc85669107a331c232.
+Minimum available3.025GB. Frozen native+ASAR+inputs+receipt+externaldist/maps under
+Roottmp/instant-editor-artifacts/candidate008, manifestperfilehashes verified.
+All Rootheavy commands terminal; no app launched for008. Main7d8006b8 and installed
+priorapp untouched. Existing external-map GUImanifest describesolder006, must
+regenerate exact008 JS/maps before use. Foregroundavailability question still
+unanswered; do not start dependent GUI work before actualreply.
+
+Knownrequired recoverygap remains: capture request has no caller UUID before
+firstdispatch; initiallostACK can orphan guard/quota. Prior auditwasmessage-only,
+not schema20 code or contractapproval. binding_inventory_review now owns DOCS-ONLY
+codex/capture-request-contract/.worktrees/capture-request-contract fromd180;
+currentcode authoritative, proposedminimalcontract mustbe Rootreviewed before
+implementation. This resumes preserved automaticrecovery work after a measured
+performancebatch; no speculative pluginAPI or broadarchitecture redesign.
 
 ## Delivery checkpoint — 2026-10-29, source f08e63d7
 

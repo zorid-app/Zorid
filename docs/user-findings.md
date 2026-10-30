@@ -3145,3 +3145,18 @@ bodies/sourceIDs/revisions/cursor preserved, zero auditimports, normalEOF. Fresh
 import total changes direction acrosspairs, so no stable import speedup claim.
 Package007 verified; actual800ms editor/faultcampaign/integration/install remain
 open. Evidence and exact pins: docs/plans/instant-editor-execution.md.
+
+
+### 2026-10-29 — Duplicate positive proofs and large-note fulltext copies
+
+Root d180c9b6/package008 removes a duplicate per-attempt inventoryfileproof and
+unnecessary whole-document captures in Base/callout fields. Actual REDs preserved,
+independent reviews accepted, Root140Native+52frontendfocused checks pass and
+TS/Vite/macOSpackage361file verification pass. Reversed fresh1000 Nativepairs
+fullimport11.99→9.96s and10.80→9.40s, explicitunchangedaudit4.90→4.08s and
+4.94→3.83s versus preceding598c. All1001bodies/IDs/revisions/cursor/namespace
+preserved, zeroauditimports, normalEOF. Actual800ms/nativeGUI/faultcampaign and
+mainintegration/install still OPEN; no app-latency claim from these checks.
+Capture initial-ACK request identity remains REQUIRED/open; docs-only contract
+audit assigned, no implementation approval implied. Exactpins/evidence in
+instant-editor-execution.md currentverifiedperformance section.
