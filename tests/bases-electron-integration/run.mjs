@@ -40,6 +40,7 @@ const recoveryCampaign=campaignPath===path.join(path.dirname(harness),'bases-ele
 const autoRecoveryCampaign=campaignPath===path.join(path.dirname(harness),'bases-electron-auto-recovery-integration','campaign.mjs');
 const campaign=campaignPath?await import(pathToFileURL(campaignPath).href):undefined;
 if(campaign)assert.ok(typeof campaign.fixtureFiles==='function'&&typeof campaign.journey==='function','Explicit supplemental campaign exports');
+if(autoRecoveryCampaign)assert.equal(typeof campaign?.sanitizeRelayEvents,'function','Exact automatic-recovery campaign requires its fixed evidence projection');
 const cuaMode=nativeSelectCuaMode(process.argv,{windowMode:requestedWindowMode,bootstrap:windowBootstrapProbe,campaignPath,minimalCampaignPath:path.join(path.dirname(harness),'bases-electron-native-select-integration/campaign.mjs'),allowedCampaignPaths:CAMPAIGN_DIRECTORIES.map(name=>path.join(path.dirname(harness),name,'campaign.mjs'))});
 const cuaNativeSelect=!!cuaMode;
 const cuaNativeContextMenus=nativeContextMenuMode(process.argv.slice(2),{windowMode:requestedWindowMode,bootstrap:windowBootstrapProbe,campaignPath,layoutsCampaignPath:path.join(path.dirname(harness),'bases-electron-layouts-integration/campaign.mjs')});
@@ -182,7 +183,7 @@ async function stop(){
   const alive=()=>livingOwnedProcesses(natives.values(),processes());let leaked=[];
   try{await until(async()=>assert.equal(alive().length,0),5000);}catch{leaked=alive();for(const value of leaked)process.kill(value.pid,'SIGKILL');await until(async()=>assert.equal(alive().length,0),5000);}
   Object.assign(shutdown,{exitCode:child.exitCode,signal:child.signalCode,nativeChildren:[...natives.values()],leaked});
-  if(relay){shutdown.relayEvents=await relay.events();evidence.relayEvents=shutdown.relayEvents;shutdown.nativeGenerations=evidence.nativeGenerations;}
+  if(relay){const rawEvents=await relay.events();shutdown.relayEvents=autoRecoveryCampaign?campaign.sanitizeRelayEvents(rawEvents):rawEvents;evidence.relayEvents=shutdown.relayEvents;shutdown.nativeGenerations=evidence.nativeGenerations;}
   evidence.runtime.push({shutdown});child=undefined;natives.clear();
   assert.deepEqual(leaked,[],'Owned native/relay processes leaked; cleaned, acceptance fails');if(ownershipFailure)throw ownershipFailure;if(externalCliCleanupFailure)throw externalCliCleanupFailure;
 }
