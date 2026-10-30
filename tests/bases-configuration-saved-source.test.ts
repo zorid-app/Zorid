@@ -7,6 +7,7 @@ import {NoteBuffer} from '../src/ui/note-buffer.ts';
 import {DurableWritePlanningError} from '../src/core/durable-writes.ts';
 import type {ConditionalSavedSourceCapture, DurableWrites, DurableWriteInput, DurableWriteIntent, DurableWriteRead} from '../src/core/durable-writes.ts';
 import type {Checkpoint} from '../src/core/durable-checkpoints.ts';
+import type {IndependentDraftProvider,IndependentDraftRead,IndependentDraftReceipt} from '../src/core/independent-drafts.ts';
 import type {DocumentService, DocumentBaseResult} from '../src/core/document-semantics.ts';
 
 const path = 'Work.base';
@@ -27,11 +28,12 @@ async function fixture(referenceNotes: Record<string, string> = {}, initialSourc
   const renamed: string[] = [];
   const checkpoints = new Map<string, Checkpoint>(), captures = new Map<string, ConditionalSavedSourceCapture>();
   const intents = new Map<string, DurableWriteIntent>(), inputs = new Map<string, {input: DurableWriteInput; source?: string}>();
-  const planned: DurableWriteInput[] = [], committed: string[] = [], released: string[] = [];
+  const planned: DurableWriteInput[] = [], committed: string[] = [], released: string[] = [], requestIds:string[]=[];
+  const releasedRequests=new Set<string>(),attachedRequests=new Set<string>();
   let onPlan: ((input: DurableWriteInput) => Promise<void>) | undefined, onCommit: (() => Promise<void>) | undefined, onCapture: (() => Promise<void>) | undefined;
   const scope = {vaultId: 'config-store', clientId: 'config-client'};
   class Adapter extends MemoryAdapter {
-    durableWrites!: DurableWrites; documentSemantics!: DocumentService;
+    durableWrites!: DurableWrites; documentSemantics!: DocumentService; independentDrafts!:IndependentDraftProvider;
     override async list() { return (await super.list()).map(row => savedRecord(row.path) ? {...row, ...savedRecord(row.path).stat, entryId: savedRecord(row.path).entryId, revision: savedRecord(row.path).revision} : row); }
     override async stat(target: string) { const row = await super.stat(target); return row && savedRecord(target) ? {...row, ...savedRecord(target).stat, entryId: savedRecord(target).entryId, revision: savedRecord(target).revision} : row; }
   }
@@ -39,21 +41,37 @@ async function fixture(referenceNotes: Record<string, string> = {}, initialSourc
   const unused = async (): Promise<never> => { throw Error('Unexpected fixture operation'); };
   adapter.durableWrites = {
     checkpoints: {scope, load: async key => structuredClone(checkpoints.get(key) ?? null), compareAndSwap: async change => {
-      const old = checkpoints.get(change.key); assert.equal(change.expectedRevision, old?.revision ?? null);
+      const old = checkpoints.get(change.key);
+      if(old?.revision===change.nextRevision){assert.equal(old.encodedState,change.encodedState,'exact Core checkpoint replay cannot change its payload');return structuredClone(old);}
+      assert.equal(change.expectedRevision, old?.revision ?? null);
       const next: Checkpoint = {version: 1, ...scope, key: change.key, revision: change.nextRevision, encodedState: change.encodedState, sequence: String(Number(old?.sequence ?? 0) + 1), deleted: change.encodedState === null, byteLength: Buffer.byteLength(change.encodedState ?? '')};
       checkpoints.set(change.key, next); return structuredClone(next);
     }, list: unused, changes: unused},
     readText: async target => structuredClone(savedRecord(target)), readTextById: async id => structuredClone([current, ...notes.values()].find(row => row.entryId === id) ?? null),
-    captureSavedSource: async witness => {
+    captureSavedSource: async request => {
+      captureCount++;requestIds.push(request.captureId);
+      assert.match(request.captureId,/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,'the caller owns the capture UUID');
+      const witness=request.logicalWitness,prior=captures.get(request.captureId);
+      const acknowledged=[...journal.values()].filter(row=>!row.deleted&&row.entryId===witness.entryId).flatMap(row=>{
+        assert.equal(row.vaultId,scope.vaultId);assert.equal(row.clientId,scope.clientId);assert.equal(row.incarnationId,journalScope.incarnationId);
+        const capsule=row.pendingOperation===null?null:JSON.parse(row.pendingOperation);
+        return capsule?.schemaVersion===2?capsule.captureRequests??[]:[];
+      }).filter(claim=>claim.captureId===request.captureId);
+      assert.equal(acknowledged.length,1,'Native capture follows the exact independently acknowledged caller request');
+      assert.deepEqual(acknowledged[0].scope,journalScope);assert.deepEqual(acknowledged[0].logicalWitness,witness);
+      if(prior){assert.deepEqual(witness,prior.logicalWitness,'capture replay retains its original witness');return structuredClone(prior);}
+      assert.equal(releasedRequests.has(request.captureId),false,'a released request cannot recapture newer physical bytes');
       const row = savedRecord(witness.path); assert.deepEqual(witness, {entryId: row.entryId, revision: row.revision, path: witness.path});
-      const capture = {captureId: 'capture-' + ++captureCount, logicalWitness: {...witness}, source: physicalSource(witness.path)!}; captures.set(capture.captureId, capture);
+      const capture = {captureId:request.captureId, logicalWitness:structuredClone(witness), source:physicalSource(witness.path)!}; captures.set(capture.captureId,capture);
       await onCapture?.(); return structuredClone(capture);
     },
-    releaseSavedSource: async id => { released.push(id); captures.delete(id); },
+    releaseSavedSource: async id => { released.push(id);releasedRequests.add(id);captures.delete(id);attachedRequests.delete(id); },
+    listSavedSourceRequests:async()=>[...captures.values()].filter(capture=>!attachedRequests.has(capture.captureId)).map(({captureId,logicalWitness})=>({captureId,logicalWitness:structuredClone(logicalWitness),legacy:false})),
     planWrite: async input => { planned.push(structuredClone(input)); await onPlan?.(input); return {version: 1, ...scope, operationId: input.operationId, entryId: input.expectedEntryId, encodedPlan: JSON.stringify(input)}; },
     prepare: async plan => {
       const old = intents.get(plan.operationId); if (old) return structuredClone(old);
       const input = JSON.parse(plan.encodedPlan) as DurableWriteInput;
+      if(input.conditionalSavedSource){const capture=captures.get(input.conditionalSavedSource.captureId);assert.ok(capture,'prepare needs its original retained physical capture');assert.deepEqual(input.conditionalSavedSource.logicalWitness,capture.logicalWitness);attachedRequests.add(capture.captureId);}
       inputs.set(plan.operationId, {input, source: input.conditionalSavedSource && captures.get(input.conditionalSavedSource.captureId)?.source});
       const row: DurableWriteIntent = {state: 'prepared', acknowledged: false, ref: {...scope, operationId: plan.operationId, entryId: plan.entryId, token: plan.operationId}};
       intents.set(plan.operationId, row); return structuredClone(row);
@@ -74,6 +92,34 @@ async function fixture(referenceNotes: Record<string, string> = {}, initialSourc
     },
     query: async ref => structuredClone(intents.get(ref.token) ?? null), listUnacknowledged: async () => [],
     acknowledge: async ref => { const row = intents.get(ref.token)!; if (row.state === 'committed' || row.state === 'rejected') intents.set(ref.token, {...row, acknowledged: true}); },
+  };
+  // Bound independent storage is a separate CAS authority. Domain checkpoints
+  // never substitute for a positive journal receipt or grant a different scope.
+  const journalScope=Object.freeze({...scope,incarnationId:'config-renderer'}),journal=new Map<string,Exclude<IndependentDraftRead,null>>(),journalRequests=new Map<string,string>();
+  const journalKey=(entryId:string,writer:string)=>JSON.stringify([entryId,writer]);
+  const journalReceipt=(row:Exclude<IndependentDraftRead,null>):IndependentDraftReceipt=>{
+    const {vaultId,clientId,incarnationId,entryId,writer,revision,generation,deleted}=row;
+    return{vaultId,clientId,incarnationId,entryId,writer,revision,generation,deleted};
+  };
+  adapter.independentDrafts={scope:journalScope,
+    list:async options=>[...journal.values()].filter(row=>!row.deleted&&(!options||row.entryId===options.entryId)).map(row=>structuredClone(journalReceipt(row))),
+    read:async address=>{assert.ok(address.incarnationId===undefined||address.incarnationId===journalScope.incarnationId);return structuredClone(journal.get(journalKey(address.entryId,address.writer))??null);},
+    compareAndSwap:async request=>{
+      const key=journalKey(request.entryId,request.writer),old=journal.get(key),fingerprint=JSON.stringify(request),attempt=JSON.stringify([key,request.nextRevision]);
+      assert.equal(request.baseline.entryId,request.entryId);assert.ok(Number.isSafeInteger(request.generation)&&request.generation>=0);
+      if(journalRequests.has(attempt)){assert.equal(journalRequests.get(attempt),fingerprint,'uncertain journal CAS replays its exact request');assert.equal(old?.revision,request.nextRevision);return structuredClone(journalReceipt(old!));}
+      assert.equal(request.expectedRevision,old?.revision??null);
+      const row={...journalScope,entryId:request.entryId,writer:request.writer,revision:request.nextRevision,generation:request.generation,deleted:false as const,baseline:structuredClone(request.baseline),draft:request.draft,checkpointRevision:request.checkpointRevision,pendingOperation:request.pendingOperation};
+      journal.set(key,row);journalRequests.set(attempt,fingerprint);return structuredClone(journalReceipt(row));
+    },
+    retire:async request=>{
+      assert.equal(request.incarnationId,journalScope.incarnationId);
+      const key=journalKey(request.entryId,request.writer),old=journal.get(key),fingerprint=JSON.stringify(request),attempt=JSON.stringify([key,request.nextRevision]);
+      if(journalRequests.has(attempt)){assert.equal(journalRequests.get(attempt),fingerprint,'uncertain journal retirement replays its exact request');assert.equal(old?.revision,request.nextRevision);return structuredClone(journalReceipt(old!));}
+      assert.ok(old);assert.equal(request.expectedRevision,old.revision);
+      const row={...journalScope,entryId:request.entryId,writer:request.writer,revision:request.nextRevision,generation:request.generation,deleted:true as const};
+      journal.set(key,row);journalRequests.set(attempt,fingerprint);return structuredClone(row);
+    },
   };
   const snapshot = () => ({localStoreId: 'config-store', generationEpoch: 'epoch', generation: String(generation), versions: {schema: 1, extraction: 'md1', resolver: 'r1', query: 'q1'}});
   const watermark = () => ({localStoreId: 'config-store', watermark: String(generation)});
@@ -105,7 +151,7 @@ async function fixture(referenceNotes: Record<string, string> = {}, initialSourc
   const buffer = await getBuffer(path); let alive = true;
   const controller = new BaseController({vault, basePath: path, mutations: createBaseMutationHost({getBuffer, validate() { if (!alive) throw Error('Retired config host'); }}), onViewRenamed: event => renamed.push(event.to), delayMs: 1000});
   await controller.refresh(); if (!failCollectionQuery) assert.equal(controller.state.error, null);
-  return {vault, adapter, buffer, controller, planned, committed, released, captures, renamed, get backlinkCalls() { return backlinkCalls; },
+  return {vault, adapter, buffer, controller, planned, committed, released, captures, requestIds, renamed, get backlinkCalls() { return backlinkCalls; },
     get physical() { return physical; }, get logical() { return current.content; }, get capturesTaken() { return captureCount; },
     async externalReference(target: string, content: string) { const old = notes.get(target); notes.set(target, {path: target, content, entryId: old?.entryId ?? 'ref-' + target, revision: old ? 'external-revision' : 'r1', stat: {ctime: 1, mtime: 2, size: content.length}}); physicalNotes.set(target, content); await adapter.write(target, content); },
     async configuration(source: string) { current = {...current,content:source,revision:'r'+ ++generation,stat:{...current.stat,mtime:generation,size:source.length}};physical=source;await adapter.write(path,source);await vault.reload();await controller.refresh(); },
@@ -121,7 +167,7 @@ test('standalone config rejects physically changed whole source before any share
     const external = original + '# external only\n'; f.external(external);
     await assert.rejects(f.controller.updateConfiguration(f.controller.state.version, {root: {filters: 'file.name == "One"'}}), /saved source changed|external edit/);
     assert.equal(f.buffer.text, original); assert.equal(f.buffer.savedText, original); assert.equal(f.logical, original); assert.equal(f.physical, external);
-    assert.equal(f.planned.length, 0); assert.equal(f.committed.length, 0); assert.equal(f.capturesTaken, 1); assert.deepEqual(f.released, ['capture-1']);
+    assert.equal(f.planned.length, 0); assert.equal(f.committed.length, 0); assert.equal(f.capturesTaken, 1); assert.deepEqual(f.released, [f.requestIds[0]]);
   } finally { await f.close(); }
 });
 
@@ -169,7 +215,7 @@ test('an unrelated local config draft is retained and its unattached physical ca
     const draft = original + '# local unsaved config\n'; f.buffer.update(draft);
     await assert.rejects(f.controller.updateView(f.controller.state.version, {limit: 12}), /unsaved or external edit/);
     assert.equal(f.buffer.text, draft); assert.equal(f.buffer.savedText, original); assert.equal(f.logical, original); assert.equal(f.physical, original);
-    assert.equal(f.planned.length, 0); assert.deepEqual(f.released, ['capture-1']);
+    assert.equal(f.planned.length, 0); assert.deepEqual(f.released, [f.requestIds[0]]);
   } finally { await f.close(); }
 });
 
@@ -178,7 +224,7 @@ test('capture awaited across host retirement or view selection cannot transform 
     const f = await fixture(); try {
       f.setCapture(async () => { if (changed === 'host') f.retire(); else await f.controller.setView(1); });
       await assert.rejects(f.controller.updateView(f.controller.state.version, {limit: 12}), /Retired config host|selected view changed|stale/);
-      assert.equal(f.buffer.text, original); assert.equal(f.buffer.savedText, original); assert.equal(f.planned.length, 0); assert.deepEqual(f.released, ['capture-1']);
+      assert.equal(f.buffer.text, original); assert.equal(f.buffer.savedText, original); assert.equal(f.planned.length, 0); assert.deepEqual(f.released, [f.requestIds[0]]);
     } finally { await f.close(); }
   }
 });
