@@ -4,11 +4,11 @@ import path from 'node:path';
 const isZombie=row=>typeof row.state==='string'&&row.state.startsWith('Z');
 export function parseProcessRows(output){
   return output.split('\n').filter(line=>line.trim()).map(line=>{
-    const match=line.trim().match(/^(\d+)\s+(\d+)\s+([A-Z][^\s]*)\s+(.*)$/);
-    assert.ok(match,'Process row includes PID, PPID, state and command');
+    const match=line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)(?:\s+(.*))?$/);
+    assert.ok(match,`Process row includes PID, PPID and state (row length ${line.length})`);
     const pid=Number(match[1]),parent=Number(match[2]);
     assert.ok(Number.isSafeInteger(pid)&&Number.isSafeInteger(parent),'Safe process IDs');
-    return {pid,parent,state:match[3],command:match[4]};
+    return {pid,parent,state:match[3],command:match[4]??''};
   });
 }
 

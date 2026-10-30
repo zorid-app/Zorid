@@ -77,5 +77,16 @@ test('ps parser preserves state and exact spaced commands, rejecting malformed r
     {pid:11,parent:10,state:'S+',command:'/owned/node --arg with spaces'},
     {pid:12,parent:1,state:'Z+',command:'(host)'},
   ]);
-  for(const malformed of ['11 10 /owned/node','11 10 S','9007199254740992 1 Z (node)','unparseable'])assert.throws(()=>parseProcessRows(malformed));
+  for(const malformed of ['11 10','9007199254740992 1 Z (node)','unparseable'])assert.throws(()=>parseProcessRows(malformed));
+});
+
+test('ps parser retains empty commands and unfamiliar states without authorizing owned processes',()=>{
+  const rows=parseProcessRows('  11 10 S   \n 12 11 ?state /unrelated/process\n 13 1 ?\n');
+  assert.deepEqual(rows,[
+    {pid:11,parent:10,state:'S',command:''},
+    {pid:12,parent:11,state:'?state',command:'/unrelated/process'},
+    {pid:13,parent:1,state:'?',command:''},
+  ]);
+  assert.throws(()=>relayProcessOwnership({...input,rows}),/Exact owned process command/);
+  assert.deepEqual(discoverUnannouncedRelayProcesses({...input,rows}),[]);
 });
