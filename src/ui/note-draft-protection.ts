@@ -6,7 +6,7 @@ import type {DraftCleanWitness,DraftJournalChange,DraftProtectionAcknowledgement
 export interface NoteDraftCapture {readonly writer:string;readonly snapshot:DraftProtectionSnapshot}
 export type NoteDraftInventory='ready'|'unknown'|'retained';
 export interface NoteDraftProtectionStatus {
-  /** Local capture sequence, including snapshots not yet offered during backoff. */
+  /** Local capture sequence, including snapshots not yet offered to storage. */
   readonly sequence:number;
   readonly currentProtected:boolean;
   /** Real journal acknowledgement of this exact latest capture, even if retired.
@@ -24,7 +24,7 @@ export interface NoteDraftProtectionOptions {
   readonly writesScope:CheckpointScope;
   readonly initialReceipt?:IndependentDraftReceipt;
   readonly onStatus?:(status:NoteDraftProtectionStatus)=>void;
-  /** Only an exact confirmed latest core capture may suppress protection retries. */
+  /** Only an exact confirmed latest core capture may cover independent protection. */
   readonly coreCovered:(capture:NoteDraftCapture)=>boolean;
   readonly getCleanWitness?:(capture:NoteDraftCapture)=>DraftCleanWitness|undefined;
   /** The owner validates candidates and calls markInventory; this never adopts one. */
@@ -32,7 +32,6 @@ export interface NoteDraftProtectionOptions {
   readonly encodePendingOperation?:(capture:Readonly<object>)=>string;
 }
 
-const delays=[500,1500,4000,30_000] as const;
 const transientCodes=new Set(['draft_storage_failure','draft_journal_busy','draft_transport_lost']);
 type JournalFailureSource='main'|'transport'|'protocol'|'untrusted';
 type JournalFailure=Error&{code?:string;source?:JournalFailureSource};
@@ -66,8 +65,9 @@ function sameCapture(left:NoteDraftCapture,right:NoteDraftCapture):boolean {
 }
 
 /** A note-local protection lane. Its acknowledgement never clears core dirty or
- * save errors. Only failures schedule a timer; healthy captures coalesce in the
- * journal queue, and failed captures stay local until the next retry boundary. */
+ * save errors. Captures coalesce in the journal queue. Failed requests stay
+ * retained for a new capture, explicit action or genuine availability event;
+ * backup failure never schedules a timer to replay itself. */
 export class NoteDraftProtection {
   private readonly options:NoteDraftProtectionOptions;
   private latest?:NoteDraftCapture;
@@ -77,8 +77,6 @@ export class NoteDraftProtection {
   private inventory:NoteDraftInventory='unknown';
   private inventoryError:Error|null=null;
   private errorValue:Error|null=null;
-  private timer:ReturnType<typeof setTimeout>|undefined;
-  private retryStep=0;
   private running?:Promise<void>;
   private explicitRequested=false;
   private scheduled=false;
@@ -95,7 +93,7 @@ export class NoteDraftProtection {
       &&!!protection&&protection.acknowledgedSequence>=this.offered.sequence;
     const currentProtected=!this.latest||this.covered(this.latest)||currentJournalAcknowledged;
     return Object.freeze({sequence:this.sequence,currentProtected,currentJournalAcknowledged,pending:this.inventory==='unknown'||!currentProtected,
-      inventory:this.inventory,inventoryError:this.inventoryError,error:this.errorValue??protection?.error??null,protection,retryPending:this.timer!==undefined});
+      inventory:this.inventory,inventoryError:this.inventoryError,error:this.errorValue??protection?.error??null,protection,retryPending:false});
   }
   capture(input:NoteDraftCapture):void {
     if(this.stopped)return;
@@ -105,16 +103,13 @@ export class NoteDraftProtection {
     const captured=Object.freeze({writer:input.writer,snapshot:Object.freeze({...snapshot,baseline:Object.freeze({...snapshot.baseline})})});
     if(this.latest&&sameCapture(this.latest,captured))return;
     this.latest=captured;this.sequence++;
-    if(this.covered(captured)&&this.inventory!=='unknown'){this.cancelTimer();this.retryStep=0;this.kick();}
-    else if(this.failureError())this.scheduleRetry();
-    else if(this.inventory!=='unknown')this.kick();
+    if(this.inventory!=='unknown')this.kick();
     this.notify();
   }
   markInventory(state:NoteDraftInventory,error?:unknown):void {
     if(this.stopped)return;
     this.inventory=state;this.inventoryError=state==='unknown'&&error!==undefined?asError(error):null;
-    if(state==='unknown')this.scheduleRetry();
-    else {this.cancelTimer();this.kick();}
+    if(state!=='unknown')this.kick();
     this.notify();
   }
   /** Explicit barrier retries the retained original CAS before protecting latest. */
@@ -123,8 +118,8 @@ export class NoteDraftProtection {
    * The latest unsent capture is not presented as storage evidence. */
   get retainedWriteRequests():readonly DraftJournalChange[]{return this.protection?.retainedWriteRequests??Object.freeze([]);}
   /** Unlike a generic protected status, dispatch requires an exact real ACK.
-   * Transient failure waits on this helper's existing backoff/availability lane;
-   * it must not send callers back out to mint another request identity. */
+   * A failed attempt rejects its waiter while retaining the original request
+   * for a later explicit action; it never grants dispatch without a real ACK. */
   flushCapture(verify:(ack:DraftProtectionAcknowledgement)=>boolean,options:{signal?:AbortSignal}={}):Promise<DraftProtectionAcknowledgement>{
     if(this.stopped)return Promise.reject(failure('draft_protection_stopped'));
     if(typeof verify!=='function')return Promise.reject(captureFailure());
@@ -136,12 +131,11 @@ export class NoteDraftProtection {
       this.captureWaiters.add(waiter);signal?.addEventListener('abort',waiter.abort,{once:true});
       if(signal?.aborted)waiter.abort();
     });
-    if(this.captureWaiters.size&&!this.running&&this.timer===undefined)void this.startFlush(false).catch(()=>{});
+    if(this.captureWaiters.size&&!this.running)void this.startFlush(false).catch(()=>{});
     return result;
   }
   private startFlush(explicit:boolean):Promise<void> {
     if(this.stopped)return Promise.reject(failure('draft_protection_stopped'));
-    this.cancelTimer();
     if(this.running){this.explicitRequested ||= explicit;return this.running;}
     this.explicitRequested=explicit;
     const operation=this.run();this.running=operation;
@@ -150,12 +144,12 @@ export class NoteDraftProtection {
   }
   coreSettled():void {
     if(this.stopped)return;
-    if(this.latest&&this.covered(this.latest)&&this.inventory!=='unknown'){this.cancelTimer();this.retryStep=0;this.kick();}
+    if(this.latest&&this.covered(this.latest)&&this.inventory!=='unknown')this.kick();
     else if(!this.failureError()&&this.inventory!=='unknown')this.kick();
     this.notify();
   }
-  availability():void {if(!this.stopped){const error=this.failureError();if(error&&!transientFailure(error))return;this.cancelTimer();this.kick();}}
-  stop():void {this.stopped=true;this.cancelTimer();for(const waiter of this.captureWaiters)this.finishCapture(waiter,failure('draft_protection_stopped'));}
+  availability():void {if(!this.stopped){const error=this.failureError();if(error&&!transientFailure(error))return;this.kick();}}
+  stop():void {this.stopped=true;for(const waiter of this.captureWaiters)this.finishCapture(waiter,failure('draft_protection_stopped'));}
 
   private finishCapture(waiter:CaptureWaiter,error?:Error,ack?:DraftProtectionAcknowledgement):void {
     if(!this.captureWaiters.delete(waiter))return;
@@ -163,7 +157,6 @@ export class NoteDraftProtection {
     if(error)waiter.reject(error);else waiter.resolve(ack!);
   }
   private settleCaptures(error?:Error):void {
-    if(error&&transientFailure(error))return;
     const ack=this.acknowledged,live=ack&&this.protection&&this.protection.status.retiredSequence<ack.sequence;
     for(const waiter of this.captureWaiters){
       if(error){this.finishCapture(waiter,error);continue;}
@@ -174,15 +167,6 @@ export class NoteDraftProtection {
 
   private covered(capture:NoteDraftCapture):boolean {return capture.snapshot.pendingOperation===null&&this.options.coreCovered(capture);}
   private failureError():Error|null {return this.inventory==='unknown'?this.inventoryError:this.errorValue??this.protection?.status.error??null;}
-  private cancelTimer():void {if(this.timer!==undefined)clearTimeout(this.timer);this.timer=undefined;}
-  private scheduleRetry():void {
-    if(this.stopped||this.timer!==undefined)return;
-    const error=this.failureError();
-    if(!error||!transientFailure(error))return;
-    if(this.inventory!=='unknown'&&(!this.latest||this.status.currentProtected))return;
-    const delay=delays[Math.min(this.retryStep++,delays.length-1)];
-    this.timer=setTimeout(()=>{this.timer=undefined;if(!this.stopped)void this.startFlush(false).catch(()=>{});},delay);
-  }
   private kick():void {
     if(this.stopped||this.scheduled)return;
     const error=this.failureError();if(error&&!transientFailure(error))return;
@@ -195,7 +179,7 @@ export class NoteDraftProtection {
       transport:{scope:provider.scope,compareAndSwap:async request=>{this.assertActive();try{return await provider.compareAndSwap(request);}catch(error){throw asError(error);}},
         retire:async request=>{this.assertActive();try{return await provider.retire(request);}catch(error){throw asError(error);}}},
       encodePendingOperation:this.options.encodePendingOperation??JSON.stringify,
-      onStatus:()=>{if(this.stopped)return;this.scheduleRetry();this.notify();}});
+      onStatus:()=>{if(this.stopped)return;this.notify();}});
   }
   private async run():Promise<void> {
     this.assertActive();
@@ -243,8 +227,7 @@ export class NoteDraftProtection {
     if(this.stopped)return;
     if(error!==undefined){
       if(this.inventory!=='unknown'&&this.protection?.status.error!==error)this.errorValue=asError(error);
-      this.scheduleRetry();
-    }else if(!this.status.pending){this.retryStep=0;this.cancelTimer();}
+    }
     const failed=error===undefined?this.failureError()??undefined:asError(error);
     // A capture can arrive between an async drain returning and this completion
     // callback. Its queued successor must run before success can decide that

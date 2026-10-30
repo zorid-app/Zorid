@@ -55,6 +55,19 @@ test('clean-note capture dispatch waits for a real journal ACK containing its ca
   assert.equal(f.buffer.dirty,false);await f.buffer.releaseConditionalSavedSource(capture!);
 });
 
+test('backup failure rejects a conditional capture before Native dispatch and retains exact cleanup ownership',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});const f=await fixture(t),attempts:IndependentDraftChange[]=[];
+  const compare=f.provider.compareAndSwap.bind(f.provider),failure=Object.assign(Error('Backup unavailable'),{code:'draft_transport_lost',source:'transport'});let fail=true;
+  f.provider.compareAndSwap=async request=>{attempts.push(request);if(fail)throw failure;return compare(request);};
+  await assert.rejects(f.buffer.captureConditionalSavedSource({entryId:'entry',revision:'source-1',path:'One.md'}),failure);
+  assert.ok(attempts.length);const original=attempts[0],id=JSON.parse(original.pendingOperation!).captureRequests[0].captureId;
+  assert.deepEqual(f.native,[],'A failed backup cannot authorize Native source capture');assert.deepEqual(f.releases,[id],'Cleanup releases only the captured caller-owned ID');
+  await tick();await tick();const count=attempts.length;t.mock.timers.tick(300_000);await tick();assert.equal(attempts.length,count,'Failure alone never replays the backup');
+  assert.equal(f.buffer.text,observed.content);assert.equal(f.buffer.savedText,observed.content);assert.equal(f.buffer.draftProtectionStatus?.currentJournalAcknowledged,false);
+  fail=false;await f.buffer.flushDraftProtection();assert.equal(attempts[count],original,'Explicit backup action settles the original retained CAS first');
+  assert.deepEqual(f.native,[]);assert.deepEqual(f.releases,[id]);assert.equal(f.buffer.draftProtectionStatus?.currentJournalAcknowledged,true);
+});
+
 test('request identity becomes journal protected while an earlier canonical Rust checkpoint is held',async t=>{
   const f=await fixture(t);f.holdCore();f.buffer.update('Later independent draft');await until(()=>f.coreCalls===1);
   const pending=f.buffer.captureConditionalSavedSource({entryId:'entry',revision:'source-1',path:'One.md'});void pending.catch(()=>{});

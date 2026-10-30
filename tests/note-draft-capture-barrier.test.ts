@@ -48,13 +48,13 @@ test('capture dispatch barrier remains pending until its exact ID, witness and s
   }finally{f.gate.resolve();f.protection.stop();}
 });
 
-test('one capture waiter stays pending across the existing transient journal backoff and retries the same CAS',async t=>{
-  t.mock.timers.enable({apis:['setTimeout']});const f=fixture();f.gate.resolve();f.fail(Object.assign(Error('Journal temporarily unavailable'),{code:'draft_storage_failure',source:'main'}));let settled=false;
+test('a failed capture waiter rejects without granting dispatch and an explicit call reuses its exact CAS',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});const f=fixture();f.gate.resolve();const failure=Object.assign(Error('Journal temporarily unavailable'),{code:'draft_storage_failure',source:'main'});f.fail(failure);
   try{
-    f.protection.capture(capture());const barrier=f.protection.flushCapture(includes(requestId)).then(ack=>{settled=true;return ack;});
-    await drain();assert.equal(f.writes.length,1);assert.equal(settled,false);assert.equal(f.protection.status.retryPending,true);
-    t.mock.timers.tick(499);await drain();assert.equal(f.writes.length,1);assert.equal(settled,false);
-    f.fail();t.mock.timers.tick(1);const ack=await barrier;
+    f.protection.capture(capture());await assert.rejects(f.protection.flushCapture(includes(requestId)),failure);
+    assert.equal(f.writes.length,1);assert.equal(f.protection.status.currentJournalAcknowledged,false);assert.equal(f.protection.status.retryPending,false);
+    t.mock.timers.tick(300_000);await drain();assert.equal(f.writes.length,1);assert.equal(f.protection.retainedWriteRequests[0],f.writes[0]);
+    f.fail();const ack=await f.protection.flushCapture(includes(requestId));
     assert.equal(f.writes.length,2);assert.equal(f.writes[1],f.writes[0]);assert.equal(ack.request,f.writes[0]);assert.equal(f.protection.status.retryPending,false);
   }finally{f.protection.stop();}
 });
@@ -98,13 +98,13 @@ test('aborting one capture waiter removes its listener without discarding the ot
   }finally{f.gate.resolve();f.protection.stop();}
 });
 
-test('stopping the owner settles a transiently held waiter and cancels its existing timer',async t=>{
+test('failed capture removes its abort listener and stopping prevents later retry work',async t=>{
   t.mock.timers.enable({apis:['setTimeout']});const f=fixture(),controller=new AbortController();let removed=0;
   const remove=controller.signal.removeEventListener;
   t.mock.method(controller.signal,'removeEventListener',function(type,...args){if(type==='abort')removed++;return Reflect.apply(remove,this,[type,...args]);});
   f.gate.resolve();f.fail(Object.assign(Error('Reply lost'),{code:'draft_transport_lost',source:'transport'}));f.protection.capture(capture());
-  const barrier=f.protection.flushCapture(includes(requestId),{signal:controller.signal});await drain();assert.equal(f.protection.status.retryPending,true);
-  f.protection.stop();await assert.rejects(barrier,{code:'draft_protection_stopped'});assert.equal(removed,1);
+  await assert.rejects(f.protection.flushCapture(includes(requestId),{signal:controller.signal}),{code:'draft_transport_lost'});assert.equal(removed,1);assert.equal(f.protection.status.retryPending,false);
+  f.protection.stop();controller.abort();assert.equal(removed,1);await assert.rejects(f.protection.flushCapture(includes(requestId)),{code:'draft_protection_stopped'});
   const count=f.writes.length;t.mock.timers.tick(300_000);await drain();assert.equal(f.writes.length,count);
 });
 

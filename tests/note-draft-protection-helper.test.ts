@@ -36,24 +36,22 @@ test('capture owns immutable metadata, deduplicates exact captures, and never en
   await f.helper.flush();assert.equal(f.helper.status.sequence,2);assert.equal(encodes,2,'a new frozen operation identity is a new capture');f.helper.stop();
 });
 
-test('backoff holds newer captures locally then retries the original uncertain CAS before latest',async t=>{
+test('new captures retry the original uncertain CAS once before coalesced latest without polling',async t=>{
   t.mock.timers.enable({apis:['setTimeout']});const f=fixture();f.fail();f.helper.markInventory('ready');f.helper.capture(capture('First',1));
   await until(()=>!!f.helper.status.error);const first=f.writes[0];
-  for(let generation=2;generation<=100;generation++)f.helper.capture(capture('Latest '+generation,generation));
-  await drain();assert.equal(f.writes.length,1);assert.equal(f.helper.status.sequence,100);assert.equal(f.helper.status.currentProtected,false);assert.equal(f.helper.status.currentJournalAcknowledged,false);assert.equal(f.helper.status.pending,true);
-  t.mock.timers.tick(499);await drain();assert.equal(f.writes.length,1);
-  f.fail(undefined);t.mock.timers.tick(1);await until(()=>f.helper.status.currentProtected);
+  t.mock.timers.tick(300_000);await drain();assert.equal(f.writes.length,1);assert.equal(f.helper.status.retryPending,false);
+  f.fail(undefined);for(let generation=2;generation<=100;generation++)f.helper.capture(capture('Latest '+generation,generation));
+  await until(()=>f.helper.status.currentProtected);assert.equal(f.helper.status.sequence,100);
   assert.equal(f.writes[1],first);assert.deepEqual(f.writes.map(write=>[write.expectedRevision,write.nextRevision,write.draft]),[[null,'1','First'],[null,'1','First'],['1','2','Latest 100']]);
-  assert.equal(f.helper.status.retryPending,false);assert.equal(f.helper.status.currentJournalAcknowledged,true);const count=f.writes.length;t.mock.timers.tick(300_000);await drain();assert.equal(f.writes.length,count,'healthy protection never polls');f.helper.stop();
+  assert.equal(f.helper.status.currentJournalAcknowledged,true);const count=f.writes.length;t.mock.timers.tick(300_000);await drain();assert.equal(f.writes.length,count);f.helper.stop();
 });
 
-test('one failure timer uses 500,1500,4000 then repeated 30 second retries',async t=>{
+test('backup failure remains truthful and retains its exact CAS without timed retries',async t=>{
   t.mock.timers.enable({apis:['setTimeout']});const f=fixture();f.fail(error('draft_journal_busy'));f.helper.markInventory('ready');f.helper.capture(capture());await until(()=>!!f.helper.status.error);
-  let expected=1;for(const delay of [500,1500,4000,30_000,30_000]){
-    t.mock.timers.tick(delay-1);await drain();assert.equal(f.writes.length,expected);
-    t.mock.timers.tick(1);expected++;await until(()=>f.writes.length===expected);await drain();assert.equal(f.helper.status.retryPending,true);
-  }
-  assert.ok(f.writes.every(write=>write===f.writes[0]));f.helper.stop();t.mock.timers.tick(300_000);await drain();assert.equal(f.writes.length,expected);
+  const original=f.writes[0];
+  for(const delay of [500,1500,4000,30_000,300_000]){t.mock.timers.tick(delay);await drain();assert.equal(f.writes.length,1);assert.equal(f.helper.status.retryPending,false);}
+  assert.equal(f.helper.status.pending,true);assert.equal(f.helper.status.currentProtected,false);assert.equal(f.helper.retainedWriteRequests[0],original);
+  f.fail(undefined);await f.helper.flush();assert.equal(f.writes[1],original);assert.equal(f.helper.status.currentJournalAcknowledged,true);f.helper.stop();
 });
 
 for(const code of ['draft_revision_conflict','invalid_draft_receipt','draft_protection_failed','io','draft_journal_corrupt','lease_revoked','unknown_failure'])test(`terminal ${code} does not schedule an automatic journal retry`,async t=>{
@@ -74,7 +72,7 @@ for(const source of ['protocol','host','foreign','authorization','unexpected-sou
 for(const source of ['main','transport',undefined])for(const plain of [false,true])test(`known journal transport provenance ${source??'legacy'} retries the exact request (${plain?'plain throw':'Error'})`,async t=>{
   t.mock.timers.enable({apis:['setTimeout']});const rejection={code:'draft_transport_lost',...(source===undefined?{}:{source})};
   const f=fixture();f.fail(plain?rejection:Object.assign(Error('Journal transient'),rejection));f.helper.markInventory('ready');f.helper.capture(capture());await until(()=>!!f.helper.status.error);
-  assert.equal(f.helper.status.retryPending,true);const original=f.writes[0];f.fail(undefined);t.mock.timers.tick(500);await until(()=>f.helper.status.currentJournalAcknowledged);assert.equal(f.writes[1],original);f.helper.stop();
+  assert.equal(f.helper.status.retryPending,false);const original=f.writes[0];t.mock.timers.tick(300_000);await drain();assert.equal(f.writes.length,1);f.fail(undefined);f.helper.availability();await until(()=>f.helper.status.currentJournalAcknowledged);assert.equal(f.writes[1],original);f.helper.stop();
 });
 
 test('terminal inventory provenance blocks passive RPC while unknown inventory without failure can resume',async t=>{
@@ -102,12 +100,14 @@ test('plain thrown provenance is captured without copying private message or unk
   assert.equal((f.helper.status.error as Error&{source:string}).source,'untrusted');assert.ok(!f.helper.status.error!.message.includes(rejection.message));assert.ok(!f.helper.status.error!.message.includes(rejection.source));assert.equal(f.helper.status.retryPending,false);f.helper.stop();
 });
 
-test('unknown inventory retries independently with no current capture and never means an empty inventory',async t=>{
+test('failed inventory remains unknown without polling and an explicit action can retry',async t=>{
   t.mock.timers.enable({apis:['setTimeout']});let attempts=0;let helper!:NoteDraftProtection;
   const f=fixture({retryInventory:async()=>{attempts++;if(attempts===1)throw error('draft_transport_lost');helper.markInventory('retained');}});helper=f.helper;
   helper.markInventory('unknown',error('draft_storage_failure'));assert.equal(helper.status.inventory,'unknown');assert.equal(helper.status.pending,true);assert.ok(helper.status.inventoryError);
-  t.mock.timers.tick(500);await until(()=>attempts===1);await drain();assert.equal(helper.status.inventory,'unknown');assert.equal(f.writes.length,0);
-  t.mock.timers.tick(1500);await until(()=>helper.status.inventory==='retained');assert.equal(helper.status.inventoryError,null);assert.equal(helper.status.pending,false);assert.equal(f.writes.length,0);helper.stop();
+  t.mock.timers.tick(300_000);await drain();assert.equal(attempts,0);
+  await assert.rejects(helper.flush(),{code:'draft_transport_lost'});assert.equal(attempts,1);assert.equal(helper.status.inventory,'unknown');assert.equal(f.writes.length,0);
+  t.mock.timers.tick(300_000);await drain();assert.equal(attempts,1);assert.equal(helper.status.retryPending,false);
+  await helper.flush();assert.equal(attempts,2);assert.equal(helper.status.inventory,'retained');assert.equal(helper.status.inventoryError,null);assert.equal(helper.status.pending,false);assert.equal(f.writes.length,0);helper.stop();
 });
 
 test('captures wait for successful inventory and explicit flush retries the retained request immediately',async()=>{
@@ -126,11 +126,11 @@ test('stop fences queued work, timers and late transport status without dropping
   f.helper.capture(capture('Late',3));f.helper.availability();await drain();assert.equal(f.writes.length,1);
 });
 
-test('only strict latest core coverage suppresses redundant retries, never an older generation',async t=>{
+test('only strict latest core coverage satisfies protection, never an older generation',async t=>{
   t.mock.timers.enable({apis:['setTimeout']});let covered:NoteDraftCapture|undefined;
   const f=fixture({coreCovered:current=>!!covered&&current.writer===covered.writer&&current.snapshot.generation===covered.snapshot.generation&&current.snapshot.draft===covered.snapshot.draft&&current.snapshot.baseline.revision===covered.snapshot.baseline.revision});
-  f.fail();f.helper.markInventory('ready');const first=capture('Same body',1),latest=capture('Same body',2);f.helper.capture(first);await until(()=>!!f.helper.status.error);f.helper.capture(latest);
-  const before=f.writes.length;covered=first;f.helper.coreSettled();await drain();assert.equal(f.writes.length,before,'an older core acknowledgement must not bypass journal backoff');assert.equal(f.helper.status.currentProtected,false);assert.equal(f.helper.status.retryPending,true);
+  f.fail();f.helper.markInventory('ready');const first=capture('Same body',1),latest=capture('Same body',2);f.helper.capture(first);await until(()=>!!f.helper.status.error);f.helper.capture(latest);await drain();
+  const before=f.writes.length;covered=first;f.helper.coreSettled();await drain();assert.equal(f.writes.length,before,'an older core acknowledgement cannot retry or cover the latest draft');assert.equal(f.helper.status.currentProtected,false);assert.equal(f.helper.status.retryPending,false);
   covered=latest;f.helper.coreSettled();await drain();const attempts=f.writes.length;assert.equal(f.helper.status.currentProtected,true);assert.equal(f.helper.status.retryPending,false);
   t.mock.timers.tick(300_000);await drain();assert.equal(f.writes.length,attempts);assert.equal(f.retirements.length,0,'failed cleanup cannot retire an unacknowledged journal CAS');f.helper.stop();
 });
