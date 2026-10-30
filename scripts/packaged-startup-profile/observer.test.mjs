@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {captureObserverFailure,observerSource,sampleObserverSource} from './observer.mjs';
-function fixture({deferredEligibility=false,withBase=false,noEditor=false}={}){
+function fixture({deferredEligibility=false,withBase=false,noEditor=false,hidden=false}={}){
   let value='Fixture body',caret=0,now=1,top=0,editable='true',inert=false;const listeners=new Map(),microtasks=[],frames=[];
   const view={state:{doc:{get length(){return value.length;},sliceString:(a,b)=>value.slice(a,b)},selection:{main:{get head(){return caret;}}}}};
   const node={cmTile:{root:{view}},getAttribute:()=>editable,closest:()=>inert?{}:null,getBoundingClientRect:()=>({width:100,height:100,top,bottom:top+100}),contains:other=>other===node};view.contentDOM=node;
@@ -11,14 +11,14 @@ function fixture({deferredEligibility=false,withBase=false,noEditor=false}={}){
   const cells=[{dataset:{path:'Note 0000.md'},textContent:'Note 0000'}],grid={getAttribute:name=>name==='aria-rowcount'?'103':null,querySelectorAll:()=>cells};
   const base={dataset:{baseControllerUpdating:'true'},getBoundingClientRect:()=>node.getBoundingClientRect(),textContent:'Loading Profile table',querySelector:selector=>selector==='.zorid-bases-table'?grid:selector==='.bases-session-content'?{getAttribute:()=> 'true'}:null,querySelectorAll:()=>[{textContent:'Properties',disabled:false}]};
   const pane={querySelector:selector=>selector==='.cm-content'?(noEditor?null:node):selector==='.note-title'?title:selector==='.bases-session'&&withBase?base:null,querySelectorAll:()=>[line]};
-  const document={readyState:'loading',visibilityState:'hidden',hidden:true,hasFocus:()=>false,documentElement:{},querySelector:()=>pane,
+  const document={readyState:'loading',visibilityState:hidden?'hidden':'visible',hidden,hasFocus:()=>false,documentElement:{},querySelector:()=>pane,
     addEventListener:(key,handler)=>listeners.set(key,handler),removeEventListener:key=>listeners.delete(key)};
   const window={addEventListener(){},removeEventListener(){}};
   const context={window,document,performance:{now:()=>now++},innerHeight:800,
     MutationObserver:class{observe(){}disconnect(){}},requestAnimationFrame:fn=>frames.push(fn),queueMicrotask:fn=>microtasks.push(fn)};
   vm.runInNewContext(observerSource({identity:'case',path:'Note.md',characters:value.length,prefix:'Fixture',visibleText:'Fixture body',markers:{ready:'x',deadline:'y'}}),context);
   const flush=()=>{while(frames.length)frames.shift()();};flush();
-  return {window,node,listeners,flush,evaluate:source=>vm.runInNewContext(source,context),setSource(source){value=source;},setTop(value){top=value;},setEditable(value){editable=value;},setInert(value){inert=value;},publishWithoutMutation(){title.value='Note';},edit(trusted,delayed=false){listeners.get('beforeinput')({data:'x',isTrusted:trusted,inputType:'insertText',target:node});let before;if(delayed){while(microtasks.length)microtasks.shift()();before=window.__zoridPackagedProbe.probes[0].accepted;}value='x'+value;caret=1;while(microtasks.length)microtasks.shift()();flush();return before;}};
+  return {window,node,listeners,flush,setHidden(value){document.hidden=value;document.visibilityState=value?'hidden':'visible';},evaluate:source=>vm.runInNewContext(source,context),setSource(source){value=source;},setTop(value){top=value;},setEditable(value){editable=value;},setInert(value){inert=value;},publishWithoutMutation(){title.value='Note';},edit(trusted,delayed=false){listeners.get('beforeinput')({data:'x',isTrusted:trusted,inputType:'insertText',target:node});let before;if(delayed){while(microtasks.length)microtasks.shift()();before=window.__zoridPackagedProbe.probes[0].accepted;}value='x'+value;caret=1;while(microtasks.length)microtasks.shift()();flush();return before;}};
 }
 test('actual injected observer records CodeMirror identity/viewport and trusted accepted edit',()=>{
   const f=fixture();assert.ok(f.window.__zoridPackagedProbe.ready);f.edit(true);
@@ -48,7 +48,7 @@ test('two-frame acceptance rechecks source, editability, inert and viewport guar
   }
 });
 test('failure capture preserves observer and actual selected editor diagnostics even without ready',async()=>{
-  const f=fixture({deferredEligibility:true}),launch={errors:['original readiness failure'],cases:[{identity:'case'}]};
+  const f=fixture({deferredEligibility:true,hidden:true}),launch={errors:['original readiness failure'],cases:[{identity:'case'}]};
   await captureObserverFailure({evaluate:async source=>f.evaluate(source)},launch);
   assert.equal(launch.failureObservation.visibilityState,'hidden');assert.equal(launch.failureObservation.hidden,true);assert.equal(launch.failureObservation.documentHasFocus,false);assert.equal(launch.failureObservation.probe.ready,null);assert.equal(launch.failureObservation.contentDOMMatches,true);assert.equal(launch.failureObservation.prefix,'Fixture body');
   assert.equal(launch.failureObservation.firstLines[0].text,'Fixture body');assert.equal(launch.failureObservation.visibleContent[0].text,'Fixture body');
@@ -65,3 +65,6 @@ test('failure diagnostics preserve Base grid/busy/error/control evidence without
   const f=fixture({withBase:true,noEditor:true}),launch={};await captureObserverFailure({evaluate:async source=>f.evaluate(source)},launch);const base=launch.failureObservation.base;
   assert.equal(launch.failureObservation.contentFound,false);assert.equal(base.present,true);assert.equal(base.busy,'true');assert.equal(base.gridRowCount,'103');assert.equal(base.knownFixtureRow,true);assert.equal(base.error,false);assert.equal(base.controls[0].text,'Properties');assert.equal(base.text,'Loading Profile table');
 });
+
+test('an early observer cannot latch readiness while the document is hidden',()=>{const f=fixture({hidden:true});assert.equal(f.window.__zoridPackagedProbe.ready,null);});
+test('visibility must remain valid after both readiness frames',()=>{const f=fixture({deferredEligibility:true});f.publishWithoutMutation();f.evaluate(sampleObserverSource);f.setHidden(true);f.flush();assert.equal(f.window.__zoridPackagedProbe.ready,null);});
