@@ -266,3 +266,20 @@ report. Unit tests use injected executors/JXA stand-ins and execute no OS action
 The observed Electron-only failures do not establish a LaunchServices cause or
 user interference; both existing journeys launch their actual executable via
 `child_process.spawn`.
+
+`--autosave-fixtures` is an explicit diagnostic lifecycle experiment. The default
+still uses Cmd+S and trusted Undo. This mode retains the same startup input,
+viewport, clocks, scope, focus, deadline, physical/Core readback, receipt and normal
+quit gates. It waits for normal autosave of the probe edits, then checks the exact
+selected CodeMirror body and collapsed caret at the end of the inserted markers.
+Plain trusted Home and ArrowRight position that caret; one ordinary Backspace per
+marker restores the original body, with exact source/caret checks and trusted
+`deleteContentBackward` observations after each deletion. It awaits exact original
+physical and Core autosave readback and retains matching restoration commit
+receipts when observed. No Cmd+S or Cmd+Z is sent for fixture persistence/restoration
+in this mode. The report labels `fixtureLifecycle: autosave-trusted-backspace`.
+
+This isolates shortcut-related focus interference as an experiment; it does not
+establish that shortcuts caused earlier focus loss. Input probes, focus guards,
+activation policy and performance deadlines are unchanged. No retries, direct
+CodeMirror mutations, bridge writes or filesystem restoration are introduced.

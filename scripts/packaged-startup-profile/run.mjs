@@ -12,6 +12,7 @@ import {assessNote,clockInterval,DEADLINE_MS,planCampaign} from './oracle.mjs';
 import {navigateFileTree} from './file-navigation.mjs';
 import {foregroundSource} from './foreground.mjs';
 import {pressProfileKey} from './keyboard-input.mjs';
+import {autosaveFixtures,fixtureEditorSource,pressFixtureKey,restoreAutosavedFixture} from './fixture-lifecycle.mjs';
 import {requestOwnedForeground} from './os-foreground.mjs';
 import {captureSetupFailure} from './setup-failure.mjs';
 import {fixtureOptions,fixtureSources,preparedRestore,returnTarget,startupTarget} from './fixtures.mjs';
@@ -34,7 +35,7 @@ export async function main(args=process.argv.slice(2)){
   const out=ownedOutput(getOption(args,'--out',`/private/tmp/zorid-packaged-startup-${Date.now()}-${randomUUID().slice(0,8)}`));
   const notes=Number(getOption(args,'--notes','1000')),repetitions=Number(getOption(args,'--repetitions','1')),seed=Number(getOption(args,'--seed','42'));
   const prewarmEmptyProfile=args.includes('--prewarm-empty-profile'),fixturePolicy=fixtureOptions(args);
-  const launchMode=launchServicesOptions(args);
+  const launchMode=launchServicesOptions(args),autosaveFixtureMode=autosaveFixtures(args);
   const timeoutMs=Number(getOption(args,'--timeout-ms','30000')),shutdownMs=Number(getOption(args,'--shutdown-timeout-ms','60000'));
   assert.ok(Number.isSafeInteger(notes)&&notes>=2&&notes<=10000);assert.ok(Number.isSafeInteger(timeoutMs)&&timeoutMs>=4000&&timeoutMs<=120000&&Number.isSafeInteger(shutdownMs)&&shutdownMs>=10000&&shutdownMs<=120000);
   const schedule=planCampaign(repetitions,seed),asar=await import(pathToFileURL(require.resolve('@electron/asar')).href);
@@ -49,6 +50,7 @@ export async function main(args=process.argv.slice(2)){
       'An unobservable fixed800ms attempt is indeterminate, not a fabricated valid target miss. Base readiness is a separate view metric without protected edit acceptance.',
     ]};
   report.launchMode=launchMode.enabled?'launch-services':'direct-executable';
+  report.fixtureLifecycle=autosaveFixtureMode?'autosave-trusted-backspace':'save-shortcut-trusted-undo';
   report.cleanupEvidence=launchMode.enabled?'Actual app quit0 + real Native exit0/null + exact owned PIDs absent + no force + open wrapper0; app kernel status unknown':'Direct ChildProcess exit0/null plus actual app quit0 and Native exit receipts';
   report.cloneRegistration={explicit:launchMode.preRegister,actions:[],cleanup:[]};
   if(launchMode.preRegister)report.cacheCondition+='; both exact APFS clones registered with LaunchServices outside launch clocks';
@@ -149,7 +151,7 @@ export async function main(args=process.argv.slice(2)){
     const inserted=record.observed.probes.map(p=>p.marker).join(''),expected=inserted+record.original;
     const body=await active.renderer.evaluate("(()=>{const node=document.querySelector('.pane.is-active .cm-content'),view=node?.cmTile?.root?.view??node?.cmView?.view;if(!view)throw Error('Actual CodeMirror missing');return view.state.doc.toString();})()");
     record.expectedEditedSha256=hash(expected);record.body={exact:body===expected,sha256:hash(body),characters:body.length};assert.ok(record.body.exact,'Later full body was truncated or changed');
-    await pressProfileKey(active.renderer,'s','KeyS',[]);
+    if(!autosaveFixtureMode)await pressProfileKey(active.renderer,'s','KeyS',[]);
     const pair=pairs.get(launch.pairId),file=path.join(pair.vault,record.path);
     await bounded(async()=>assert.equal(await fs.readFile(file,'utf8'),expected),launch);
     const committed=await coreRead(active.renderer,pair.vault,record.path);assert.equal(committed.content,expected);
@@ -158,17 +160,31 @@ export async function main(args=process.argv.slice(2)){
     record.coreAckEvidence=await active.main.evaluate(`globalThis.__zoridPackagedMain.requests.filter(row=>row.method==='commit_intent'&&row.ok&&row.intent?.state==='committed'&&row.intent.receipt?.changes?.some(change=>change.after?.id===${JSON.stringify(committed.entryId)}&&change.after.revision===${JSON.stringify(committed.revision)}))`);
     record.checkpointAckEvidence=await active.main.evaluate(`globalThis.__zoridPackagedMain.requests.filter(row=>row.method==='checkpoint_cas'&&row.ok&&row.checkpoint?.key?.includes(${JSON.stringify(committed.entryId)}))`);
     record.coreAckStatus=record.coreAckEvidence.length?'normal-core-receipts-observed':'not-observed';
-    // Restore through ordinary trusted Undo, never a bridge/filesystem write.
-    // Stop as soon as source is exact: typing history may coalesce two probes.
-    let restored=body;
-    for(let count=0;restored!==record.original&&count<record.observed.probes.length;count++){
-      await pressProfileKey(active.renderer,'z','KeyZ');
-      restored=await active.renderer.evaluate("(()=>{const n=document.querySelector('.pane.is-active .cm-content');return(n.cmTile?.root?.view??n.cmView?.view).state.doc.toString();})()");
+    let restorationInput;
+    if(autosaveFixtureMode){
+      const config={identity:record.identity,path:record.path};
+      await checkForeground(launch);await active.renderer.evaluate(fixtureEditorSource(config,'observe'));
+      try{restorationInput=await restoreAutosavedFixture({markers:inserted,original:record.original,
+        guard:()=>checkForeground(launch),read:()=>active.renderer.evaluate(fixtureEditorSource(config)),key:code=>pressFixtureKey(active.renderer,code)});}
+      finally{await active.renderer.evaluate(fixtureEditorSource(config,'dispose'));}
+    }else{
+      // Restore through ordinary trusted Undo, never a bridge/filesystem write.
+      // Stop as soon as source is exact: typing history may coalesce two probes.
+      let restored=body;
+      for(let count=0;restored!==record.original&&count<record.observed.probes.length;count++){
+        await pressProfileKey(active.renderer,'z','KeyZ');
+        restored=await active.renderer.evaluate("(()=>{const n=document.querySelector('.pane.is-active .cm-content');return(n.cmTile?.root?.view??n.cmView?.view).state.doc.toString();})()");
+      }
+      assert.equal(restored,record.original,'Normal Undo did not restore the exact disposable source');
+      await pressProfileKey(active.renderer,'s','KeyS',[]);
     }
-    assert.equal(restored,record.original,'Normal Undo did not restore the exact disposable source');
-    await pressProfileKey(active.renderer,'s','KeyS',[]);await bounded(async()=>assert.equal(await fs.readFile(file,'utf8'),record.original),launch);
+    await bounded(async()=>assert.equal(await fs.readFile(file,'utf8'),record.original),launch);
     const restoredCore=await coreRead(active.renderer,pair.vault,record.path);assert.equal(restoredCore.content,record.original);
-    record.restoration={physicalSha256:await hashFile(file),coreSha256:hash(restoredCore.content),revision:restoredCore.revision,exact:true};
+    record.restoration={physicalSha256:await hashFile(file),coreSha256:hash(restoredCore.content),revision:restoredCore.revision,exact:true,...(restorationInput?{input:restorationInput}:{})};
+    if(autosaveFixtureMode){
+      record.restoration.coreAckEvidence=await active.main.evaluate(`globalThis.__zoridPackagedMain.requests.filter(row=>row.method==='commit_intent'&&row.ok&&row.intent?.state==='committed'&&row.intent.receipt?.changes?.some(change=>change.after?.id===${JSON.stringify(restoredCore.entryId)}&&change.after.revision===${JSON.stringify(restoredCore.revision)}))`);
+      record.restoration.coreAckStatus=record.restoration.coreAckEvidence.length?'normal-core-receipts-observed':'not-observed';
+    }
     delete record.original;delete record.deadlineDone;delete record.deadlineTimer;delete record.inputQueue;delete record.deadlineTask;delete record.resolveDeadline;
   }
   async function baseCase(launch,pair){
