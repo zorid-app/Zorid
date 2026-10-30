@@ -2,6 +2,7 @@ import test from 'node:test';
 import type {TestContext} from 'node:test';
 import assert from 'node:assert/strict';
 import {NoteBuffer} from '../src/ui/note-buffer.ts';
+import {claimCaptureRequest} from '../src/ui/capture-request-cleanup.ts';
 import type {Vault} from '../src/core/vault.ts';
 import type {DurableWrites,ConditionalSavedSourceRequest} from '../src/core/durable-writes.ts';
 import type {Checkpoint} from '../src/core/durable-checkpoints.ts';
@@ -94,8 +95,9 @@ test('cancel while the including-ID ACK is held dispatches no Native capture and
   await assert.rejects(pending,/closing/);assert.equal(f.native.length,0);assert.deepEqual(f.releases,[id]);f.releaseJournal();await closing;
 });
 function abandonedCandidate(captureId:string,overrides:Record<string,unknown>={}){
-  return{...journalScope,incarnationId:'retired-document',entryId:'entry',writer:'retired-writer',revision:'1',generation:0,deleted:false as const,baseline:{entryId:'entry',revision:'source-1',path:'One.md',content:observed.content},draft:observed.content,checkpointRevision:null,
-    pendingOperation:JSON.stringify({schemaVersion:2,conflict:false,operation:null,checkpoint:null,captureRequests:[{captureId,logicalWitness:witness,scope:{...journalScope,incarnationId:'retired-document'}}]}),...overrides};
+  const entryId=typeof overrides.entryId==='string'?overrides.entryId:'entry',candidateWitness={...witness,entryId};
+  return{...journalScope,incarnationId:'retired-document',entryId,writer:'retired-writer',revision:'1',generation:0,deleted:false as const,baseline:{entryId,revision:'source-1',path:'One.md',content:observed.content},draft:observed.content,checkpointRevision:null,
+    pendingOperation:JSON.stringify({schemaVersion:2,conflict:false,operation:null,checkpoint:null,captureRequests:[{captureId,logicalWitness:candidateWitness,scope:{...journalScope,incarnationId:'retired-document'}}]}),...overrides};
 }
 for(const certificate of[true,false,undefined,'unknown'] as const)test(`restart cleanup requires a positive retired-owner certificate (${certificate}) and uses targeted lookups`,async t=>{
   const f=await fixture(t),id=crypto.randomUUID(),candidate=abandonedCandidate(id),listed:unknown[]=[];
@@ -159,11 +161,17 @@ test('lost release ACK retries the same ID with typed transport backoff and reta
   assert.deepEqual(seen,[capture.captureId,capture.captureId]);assert.equal(f.buffer.conditionalSavedSourceStatus(capture),'settled');
 });
 
-test('a current-incarnation row prevents cleanup from inspecting any bodies or Core head for that entry',async t=>{
-  const f=await fixture(t),id=crypto.randomUUID(),old=abandonedCandidate(id,{entryId:'unopened'}),current={...old,writer:'current-writer',incarnationId:journalScope.incarnationId};let bodyReads=0,checkpointReads=0;
-  f.provider.list=async options=>options?.entryId==='unopened'?[old,current]:[];f.provider.isRetiredIncarnation=async()=>true;f.provider.read=async()=>{bodyReads++;return old;};
-  f.writes.checkpoints.load=async()=>{checkpointReads++;return null;};f.writes.listSavedSourceRequests=async()=>[{captureId:id,logicalWitness:{...witness,entryId:'unopened'},legacy:false}];
-  const own=await f.buffer.captureConditionalSavedSource(witness);assert.deepEqual(f.releases,[]);assert.equal(bodyReads,0);assert.equal(checkpointReads,0);if(own)await f.buffer.releaseConditionalSavedSource(own);
+test('eight old same-note claims are reclaimed while unrelated current typing and a current request stay protected',async t=>{
+  const f=await fixture(t),pending=new Map<string,{captureId:string;logicalWitness:typeof witness;legacy:false}>(),old=[];
+  for(let i=0;i<8;i++){const captureId=crypto.randomUUID();old.push(abandonedCandidate(captureId,{writer:`old-${i}`}));pending.set(captureId,{captureId,logicalWitness:witness,legacy:false});}
+  f.buffer.update('Current raw typing');await until(()=>f.journal.length>0);
+  const current=()=>({...journalScope,entryId:'entry',writer:f.journal.at(-1)!.writer,revision:'1',generation:f.journal.at(-1)!.generation,deleted:false as const,baseline:f.journal.at(-1)!.baseline,draft:f.journal.at(-1)!.draft,checkpointRevision:f.journal.at(-1)!.checkpointRevision,pendingOperation:f.journal.at(-1)!.pendingOperation});
+  f.writes.listSavedSourceRequests=async()=>[...pending.values()];f.writes.releaseSavedSource=async id=>{f.releases.push(id);pending.delete(id);};
+  f.provider.list=async options=>{assert.deepEqual(options,{entryId:'entry'});return[...old,current()];};
+  f.provider.read=async address=>address.incarnationId===journalScope.incarnationId?current():old.find(row=>row.writer===address.writer)??null;
+  const certified:string[]=[];f.provider.isRetiredIncarnation=async incarnation=>{certified.push(incarnation);assert.notEqual(incarnation,journalScope.incarnationId);return true;};
+  const acquire=f.writes.captureSavedSource!;f.writes.captureSavedSource=async request=>{assert.equal(pending.size,0,'Old same-note guards must not strand Native capacity');return acquire(request);};
+  const own=await f.buffer.captureConditionalSavedSource(witness);assert.ok(own);assert.equal(f.releases.length,8);assert.ok(certified.length);assert.equal(f.buffer.text,'Current raw typing');assert.equal(f.journal.at(-1)!.draft,'Current raw typing');assert.ok(JSON.parse(f.journal.at(-1)!.pendingOperation!).captureRequests.some((request:any)=>request.captureId===own.captureId));await f.buffer.releaseConditionalSavedSource(own);
 });
 for(const kind of['candidate-body','candidate-checkpoint-reference','checkpoint-revision','checkpoint-sequence','checkpoint-byteLength'] as const)test(`malformed ${kind} evidence cannot authorize cleanup`,async t=>{
   const f=await fixture(t),id=crypto.randomUUID(),candidate=abandonedCandidate(id,{entryId:'unopened'}),logicalWitness={...witness,entryId:'unopened'},capsule=JSON.parse(candidate.pendingOperation);
@@ -173,4 +181,77 @@ for(const kind of['candidate-body','candidate-checkpoint-reference','checkpoint-
   if(kind.startsWith('checkpoint-')){const encodedState=JSON.stringify({version:1,writer:candidate.writer,generation:0,base:{...observed,entryId:'unopened'},draft:observed.content,conflict:false});
     f.writes.checkpoints.load=async key=>({version:1,...scope,key,revision:kind==='checkpoint-revision'?'invalid':crypto.randomUUID(),sequence:kind==='checkpoint-sequence'?'0':'1',encodedState,deleted:false,byteLength:Buffer.byteLength(encodedState)+(kind==='checkpoint-byteLength'?1:0)});}
   const own=await f.buffer.captureConditionalSavedSource(witness);assert.deepEqual(f.releases,[]);if(own)await f.buffer.releaseConditionalSavedSource(own);
+});
+
+test('a current actor loading an old operation guard during journal lookup prevents cleanup release before it can adopt or author',async t=>{
+  const f=await fixture(t),id=crypto.randomUUID(),old=abandonedCandidate(id),lookup=held(),entered=held();let hold=true,adopterRead=false,adopted=false;
+  f.writes.listSavedSourceRequests=async()=>[{captureId:id,logicalWitness:witness,legacy:false}];f.provider.isRetiredIncarnation=async()=>true;
+  f.provider.list=async()=>[old];f.provider.read=async address=>{if(address.writer!==old.writer)return null;if(hold){entered.resolve();await lookup.promise;}return old;};
+  const ownPending=f.buffer.captureConditionalSavedSource(witness);await entered.promise;
+  const input={operationId:crypto.randomUUID(),path:'One.md',expectedEntryId:'entry',expectedRevision:'source-1',expectedContent:observed.content,content:'Original accepted transform',conditionalSavedSource:{captureId:id,logicalWitness:witness}};
+  const encodedState=JSON.stringify({version:1,writer:'adopting-writer',generation:1,base:observed,draft:input.content,conflict:false,operation:{input,content:input.content}});
+  const head:Checkpoint={version:1,...scope,key:'note/v1/entry',revision:crypto.randomUUID(),sequence:'1',encodedState,deleted:false,byteLength:Buffer.byteLength(encodedState)};
+  f.writes.checkpoints.load=async()=>{if(adopterRead){adopterRead=false;return head;}return null;};adopterRead=true;
+  const adopter=new NoteBuffer(f.vault,'One.md',{debounceMs:60000});t.after(()=>adopter.closeMetadataProjection());const loading=adopter.load('entry').then(()=>{adopted=true;});
+  await tick();await tick();assert.equal(adopterRead,false);assert.equal(adopted,false,'Contending actor must join the gate before adopting or journaling its old guard');assert.equal(f.journal.some(row=>row.writer==='adopting-writer'),false);
+  hold=false;lookup.resolve();const own=await ownPending;await loading;
+  assert.ok(own);assert.equal(adopted,true);assert.deepEqual(f.releases,[]);assert.equal(adopter.text,input.content);assert.equal(f.native.length,1);await f.buffer.releaseConditionalSavedSource(own);
+});
+test('a current journal operation referencing the retired ID blocks release even when the owning old incarnation is certified',async t=>{
+  const f=await fixture(t),id=crypto.randomUUID(),old=abandonedCandidate(id),live=abandonedCandidate(crypto.randomUUID(),{writer:'live-writer',incarnationId:journalScope.incarnationId});
+  const capsule=JSON.parse(live.pendingOperation);capsule.captureRequests[0].scope=journalScope;capsule.operation={content:'accepted',input:{conditionalSavedSource:{captureId:id,logicalWitness:witness}}};live.pendingOperation=JSON.stringify(capsule);
+  f.provider.list=async()=>[old,live];f.provider.read=async address=>address.writer===old.writer?old:live;f.provider.isRetiredIncarnation=async incarnation=>{assert.equal(incarnation,old.incarnationId);return true;};f.writes.listSavedSourceRequests=async()=>[{captureId:id,logicalWitness:witness,legacy:false}];
+  const own=await f.buffer.captureConditionalSavedSource(witness);assert.deepEqual(f.releases,[]);assert.ok(own);await f.buffer.releaseConditionalSavedSource(own);
+});
+
+for(const unknown of[false,true])test(`an unrelated old journal owner's ${unknown?'unknown':'live'} certificate is not abandonment authority for the selected request`,async t=>{
+  const f=await fixture(t),id=crypto.randomUUID(),old=abandonedCandidate(id),unrelated=abandonedCandidate(crypto.randomUUID(),{writer:'unrelated-writer',incarnationId:'other-owner'});
+  const capsule=JSON.parse(unrelated.pendingOperation);capsule.captureRequests[0].scope.incarnationId='other-owner';unrelated.pendingOperation=JSON.stringify(capsule);
+  f.provider.list=async()=>[old,unrelated];f.provider.read=async address=>address.writer===old.writer?old:unrelated;
+  f.provider.isRetiredIncarnation=async incarnation=>{if(incarnation===old.incarnationId)return true;if(unknown)throw Error('Unknown unrelated owner');return false;};f.writes.listSavedSourceRequests=async()=>[{captureId:id,logicalWitness:witness,legacy:false}];
+  const own=await f.buffer.captureConditionalSavedSource(witness);assert.deepEqual(f.releases,[id]);assert.ok(own);await f.buffer.releaseConditionalSavedSource(own);
+});
+
+test('cancelling a capture does not wait for an unrelated held orphan-proof lookup',async t=>{
+  const f=await fixture(t),id=crypto.randomUUID(),old=abandonedCandidate(id),lookup=held(),entered=held();
+  f.writes.listSavedSourceRequests=async()=>[{captureId:id,logicalWitness:witness,legacy:false}];f.provider.isRetiredIncarnation=async()=>true;f.provider.list=async()=>[old];
+  f.provider.read=async()=>{entered.resolve();await lookup.promise;return old;};
+  const pending=f.buffer.captureConditionalSavedSource(witness);let rejected=false;void pending.catch(()=>{rejected=true;});await entered.promise;
+  const ownId=JSON.parse(f.journal.at(-1)!.pendingOperation!).captureRequests[0].captureId,closing=f.buffer.dispose();void closing.catch(()=>{});await tick();await tick();
+  assert.equal(rejected,true,'Owner cancellation must not wait for unrelated background evidence IO');assert.ok(f.releases.includes(ownId));assert.equal(f.native.length,0);
+  lookup.resolve();await assert.rejects(pending,/closing/);await closing;
+});
+
+test('a malformed ACK after Native accepted cleanup keeps the ID sealed and a new actor retries only that ID even with no pending row',async t=>{
+  const f=await fixture(t),id=crypto.randomUUID(),old=abandonedCandidate(id);let pending=true,calls=0;
+  f.writes.listSavedSourceRequests=async()=>pending?[{captureId:id,logicalWitness:witness,legacy:false}]:[];f.provider.isRetiredIncarnation=async()=>true;f.provider.list=async()=>[old];
+  f.provider.read=async address=>address.writer===old.writer&&address.incarnationId===old.incarnationId?old:null;
+  f.writes.releaseSavedSource=async captureId=>{f.releases.push(captureId);if(captureId===id){pending=false;if(++calls===1)throw Object.assign(Error('Malformed release ACK'),{code:'invalid_durable_response',source:'protocol'});}};
+  const own=await f.buffer.captureConditionalSavedSource(witness);assert.ok(own);assert.equal(calls,1);assert.equal(pending,false);
+  assert.throws(()=>claimCaptureRequest(scope,id,{}),{code:'capture_cleanup_unsettled'});
+  const next=new NoteBuffer(f.vault,'One.md',{debounceMs:60000});t.after(()=>next.closeMetadataProjection());await next.load('entry');await until(()=>calls===2);await tick();
+  assert.throws(()=>claimCaptureRequest(scope,id,{}),{code:'capture_request_released'});assert.deepEqual(f.releases,[id,id]);assert.equal(f.native.length,1,'Cleanup retries release only; no source recapture');await f.buffer.releaseConditionalSavedSource(own);
+});
+test('a cancelled unadmitted actor cannot claim an old guard after its contended proof wait wakes',async t=>{
+  const f=await fixture(t),id=crypto.randomUUID(),old=abandonedCandidate(id),lookup=held(),entered=held();let hold=true,adopterRead=false;
+  f.writes.listSavedSourceRequests=async()=>[{captureId:id,logicalWitness:witness,legacy:false}];f.provider.isRetiredIncarnation=async()=>true;f.provider.list=async()=>[old];
+  f.provider.read=async address=>{if(address.writer!==old.writer)return null;if(hold){entered.resolve();await lookup.promise;}return old;};
+  const ownPending=f.buffer.captureConditionalSavedSource(witness);await entered.promise;
+  const input={operationId:crypto.randomUUID(),path:'One.md',expectedEntryId:'entry',expectedRevision:'source-1',expectedContent:observed.content,content:'Original accepted transform',conditionalSavedSource:{captureId:id,logicalWitness:witness}};
+  const encodedState=JSON.stringify({version:1,writer:'cancelled-adopter',generation:1,base:observed,draft:input.content,conflict:false,operation:{input,content:input.content}});
+  const head:Checkpoint={version:1,...scope,key:'note/v1/entry',revision:crypto.randomUUID(),sequence:'1',encodedState,deleted:false,byteLength:Buffer.byteLength(encodedState)};
+  f.writes.checkpoints.load=async()=>{if(adopterRead){adopterRead=false;return head;}return null;};adopterRead=true;
+  const adopter=new NoteBuffer(f.vault,'One.md'),loading=adopter.load('entry');void loading.catch(()=>{});await tick();await tick();assert.equal(adopterRead,false);await adopter.disposeUnadmitted();await assert.rejects(loading);
+  hold=false;lookup.resolve();const own=await ownPending;assert.ok(own);await tick();await tick();assert.equal(f.journal.some(row=>row.writer==='cancelled-adopter'),false);assert.deepEqual(f.releases,[]);
+  const second=await f.buffer.captureConditionalSavedSource(witness);assert.ok(second);assert.deepEqual(f.releases,[id],'Dead adopter must not strand the abandoned pending slot');await f.buffer.releaseConditionalSavedSource(own);await f.buffer.releaseConditionalSavedSource(second);
+});
+
+test('new actor positive admission wakes an exact release still waiting in a retired actor, while ordinary cleanup does not self-admit',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});const f=await fixture(t),id=crypto.randomUUID(),old=abandonedCandidate(id);let pending=true,calls=0;
+  f.writes.listSavedSourceRequests=async()=>pending?[{captureId:id,logicalWitness:witness,legacy:false}]:[];f.provider.isRetiredIncarnation=async()=>true;f.provider.list=async()=>[old];f.provider.read=async address=>address.writer===old.writer&&address.incarnationId===old.incarnationId?old:null;
+  f.writes.releaseSavedSource=async captureId=>{f.releases.push(captureId);if(captureId===id){if(++calls===1)throw Object.assign(Error('Old host exited'),{code:'host_exited',source:'host'});pending=false;}};
+  const capture=f.buffer.captureConditionalSavedSource(witness);void capture.catch(()=>{});await until(()=>calls===1);await tick();const closing=f.buffer.dispose();await assert.rejects(capture,/closing/);await closing;
+  const next=new NoteBuffer(f.vault,'One.md',{debounceMs:60000});t.after(()=>next.closeMetadataProjection());await next.load('entry');await tick();t.mock.timers.tick(90000);await tick();assert.equal(calls,1,'Background retry must not invent positive admission for the retired release owner');
+  next.coreAdmissionAvailable({...scope,clientId:'wrong-client'});await tick();assert.equal(calls,1);next.coreAdmissionAvailable(scope);await until(()=>calls===2);await tick();
+  assert.equal(pending,false);assert.equal(f.releases.filter(value=>value===id).length,2);assert.equal(f.native.length,0);assert.throws(()=>claimCaptureRequest(scope,id,{}),{code:'capture_request_released'});
 });

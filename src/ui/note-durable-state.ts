@@ -5,6 +5,8 @@ import type { Checkpoint,CheckpointChange } from '../core/durable-checkpoints.ts
 import { boundedUtf8,checkpointRevision,checkpointStateLimit,snapshotCheckpointChange } from '../core/checkpoint-input.ts';
 import {NoteDraftProtection} from './note-draft-protection.ts';
 import {NoteLoadSupervisor} from './note-load-supervisor.ts';
+import {claimCaptureRequest,reserveCaptureRequestCleanup,retryCaptureRequestCleanups,captureRequestCleanupAdmissionAvailable} from './capture-request-cleanup.ts';
+import type {CaptureRequestClaim} from './capture-request-cleanup.ts';
 import type {NoteDraftCapture,NoteDraftProtectionStatus} from './note-draft-protection.ts';
 import type {IndependentDraftReceipt,IndependentDraftCandidate,IndependentDraftRetirement,IndependentDraftScope} from '../core/independent-drafts.ts';
 import type {DraftProtectionAcknowledgement} from './draft-protection.ts';
@@ -69,6 +71,7 @@ export class DurableNoteState {
   private releasingCaptures=new WeakMap<ConditionalSavedSourceCapture,Promise<void>>();
   private captureRequests=new Map<string,ProtectedCaptureRequest>();
   private captureRequestsVersion=0;
+  private captureClaims=new Map<string,CaptureRequestClaim>();
   private captureReleases=new Map<string,{supervisor:NoteLoadSupervisor;task:Promise<void>}>();
   private pendingCaptureOwners=new Map<string,{controller:AbortController;supervisor:NoteLoadSupervisor}>();
   error:Error|null=null;
@@ -122,7 +125,7 @@ export class DurableNoteState {
     try{await owner?.flush();}catch(error){if(this.protection===owner||this.protectionStopped)throw error;await this.protection?.flush();}
     await this.cleanupRecoveredSource(true);
   }
-  stopDraftProtection():void{this.protectionStopped=true;this.candidateTerminal=true;this.candidateRetryWake?.();this.protection?.stop();this.sourceRecovery?.supervisor.stop();}
+  stopDraftProtection():void{this.protectionStopped=true;this.candidateTerminal=true;this.candidateRetryWake?.();this.protection?.stop();this.sourceRecovery?.supervisor.stop();for(const claim of this.captureClaims.values())claim.release();this.captureClaims.clear();}
   draftProtectionAvailable():void{if(!this.protectionAdmitted)return;this.candidateRetryStep=0;this.candidateRetryWake?.();this.protection?.availability();}
   retryCanonicalRecovery():void{
     if(this.protectionStopped)return;
@@ -143,6 +146,7 @@ export class DurableNoteState {
     this.sourceRecovery?.supervisor.admissionAvailable();
     for(const owner of this.pendingCaptureOwners.values())owner.supervisor.admissionAvailable();
     for(const release of this.captureReleases.values())release.supervisor.admissionAvailable();
+    captureRequestCleanupAdmissionAvailable(this.noteScope);
     return true;
   }
   /** Called only AFTER NoteBuffer has made the validated raw draft usable. */
@@ -319,57 +323,65 @@ export class DurableNoteState {
     if(this.captureCleanup)return this.captureCleanup;
     const provider=this.vault.adapter.independentDrafts;
     if(!provider?.isRetiredIncarnation||!this.writes.listSavedSourceRequests||!this.writes.releaseSavedSource)return Promise.resolve();
+    const inspect=async(entryId:string,rows:readonly IndependentDraftReceipt[]):Promise<IndependentDraftCandidate[]|undefined>=>{
+      if(!Array.isArray(rows)||rows.length>16||!rows.length||rows.some(row=>!this.validJournalReceipt(row)||row.entryId!==entryId||row.deleted))return;
+      const candidates:IndependentDraftCandidate[]=[];let bytes=0;
+      for(const row of rows){const value=await provider.read({entryId,writer:row.writer,incarnationId:row.incarnationId});
+        if(!value||value.deleted||!this.validJournalReceipt(value)||!['vaultId','clientId','incarnationId','entryId','writer','revision','generation','deleted'].every(key=>value[key as keyof IndependentDraftReceipt]===row[key as keyof IndependentDraftReceipt])
+          ||!object(value.baseline)||value.baseline.entryId!==entryId||!validId(value.baseline.revision)||typeof value.baseline.path!=='string'||typeof value.baseline.content!=='string'||typeof value.draft!=='string'
+          ||!validCheckpointReference(value.checkpointRevision)||!(value.pendingOperation===null||typeof value.pendingOperation==='string'))return;
+        bytes+=(value.baseline.content.length+value.draft.length+(value.pendingOperation?.length??0))*2;if(bytes>32*1024*1024)return;candidates.push(value);
+      }
+      return candidates;
+    };
     const cleanup=(async()=>{
-      this.assertLoadScope();const pending=await this.writes.listSavedSourceRequests!();
+      this.assertLoadScope();await retryCaptureRequestCleanups(this.noteScope);const pending=await this.writes.listSavedSourceRequests!();
       if(!Array.isArray(pending)||pending.length>8)return;
-      const entries=new Map<string,typeof pending>();
-      for(const request of pending){if(!object(request)||request.legacy!==false||!validId(request.captureId)||!object(request.logicalWitness)||!validId(request.logicalWitness.entryId))continue;
-        entries.set(request.logicalWitness.entryId,[...(entries.get(request.logicalWitness.entryId)??[]),request]);}
-      for(const[entryId,requests]of entries){
-        const rows=await provider.list({entryId});if(!Array.isArray(rows)||rows.length>16||!rows.length||rows.some(row=>!this.validJournalReceipt(row)||row.entryId!==entryId||row.deleted))continue;
-        const candidates:IndependentDraftCandidate[]=[];let verified=true,bytes=0;
-        // Certification drains old Core RPCs before reading evidence. A live,
-        // unknown, or legacy owner cannot authorize speculative abandonment.
-        for(const row of rows)if(row.incarnationId===provider.scope.incarnationId||await provider.isRetiredIncarnation!(row.incarnationId)!==true){verified=false;break;}
-        if(!verified)continue;
-        for(const row of rows){const value=await provider.read({entryId,writer:row.writer,incarnationId:row.incarnationId});
-          if(!value||value.deleted||!this.validJournalReceipt(value)||!['vaultId','clientId','incarnationId','entryId','writer','revision','generation','deleted'].every(key=>value[key as keyof IndependentDraftReceipt]===row[key as keyof IndependentDraftReceipt])
-            ||!object(value.baseline)||value.baseline.entryId!==entryId||!validId(value.baseline.revision)||typeof value.baseline.path!=='string'||typeof value.baseline.content!=='string'||typeof value.draft!=='string'
-            ||!validCheckpointReference(value.checkpointRevision)||!(value.pendingOperation===null||typeof value.pendingOperation==='string')){verified=false;break;}
-          bytes+=(value.baseline.content.length+value.draft.length+(value.pendingOperation?.length??0))*2;if(bytes>32*1024*1024){verified=false;break;}candidates.push(value);
-        }
-        if(!verified)continue;
-        const head=await this.writes.checkpoints.load(`note/v1/${entryId}`);
-        // Validate through the ordinary note receipt checks where applicable;
-        // unopened entries still require the complete bound checkpoint shape.
-        if(head!==null&&(!object(head)||head.vaultId!==this.noteScope.vaultId||head.clientId!==this.noteScope.clientId||head.key!==`note/v1/${entryId}`||head.version!==1
-          ||Reflect.ownKeys(head).length!==9||!validCheckpointReference(head.revision)||head.revision===null||typeof head.sequence!=='string'||!/^[1-9][0-9]{0,19}$/.test(head.sequence)||BigInt(head.sequence)>18446744073709551615n
-          ||!Number.isSafeInteger(head.byteLength)||head.byteLength<0||head.byteLength>checkpointStateLimit||!(head.encodedState===null||typeof head.encodedState==='string')||head.deleted!==(head.encodedState===null)
-          ||(head.encodedState===null?head.byteLength!==0:boundedUtf8(head.encodedState,checkpointStateLimit)!==head.byteLength)))continue;
-        const canonical=head?.encodedState?plainCheckpointState(head.encodedState):null;
-        if(head?.encodedState&&!canonical||canonical&&canonical.base.entryId!==entryId)continue;
-        for(const request of requests){
-          if(this.captureRequests.has(request.captureId)||this.captureReferenced(request.captureId))continue;
-          let owner:IndependentDraftCandidate|undefined,blocked=false;
-          const references=(value:unknown):boolean=>{if(!value||typeof value!=='object')return false;if(Array.isArray(value))return value.some(references);const object=value as Record<string,unknown>;return object.captureId===request.captureId||Object.values(object).some(references);};
-          if(references(canonical?.operation))continue;
+      for(const request of pending){
+        if(!object(request)||request.legacy!==false||!validId(request.captureId)||!object(request.logicalWitness)||!validId(request.logicalWitness.entryId)||!validId(request.logicalWitness.revision)||typeof request.logicalWitness.path!=='string'
+          ||this.captureRequests.has(request.captureId)||this.captureReferenced(request.captureId))continue;
+        const captureId=request.captureId,logicalWitness=Object.freeze({...request.logicalWitness});
+        const reservation=reserveCaptureRequestCleanup(this.noteScope,captureId,()=>this.releaseCapture(captureId),()=>{this.assertLoadScope();this.captureReleases.get(captureId)?.supervisor.admissionAvailable();});if(!reservation)continue;
+        try{
+          const entryId=logicalWitness.entryId,rows=await provider.list({entryId});
+          if(!Array.isArray(rows)||rows.length>16||!rows.length||rows.some(row=>!this.validJournalReceipt(row)||row.entryId!==entryId||row.deleted))continue;
+          const certificates=new Map<string,boolean>();
+          for(const row of rows)if(row.incarnationId!==provider.scope.incarnationId&&!certificates.has(row.incarnationId)){
+            try{certificates.set(row.incarnationId,await provider.isRetiredIncarnation!(row.incarnationId)===true);}catch{certificates.set(row.incarnationId,false);}
+          }
+          // Every body/reference read follows Core drainage. Current or other
+          // live rows are blocking evidence, never abandonment authority.
+          const candidates=await inspect(entryId,rows);if(!candidates)continue;
+          const matching=candidates.filter(candidate=>this.captureCapsule(candidate)?.captureRequests.some(claim=>claim.captureId===captureId));
+          if(matching.length!==1)continue;const owner=matching[0];
+          if(certificates.get(owner.incarnationId)!==true||!reservation.owns())continue;
+          const head=await this.writes.checkpoints.load(`note/v1/${entryId}`);
+          if(head!==null&&(!object(head)||head.vaultId!==this.noteScope.vaultId||head.clientId!==this.noteScope.clientId||head.key!==`note/v1/${entryId}`||head.version!==1
+            ||Reflect.ownKeys(head).length!==9||!validCheckpointReference(head.revision)||head.revision===null||typeof head.sequence!=='string'||!/^[1-9][0-9]{0,19}$/.test(head.sequence)||BigInt(head.sequence)>18446744073709551615n
+            ||!Number.isSafeInteger(head.byteLength)||head.byteLength<0||head.byteLength>checkpointStateLimit||!(head.encodedState===null||typeof head.encodedState==='string')||head.deleted!==(head.encodedState===null)
+            ||(head.encodedState===null?head.byteLength!==0:boundedUtf8(head.encodedState,checkpointStateLimit)!==head.byteLength)))continue;
+          const canonical=head?.encodedState?plainCheckpointState(head.encodedState):null;
+          if(head?.encodedState&&!canonical||canonical&&canonical.base.entryId!==entryId)continue;
+          let found=false,blocked=false;
           for(const candidate of candidates){
             if(candidate.pendingOperation===null)continue;
             let capsule:any;try{capsule=JSON.parse(candidate.pendingOperation);}catch{blocked=true;break;}
             const decoded=this.captureCapsule(candidate);
-            if(!decoded){
-              // Strict old capsules may retain an operation or original CAS.
-              if(!object(capsule)||capsule.schemaVersion!==1||Object.keys(capsule).length!==4||typeof capsule.conflict!=='boolean'||!(capsule.operation===null||object(capsule.operation))||!(capsule.checkpoint===null||object(capsule.checkpoint))){blocked=true;break;}
-            }
+            if(!decoded&&(!object(capsule)||capsule.schemaVersion!==1||Object.keys(capsule).length!==4||typeof capsule.conflict!=='boolean'||!(capsule.operation===null||object(capsule.operation))||!(capsule.checkpoint===null||object(capsule.checkpoint)))){blocked=true;break;}
+            // Current rows supply blocking references, never retirement authority.
             if(capsule.operation!==null){blocked=true;break;}
             if(capsule.checkpoint!==null){try{if(!object(capsule.checkpoint)||Object.keys(capsule.checkpoint).length!==4||capsule.checkpoint.key!==`note/v1/${entryId}`||!plainCheckpointState(capsule.checkpoint.encodedState)){blocked=true;break;}}catch{blocked=true;break;}}
-            const claim=decoded?.captureRequests.find(value=>value.captureId===request.captureId);
-            if(claim){if(owner||!['entryId','revision','path'].every(key=>claim.logicalWitness[key as keyof ConditionalSavedSourceWitness]===request.logicalWitness[key as keyof ConditionalSavedSourceWitness])){blocked=true;break;}owner=candidate;}
+            const claim=decoded?.captureRequests.find(value=>value.captureId===captureId);
+            if(claim){
+              if(found||candidate.writer!==owner.writer||candidate.incarnationId!==owner.incarnationId||!['entryId','revision','path'].every(key=>claim.logicalWitness[key as keyof ConditionalSavedSourceWitness]===logicalWitness[key as keyof ConditionalSavedSourceWitness])){blocked=true;break;}
+              found=true;
+            }
           }
-          if(blocked||!owner||owner.incarnationId===provider.scope.incarnationId)continue;
-          this.assertLoadScope();if(this.captureRequests.has(request.captureId)||this.captureReferenced(request.captureId))continue;
-          await this.releaseCapture(request.captureId);
-        }
+          this.assertLoadScope();
+          if(blocked||!found||this.captureRequests.has(captureId)||this.captureReferenced(captureId)||!reservation.seal())continue;
+          // No await separates the sealed ownership check from exact dispatch.
+          await reservation.release();
+        }finally{reservation.finish();}
       }
     })().catch(()=>{/* Unknown evidence never grants release or blocks startup. */});
     this.captureCleanup=cleanup;void cleanup.finally(()=>{if(this.captureCleanup===cleanup)this.captureCleanup=undefined;});return cleanup;
@@ -500,7 +512,18 @@ export class DurableNoteState {
         &&object(value.scope)&&['vaultId','clientId','incarnationId'].every(key=>value.scope[key]===request.scope[key as keyof IndependentDraftScope]));
     }catch{return false;}
   }
-  private forgetCaptureRequest(id:string):void {if(this.captureRequests.delete(id)){this.captureRequestsVersion++;this.captureProtection();}}
+  private claimCapture(id:string):void {if(!this.captureClaims.has(id))this.captureClaims.set(id,claimCaptureRequest(this.noteScope,id,this));}
+  private async claimLoadedCapture(op:Operation,validate:()=>void):Promise<void>{
+    const id=op.input?.conditionalSavedSource?.captureId;if(!id)return;
+    for(;;){validate();if(this.protectionStopped)throw failure('the note actor stopped before capture adoption');try{this.claimCapture(id);return;}catch(error){
+      if(!error||typeof error!=='object'||Object.getOwnPropertyDescriptor(error,'code')?.value!=='capture_cleanup_pending')throw error;
+      const wait=Object.getOwnPropertyDescriptor(error,'wait')?.value;if(!(wait instanceof Promise))throw error;await wait;
+    }}
+  }
+  private forgetCaptureRequest(id:string):void {
+    this.captureClaims.get(id)?.release();this.captureClaims.delete(id);
+    if(this.captureRequests.delete(id)){this.captureRequestsVersion++;this.captureProtection();}
+  }
   /** Freeze and protect the identity before either serialized save lane. Only
    * Native dispatch joins those lanes; the independent ACK never waits for Rust. */
   captureConditionalSavedSource(witness:ConditionalSavedSourceWitness,validate:()=>void,serialize:<T>(run:()=>Promise<T>)=>Promise<T>=run=>run()):Promise<ConditionalSavedSourceCapture|undefined>{
@@ -513,6 +536,7 @@ export class DurableNoteState {
       if(!provider||!this.protection||!this.protectionAdmitted||provider.scope.vaultId!==this.noteScope.vaultId||provider.scope.clientId!==this.noteScope.clientId)throw failure('conditional saved-source capture requires independent protection');
       if(this.captureRequests.size>=8)throw failure('too many retained capture requests');
       request=Object.freeze({captureId:crypto.randomUUID(),logicalWitness:Object.freeze({...witness}),scope:Object.freeze({...provider.scope})});
+      this.claimCapture(request.captureId);
       owner={controller:new AbortController(),supervisor:new NoteLoadSupervisor()};this.pendingCaptureOwners.set(request.captureId,owner);
       this.captureRequests.set(request.captureId,request);this.captureRequestsVersion++;this.captureProtection();
       if(this.protectionCaptureError)throw this.protectionCaptureError;
@@ -523,7 +547,7 @@ export class DurableNoteState {
     const task=serialize(()=>this.queue(async()=>{
       let received=false,dispatched=false;
       try{
-        await acknowledged;check();await this.cleanupAbandonedCaptureRequests();check();
+        await acknowledged;check();await owner.supervisor.run(()=>this.cleanupAbandonedCaptureRequests(),check,{signal:owner.controller.signal});check();
         for(const id of this.abandonedCaptures){await this.releaseCapture(id);this.abandonedCaptures.delete(id);this.forgetCaptureRequest(id);}
         if(this.state!.conflict||this.state!.operation)throw failure('settle the retained note write before capturing another conditional source');
         const claim=Object.freeze({captureId:request.captureId,logicalWitness:request.logicalWitness});
@@ -671,7 +695,7 @@ export class DurableNoteState {
       if(options.deferRecovery&&raw.base.path!==path)throw failure('checkpoint belongs to another selected path; retained');
       this.state=raw;
       this.coverage={...this.coverageFor(raw),revision:head!.revision};
-      if(raw.operation!==undefined)this.validateLoadedOperation(raw.operation);
+      if(raw.operation!==undefined){this.validateLoadedOperation(raw.operation);await this.claimLoadedCapture(raw.operation,validate);validate();}
       if(raw.operation?.ref){if(options.deferRecovery)this.sourceRecoveryRequired=true;else await this.resume(validate);}
       else if(observed.revision!==raw.base.revision){if(!raw.operation&&raw.draft===raw.base.content){raw.base=observed;raw.draft=observed.content;}else raw.conflict=true;}
     }
@@ -682,7 +706,7 @@ export class DurableNoteState {
   });}
   update(text:string,capture?:ConditionalSavedSourceCapture):void{
     if(capture){
-      this.validateConditionalSavedSource(capture);
+      this.validateConditionalSavedSource(capture);this.claimCapture(capture.captureId);
       const base=this.base;
       // Freeze the original conditional request BEFORE any planning call. Later
       // typing changes only the draft, never this operation's content or proof.
