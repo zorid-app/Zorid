@@ -7,13 +7,15 @@ import {NoteBuffer} from '../src/ui/note-buffer.ts';
 import type {DurableWrites,DurableWriteRead} from '../src/core/durable-writes.ts';
 import type {Checkpoint} from '../src/core/durable-checkpoints.ts';
 
+const initialCheckpointRevision='00000000-0000-0000-0000-000000000001';
 function fixture(count=1){
   const scope={vaultId:'startup-vault',clientId:'startup-window'},records=new Map<string,DurableWriteRead>(),heads=new Map<string,Checkpoint>();
   const reads={body:0,checkpoint:0},scopeRequests={plans:0};
   for(let index=0;index<count;index++){
     const record:DurableWriteRead={entryId:`entry-${index}`,revision:'source-1',path:`Note ${index}.md`,content:`Saved note ${index}`,stat:{ctime:1,mtime:1,size:12}};
     records.set(record.entryId,record);const key=`note/v1/${record.entryId}`;
-    heads.set(key,{version:1,...scope,key,revision:'checkpoint-1',sequence:String(index+1),deleted:false,byteLength:0,encodedState:JSON.stringify({version:1,writer:'previous-window',generation:0,base:record,draft:record.content,conflict:false})});
+    const encodedState=JSON.stringify({version:1,writer:'previous-window',generation:0,base:record,draft:record.content,conflict:false});
+    heads.set(key,{version:1,...scope,key,revision:initialCheckpointRevision,sequence:String(index+1),deleted:false,byteLength:Buffer.byteLength(encodedState,'utf8'),encodedState});
   }
   class Adapter extends MemoryAdapter{durableWrites!:DurableWrites;}
   const adapter=new Adapter(Object.fromEntries([...records.values()].map(row=>[row.path,row.content])));
@@ -31,7 +33,7 @@ function fixture(count=1){
   const recovery=Workspace.prototype as unknown as {recoverDurableBuffers(this:unknown,vault:Vault):Promise<Map<string,NoteBuffer>>};
   const recover=()=>recovery.recoverDurableBuffers.call(owner,vault);
   const state=(index=0)=>JSON.parse(heads.get(`note/v1/entry-${index}`)!.encodedState!);
-  const setState=(raw:unknown,index=0)=>{const head=heads.get(`note/v1/entry-${index}`)!;heads.set(head.key,{...head,encodedState:JSON.stringify(raw)});};
+  const setState=(raw:unknown,index=0)=>{const head=heads.get(`note/v1/entry-${index}`)!,encodedState=JSON.stringify(raw);heads.set(head.key,{...head,encodedState,byteLength:Buffer.byteLength(encodedState,'utf8')});};
   return{scope,records,heads,reads,scopeRequests,vault,recover,state,setState};
 }
 
@@ -48,7 +50,7 @@ test('deferred clean note opens with current authoritative source and retained c
   const original=f.records.get('entry-0')!;f.records.set(original.entryId,{...original,revision:'source-2',content:'Changed externally'});
   const note=new NoteBuffer(f.vault,original.path);await note.load(original.entryId);
   assert.equal(note.text,'Changed externally');assert.equal(note.savedDurableWitness?.revision,'source-2');assert.equal(note.dirty,false);
-  assert.equal(f.scopeRequests.plans,0);assert.equal(f.heads.get('note/v1/entry-0')!.revision,'checkpoint-1');
+  assert.equal(f.scopeRequests.plans,0);assert.equal(f.heads.get('note/v1/entry-0')!.revision,initialCheckpointRevision);
 });
 
 test('startup still recovers an unsaved draft without creating a write plan',async()=>{
