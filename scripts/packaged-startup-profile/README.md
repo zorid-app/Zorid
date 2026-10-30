@@ -273,8 +273,10 @@ viewport, clocks, scope, focus, deadline, physical/Core readback, receipt and no
 quit gates. It waits for normal autosave of the probe edits, then checks the exact
 selected CodeMirror body and collapsed caret at the end of the inserted markers.
 Plain trusted Home and ArrowRight position that caret; one ordinary Backspace per
-marker restores the original body, with exact source/caret checks and trusted
-`deleteContentBackward` observations after each deletion. It awaits exact original
+marker restores the original body, with exact source/caret checks and one trusted
+Backspace keydown per deletion. Final `defaultPrevented` is diagnostic: CodeMirror
+can handle the command without browser `beforeinput`. Trusted
+`deleteContentBackward` observations are retained separately when emitted. It awaits exact original
 physical and Core autosave readback and retains matching restoration commit
 receipts when observed. No Cmd+S or Cmd+Z is sent for fixture persistence/restoration
 in this mode. The report labels `fixtureLifecycle: autosave-trusted-backspace`.
