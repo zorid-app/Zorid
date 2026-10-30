@@ -44,7 +44,7 @@ import type { CanvasMarkdownBufferSession } from './canvas-markdown-session.ts';
 import { MarkdownEmbeds } from './embeds.ts';
 import { renderProperties } from './properties.ts';
 import type { PropertiesView } from './properties.ts';
-import type { PropertiesRawDrafts } from './properties.ts';
+import type { PropertiesRawDrafts,PropertiesChangeRecovery } from './properties.ts';
 import { AttachmentResources, isImage } from './attachments.ts';
 import type {AttachmentLease} from './attachments.ts';
 import { createImageView } from './image-view.ts';
@@ -1934,9 +1934,10 @@ export class Workspace {
         const propertyCurrent=()=>{try{validateProperties();return true;}catch{return false;}};
         const targets=this.notePropertyTargets(()=>path,propertyCurrent,()=>{pane.properties?.refresh();if(this.retainedAdmissionRawInputs.length)queueMicrotask(()=>{void this.restoreAdmissionRawInputs().catch(()=>{});});});
         let admissionWriterKnown=false;
-        const properties=renderProperties(host,{vault:this.vault,path,prepareAdmissionRestore:async()=>{validateProperties();await targets.prepareCollection();validateProperties();admissionWriterKnown=true;properties.refresh();},managedOnly:true,onVisibilityChange:visible=>{host.hidden=!visible;},getDefinitions:()=>targets.getDefinitions(),getAdmissionWriterIdentity:()=>targets.getCollection()?.collection.id??(admissionWriterKnown?null:undefined),isManaged:()=>!!targets.getCollection(),collectionName:()=>targets.getCollection()?.collection.name,getRelationTargets:property=>targets.get(property),getDisplayValue:(property,raw)=>targets.getDisplayValue(property,raw),isCurrent:propertyCurrent,onError:error=>notice(error instanceof Error?error.message:String(error)),getSource:()=>buffer.text,onChange:async next=>{
+        const propertyRecovery=this.platform.recovery;
+        const properties=renderProperties(host,{vault:this.vault,path,canRecoverDatabaseEntry:request=>propertyRecovery?.containsCapturedSetEntry?.(request)===true,holdRecoverDatabaseEntry:request=>propertyRecovery?.holdCapturedSetEntry?.(request)??(()=>{}),claimRecoverDatabaseEntry:request=>{if(!propertyRecovery?.claimCapturedSetEntry)throw new Error('This property has no captured recovery command.');return propertyRecovery.claimCapturedSetEntry(request);},prepareAdmissionRestore:async()=>{validateProperties();await targets.prepareCollection();validateProperties();admissionWriterKnown=true;properties.refresh();},managedOnly:true,onVisibilityChange:visible=>{host.hidden=!visible;},getDefinitions:()=>targets.getDefinitions(),getAdmissionWriterIdentity:()=>targets.getCollection()?.collection.id??(admissionWriterKnown?null:undefined),isManaged:()=>!!targets.getCollection(),collectionName:()=>targets.getCollection()?.collection.name,getRelationTargets:property=>targets.get(property),getDisplayValue:(property,raw)=>targets.getDisplayValue(property,raw),isCurrent:propertyCurrent,onError:error=>notice(error instanceof Error?error.message:String(error)),getSource:()=>buffer.text,onChange:async (next,submission)=>{
           validateProperties();
-          if(await this.changeManagedNoteProperties(buffer,next,targets,validateProperties)){for(const other of this.loadedViews())if(this.current(other)?.path===path){other.editor?.setValue(buffer.text);other.properties?.refresh();other.refreshPreview?.();}return;}
+          if(await this.changeManagedNoteProperties(buffer,next,targets,validateProperties,submission)){if(!submission?.retiring)for(const other of this.loadedViews())if(this.current(other)?.path===path){other.editor?.setValue(buffer.text);other.properties?.refresh();other.refreshPreview?.();}return;}
           this.updateMarkdownBuffer(buffer,next,validateFile);runtime.touch();
           for(const other of this.loadedViews()){if(this.current(other)?.path===path){other.editor?.setValue(next);other.refreshPreview?.();if(other!==pane)other.properties?.refresh();}}
           await buffer.flush();
@@ -3236,7 +3237,7 @@ export class Workspace {
 
   /** Collection values use the same typed operation as a Base cell. The note
    * buffer owns composing the returned projection with any newer body draft. */
-  private async changeManagedNoteProperties(buffer:NoteBuffer,next:string,targets:NotePropertyTargets,validate:()=>void):Promise<boolean>{
+  private async changeManagedNoteProperties(buffer:NoteBuffer,next:string,targets:NotePropertyTargets,validate:()=>void,submission?:PropertiesChangeRecovery):Promise<boolean>{
     const before=buffer.text,vault=this.vault,generation=this.vaultGeneration;validate();
     const selected=await targets.prepareCollection();validate();
     if(!selected)return false;
@@ -3291,10 +3292,13 @@ export class Workspace {
       request={op:'set_entry',operationId:crypto.randomUUID(),entryId:selected.entry.entryId,expectedRevision:selected.entry.revision,expectedCollectionRevision:selected.collection.revision,values};requests.set(signature,request);
     }
     await buffer.flush();validate();
-    const response=await databases.request(request);validate();
+    const run=()=>databases.request(request!);
+    const response=await(submission?submission.request(request as DatabaseRequest&{op:'set_entry'},selected.collection.id,run):run());
+    if(submission?.retiring)return true;validate();
     const saved=response.entries.find(entry=>entry.entryId===selected.entry.entryId);
     if(!saved||saved.pendingProjection)throw new Error('The property is committed locally but its note still needs publication. Retry this edit.');
-    await buffer.refreshManagedProjection(validate);validate();requests.delete(signature);
+    const refresh=async()=>{await buffer.refreshManagedProjection(validate);if(submission?.retiring)return;validate();requests.delete(signature);};
+    if(submission)await submission.finishDerived(refresh);else await refresh();if(submission?.retiring)return true;
     // The setter and canonical buffer refresh above already confirmed this
     // save. A later membership read only refreshes presentation; retry it once
     // through normal invalidation rather than reporting the committed edit as failed.

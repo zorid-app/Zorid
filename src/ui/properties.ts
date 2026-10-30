@@ -7,8 +7,16 @@ import type { Vault } from '../core/vault.ts';
 import { baseExpressionValue } from '../bases/expression.ts';
 import type { BaseExpressionValue } from '../bases/expression.ts';
 import type { BasePropertyDefinition } from '../bases/property-definitions.ts';
-import { basePropertyPopoverOwner,mountBasePropertyWidget,canCaptureBasePropertyRawDraft,captureBasePropertyRawDraft,restoreBasePropertyRawDraft } from '../bases/property-widgets.ts';
-import type { BaseRelationTarget,BasePropertyRawDraft } from '../bases/property-widgets.ts';
+import { basePropertyPopoverOwner,basePropertyEditRecovery,mountBasePropertyWidget,canCaptureBasePropertyRawDraft,captureBasePropertyRawDraft,restoreBasePropertyRawDraft } from '../bases/property-widgets.ts';
+import type { BaseRelationTarget,BasePropertyRawDraft,BasePropertyEditRecovery } from '../bases/property-widgets.ts';
+import type {DatabaseRequest,DatabaseResponse} from '../core/databases.ts';
+type ManagedEntryRequest=DatabaseRequest&{op:'set_entry'};
+/** Captures only an already submitted managed widget command. */
+export interface PropertiesChangeRecovery {
+  readonly retiring:boolean;
+  request(command:ManagedEntryRequest,collectionId:string,run:()=>Promise<DatabaseResponse>):Promise<DatabaseResponse>;
+  finishDerived(run:()=>Promise<void>):Promise<void>;
+}
 
 export interface PropertiesOptions {
   getSource: () => string;
@@ -38,7 +46,10 @@ export interface PropertiesOptions {
   /** Core-derived display only after the owner verifies the saved actor and raw
    * property baseline. Undefined keeps the exact raw property display. */
   getDisplayValue?: (property: string, raw: BaseExpressionValue) => BaseExpressionValue | undefined;
-  onChange: (next: string) => Promise<void> | void;
+  onChange: (next: string,recovery?:PropertiesChangeRecovery) => Promise<void> | void;
+  canRecoverDatabaseEntry?:(request:ManagedEntryRequest)=>boolean;
+  holdRecoverDatabaseEntry?:(request:ManagedEntryRequest)=>(()=>void);
+  claimRecoverDatabaseEntry?:(request:ManagedEntryRequest)=>(()=>void);
   openLink?: (target: string, witness?: { readonly entryId: string; readonly revision: string }) => void;
   showMenu?: typeof showContextMenu;
   dismissMenu?: typeof dismissContextMenu;
@@ -131,6 +142,28 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
   let destroyed = false, pending = Promise.resolve(), addForm: HTMLElement | undefined, addingManagedProperty = false;
   let addFormBaseline:{propertiesFingerprint:string;managed:boolean;writerGuarded:boolean;writerIdentity?:string|null}|undefined;
   let pendingGeneration=0,settledGeneration=0,mutationFailure:unknown,mutationFailureOwner:Row|undefined;
+  type ManagedAttempt={row:Row;widget:BasePropertyEditRecovery;request?:ManagedEntryRequest;collectionId?:string;run?:()=>Promise<DatabaseResponse>;response?:DatabaseResponse;release?:()=>void};
+  const managedAttempts=new Map<Row,ManagedAttempt>();
+  let recoveryEdits:ManagedAttempt[]|undefined,recoverySettled=false,retireDerived!:()=>void;
+  const activeOperations=new Set<Promise<void>>();
+  const derivedRetirement=new Promise<void>(resolve=>{retireDerived=resolve;});
+  const widgetCurrent=(row:Row)=>!destroyed&&root.isConnected&&(options.isCurrent?.()??true)&&(!frozen||!!recoveryEdits?.some(edit=>edit.row===row))&&rows.get(row.key)===row;
+  function verifyManaged(edit:ManagedAttempt,response:DatabaseResponse):void{
+    const request=edit.request!,saved=response.entries.find(entry=>entry.entryId===request.entryId),collection=response.collections.find(value=>value.id===edit.collectionId);
+    if(!saved||saved.deleted||saved.pendingProjection||!saved.fileRevision||saved.collectionId!==edit.collectionId||!collection||collection.deleted||Object.entries(request.values).some(([key,value])=>JSON.stringify(saved.values[key])!==JSON.stringify(value)))throw new Error('The submitted property edit is not confirmed. Its original draft is retained.');
+  }
+  function managedChange(row:Row):PropertiesChangeRecovery|undefined{
+    const widget=basePropertyEditRecovery(row.value);if(!widget)return;
+    let edit=managedAttempts.get(row);
+    if(edit?.widget.owner!==widget.owner){edit?.release?.();edit=undefined;}
+    if(!edit){edit={row,widget};managedAttempts.set(row,edit);}else edit.widget=widget;
+    const retained=edit;
+    return {get retiring(){return !!recovery;},request(command,collectionId,run){
+      if(retained.request&&(JSON.stringify(retained.request)!==JSON.stringify(command)||retained.collectionId!==collectionId))throw new Error('The retained property command changed. Its draft is kept.');
+      if(!retained.request){retained.request=command;retained.collectionId=collectionId;retained.run=run;retained.release=options.holdRecoverDatabaseEntry?.(command);}
+      return run().then(response=>{retained.response=response;if(recovery)verifyManaged(retained,response);return response;});
+    },async finishDerived(run){if(recovery)return;const work=run().catch(error=>{if(!recovery)throw error;});await Promise.race([work,derivedRetirement]);}};
+  }
   // A canceled search cannot establish the outcome of an uncertain schema write.
   const retainedOptionFailures = new Map<Row, Map<string, unknown>>();
   const releasedWidgetRows = new Set<Row>();
@@ -139,8 +172,8 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
     if(!failures?.size)retainedOptionFailures.delete(row);
   };
   function setPending(operation:Promise<void>):void {
-    pending=operation;const generation=++pendingGeneration;
-    const settled=()=>{settledGeneration=Math.max(settledGeneration,generation);clearReleasedWidgetErrors();};void operation.then(settled,settled);
+    pending=operation;activeOperations.add(operation);const generation=++pendingGeneration;
+    const settled=()=>{activeOperations.delete(operation);settledGeneration=Math.max(settledGeneration,generation);clearReleasedWidgetErrors();};void operation.then(settled,settled);
   }
   let menuSerial = 0, menuPending = false;
   let definitions: Readonly<Record<string, BasePropertyDefinition>> = {};
@@ -233,7 +266,7 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
       };
       row.disposeWidget = mountBasePropertyWidget(row.value, { property: `note.${row.key}`, value: rawValue, row: { path: options.path ?? 'Note.md', values: {},entryId:mountedIdentity.entryId,revision:mountedIdentity.revision }, version: 0 }, {
         getDefinition: () => definitionFor(row.key) ?? definition,
-        isCurrent: () => live() && rows.get(row.key) === row,
+        isCurrent: () => widgetCurrent(row),
         getDisplayValue: presentation => options.getDisplayValue?.(row.key, presentation.value),
         openFile: (path, _event, witness) => options.openLink?.(path, witness),
         getRelationTargets: () => options.getRelationTargets?.(row.key, definition) ?? (!definition.relation?.targetFilter ? [...(options.vault?.entries.values() ?? [])].filter(entry => entry.type === 'file' && /\.md$/i.test(entry.path)).map(entry => ({ path: entry.path, label: entry.path.replace(/\.md$/i, ''), entryId: entry.entryId, revision: entry.revision })) : undefined),
@@ -245,7 +278,7 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
             const source = options.getSource(), latest = current(source, row);
             if (JSON.stringify(latest.value) !== baseline) throw new Error('This property changed outside the editor; the draft is preserved.');
             const next = setProperty(source, row.key, toPlain(edit.value));
-            if (next !== source) await options.onChange(next);
+            if (next !== source) await options.onChange(next,managedChange(row));
             baseline = JSON.stringify(toPlain(edit.value)); error(row.error);
             if (live()) queueMicrotask(() => { if (live()) refresh(); });
             return { version: 0, row: edit.row, value: edit.value };
@@ -676,6 +709,7 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
   }
   void loadDefinitions();
   function clearReleasedWidgetErrors(): void {
+    for(const [row,edit]of managedAttempts)if(!recovery&&!row.value.hasAttribute('data-base-editing')){edit.release?.();managedAttempts.delete(row);}
     if(destroyed||pendingGeneration!==settledGeneration)return;
     for(const row of releasedWidgetRows){
       if(rows.get(row.key)!==row||hasDraft(row)){releasedWidgetRows.delete(row);continue;}
@@ -719,25 +753,52 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
     if(state.selectionStart!==null&&state.selectionEnd!==null&&'setSelectionRange'in control)try{control.setSelectionRange(state.selectionStart,state.selectionEnd,state.selectionDirection??undefined);}catch{/* Checkbox/select controls have no text selection. */}
     return true;
   };
-  const canRecoverAdmission=()=>!destroyed&&!frozen&&pendingGeneration===settledGeneration&&!mutationFailure&&!retainedOptionFailures.size&&!addingManagedProperty&&!menuPending
-    &&[...rows.values()].every(row=>!row.value.hasAttribute('data-base-editing')||canCaptureBasePropertyRawDraft(row.value));
+  const recoverableManaged=():ManagedAttempt[]|undefined=>{
+    if(destroyed||frozen||retainedOptionFailures.size||addingManagedProperty||menuPending)return;
+    const selected:ManagedAttempt[]=[];
+    for(const row of rows.values())if(row.value.hasAttribute('data-base-editing')){
+      const widget=basePropertyEditRecovery(row.value);
+      if(widget){const edit=managedAttempts.get(row);if(!edit?.request||!edit.release||edit.widget!==widget||!options.canRecoverDatabaseEntry?.(edit.request)||!options.claimRecoverDatabaseEntry)return;selected.push(edit);}
+      else if(!canCaptureBasePropertyRawDraft(row.value))return;
+    }
+    if(activeOperations.size>selected.filter(edit=>edit.widget.pending).length||mutationFailure&&!selected.some(edit=>edit.row===mutationFailureOwner))return;
+    return selected;
+  };
+  const canRecoverAdmission=()=>recovery?!destroyed:recoverableManaged()!==undefined;
   const prepareAdmissionRecovery=():PropertiesAdmissionRecovery=>{
     if(recovery)return recovery;
-    if(!canRecoverAdmission())throw new Error('Submitted property changes must settle before storage reconnects.');
+    const selected=recoverableManaged();if(!selected)throw new Error('Submitted property changes must settle before storage reconnects.');
     const identity=mountedIdentity;
-    const drafts=[...rows.values()].filter(row=>hasDraft(row)||[...composing].some(target=>row.element.contains(target as Node))).map(row=>({row,key:row.key,valueFingerprint:row.renderedValue??JSON.stringify(row.property.value),definitionFingerprint:row.renderedDefinition,
+    const drafts=[...rows.values()].filter(row=>!selected.some(edit=>edit.row===row)&&(hasDraft(row)||[...composing].some(target=>row.element.contains(target as Node)))).map(row=>({row,key:row.key,valueFingerprint:row.renderedValue??JSON.stringify(row.property.value),definitionFingerprint:row.renderedDefinition,
       type:row.renderedType??typeFor(row.property),managed:row.renderedManaged??false,writerGuarded:!!options.getAdmissionWriterIdentity,writerIdentity:row.renderedWriterIdentity,widget:row.value.hasAttribute('data-base-editing')?captureBasePropertyRawDraft(row.value):undefined}));
     if(drafts.some(draft=>draft.row.value.hasAttribute('data-base-editing')&&!draft.widget))throw new Error('The property draft changed before it could be retained.');
     const snapshot=():PropertiesRawDrafts=>({identity,rows:drafts.map(({row,...draft})=>({...draft,controls:draft.widget?[]:controlsFor(row).map((control,index)=>rawControl(control,index===0?'key':'value',index===0?0:index-1))})),
       ...(addForm?{addForm:{...addFormBaseline!,name:rawControl(addForm.querySelector<HTMLInputElement>('input')!,'key',0),type:addForm.querySelector<HTMLSelectElement>('select')!.value}}:{})});
-    let raw=snapshot();frozen=true;
+    let raw=snapshot();const claims:(()=>void)[]=[];
+    try{for(const edit of selected)claims.push(options.claimRecoverDatabaseEntry!(edit.request!));}catch(error){for(const release of claims)release();throw error;}
+    frozen=true;
     for(const control of root.querySelectorAll('input,textarea,select,button'))if(!composing.has(control))freezeNativeControl(control);
     const compositionReady=composing.size?new Promise<void>(resolve=>{compositionDone=resolve;}):Promise.resolve();
     const settled=Promise.all([compositionReady,...drafts.flatMap(draft=>draft.widget?[draft.widget.ready]:[])]).then(()=>new Promise<void>(resolve=>setTimeout(resolve,0))).then(()=>{
       const next=snapshot();raw={...next,rows:next.rows.map((row,index)=>({...row,controls:row.controls.map((control,controlIndex)=>({...control,focused:raw.rows[index]?.controls[controlIndex]?.focused??false}))})),
         ...(next.addForm?{addForm:{...next.addForm,name:{...next.addForm.name,focused:raw.addForm?.name.focused??false}}}:{})};
     });
-    return recovery={get rawDrafts(){return raw;},settle:()=>settled};
+    let done=false,settling:Promise<void>|undefined;
+    recoveryEdits=selected;
+    recovery={get rawDrafts(){return raw;},settle(){if(done)return Promise.resolve();if(settling)return settling;
+      const work=(async()=>{await settled;await Promise.allSettled([pending]);await Promise.resolve();
+        if(destroyed||!root.isConnected||options.isCurrent?.()===false)throw new Error('The property recovery owner changed; its draft is retained.');
+        for(const edit of selected){
+          if(edit.widget.isCurrent()){
+            if(edit.widget.pending)throw new Error('The original property edit is still pending.');
+            const response=await edit.run!();verifyManaged(edit,response);
+            if(!edit.widget.acknowledge())throw new Error('The property draft changed during recovery; it is retained.');edit.response=response;
+          }else{if(edit.row.value.hasAttribute('data-base-editing')||!edit.response)throw new Error('The property draft changed during recovery; it is retained.');verifyManaged(edit,edit.response);}
+          error(edit.row.error);if(mutationFailureOwner===edit.row){mutationFailure=undefined;mutationFailureOwner=undefined;}
+        }
+        for(const edit of selected){edit.release?.();edit.release=undefined;managedAttempts.delete(edit.row);}for(const release of claims)release();done=true;recoverySettled=true;
+      })();settling=work;void work.finally(()=>{if(settling===work)settling=undefined;}).catch(()=>{});return work;
+    }};retireDerived();return recovery;
   };
   const restoredDrafts=new WeakSet<PropertiesRawDrafts>();
   const restoreAdmissionDrafts=(draft:PropertiesRawDrafts,restoreOptions?:{focus?:boolean}):{restored:boolean;pending:boolean;conflicts:readonly PropertiesRawConflict[]}=>{
@@ -775,6 +836,8 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
       refresh();
     }, destroy() {
     if (destroyed) return;
+    if(recoveryEdits?.length&&!recoverySettled)throw new Error('The submitted property recovery is still pending. Its draft is retained.');
+    for(const edit of managedAttempts.values())edit.release?.();managedAttempts.clear();
     destroyed = true; menuSerial++;
     document.removeEventListener('contextmenu', supersede, true); document.removeEventListener('keydown', keyboardSupersede, true);
     root.removeEventListener('contextmenu', contextMenu); root.removeEventListener('keydown', keyboardMenu);
