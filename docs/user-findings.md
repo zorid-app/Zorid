@@ -1,5 +1,18 @@
 # User findings queue
 
+## File recovery scope follow-up — 2026-10-30
+
+User requests a fresh check of current Zorid and Obsidian file recovery and no
+additional recovery policy beyond Obsidian. Root owns integration/build/install
+for this continuation; isolated delivery `codex/recovery-scope-delivery`.
+Independent audit confirms native history already uses five-minute snapshots and
+seven-day retention outside the vault, currently Markdown only. Main already
+includes the Base Review/Copy removal and ordinary failed-save backoff removal.
+Named workers own isolated Workspace failed-reconnect timer removal, independent
+draft backup timer removal, and the test-only hidden-summary-textarea oracle fix.
+Stored snapshots/journals and Rust write-integrity checks stay intact. Validation,
+main integration and installation are pending; no complete parity claim.
+
 ## Merge now; defer further work — 2026-10-30
 
 User asks to merge completed changes into main and says they will figure out the

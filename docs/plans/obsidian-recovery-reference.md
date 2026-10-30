@@ -102,3 +102,22 @@ One instrumented run attributes 997.4 ms to BrowserWindow construction and
 reports 375.455 ms. These are diagnostic intervals, not an 800 ms usable-editor
 measurement, comparison, or representative first-import/large-note acceptance.
 Package013 predates history plumbing removal and the configuration UI cut.
+
+## Fresh follow-up audit — 2026-10-30
+
+Official documentation checked at https://obsidian.md/help/plugins/file-recovery:
+five-minute minimum snapshot spacing, seven-day retention, local storage outside
+the vault, and explicit Copy/Restore. Its documented type list is Markdown and
+Canvas; the inspected cached artifact also includes Bases, so those two sources
+should not be described as identical. Current native Zorid snapshots accept only
+Markdown. Existing captures use five minutes/seven days and content deduplication.
+This is narrower file-type coverage, not a reason to expand this task.
+
+Current main already contains `19d9287f` (ordinary editable Base controls in place
+of bespoke Review/Copy) and `23541ed6` (ordinary failed-save backoff removal),
+superseding the open implementation status above. The fresh read-only audit found
+two remaining optional policies to cut: indefinite Workspace failed-readmission
+backoff and independent-draft failed-backup timer retries. Initial native host
+readmission and exact uncertain-write reconciliation remain architecture duties.
+Access to existing protected draft versions remains to avoid stranding user data;
+this is a known Zorid-specific compatibility surface, not claimed Obsidian parity.
